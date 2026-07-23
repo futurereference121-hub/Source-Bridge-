@@ -18,17 +18,18 @@ const cormorant = Cormorant({
 
 export const metadata: Metadata = {
   title: {
-    default: `${siteConfig.name} | International Product Sourcing & Retail`,
+    default: `${siteConfig.name} | People-Powered Marketplace`,
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
   keywords: [
     "product sourcing",
+    "people marketplace",
     "Thailand sourcing",
     "Russia sourcing",
-    "wholesale",
-    "international retail",
-    "procurement",
+    "personal sourcing",
+    "member listings",
+    "local access",
   ],
   openGraph: {
     title: siteConfig.name,

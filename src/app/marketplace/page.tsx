@@ -5,25 +5,25 @@ import { ShopCatalogue } from "@/components/shop/ShopCatalogue";
 import { products } from "@/data/products";
 
 export const metadata: Metadata = {
-  title: "Shop",
+  title: "Marketplace",
   description:
-    "Browse the Source Bridge catalogue — clothing, jewellery, home & living, and collectibles from Thailand and Russia.",
+    "Discover products shared by Source Bridge members — local access, trusted listings, and shipping across borders.",
 };
 
-type ShopPageProps = {
+type MarketplacePageProps = {
   searchParams: Promise<{ category?: string; subcategory?: string }>;
 };
 
-export default async function ShopPage({ searchParams }: ShopPageProps) {
+export default async function MarketplacePage({ searchParams }: MarketplacePageProps) {
   const params = await searchParams;
 
   return (
     <div className="pt-28 pb-20 sm:pt-32 sm:pb-28">
       <Container>
         <SectionHeading
-          eyebrow="Shop"
-          title="Curated products for modern retail."
-          description="Filter by category and subcategory. Every piece is selected for craftsmanship, presentation, and commercial relevance."
+          eyebrow="Marketplace"
+          title="Discover what members share from where they are."
+          description="Premium listings from the community. Every product belongs to a member profile — with country of origin and shipping clarity built in."
           className="mb-12 sm:mb-16"
         />
         <ShopCatalogue

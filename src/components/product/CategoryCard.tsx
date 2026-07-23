@@ -10,7 +10,7 @@ type CategoryCardProps = {
 export function CategoryCard({ category, large = false }: CategoryCardProps) {
   return (
     <Link
-      href={`/shop?category=${encodeURIComponent(category.name)}`}
+      href={`/marketplace?category=${encodeURIComponent(category.name)}`}
       className="group relative block overflow-hidden bg-stone outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <div className={`relative ${large ? "aspect-[4/5] sm:aspect-[16/10]" : "aspect-[4/5]"}`}>

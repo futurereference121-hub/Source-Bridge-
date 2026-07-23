@@ -9,6 +9,28 @@ export interface SupplierInfo {
   notes?: string;
 }
 
+/**
+ * Public member profile. Every listing belongs to a member —
+ * people are the product; location is the value.
+ */
+export interface Member {
+  id: string;
+  slug: string;
+  displayName: string;
+  bio: string;
+  countries: string[];
+  verified: boolean;
+  offersPersonalSourcing: boolean;
+  offersRetailListings: boolean;
+  offersBusinessSourcing: boolean;
+  worldwideShipping: boolean;
+  avatar?: string;
+  joinedAt?: string;
+}
+
+/** Alias for clarity in UI copy and future profile routes. */
+export type MemberProfile = Member;
+
 export interface Product {
   id: string;
   slug: string;
@@ -19,8 +41,14 @@ export interface Product {
   images: string[];
   price: number;
   currency: Currency;
+  /** Owning member — listings are never company-owned inventory. */
+  memberId: string;
+  /** Origin / listing country for this product. */
+  country: string;
+  /** Whether shipping is available for this listing. */
+  shippingAvailable: boolean;
   /** INTERNAL — do not display to customers */
-  supplier: SupplierInfo;
+  supplier?: SupplierInfo;
   availability: Availability;
   tags: string[];
   featured: boolean;

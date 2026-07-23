@@ -12,7 +12,7 @@ export function FeaturedCategories() {
           <SectionHeading
             eyebrow="Catalogue"
             title="Featured Categories"
-            description="Explore collections shaped for retail excellence — from clothing and jewellery to home and rare collectibles."
+            description="Explore collections shaped by members — clothing, jewellery, home, and rare collectibles."
           />
           <Button href="/categories" variant="outline" className="shrink-0 self-start sm:self-auto">
             View All Categories

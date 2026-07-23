@@ -8,7 +8,7 @@ import { SectionHeading } from "@/components/ui/SectionHeading";
 export const metadata: Metadata = {
   title: "Categories",
   description:
-    "Explore Source Bridge category hierarchy — Clothing, Jewellery, Home & Living, and Collectibles.",
+    "Explore Source Bridge categories — Clothing, Jewellery, Home & Living, and Collectibles shared by members.",
 };
 
 export default function CategoriesPage() {
@@ -18,7 +18,7 @@ export default function CategoriesPage() {
         <SectionHeading
           eyebrow="Categories"
           title="A clear hierarchy for discovery."
-          description="Browse by category and subcategory — the same structure used throughout the shop."
+          description="Browse by category and subcategory — the same structure used throughout the marketplace."
           className="mb-14 sm:mb-20"
         />
 
@@ -26,7 +26,7 @@ export default function CategoriesPage() {
           {categories.map((category) => (
             <section key={category.id} className="grid gap-8 lg:grid-cols-2 lg:gap-14">
               <Link
-                href={`/shop?category=${encodeURIComponent(category.name)}`}
+                href={`/marketplace?category=${encodeURIComponent(category.name)}`}
                 className="group relative aspect-[4/5] overflow-hidden bg-stone sm:aspect-[16/11] lg:aspect-auto lg:min-h-[420px]"
               >
                 <Image
@@ -48,7 +48,7 @@ export default function CategoriesPage() {
                   {category.subcategories.map((sub) => (
                     <li key={sub.id}>
                       <Link
-                        href={`/shop?category=${encodeURIComponent(category.name)}&subcategory=${encodeURIComponent(sub.name)}`}
+                        href={`/marketplace?category=${encodeURIComponent(category.name)}&subcategory=${encodeURIComponent(sub.name)}`}
                         className="block border-b border-border py-3 text-sm text-ink transition-colors hover:text-accent"
                       >
                         {sub.name}
@@ -57,10 +57,10 @@ export default function CategoriesPage() {
                   ))}
                 </ul>
                 <Link
-                  href={`/shop?category=${encodeURIComponent(category.name)}`}
+                  href={`/marketplace?category=${encodeURIComponent(category.name)}`}
                   className="mt-8 inline-flex text-xs font-medium uppercase tracking-[0.16em] text-accent hover:text-accent-hover"
                 >
-                  Shop {category.name} →
+                  Browse {category.name} →
                 </Link>
               </div>
             </section>

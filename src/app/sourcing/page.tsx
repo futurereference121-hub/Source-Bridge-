@@ -3,62 +3,62 @@ import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { SourcingForm } from "@/components/forms/SourcingForm";
 import {
-  Factory,
+  Briefcase,
   Globe,
-  Hammer,
+  Handshake,
+  MapPinned,
   Package,
+  Plane,
   Ship,
-  ShoppingBag,
-  Store,
   Users,
 } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Product Sourcing",
   description:
-    "Wholesale, retail, custom manufacturing, factory and artisan sourcing, procurement, import, and worldwide shipping with Source Bridge.",
+    "Personal and business sourcing through real people — specialists, locals, and travellers connected by Source Bridge.",
 };
 
 const services = [
   {
+    icon: Users,
+    title: "Through real people",
+    body: "Specialists, locals, and travellers with genuine access — not anonymous stock lists.",
+  },
+  {
+    icon: MapPinned,
+    title: "Where they are",
+    body: "Thailand and Russia are our first community locations — more regions as members join.",
+  },
+  {
     icon: Package,
-    title: "Wholesale sourcing",
-    body: "Volume programs with reliable lead times and consistent quality.",
+    title: "Personal sourcing",
+    body: "Find a specific piece, gift, or hard-to-reach product through someone on the ground.",
   },
   {
-    icon: Store,
-    title: "Retail-ready goods",
-    body: "Curated products prepared for boutique and multi-brand floors.",
+    icon: Briefcase,
+    title: "Business sourcing",
+    body: "Wholesale, private-label, and procurement programs shaped with member expertise.",
   },
   {
-    icon: Factory,
-    title: "Custom manufacturing",
-    body: "Develop private-label and made-to-spec products with partner factories.",
+    icon: Handshake,
+    title: "Human connection",
+    body: "Clarity, judgment, and accountability — the qualities that make cross-border buying work.",
   },
   {
-    icon: Hammer,
-    title: "Factory & artisan",
-    body: "Access industrial capacity and small-batch artisan workshops.",
-  },
-  {
-    icon: ShoppingBag,
-    title: "Procurement",
-    body: "Structured buying across categories with transparent commercial terms.",
+    icon: Plane,
+    title: "Traveller-ready (soon)",
+    body: "Trip-aware sourcing and travel calendars will fit this model — placeholders for now.",
   },
   {
     icon: Ship,
-    title: "Import coordination",
-    body: "Documentation guidance and consolidation for cross-border shipments.",
+    title: "Shipping pathways",
+    body: "From local handoff to worldwide delivery, coordinated through the member who sources.",
   },
   {
     icon: Globe,
-    title: "Worldwide shipping",
-    body: "Door-to-door logistics planning from origin to your destination.",
-  },
-  {
-    icon: Users,
-    title: "Dedicated support",
-    body: "A single sourcing desk from brief through delivery confirmation.",
+    title: "Community growth",
+    body: "One founding member today. The same profile structure welcomes the next members.",
   },
 ];
 
@@ -68,8 +68,8 @@ export default function SourcingPage() {
       <Container>
         <SectionHeading
           eyebrow="Product Sourcing"
-          title="From brief to delivery — sourcing built for professionals."
-          description="Source Bridge activates networks across Thailand and Russia for wholesale, retail, custom manufacturing, and specialist procurement."
+          title="Sourced through people — not warehouses."
+          description="Personal and business sourcing via members of the community: specialists, locals, and travellers who can help because of where they are — or where they're going."
           className="mb-14 max-w-3xl sm:mb-20"
         />
 
@@ -88,12 +88,12 @@ export default function SourcingPage() {
             <SectionHeading
               eyebrow="Request"
               title="Tell us what you need."
-              description="Share as much detail as you can. We’ll respond with next steps, timelines, and sourcing options."
+              description="Share as much detail as you can. We'll connect your brief with the right human access — starting with our Thailand and Russia community."
             />
             <ul className="mt-8 space-y-3 text-sm text-muted">
-              <li>— Thailand & Russia focus, expandable globally</li>
-              <li>— Samples, MOQs, and factory introductions</li>
-              <li>— Retail buyers and wholesale partners welcome</li>
+              <li>— People-powered sourcing, not company inventory</li>
+              <li>— First community locations: Thailand &amp; Russia</li>
+              <li>— Personal requests and business programs welcome</li>
             </ul>
           </div>
           <SourcingForm />

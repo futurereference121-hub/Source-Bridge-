@@ -8,8 +8,10 @@ import {
   getRelatedProducts,
   products,
 } from "@/data/products";
+import { getMemberById } from "@/data/members";
 import { ProductGallery } from "@/components/product/ProductGallery";
 import { ProductCard } from "@/components/product/ProductCard";
+import { MemberProfileCard } from "@/components/member/MemberProfileCard";
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { Button } from "@/components/ui/Button";
@@ -37,18 +39,19 @@ export default async function ProductDetailPage({ params }: PageProps) {
   const product = getProductBySlug(slug);
   if (!product) notFound();
 
+  const member = getMemberById(product.memberId);
   const related = getRelatedProducts(product, 4);
 
   return (
     <div className="pt-28 pb-20 sm:pt-32 sm:pb-28">
       <Container>
         <nav className="mb-8 text-xs uppercase tracking-[0.14em] text-muted">
-          <Link href="/shop" className="hover:text-ink">
-            Shop
+          <Link href="/marketplace" className="hover:text-ink">
+            Marketplace
           </Link>
           <span className="mx-2">/</span>
           <Link
-            href={`/shop?category=${encodeURIComponent(product.category)}`}
+            href={`/marketplace?category=${encodeURIComponent(product.category)}`}
             className="hover:text-ink"
           >
             {product.category}
@@ -72,6 +75,12 @@ export default async function ProductDetailPage({ params }: PageProps) {
             </p>
             <p className="mt-2 text-sm text-muted">
               {availabilityLabel(product.availability)}
+              <span className="mx-2 text-border">·</span>
+              {product.country}
+              <span className="mx-2 text-border">·</span>
+              {product.shippingAvailable
+                ? "Shipping available"
+                : "Local arrangement"}
             </p>
 
             <p className="mt-8 text-base leading-relaxed text-muted">
@@ -97,26 +106,17 @@ export default async function ProductDetailPage({ params }: PageProps) {
               </div>
             ) : null}
 
-            {product.shippingNote ? (
-              <div className="mt-8 border-t border-border pt-8">
-                <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
-                  Shipping
-                </h2>
-                <p className="mt-3 text-sm leading-relaxed text-muted">
-                  {product.shippingNote}
-                </p>
-              </div>
-            ) : (
-              <div className="mt-8 border-t border-border pt-8">
-                <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
-                  Shipping
-                </h2>
-                <p className="mt-3 text-sm leading-relaxed text-muted">
-                  Worldwide shipping available. Lead times vary by destination and
-                  availability.
-                </p>
-              </div>
-            )}
+            <div className="mt-8 border-t border-border pt-8">
+              <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
+                Shipping
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-muted">
+                {product.shippingNote ??
+                  (product.shippingAvailable
+                    ? "Worldwide shipping available through this member. Lead times vary by destination and availability."
+                    : "Shipping details arranged directly with the member.")}
+              </p>
+            </div>
 
             {product.tags.length > 0 ? (
               <div className="mt-8 flex flex-wrap gap-2">
@@ -135,18 +135,30 @@ export default async function ProductDetailPage({ params }: PageProps) {
               <Button href="/sourcing" size="lg">
                 Request Similar Sourcing
               </Button>
-              <Button href="/contact" variant="outline" size="lg">
-                Ask About This Product
+              <Button variant="outline" size="lg" disabled type="button">
+                Contact Member — Coming Soon
               </Button>
             </div>
           </div>
         </div>
 
+        {member ? (
+          <section className="mt-20 border-t border-border pt-14 sm:mt-28 sm:pt-20">
+            <SectionHeading
+              eyebrow="Member"
+              title="Listed by"
+              description="Every product on Source Bridge belongs to a member profile — people with local access, not a company warehouse."
+              className="mb-10"
+            />
+            <MemberProfileCard member={member} />
+          </section>
+        ) : null}
+
         {related.length > 0 ? (
           <section className="mt-20 sm:mt-28">
             <SectionHeading
-              title="Related products"
-              description="More from the same collection."
+              title="More from this community"
+              description="Related listings shared by members."
               className="mb-10"
             />
             <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">

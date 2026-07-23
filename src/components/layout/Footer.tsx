@@ -12,8 +12,8 @@ export function Footer() {
               {siteConfig.name.toUpperCase()}
             </p>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/65">
-              International product sourcing and curated retail. Connecting Thailand,
-              Russia, and partners worldwide.
+              A people-powered marketplace for trusted local access. Members share
+              products and sourcing from where they are.
             </p>
           </div>
 
@@ -53,7 +53,7 @@ export function Footer() {
 
         <div className="mt-14 flex flex-col gap-3 border-t border-white/10 pt-8 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
           <p>© {new Date().getFullYear()} {siteConfig.name}. All rights reserved.</p>
-          <p>Trusted sourcing · Premium retail · Global delivery</p>
+          <p>People · Place · Trusted access</p>
         </div>
       </Container>
     </footer>

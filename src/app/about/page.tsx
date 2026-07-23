@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "Learn about Source Bridge — international product sourcing and curated retail connecting Thailand, Russia, and the world.",
+    "Source Bridge philosophy — people trust people. Technology connects rather than replaces. People are the bridge.",
 };
 
 export default function AboutPage() {
@@ -17,20 +17,21 @@ export default function AboutPage() {
         <div className="grid gap-12 lg:grid-cols-2 lg:gap-20 lg:items-end">
           <SectionHeading
             eyebrow="About"
-            title="Built for trust across borders."
-            description="Source Bridge is an international product sourcing and retail company. Our network focuses on Thailand and Russia — with a foundation designed to grow into additional markets."
+            title="People are the bridge."
+            description="Modern trade became too impersonal. Source Bridge exists so people can trust people again — with technology that connects rather than replaces."
           />
           <p className="text-base leading-relaxed text-muted sm:text-lg">
-            We believe the best retail experiences start with disciplined sourcing:
-            clear briefs, careful maker relationships, and presentation that respects
-            both craft and commerce.
+            If you&apos;re somewhere, or you&apos;re going somewhere, you can help
+            someone. Location is value. Members share products and sourcing access
+            from where they are — starting with our founding member across Thailand
+            and Russia.
           </p>
         </div>
 
         <div className="relative mt-16 aspect-[16/9] overflow-hidden bg-stone sm:mt-20">
           <Image
-            src="https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=1600&q=80"
-            alt="Quiet retail space with natural light"
+            src="https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=1600&q=80"
+            alt="People connecting across cultures and places"
             fill
             sizes="100vw"
             className="object-cover"
@@ -41,16 +42,16 @@ export default function AboutPage() {
         <div className="mt-16 grid gap-12 sm:mt-24 lg:grid-cols-3">
           {[
             {
-              title: "Sourcing first",
-              body: "We start with the supply chain — factories, artisans, and wholesalers — then shape assortments for retail excellence.",
+              title: "Trade grew distant",
+              body: "Buying and sourcing often lost the human face — endless catalogues without trust, context, or care.",
             },
             {
-              title: "Two hubs, global reach",
-              body: "Thailand and Russia form our core corridors today. Logistics and partnerships extend delivery worldwide.",
+              title: "People trust people",
+              body: "We rebuild commerce around member profiles: verified presence, local knowledge, and accountability.",
             },
             {
-              title: "Ready to scale",
-              body: "Our catalogue, category model, and sourcing workflows are structured so new regions can be added cleanly.",
+              title: "Tech connects, not replaces",
+              body: "Platforms should amplify human bridges — messaging, travel context, and community tools will grow here over time.",
             },
           ].map((item) => (
             <div key={item.title} className="border-t border-border pt-6">
@@ -62,18 +63,18 @@ export default function AboutPage() {
 
         <div className="mt-20 flex flex-col gap-4 border border-border bg-surface p-8 sm:mt-28 sm:flex-row sm:items-center sm:justify-between sm:p-10">
           <div>
-            <h2 className="font-display text-3xl text-ink">Partner with Source Bridge</h2>
+            <h2 className="font-display text-3xl text-ink">Join the bridge</h2>
             <p className="mt-2 max-w-xl text-muted">
-              Whether you need inventory for your store or a full sourcing program, we’re
-              ready to talk.
+              Explore member listings or request personal sourcing through people who
+              are already where you need them.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button href="/sourcing" size="lg">
-              Request Sourcing
+            <Button href="/marketplace" size="lg">
+              Explore Marketplace
             </Button>
-            <Button href="/contact" variant="outline" size="lg">
-              Contact Us
+            <Button href="/sourcing" variant="outline" size="lg">
+              Request Sourcing
             </Button>
           </div>
         </div>

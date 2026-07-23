@@ -1,27 +1,27 @@
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
-import { Globe2, ShieldCheck, Sparkles, Truck } from "lucide-react";
+import { Globe2, MapPin, Sparkles, Users } from "lucide-react";
 
 const reasons = [
   {
-    icon: ShieldCheck,
-    title: "Trusted networks",
-    body: "Vetted makers, factories, and artisans across Thailand and Russia with quality standards you can rely on.",
+    icon: Users,
+    title: "People first",
+    body: "Trade works best when you know who you're dealing with. Members bring trust, taste, and real presence on the ground.",
+  },
+  {
+    icon: MapPin,
+    title: "Location as value",
+    body: "Being somewhere — or going somewhere — is the advantage. Local access is what the marketplace is built around.",
   },
   {
     icon: Sparkles,
-    title: "Curated retail eye",
-    body: "Every product is selected for craftsmanship, relevance, and presentation — ready for discerning customers.",
+    title: "Curated by members",
+    body: "Listings reflect human judgment: craftsmanship, relevance, and care — shared from member profiles, not stock rooms.",
   },
   {
     icon: Globe2,
-    title: "Scalable geography",
-    body: "Built around Thailand and Russia today, with architecture ready to expand into additional markets.",
-  },
-  {
-    icon: Truck,
-    title: "End-to-end delivery",
-    body: "From sample to shipment — procurement, consolidation, and worldwide logistics coordination.",
+    title: "Ready for more members",
+    body: "Launch focuses on Thailand and Russia through our founding member. The architecture welcomes the next community members.",
   },
 ];
 
@@ -31,8 +31,8 @@ export function WhySourceBridge() {
       <Container>
         <SectionHeading
           eyebrow="Why Source Bridge"
-          title="Premium sourcing with retail discipline."
-          description="We combine international trading expertise with a storefront sensibility — so every partnership feels as polished as the products themselves."
+          title="Technology connects. People remain the bridge."
+          description="We design for human connection across borders — premium discovery today, richer community tools tomorrow."
           className="mb-14"
         />
         <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">

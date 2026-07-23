@@ -6,7 +6,7 @@ export const categories: Category[] = [
     slug: "clothing",
     name: "Clothing",
     description:
-      "Curated apparel from ateliers and makers across Thailand and Russia — from everyday essentials to statement pieces.",
+      "Apparel shared by members from ateliers and makers — everyday essentials to statement pieces.",
     image:
       "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1200&q=80",
     subcategories: [

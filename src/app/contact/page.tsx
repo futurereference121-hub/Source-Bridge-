@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 export const metadata: Metadata = {
   title: "Contact",
   description:
-    "Contact Source Bridge for business, retail, or product sourcing enquiries.",
+    "Contact Source Bridge — platform questions, community partnership, or product sourcing enquiries.",
 };
 
 export default function ContactPage() {
@@ -17,8 +17,8 @@ export default function ContactPage() {
       <Container>
         <SectionHeading
           eyebrow="Contact"
-          title="Business, retail, or sourcing — start here."
-          description="Choose the frame that fits your enquiry. For detailed product briefs, the sourcing form captures quantity, budget, and specifications."
+          title="Talk with the Source Bridge team."
+          description="Platform questions, community interest, or a sourcing brief — start here. For detailed product requests, the sourcing form captures quantity, budget, and specifications."
           className="mb-14 max-w-3xl sm:mb-20"
         />
 
@@ -43,16 +43,16 @@ export default function ContactPage() {
             <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
               {[
                 {
-                  title: "Business",
-                  body: "Partnerships, wholesale accounts, and general company questions.",
+                  title: "Platform",
+                  body: "How Source Bridge works, community direction, and partnership interest.",
                 },
                 {
-                  title: "Retail",
-                  body: "Assortment planning, stock availability, and store collaborations.",
+                  title: "Marketplace",
+                  body: "Questions about member listings, categories, or discovering products.",
                 },
                 {
                   title: "Sourcing",
-                  body: "Custom manufacturing, factory introductions, and import programs.",
+                  body: "Personal or business sourcing through people with local access.",
                 },
               ].map((item) => (
                 <div key={item.title} className="border-t border-border pt-4">

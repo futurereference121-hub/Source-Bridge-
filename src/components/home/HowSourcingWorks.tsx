@@ -5,23 +5,23 @@ import { Button } from "@/components/ui/Button";
 const steps = [
   {
     step: "01",
-    title: "Share your brief",
-    body: "Tell us the product, quantity, budget, and destination. Optional business details help us tailor the approach.",
+    title: "Share what you need",
+    body: "Tell us the product, quantity, budget, and destination. A clear brief helps the right people respond.",
   },
   {
     step: "02",
-    title: "Source & shortlist",
-    body: "We activate our Thailand and Russia networks — factories, artisans, wholesalers — and shortlist viable options.",
+    title: "Connect through people",
+    body: "We activate members and trusted networks — specialists, locals, and travellers with real access where it matters.",
   },
   {
     step: "03",
-    title: "Sample & confirm",
-    body: "Review samples, pricing, and lead times. Refine specs until quality and commercial terms align.",
+    title: "Refine together",
+    body: "Review options, samples, and timing. Human judgment shapes quality until the fit feels right.",
   },
   {
     step: "04",
-    title: "Produce & ship",
-    body: "We coordinate production or procurement, quality checks, and worldwide shipping to your door.",
+    title: "Deliver across borders",
+    body: "Members coordinate sourcing and shipping pathways — from local pickup to worldwide delivery.",
   },
 ];
 
@@ -32,8 +32,8 @@ export function HowSourcingWorks() {
         <div className="mb-14 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <SectionHeading
             eyebrow="Process"
-            title="How Product Sourcing Works"
-            description="Four clear steps from enquiry to delivery — designed for retailers, brands, and serious buyers."
+            title="How Personal Sourcing Works"
+            description="Sourcing through real people — four clear steps from brief to delivery."
             tone="on-dark"
           />
           <Button
