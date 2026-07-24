@@ -8,31 +8,24 @@ type TrustStatsProps = {
 export function TrustStats({ member }: TrustStatsProps) {
   const stats = [
     {
-      label: "Response rate",
-      value: `${member.responseRate}%`,
-      note: "Placeholder",
-    },
-    {
       label: "Completed requests",
-      value: String(member.reviews.completedRequests),
-      note: member.reviews.note,
+      value: String(member.completedRequests),
     },
     {
       label: "Average rating",
-      value: member.reviews.averageRating.toFixed(1),
-      note: `${member.reviews.totalReviews} reviews (placeholder)`,
+      value: member.rating.toFixed(1),
       icon: true,
+    },
+    {
+      label: "Bridge Score",
+      value: String(member.bridgeScore),
     },
   ];
 
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       {stats.map((stat) => (
-        <div
-          key={stat.label}
-          className="border border-border bg-surface px-5 py-5"
-          title={stat.note}
-        >
+        <div key={stat.label} className="border border-border bg-surface px-5 py-5">
           <p className="text-[10px] uppercase tracking-[0.16em] text-muted">
             {stat.label}
           </p>

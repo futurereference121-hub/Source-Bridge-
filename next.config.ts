@@ -14,12 +14,17 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/shop",
-        destination: "/marketplace",
+        destination: "/explore",
         permanent: false,
       },
       {
         source: "/shop/:slug",
         destination: "/marketplace/:slug",
+        permanent: false,
+      },
+      {
+        source: "/marketplace",
+        destination: "/explore",
         permanent: false,
       },
     ];

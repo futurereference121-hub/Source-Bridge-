@@ -1,27 +1,53 @@
-export type Availability = "available" | "limited" | "made_to_order" | "to_source";
+/** Listing stock state (not member availability). */
+export type ListingAvailability =
+  | "available"
+  | "limited"
+  | "made_to_order"
+  | "to_source";
 
-export type Currency = "USD" | "EUR" | "THB" | "RUB";
+/** Member presence / readiness. */
+export type Availability =
+  | "available_now"
+  | "limited"
+  | "travelling_soon"
+  | "unavailable";
 
-/** Internal only — never render on the customer storefront. */
-export interface SupplierInfo {
-  code: string;
-  region: "Thailand" | "Russia" | "Other";
-  notes?: string;
+export type Currency = "USD" | "EUR" | "THB" | "RUB" | "GBP" | "INR" | "MXN";
+
+export type MemberType =
+  | "local"
+  | "traveller"
+  | "specialist"
+  | "student"
+  | "nomad"
+  | "collector";
+
+export type AccountIntent = "buyer" | "provider" | "both";
+
+export interface Location {
+  city: string;
+  country: string;
+  /** Display string, e.g. "Bangkok, Thailand" */
+  label: string;
 }
 
-/** How a member can help — shown on profile storefronts. */
-export type MemberServiceKey =
-  | "canSource"
-  | "canInspect"
-  | "canNegotiate"
-  | "canTranslate"
-  | "canRecommendSuppliers"
-  | "canReceiveDeliveries"
-  | "canShipInternationally"
-  | "canCarryWhileTravelling"
-  | "hasLocalKnowledge";
+export interface CountryConnection {
+  country: string;
+  kind: "lives" | "visits" | "sources" | "travels";
+}
 
-export type MemberServices = Record<MemberServiceKey, boolean>;
+export interface Service {
+  id: string;
+  label: string;
+}
+
+export interface Journey {
+  id: string;
+  from: string;
+  to: string;
+  datesLabel: string;
+  note?: string;
+}
 
 export type VerificationBadgeKind =
   | "verified_identity"
@@ -34,30 +60,35 @@ export type VerificationBadgeKind =
 export interface VerificationBadge {
   kind: VerificationBadgeKind;
   label: string;
-  /** Placeholder until verification workflow ships. */
   placeholder?: boolean;
 }
 
-export interface BridgeScorePlaceholder {
-  /** Display score 0–100; UI only until real logic exists. */
-  score: number;
-  label: string;
-  note: string;
+export interface Verification {
+  identityVerified: boolean;
+  badges: VerificationBadge[];
 }
 
-export interface ReviewStatsPlaceholder {
-  averageRating: number;
-  totalReviews: number;
-  completedRequests: number;
-  note: string;
-}
-
-export interface JourneyPlaceholder {
+export interface Review {
   id: string;
-  from: string;
-  to: string;
-  datesLabel: string;
-  note?: string;
+  authorName: string;
+  rating: number;
+  text: string;
+  dateLabel: string;
+}
+
+export interface ActivityItemData {
+  id: string;
+  type: "listing" | "journey" | "review" | "request" | "follow";
+  title: string;
+  detail: string;
+  dateLabel: string;
+}
+
+/** Internal only — never render on the customer storefront. */
+export interface SupplierInfo {
+  code: string;
+  region: string;
+  notes?: string;
 }
 
 /**
@@ -67,29 +98,35 @@ export interface JourneyPlaceholder {
 export interface Member {
   id: string;
   slug: string;
-  displayName: string;
+  fullName: string;
   photo: string;
   cover: string;
+  location: Location;
+  /** Short help pitch shown on cards and profile. */
+  howICanHelp: string;
+  /** Longer bio for profile. */
   bio: string;
-  languages: string[];
-  currentLocation: string;
-  countries: string[];
-  areasWillingToTravel: string[];
-  availability: string;
-  services: MemberServices;
-  bridgeScore: BridgeScorePlaceholder;
-  badges: VerificationBadge[];
-  responseRate: number;
-  reviews: ReviewStatsPlaceholder;
-  upcomingJourneys: JourneyPlaceholder[];
+  memberType: MemberType;
+  verification: Verification;
+  bridgeScore: number;
+  rating: number;
+  completedRequests: number;
+  services: Service[];
+  connectedCountries: CountryConnection[];
+  upcomingJourney?: Journey | null;
+  journeys: Journey[];
+  availability: Availability;
+  availabilityLabel: string;
   listingIds: string[];
+  reviews: Review[];
+  recentActivity: ActivityItemData[];
+  languages: string[];
   joinedAt?: string;
+  /** Subtle prototype note when profile is seed data. */
+  isPrototype?: boolean;
 }
 
-/** Alias for clarity in UI copy and future profile routes. */
-export type MemberProfile = Member;
-
-/** Marketplace listing (avoid "product/inventory/stock" in user-facing copy). */
+/** Marketplace listing — belongs to a member, never company inventory. */
 export interface Listing {
   id: string;
   slug: string;
@@ -100,25 +137,17 @@ export interface Listing {
   images: string[];
   price: number;
   currency: Currency;
-  /** Owning member — listings are never company-owned inventory. */
   memberId: string;
-  /** Origin / listing country. */
   country: string;
-  /** Member's current location display for this listing context. */
   currentLocation: string;
-  /** Whether shipping is available for this listing. */
   shippingAvailable: boolean;
-  /** INTERNAL — do not display to customers */
   supplier?: SupplierInfo;
-  availability: Availability;
+  availability: ListingAvailability;
   tags: string[];
   featured: boolean;
   specs?: Record<string, string>;
   shippingNote?: string;
 }
-
-/** @deprecated Prefer Listing — kept as alias during migration. */
-export type Product = Listing;
 
 export interface Category {
   id: string;
@@ -139,3 +168,17 @@ export interface NavItem {
   label: string;
   href: string;
 }
+
+export interface ExploreFilters {
+  query: string;
+  country: string;
+  city: string;
+  service: string;
+  memberType: string;
+  verifiedOnly: boolean;
+  availableNow: boolean;
+  travellingSoon: boolean;
+}
+
+/** @deprecated Prefer Listing */
+export type Product = Listing;

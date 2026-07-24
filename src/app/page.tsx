@@ -1,17 +1,7 @@
 import type { Metadata } from "next";
-import { Hero } from "@/components/home/Hero";
-import { MissionStory } from "@/components/home/MissionStory";
-import { MeetFirstMember } from "@/components/home/MeetFirstMember";
-import { FeaturedCategories } from "@/components/home/FeaturedCategories";
-import { HowPeopleHelp } from "@/components/home/HowPeopleHelp";
-import { HowSourcingWorks } from "@/components/home/HowSourcingWorks";
-import { UpcomingJourneysTease } from "@/components/home/UpcomingJourneysTease";
-import { Container } from "@/components/ui/Container";
-import { SectionHeading } from "@/components/ui/SectionHeading";
-import { ListingCard } from "@/components/marketplace/ListingCard";
+import Image from "next/image";
 import { Button } from "@/components/ui/Button";
-import { getFeaturedListings } from "@/data/products";
-import { getLaunchMember } from "@/data/members";
+import { Container } from "@/components/ui/Container";
 import { siteConfig } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -19,71 +9,89 @@ export const metadata: Metadata = {
   description: siteConfig.description,
 };
 
-export default function HomePage() {
-  const member = getLaunchMember();
-  const featured = getFeaturedListings(4);
+const steps = [
+  {
+    title: "Find someone",
+    copy: "Search by place, service, or who can help — locals, travellers, and specialists.",
+  },
+  {
+    title: "Connect directly",
+    copy: "Follow members, message them, and request help based on where they are or where they’re going.",
+  },
+  {
+    title: "Create value together",
+    copy: "Source, inspect, carry, or share local access — people are the bridge.",
+  },
+];
 
+export default function HomePage() {
   return (
     <>
-      <Hero />
-      <MissionStory />
-      <MeetFirstMember />
+      <section className="relative min-h-[88svh] w-full overflow-hidden bg-ink">
+        <Image
+          src="https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1800&q=80"
+          alt="People connecting across places"
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover object-center animate-fade-in"
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-ink/85 via-ink/55 to-ink/30" />
 
-      <section className="bg-surface py-20 sm:py-28">
-        <Container>
-          <div className="mb-12 flex flex-col gap-6 sm:mb-16 sm:flex-row sm:items-end sm:justify-between">
-            <SectionHeading
-              eyebrow="Available Finds"
-              title="Featured listings from the community"
-              description={`Recent discoveries shared by ${member.displayName} — each tied to a real person in Thailand or Russia.`}
-            />
+        <div className="relative z-10 mx-auto flex min-h-[88svh] max-w-7xl flex-col justify-end px-5 pb-14 pt-28 sm:px-8 sm:pb-16 lg:px-10 lg:pb-20">
+          <p className="animate-fade-up font-display text-2xl tracking-[0.12em] text-white sm:text-3xl">
+            {siteConfig.name.toUpperCase()}
+          </p>
+          <h1 className="animate-fade-up animate-delay-1 mt-5 max-w-3xl font-display text-3xl leading-[1.15] text-white sm:text-5xl md:text-[3.25rem]">
+            {siteConfig.tagline}
+          </h1>
+          <p className="animate-fade-up animate-delay-2 mt-5 max-w-lg text-base leading-relaxed text-white/80 sm:text-lg">
+            {siteConfig.description}
+          </p>
+          <div className="animate-fade-up animate-delay-3 mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
             <Button
-              href="/marketplace"
-              variant="outline"
-              className="shrink-0 self-start sm:self-auto"
+              href="/explore"
+              variant="primary"
+              size="lg"
+              className="bg-white text-ink hover:bg-stone"
             >
-              Explore Marketplace
+              Enter Marketplace
+            </Button>
+            <Button
+              href="/join"
+              variant="outline"
+              size="lg"
+              className="border-white/40 text-white hover:border-white hover:bg-white/10"
+            >
+              Start Earning From Your Location
             </Button>
           </div>
-          <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-            {featured.map((listing, index) => (
-              <ListingCard
-                key={listing.id}
-                listing={listing}
-                member={member}
-                priority={index < 2}
-              />
+        </div>
+      </section>
+
+      <section className="py-16 sm:py-20">
+        <Container>
+          <div className="grid gap-10 sm:grid-cols-3 sm:gap-8">
+            {steps.map((step, i) => (
+              <div key={step.title}>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-muted">
+                  0{i + 1}
+                </p>
+                <h2 className="mt-3 font-display text-2xl text-ink sm:text-3xl">
+                  {step.title}
+                </h2>
+                <p className="mt-3 text-sm leading-relaxed text-muted">{step.copy}</p>
+              </div>
             ))}
           </div>
         </Container>
       </section>
 
-      <HowPeopleHelp />
-      <UpcomingJourneysTease />
-      <FeaturedCategories />
-      <HowSourcingWorks />
-
-      <section className="py-20 sm:py-28">
+      <section className="border-t border-border py-12 sm:py-14">
         <Container>
-          <div className="flex flex-col items-start gap-6 border border-border bg-surface p-8 sm:flex-row sm:items-center sm:justify-between sm:p-12">
-            <div className="max-w-xl">
-              <h2 className="font-display text-3xl text-ink sm:text-4xl">
-                Ready to connect through people?
-              </h2>
-              <p className="mt-3 text-muted">
-                Explore Available Finds or request personal sourcing through
-                specialists, travellers, and locals.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Button href="/marketplace" size="lg">
-                Explore Marketplace
-              </Button>
-              <Button href="/sourcing" variant="outline" size="lg">
-                Request Product Sourcing
-              </Button>
-            </div>
-          </div>
+          <p className="text-center font-display text-2xl text-ink sm:text-3xl">
+            {siteConfig.missionLine}
+          </p>
         </Container>
       </section>
     </>

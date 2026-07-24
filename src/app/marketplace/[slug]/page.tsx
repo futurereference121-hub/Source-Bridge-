@@ -8,10 +8,10 @@ import {
   getRelatedListings,
   listings,
 } from "@/data/products";
-import { getMemberById } from "@/data/members";
+import { getMemberForListing } from "@/data/members";
 import { ListingGallery } from "@/components/marketplace/ListingGallery";
 import { ListingCard } from "@/components/marketplace/ListingCard";
-import { MemberCard } from "@/components/profile/MemberCard";
+import { MemberCardCompact } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { Button } from "@/components/ui/Button";
@@ -39,22 +39,15 @@ export default async function ListingDetailPage({ params }: PageProps) {
   const listing = getListingBySlug(slug);
   if (!listing) notFound();
 
-  const member = getMemberById(listing.memberId);
+  const member = getMemberForListing(listing);
   const related = getRelatedListings(listing, 4);
 
   return (
     <div className="pt-28 pb-20 sm:pt-32 sm:pb-28">
       <Container>
         <nav className="mb-8 text-xs uppercase tracking-[0.14em] text-muted">
-          <Link href="/marketplace" className="hover:text-ink">
-            Marketplace
-          </Link>
-          <span className="mx-2">/</span>
-          <Link
-            href={`/marketplace?category=${encodeURIComponent(listing.category)}`}
-            className="hover:text-ink"
-          >
-            {listing.category}
+          <Link href="/explore" className="hover:text-ink">
+            Explore
           </Link>
           <span className="mx-2">/</span>
           <span className="text-ink">{listing.name}</span>
@@ -121,48 +114,25 @@ export default async function ListingDetailPage({ params }: PageProps) {
               </p>
             </div>
 
-            {listing.tags.length > 0 ? (
-              <div className="mt-8 flex flex-wrap gap-2">
-                {listing.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="border border-border px-3 py-1 text-xs uppercase tracking-[0.12em] text-muted"
-                  >
-                    {tag}
-                  </span>
-                ))}
+            {member ? (
+              <div className="mt-10">
+                <h2 className="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-muted">
+                  Shared by
+                </h2>
+                <MemberCardCompact member={member} />
+                <Button href={`/members/${member.slug}`} className="mt-4" variant="outline">
+                  View profile
+                </Button>
               </div>
             ) : null}
-
-            <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-              <Button href="/sourcing" size="lg">
-                Request Similar Sourcing
-              </Button>
-              <Button variant="outline" size="lg" disabled type="button">
-                Contact Member — Coming Soon
-              </Button>
-            </div>
           </div>
         </div>
 
-        {member ? (
-          <section className="mt-20 border-t border-border pt-14 sm:mt-28 sm:pt-20">
-            <SectionHeading
-              eyebrow="Who is offering this?"
-              title="Member profile"
-              description="Every finding on Source Bridge belongs to a person with local access — not a company warehouse."
-              className="mb-10"
-            />
-            <MemberCard member={member} />
-          </section>
-        ) : null}
-
-        {related.length > 0 ? (
-          <section className="mt-20 sm:mt-28">
+        {related.length ? (
+          <section className="mt-20">
             <SectionHeading
               eyebrow="More finds"
-              title="Related discoveries"
-              description="Other listings from the community."
+              title="Related listings"
               className="mb-10"
             />
             <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">

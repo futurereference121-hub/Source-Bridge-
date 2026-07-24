@@ -4,18 +4,46 @@ export const siteConfig = {
   name: "Source Bridge",
   tagline: "If you're somewhere, or you're going somewhere, you can help someone.",
   description:
-    "Source Bridge connects people around the world through trusted local access, personal sourcing, and discoveries shared by members of the community.",
+    "Source Bridge connects people through location, travel and local access.",
+  missionLine: "People are the bridge. Location is the value.",
   url: "https://sourcebridge.example",
   email: "hello@sourcebridge.com",
   phone: "+66 2 000 0000",
-  address: "First community locations: Thailand · Russia",
+  address: "Community locations worldwide",
 };
 
+/** Desktop primary navigation */
 export const navItems: NavItem[] = [
   { label: "Home", href: "/" },
-  { label: "Marketplace", href: "/marketplace" },
-  { label: "Personal Sourcing", href: "/sourcing" },
-  { label: "Categories", href: "/categories" },
+  { label: "Explore", href: "/explore" },
+  { label: "How It Works", href: "/how-it-works" },
+  { label: "Sign In", href: "/sign-in" },
+  { label: "Join", href: "/join" },
+];
+
+/** Footer / secondary links */
+export const footerNavItems: NavItem[] = [
+  { label: "Explore", href: "/explore" },
+  { label: "How It Works", href: "/how-it-works" },
   { label: "About", href: "/about" },
   { label: "Contact", href: "/contact" },
+  { label: "Personal Sourcing", href: "/sourcing" },
+  { label: "Join", href: "/join" },
 ];
+
+export const mobileNavItems: NavItem[] = [
+  { label: "Home", href: "/" },
+  { label: "Explore", href: "/explore" },
+  { label: "Requests", href: "/requests" },
+  { label: "Messages", href: "/messages" },
+  { label: "Profile", href: "/profile" },
+];
+
+export const memberTypeLabels: Record<string, string> = {
+  local: "Local",
+  traveller: "Traveller",
+  specialist: "Specialist",
+  student: "Student",
+  nomad: "Nomad",
+  collector: "Collector",
+};

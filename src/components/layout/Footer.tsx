@@ -1,20 +1,20 @@
 import Link from "next/link";
-import { navItems, siteConfig } from "@/lib/site";
+import { footerNavItems, siteConfig } from "@/lib/site";
 import { Container } from "@/components/ui/Container";
 
 export function Footer() {
   return (
     <footer className="border-t border-border bg-ink text-white">
-      <Container className="py-16 sm:py-20">
-        <div className="grid gap-12 md:grid-cols-3">
+      <Container className="py-14 sm:py-16">
+        <div className="grid gap-10 md:grid-cols-3">
           <div>
             <p className="font-display text-2xl tracking-[0.08em]">
               {siteConfig.name.toUpperCase()}
             </p>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/65">
-              A people-powered platform for trusted local access. If you&apos;re
-              somewhere — or going somewhere — you can help someone.
+              {siteConfig.tagline}
             </p>
+            <p className="mt-4 text-sm text-white/50">{siteConfig.missionLine}</p>
           </div>
 
           <div>
@@ -22,7 +22,7 @@ export function Footer() {
               Navigate
             </p>
             <ul className="mt-5 space-y-3">
-              {navItems.map((item) => (
+              {footerNavItems.map((item) => (
                 <li key={item.href}>
                   <Link
                     href={item.href}
@@ -51,8 +51,10 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-14 flex flex-col gap-3 border-t border-white/10 pt-8 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} {siteConfig.name}. All rights reserved.</p>
+        <div className="mt-12 flex flex-col gap-3 border-t border-white/10 pt-8 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            © {new Date().getFullYear()} {siteConfig.name}. All rights reserved.
+          </p>
           <p>People · Place · Trusted access</p>
         </div>
       </Container>

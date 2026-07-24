@@ -1,8 +1,8 @@
-import type { JourneyPlaceholder } from "@/lib/types";
+import type { Journey } from "@/lib/types";
 import { ArrowRight, Plane } from "lucide-react";
 
 type JourneyCardProps = {
-  journey: JourneyPlaceholder;
+  journey: Journey;
 };
 
 export function JourneyCard({ journey }: JourneyCardProps) {
@@ -23,20 +23,23 @@ export function JourneyCard({ journey }: JourneyCardProps) {
       {journey.note ? (
         <p className="mt-3 text-sm leading-relaxed text-muted">{journey.note}</p>
       ) : null}
-      <p className="mt-4 text-xs italic text-muted-light">
-        Journey matching — coming soon
-      </p>
     </article>
   );
 }
 
 type JourneyGridProps = {
-  journeys: JourneyPlaceholder[];
+  journeys: Journey[];
 };
 
 export function JourneyGrid({ journeys }: JourneyGridProps) {
+  if (!journeys.length) {
+    return (
+      <p className="text-sm text-muted">No upcoming journeys posted yet.</p>
+    );
+  }
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {journeys.map((journey) => (
         <JourneyCard key={journey.id} journey={journey} />
       ))}

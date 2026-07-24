@@ -1,20 +1,15 @@
+import { members } from "@/data/members";
+import { MemberCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
-import { SectionHeading } from "@/components/ui/SectionHeading";
-import { MemberCard } from "@/components/profile/MemberCard";
-import { getLaunchMember } from "@/data/members";
 
+/** Legacy home tease — unused on the short homepage; kept for optional reuse. */
 export function MeetFirstMember() {
-  const member = getLaunchMember();
+  const member = members[0];
+  if (!member) return null;
 
   return (
-    <section className="py-20 sm:py-28">
+    <section className="py-16">
       <Container>
-        <SectionHeading
-          eyebrow="Community"
-          title="Meet a member of the bridge"
-          description="Source Bridge launches with one community member across Thailand and Russia. Every future member uses this same storefront structure — equal, human, and local."
-          className="mb-12 sm:mb-16"
-        />
         <MemberCard member={member} />
       </Container>
     </section>

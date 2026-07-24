@@ -1,8 +1,10 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
 import type { Listing, Member } from "@/lib/types";
+import { getMemberById, getMemberForListing } from "@/data/members";
 import { availabilityLabel, formatPrice } from "@/data/products";
-import { getMemberById } from "@/data/members";
 import { BadgeCheck } from "lucide-react";
 
 type ListingCardProps = {
@@ -16,7 +18,8 @@ export function ListingCard({
   member: memberProp,
   priority = false,
 }: ListingCardProps) {
-  const member = memberProp ?? getMemberById(listing.memberId);
+  const member =
+    memberProp ?? getMemberForListing(listing) ?? getMemberById(listing.memberId);
 
   return (
     <Link
@@ -46,7 +49,7 @@ export function ListingCard({
             <div className="relative h-8 w-8 shrink-0 overflow-hidden bg-stone">
               <Image
                 src={member.photo}
-                alt={member.displayName}
+                alt={member.fullName}
                 fill
                 sizes="32px"
                 className="object-cover"
@@ -54,34 +57,29 @@ export function ListingCard({
             </div>
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
-                <span className="truncate">{member.displayName}</span>
-                {member.badges.some((b) => b.kind === "verified_identity") ? (
+                <span className="truncate">{member.fullName}</span>
+                {member.verification.identityVerified ? (
                   <BadgeCheck
                     size={14}
-                    strokeWidth={1.5}
                     className="shrink-0 text-accent"
-                    aria-label="Verified identity placeholder"
+                    strokeWidth={1.5}
                   />
                 ) : null}
               </p>
-              <p className="text-xs text-muted">
-                {listing.country}
-                <span className="mx-1.5 text-border">·</span>
+              <p className="truncate text-xs text-muted">
                 {listing.currentLocation}
               </p>
             </div>
           </div>
-        ) : null}
+        ) : (
+          <p className="mt-3 text-xs text-muted">{listing.currentLocation}</p>
+        )}
 
-        <p className="mt-2 text-xs text-muted">
-          {listing.shippingAvailable ? "Shipping available" : "Local arrangement"}
-        </p>
-
-        <div className="mt-auto flex items-end justify-between gap-3 pt-3">
-          <p className="text-sm font-medium text-ink">
+        <div className="mt-auto flex items-end justify-between gap-3 pt-4">
+          <p className="font-display text-xl text-ink">
             {formatPrice(listing.price, listing.currency)}
           </p>
-          <p className="text-xs text-muted">
+          <p className="text-xs uppercase tracking-[0.12em] text-muted">
             {availabilityLabel(listing.availability)}
           </p>
         </div>
@@ -89,6 +87,3 @@ export function ListingCard({
     </Link>
   );
 }
-
-/** @deprecated Prefer ListingCard */
-export { ListingCard as ProductCard };
