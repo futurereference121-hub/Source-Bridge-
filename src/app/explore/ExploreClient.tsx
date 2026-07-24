@@ -43,7 +43,7 @@ export function ExploreClient() {
   return (
     <div className="pt-24 pb-20 sm:pt-28 sm:pb-24">
       <Container>
-        <h1 className="font-display text-4xl text-ink sm:text-5xl">
+        <h1 className="text-4xl font-bold tracking-tight text-navy sm:text-5xl">
           Who can help you, and where?
         </h1>
         <p className="mt-3 max-w-2xl text-base text-muted">

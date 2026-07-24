@@ -1,20 +1,18 @@
 import Link from "next/link";
 import { footerNavItems, siteConfig } from "@/lib/site";
 import { Container } from "@/components/ui/Container";
+import { SourceBridgeLogo } from "@/components/brand/SourceBridgeLogo";
 
 export function Footer() {
   return (
-    <footer className="border-t border-border bg-ink text-white">
+    <footer className="border-t border-white/10 bg-navy text-white">
       <Container className="py-14 sm:py-16">
         <div className="grid gap-10 md:grid-cols-3">
           <div>
-            <p className="font-display text-2xl tracking-[0.08em]">
-              {siteConfig.name.toUpperCase()}
-            </p>
+            <SourceBridgeLogo size={32} color="white" withWordmark />
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/65">
-              {siteConfig.tagline}
+              {siteConfig.description}
             </p>
-            <p className="mt-4 text-sm text-white/50">{siteConfig.missionLine}</p>
           </div>
 
           <div>
@@ -45,8 +43,6 @@ export function Footer() {
                   {siteConfig.email}
                 </a>
               </li>
-              <li>{siteConfig.phone}</li>
-              <li>{siteConfig.address}</li>
             </ul>
           </div>
         </div>

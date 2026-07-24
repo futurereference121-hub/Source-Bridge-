@@ -30,13 +30,11 @@ export default function ContactPage() {
                 <li>
                   <a
                     href={`mailto:${siteConfig.email}`}
-                    className="text-ink hover:text-accent"
+                    className="text-navy hover:text-electric"
                   >
                     {siteConfig.email}
                   </a>
                 </li>
-                <li>{siteConfig.phone}</li>
-                <li>{siteConfig.address}</li>
               </ul>
             </div>
 

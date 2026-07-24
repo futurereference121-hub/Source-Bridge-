@@ -10,6 +10,7 @@ const outfit = Outfit({
   display: "swap",
 });
 
+/** Kept for any legacy className bindings; brand UI uses Outfit sans */
 const cormorant = Cormorant({
   variable: "--font-cormorant",
   subsets: ["latin"],
@@ -25,11 +26,9 @@ export const metadata: Metadata = {
   keywords: [
     "people-powered marketplace",
     "personal sourcing",
-    "Thailand",
-    "Russia",
     "member listings",
     "local access",
-    "Available Finds",
+    "travel access",
   ],
   openGraph: {
     title: siteConfig.name,

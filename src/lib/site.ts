@@ -7,14 +7,18 @@ export const siteConfig = {
     "Source Bridge connects people through location, travel and local access.",
   missionLine: "People are the bridge. Location is the value.",
   url: "https://sourcebridge.example",
-  email: "hello@sourcebridge.com",
-  phone: "+66 2 000 0000",
+  email: "info@sourcebridge.com",
   address: "Community locations worldwide",
 };
 
-/** Desktop primary navigation */
+/** Homepage header — minimal welcome screen */
+export const homeNavItems: NavItem[] = [
+  { label: "How It Works", href: "/how-it-works" },
+  { label: "Sign In / Up", href: "/sign-in" },
+];
+
+/** Desktop primary navigation (internal pages) */
 export const navItems: NavItem[] = [
-  { label: "Home", href: "/" },
   { label: "Explore", href: "/explore" },
   { label: "How It Works", href: "/how-it-works" },
   { label: "Sign In", href: "/sign-in" },

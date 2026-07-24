@@ -39,7 +39,7 @@ export function MobileNav() {
               <Link
                 href={item.href}
                 className={`flex h-full flex-col items-center justify-center gap-1 text-[10px] uppercase tracking-[0.12em] ${
-                  active ? "text-ink" : "text-muted"
+                  active ? "text-electric" : "text-muted"
                 }`}
               >
                 <Icon size={20} strokeWidth={active ? 1.75 : 1.5} />

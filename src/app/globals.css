@@ -1,23 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  /* Cool, calm neutrals — premium human platform, not warehouse retail */
-  --background: #f5f6f8;
-  --foreground: #12151a;
+  /* Source Bridge — navy / white / electric blue */
+  --navy: #020c1d;
+  --navy-mid: #041a36;
+  --electric: #1769e8;
+  --electric-hover: #1258c4;
+  --electric-soft: #e8f0fc;
+
+  --background: #f4f6fa;
+  --foreground: #020c1d;
   --surface: #ffffff;
-  --muted: #5c6570;
-  --muted-light: #8b939c;
-  --border: #d8dde3;
-  --stone: #e8ebef;
-  --stone-dark: #c5ccd4;
-  --accent: #1a3d4d;
-  --accent-hover: #143240;
-  --accent-soft: #e6eef1;
-  --ink: #12151a;
+  --muted: #5a6578;
+  --muted-light: #8a94a6;
+  --border: #d5dce8;
+  --stone: #e8edf5;
+  --stone-dark: #c5cedc;
+  --accent: #1769e8;
+  --accent-hover: #1258c4;
+  --accent-soft: #e8f0fc;
+  --ink: #020c1d;
   --success: #2a5a45;
 }
 
 @theme inline {
+  --color-navy: var(--navy);
+  --color-navy-mid: var(--navy-mid);
+  --color-electric: var(--electric);
+  --color-electric-hover: var(--electric-hover);
+  --color-electric-soft: var(--electric-soft);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
@@ -32,7 +43,7 @@
   --color-ink: var(--ink);
   --color-success: var(--success);
   --font-sans: var(--font-outfit);
-  --font-display: var(--font-cormorant);
+  --font-display: var(--font-outfit);
 }
 
 * {
@@ -52,12 +63,18 @@ body {
 }
 
 ::selection {
-  background: var(--accent);
+  background: var(--electric);
   color: white;
 }
 
 .font-display {
-  font-family: var(--font-cormorant), serif;
+  font-family: var(--font-outfit), sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.bg-hero-navy {
+  background: linear-gradient(135deg, #020c1d 0%, #041a36 48%, #031428 100%);
 }
 
 @keyframes fade-up {
@@ -98,4 +115,26 @@ body {
 
 .animate-delay-3 {
   animation-delay: 0.45s;
+}
+
+@keyframes globe-node-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.globe-node-pulse {
+  animation: globe-node-pulse 3.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in,
+  .globe-node-pulse {
+    animation: none;
+  }
 }
