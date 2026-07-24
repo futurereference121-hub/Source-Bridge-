@@ -24,7 +24,7 @@ export function CategoryCard({ category, large = false }: CategoryCardProps) {
         <div className="absolute inset-0 bg-gradient-to-t from-ink/70 via-ink/20 to-transparent" />
         <div className="absolute inset-x-0 bottom-0 p-6 sm:p-8">
           <p className="text-[11px] uppercase tracking-[0.2em] text-white/70">
-            {category.subcategories.length} collections
+            Available finds
           </p>
           <h3 className="mt-2 font-display text-3xl text-white sm:text-4xl">
             {category.name}

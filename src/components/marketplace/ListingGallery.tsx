@@ -3,12 +3,12 @@
 import Image from "next/image";
 import { useState } from "react";
 
-type ProductGalleryProps = {
+type ListingGalleryProps = {
   images: string[];
   name: string;
 };
 
-export function ProductGallery({ images, name }: ProductGalleryProps) {
+export function ListingGallery({ images, name }: ListingGalleryProps) {
   const [active, setActive] = useState(0);
   const current = images[active] ?? images[0];
 

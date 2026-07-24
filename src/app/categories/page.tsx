@@ -8,7 +8,7 @@ import { SectionHeading } from "@/components/ui/SectionHeading";
 export const metadata: Metadata = {
   title: "Categories",
   description:
-    "Explore Source Bridge categories — Clothing, Jewellery, Home & Living, and Collectibles shared by members.",
+    "Browse Available Finds by category — Clothing, Jewellery, Home & Living, and Collectibles shared by members.",
 };
 
 export default function CategoriesPage() {
@@ -17,7 +17,7 @@ export default function CategoriesPage() {
       <Container>
         <SectionHeading
           eyebrow="Categories"
-          title="A clear hierarchy for discovery."
+          title="Find your way through Available Finds."
           description="Browse by category and subcategory — the same structure used throughout the marketplace."
           className="mb-14 sm:mb-20"
         />

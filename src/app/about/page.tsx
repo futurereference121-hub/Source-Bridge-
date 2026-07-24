@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 export const metadata: Metadata = {
   title: "About",
   description:
-    "Source Bridge philosophy — people trust people. Technology connects rather than replaces. People are the bridge.",
+    "Source Bridge philosophy — trade became too impersonal. People trust people. Technology connects rather than replaces. People are the bridge.",
 };
 
 export default function AboutPage() {
@@ -22,9 +22,9 @@ export default function AboutPage() {
           />
           <p className="text-base leading-relaxed text-muted sm:text-lg">
             If you&apos;re somewhere, or you&apos;re going somewhere, you can help
-            someone. Location is value. Members share products and sourcing access
-            from where they are — starting with our founding member across Thailand
-            and Russia.
+            someone. Location is value. Members share discoveries and sourcing
+            access from where they are — starting with our first community
+            locations in Thailand and Russia.
           </p>
         </div>
 
@@ -47,11 +47,11 @@ export default function AboutPage() {
             },
             {
               title: "People trust people",
-              body: "We rebuild commerce around member profiles: verified presence, local knowledge, and accountability.",
+              body: "We rebuild connection around equal member profiles: presence, local knowledge, and accountability earned over time.",
             },
             {
               title: "Tech connects, not replaces",
-              body: "Platforms should amplify human bridges — messaging, travel context, and community tools will grow here over time.",
+              body: "Platforms should amplify human bridges — messaging, travel context, and community tools will grow here without replacing the people.",
             },
           ].map((item) => (
             <div key={item.title} className="border-t border-border pt-6">
@@ -65,8 +65,8 @@ export default function AboutPage() {
           <div>
             <h2 className="font-display text-3xl text-ink">Join the bridge</h2>
             <p className="mt-2 max-w-xl text-muted">
-              Explore member listings or request personal sourcing through people who
-              are already where you need them.
+              Explore member findings or request personal sourcing through people
+              who are already where you need them.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">

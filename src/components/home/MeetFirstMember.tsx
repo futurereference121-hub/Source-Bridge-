@@ -1,21 +1,21 @@
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
-import { MemberProfileCard } from "@/components/member/MemberProfileCard";
-import { getFoundingMember } from "@/data/members";
+import { MemberCard } from "@/components/profile/MemberCard";
+import { getLaunchMember } from "@/data/members";
 
 export function MeetFirstMember() {
-  const member = getFoundingMember();
+  const member = getLaunchMember();
 
   return (
     <section className="py-20 sm:py-28">
       <Container>
         <SectionHeading
           eyebrow="Community"
-          title="Meet The First Member"
-          description="Source Bridge launches with one featured member — a trusted presence across Thailand and Russia. More members will join on the same structure."
+          title="Meet a member of the bridge"
+          description="Source Bridge launches with one community member across Thailand and Russia. Every future member uses this same storefront structure — equal, human, and local."
           className="mb-12 sm:mb-16"
         />
-        <MemberProfileCard member={member} />
+        <MemberCard member={member} />
       </Container>
     </section>
   );

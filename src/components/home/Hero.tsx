@@ -11,7 +11,7 @@ type HeroProps = {
 
 export function Hero({
   headline = "If you're somewhere, or you're going somewhere, you can help someone.",
-  subhead = "Source Bridge connects people around the world through trusted local access, personal sourcing and products shared by members of the community.",
+  subhead = "Source Bridge connects people around the world through trusted local access, personal sourcing and discoveries shared by members of the community.",
   imageSrc = "https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1800&q=80",
   imageAlt = "Travellers and locals connecting across cities and landscapes",
 }: HeroProps) {
@@ -25,7 +25,8 @@ export function Hero({
         sizes="100vw"
         className="object-cover object-center animate-fade-in"
       />
-      <div className="absolute inset-0 bg-gradient-to-r from-ink/78 via-ink/48 to-ink/28" />
+      <div className="absolute inset-0 bg-gradient-to-r from-ink/80 via-ink/50 to-ink/25" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_70%,transparent_0%,rgba(18,21,26,0.35)_100%)]" />
 
       <div className="relative z-10 mx-auto flex min-h-[100svh] max-w-7xl flex-col justify-end px-5 pb-16 pt-28 sm:px-8 sm:pb-20 lg:px-10 lg:pb-24">
         <p className="animate-fade-up font-display text-2xl tracking-[0.12em] text-white sm:text-3xl md:text-4xl">

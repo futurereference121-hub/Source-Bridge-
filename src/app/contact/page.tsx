@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 export const metadata: Metadata = {
   title: "Contact",
   description:
-    "Contact Source Bridge — platform questions, community partnership, or product sourcing enquiries.",
+    "Contact the Source Bridge community — platform questions, partnership interest, or personal sourcing enquiries.",
 };
 
 export default function ContactPage() {
@@ -17,8 +17,8 @@ export default function ContactPage() {
       <Container>
         <SectionHeading
           eyebrow="Contact"
-          title="Talk with the Source Bridge team."
-          description="Platform questions, community interest, or a sourcing brief — start here. For detailed product requests, the sourcing form captures quantity, budget, and specifications."
+          title="Talk with the Source Bridge community."
+          description="Platform questions, community interest, or a sourcing brief — start here. For detailed requests, the personal sourcing form captures quantity, budget, and specifications."
           className="mb-14 max-w-3xl sm:mb-20"
         />
 
@@ -48,7 +48,7 @@ export default function ContactPage() {
                 },
                 {
                   title: "Marketplace",
-                  body: "Questions about member listings, categories, or discovering products.",
+                  body: "Questions about Available Finds, member listings, or discovery.",
                 },
                 {
                   title: "Sourcing",

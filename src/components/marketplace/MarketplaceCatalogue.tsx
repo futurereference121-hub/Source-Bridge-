@@ -1,21 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Product } from "@/lib/types";
-import { ProductCard } from "@/components/product/ProductCard";
+import type { Listing } from "@/lib/types";
+import { ListingCard } from "@/components/marketplace/ListingCard";
 import { getSubcategoriesForCategory, getUniqueCategories } from "@/data/products";
 
-type ShopCatalogueProps = {
-  products: Product[];
+type MarketplaceCatalogueProps = {
+  listings: Listing[];
   initialCategory?: string;
   initialSubcategory?: string;
 };
 
-export function ShopCatalogue({
-  products,
+export function MarketplaceCatalogue({
+  listings,
   initialCategory = "",
   initialSubcategory = "",
-}: ShopCatalogueProps) {
+}: MarketplaceCatalogueProps) {
   const categories = getUniqueCategories();
   const [category, setCategory] = useState(initialCategory);
   const [subcategory, setSubcategory] = useState(initialSubcategory);
@@ -26,12 +26,12 @@ export function ShopCatalogue({
   );
 
   const filtered = useMemo(() => {
-    return products.filter((p) => {
+    return listings.filter((p) => {
       if (category && p.category !== category) return false;
       if (subcategory && p.subcategory !== subcategory) return false;
       return true;
     });
-  }, [products, category, subcategory]);
+  }, [listings, category, subcategory]);
 
   return (
     <div className="grid gap-10 lg:grid-cols-[240px_1fr] lg:gap-14">
@@ -89,20 +89,20 @@ export function ShopCatalogue({
 
       <div>
         <p className="mb-6 text-sm text-muted">
-          {filtered.length} product{filtered.length === 1 ? "" : "s"}
+          {filtered.length} finding{filtered.length === 1 ? "" : "s"}
           {category ? ` in ${category}` : ""}
           {subcategory ? ` · ${subcategory}` : ""}
         </p>
         {filtered.length === 0 ? (
           <p className="border border-border bg-surface p-10 text-center text-muted">
-            No products match this filter. Try another category.
+            No findings match this filter. Try another category.
           </p>
         ) : (
           <div className="grid gap-8 sm:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((product, index) => (
-              <ProductCard
-                key={product.id}
-                product={product}
+            {filtered.map((listing, index) => (
+              <ListingCard
+                key={listing.id}
+                listing={listing}
                 priority={index < 3}
               />
             ))}

@@ -1,10 +1,10 @@
-import type { Product } from "@/lib/types";
+import type { Listing } from "@/lib/types";
 
 /**
- * Mock marketplace listings. Every product belongs to a member profile.
+ * Mock marketplace listings. Every listing belongs to a member profile.
  * `supplier` is INTERNAL and must never be shown on the storefront.
  */
-export const products: Product[] = [
+export const products: Listing[] = [
   {
     id: "p-001",
     slug: "silk-road-tracksuit",
@@ -19,11 +19,12 @@ export const products: Product[] = [
     ],
     price: 189,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-ATL-014", region: "Thailand", notes: "Bangkok atelier" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["cotton", "leisure", "unisex"],
     featured: true,
     specs: {
@@ -47,8 +48,9 @@ export const products: Product[] = [
     ],
     price: 320,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-SLK-008", region: "Thailand" },
     availability: "limited",
@@ -75,11 +77,12 @@ export const products: Product[] = [
     ],
     price: 245,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-LN-021", region: "Russia" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["linen", "minimal", "summer"],
     featured: true,
     specs: {
@@ -102,11 +105,12 @@ export const products: Product[] = [
     ],
     price: 128,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-TXT-033", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["poplin", "essentials", "classic"],
     featured: false,
     specs: {
@@ -129,11 +133,12 @@ export const products: Product[] = [
     ],
     price: 210,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-WL-017", region: "Russia" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["wool", "tailoring", "wide-leg"],
     featured: false,
     specs: {
@@ -156,11 +161,12 @@ export const products: Product[] = [
     ],
     price: 165,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-ART-041", region: "Thailand", notes: "Chiang Mai artisans" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["rattan", "handwoven", "leather"],
     featured: true,
     specs: {
@@ -183,11 +189,12 @@ export const products: Product[] = [
     ],
     price: 98,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-HAT-009", region: "Russia" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["wool", "accessories", "classic"],
     featured: false,
     specs: {
@@ -210,8 +217,9 @@ export const products: Product[] = [
     ],
     price: 175,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-KNT-012", region: "Russia" },
     availability: "made_to_order",
@@ -238,8 +246,9 @@ export const products: Product[] = [
     ],
     price: 890,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-WCH-003", region: "Russia" },
     availability: "limited",
@@ -265,11 +274,12 @@ export const products: Product[] = [
     ],
     price: 245,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-SLV-019", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["sterling", "handmade", "cuff"],
     featured: false,
     specs: {
@@ -292,8 +302,9 @@ export const products: Product[] = [
     ],
     price: 420,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-ANT-006", region: "Russia" },
     availability: "limited",
@@ -319,11 +330,12 @@ export const products: Product[] = [
     ],
     price: 380,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-PRL-011", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["pearls", "classic", "gift"],
     featured: true,
     specs: {
@@ -346,11 +358,12 @@ export const products: Product[] = [
     ],
     price: 72,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-LTH-027", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["leather", "everyday", "unisex"],
     featured: false,
     specs: {
@@ -373,11 +386,12 @@ export const products: Product[] = [
     ],
     price: 195,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-RNG-015", region: "Russia" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["onyx", "signet", "sterling"],
     featured: false,
     specs: {
@@ -400,11 +414,12 @@ export const products: Product[] = [
     ],
     price: 210,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-CRM-022", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["ceramic", "handmade", "set"],
     featured: true,
     specs: {
@@ -427,11 +442,12 @@ export const products: Product[] = [
     ],
     price: 145,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-WD-018", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["teak", "kitchen", "serving"],
     featured: false,
     specs: {
@@ -454,8 +470,9 @@ export const products: Product[] = [
     ],
     price: 1280,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-FRN-004", region: "Russia" },
     availability: "made_to_order",
@@ -482,8 +499,9 @@ export const products: Product[] = [
     ],
     price: 265,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-TXT-044", region: "Thailand" },
     availability: "limited",
@@ -509,8 +527,9 @@ export const products: Product[] = [
     ],
     price: 540,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-COL-002", region: "Russia" },
     availability: "limited",
@@ -536,8 +555,9 @@ export const products: Product[] = [
     ],
     price: 680,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Russia",
+    currentLocation: "Moscow, Russia",
     shippingAvailable: true,
     supplier: { code: "RU-AMB-001", region: "Russia" },
     availability: "limited",
@@ -563,11 +583,12 @@ export const products: Product[] = [
     ],
     price: 390,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "International",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "OTH-ART-007", region: "Other" },
-    availability: "preorder",
+    availability: "to_source",
     tags: ["print", "limited", "signed"],
     featured: false,
     specs: {
@@ -591,11 +612,12 @@ export const products: Product[] = [
     ],
     price: 155,
     currency: "USD",
-    memberId: "m-founding",
+    memberId: "m-alex-rivera",
     country: "Thailand",
+    currentLocation: "Bangkok, Thailand",
     shippingAvailable: true,
     supplier: { code: "TH-SLK-051", region: "Thailand" },
-    availability: "in_stock",
+    availability: "available",
     tags: ["silk", "evening", "clutch"],
     featured: false,
     specs: {
@@ -606,19 +628,19 @@ export const products: Product[] = [
   },
 ];
 
-export function getProductBySlug(slug: string): Product | undefined {
+export function getProductBySlug(slug: string): Listing | undefined {
   return products.find((p) => p.slug === slug);
 }
 
-export function getFeaturedProducts(limit = 6): Product[] {
+export function getFeaturedProducts(limit = 6): Listing[] {
   return products.filter((p) => p.featured).slice(0, limit);
 }
 
-export function getProductsByMember(memberId: string): Product[] {
+export function getProductsByMember(memberId: string): Listing[] {
   return products.filter((p) => p.memberId === memberId);
 }
 
-export function getRelatedProducts(product: Product, limit = 4): Product[] {
+export function getRelatedProducts(product: Listing, limit = 4): Listing[] {
   return products
     .filter(
       (p) =>
@@ -629,7 +651,7 @@ export function getRelatedProducts(product: Product, limit = 4): Product[] {
     .slice(0, limit);
 }
 
-export function getProductsByCategory(category?: string, subcategory?: string): Product[] {
+export function getProductsByCategory(category?: string, subcategory?: string): Listing[] {
   return products.filter((p) => {
     if (category && p.category.toLowerCase() !== category.toLowerCase()) {
       return false;
@@ -671,12 +693,20 @@ export function formatPrice(price: number, currency: string): string {
   }
 }
 
-export function availabilityLabel(availability: Product["availability"]): string {
-  const labels: Record<Product["availability"], string> = {
-    in_stock: "In stock",
-    limited: "Limited availability",
+export function availabilityLabel(availability: Listing["availability"]): string {
+  const labels: Record<Listing["availability"], string> = {
+    available: "Available",
+    limited: "Limited",
     made_to_order: "Made to order",
-    preorder: "Preorder",
+    to_source: "Available to source",
   };
   return labels[availability];
 }
+
+/** Alias exports for listing-first naming. */
+export const listings = products;
+export const getListingBySlug = getProductBySlug;
+export const getFeaturedListings = getFeaturedProducts;
+export const getListingsByMember = getProductsByMember;
+export const getRelatedListings = getRelatedProducts;
+

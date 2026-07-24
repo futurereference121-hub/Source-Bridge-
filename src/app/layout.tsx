@@ -23,13 +23,13 @@ export const metadata: Metadata = {
   },
   description: siteConfig.description,
   keywords: [
-    "product sourcing",
-    "people marketplace",
-    "Thailand sourcing",
-    "Russia sourcing",
+    "people-powered marketplace",
     "personal sourcing",
+    "Thailand",
+    "Russia",
     "member listings",
     "local access",
+    "Available Finds",
   ],
   openGraph: {
     title: siteConfig.name,

@@ -4,14 +4,14 @@ import Link from "next/link";
 import {
   availabilityLabel,
   formatPrice,
-  getProductBySlug,
-  getRelatedProducts,
-  products,
+  getListingBySlug,
+  getRelatedListings,
+  listings,
 } from "@/data/products";
 import { getMemberById } from "@/data/members";
-import { ProductGallery } from "@/components/product/ProductGallery";
-import { ProductCard } from "@/components/product/ProductCard";
-import { MemberProfileCard } from "@/components/member/MemberProfileCard";
+import { ListingGallery } from "@/components/marketplace/ListingGallery";
+import { ListingCard } from "@/components/marketplace/ListingCard";
+import { MemberCard } from "@/components/profile/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { Button } from "@/components/ui/Button";
@@ -21,26 +21,26 @@ type PageProps = {
 };
 
 export async function generateStaticParams() {
-  return products.map((p) => ({ slug: p.slug }));
+  return listings.map((p) => ({ slug: p.slug }));
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const product = getProductBySlug(slug);
-  if (!product) return { title: "Product" };
+  const listing = getListingBySlug(slug);
+  if (!listing) return { title: "Listing" };
   return {
-    title: product.name,
-    description: product.description,
+    title: listing.name,
+    description: listing.description,
   };
 }
 
-export default async function ProductDetailPage({ params }: PageProps) {
+export default async function ListingDetailPage({ params }: PageProps) {
   const { slug } = await params;
-  const product = getProductBySlug(slug);
-  if (!product) notFound();
+  const listing = getListingBySlug(slug);
+  if (!listing) notFound();
 
-  const member = getMemberById(product.memberId);
-  const related = getRelatedProducts(product, 4);
+  const member = getMemberById(listing.memberId);
+  const related = getRelatedListings(listing, 4);
 
   return (
     <div className="pt-28 pb-20 sm:pt-32 sm:pb-28">
@@ -51,49 +51,52 @@ export default async function ProductDetailPage({ params }: PageProps) {
           </Link>
           <span className="mx-2">/</span>
           <Link
-            href={`/marketplace?category=${encodeURIComponent(product.category)}`}
+            href={`/marketplace?category=${encodeURIComponent(listing.category)}`}
             className="hover:text-ink"
           >
-            {product.category}
+            {listing.category}
           </Link>
           <span className="mx-2">/</span>
-          <span className="text-ink">{product.name}</span>
+          <span className="text-ink">{listing.name}</span>
         </nav>
 
         <div className="grid gap-10 lg:grid-cols-2 lg:gap-16">
-          <ProductGallery images={product.images} name={product.name} />
+          <ListingGallery images={listing.images} name={listing.name} />
 
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-muted">
-              {product.subcategory ?? product.category}
+              {listing.subcategory ?? listing.category}
             </p>
             <h1 className="mt-3 font-display text-4xl text-ink sm:text-5xl">
-              {product.name}
+              {listing.name}
             </h1>
             <p className="mt-4 text-xl font-medium text-ink">
-              {formatPrice(product.price, product.currency)}
+              {formatPrice(listing.price, listing.currency)}
             </p>
             <p className="mt-2 text-sm text-muted">
-              {availabilityLabel(product.availability)}
+              {availabilityLabel(listing.availability)}
               <span className="mx-2 text-border">·</span>
-              {product.country}
+              {listing.country}
               <span className="mx-2 text-border">·</span>
-              {product.shippingAvailable
+              {listing.currentLocation}
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              {listing.shippingAvailable
                 ? "Shipping available"
                 : "Local arrangement"}
             </p>
 
             <p className="mt-8 text-base leading-relaxed text-muted">
-              {product.description}
+              {listing.description}
             </p>
 
-            {product.specs ? (
+            {listing.specs ? (
               <div className="mt-10 border-t border-border pt-8">
                 <h2 className="text-xs font-medium uppercase tracking-[0.18em] text-muted">
-                  Specifications
+                  Details
                 </h2>
                 <dl className="mt-4 space-y-3">
-                  {Object.entries(product.specs).map(([key, value]) => (
+                  {Object.entries(listing.specs).map(([key, value]) => (
                     <div
                       key={key}
                       className="flex justify-between gap-6 border-b border-border/70 pb-3 text-sm"
@@ -111,16 +114,16 @@ export default async function ProductDetailPage({ params }: PageProps) {
                 Shipping
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-muted">
-                {product.shippingNote ??
-                  (product.shippingAvailable
+                {listing.shippingNote ??
+                  (listing.shippingAvailable
                     ? "Worldwide shipping available through this member. Lead times vary by destination and availability."
                     : "Shipping details arranged directly with the member.")}
               </p>
             </div>
 
-            {product.tags.length > 0 ? (
+            {listing.tags.length > 0 ? (
               <div className="mt-8 flex flex-wrap gap-2">
-                {product.tags.map((tag) => (
+                {listing.tags.map((tag) => (
                   <span
                     key={tag}
                     className="border border-border px-3 py-1 text-xs uppercase tracking-[0.12em] text-muted"
@@ -145,25 +148,26 @@ export default async function ProductDetailPage({ params }: PageProps) {
         {member ? (
           <section className="mt-20 border-t border-border pt-14 sm:mt-28 sm:pt-20">
             <SectionHeading
-              eyebrow="Member"
-              title="Listed by"
-              description="Every product on Source Bridge belongs to a member profile — people with local access, not a company warehouse."
+              eyebrow="Who is offering this?"
+              title="Member profile"
+              description="Every finding on Source Bridge belongs to a person with local access — not a company warehouse."
               className="mb-10"
             />
-            <MemberProfileCard member={member} />
+            <MemberCard member={member} />
           </section>
         ) : null}
 
         {related.length > 0 ? (
           <section className="mt-20 sm:mt-28">
             <SectionHeading
-              title="More from this community"
-              description="Related listings shared by members."
+              eyebrow="More finds"
+              title="Related discoveries"
+              description="Other listings from the community."
               className="mb-10"
             />
             <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
               {related.map((item) => (
-                <ProductCard key={item.id} product={item} />
+                <ListingCard key={item.id} listing={item} />
               ))}
             </div>
           </section>

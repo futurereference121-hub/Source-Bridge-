@@ -45,8 +45,8 @@ export function SourcingForm() {
         </p>
         <h3 className="mt-3 font-display text-3xl text-ink">Thank you.</h3>
         <p className="mt-3 max-w-md text-muted">
-          Our sourcing team will review your brief and respond shortly. You can also
-          browse the shop while you wait.
+          We&apos;ll connect your brief with people who can help. Meanwhile, explore
+          Available Finds in the marketplace.
         </p>
         <Button
           type="button"
@@ -89,7 +89,7 @@ export function SourcingForm() {
           onChange={(v) => setValues((s) => ({ ...s, business: v }))}
         />
         <Field
-          label="Product Required"
+          label="What do you need?"
           required
           className="sm:col-span-2"
           value={values.productRequired}

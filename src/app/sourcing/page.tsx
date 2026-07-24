@@ -14,31 +14,31 @@ import {
 } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Product Sourcing",
+  title: "Personal Sourcing",
   description:
-    "Personal and business sourcing through real people — specialists, locals, and travellers connected by Source Bridge.",
+    "Personal and business sourcing through real people — specialists, travellers, expats, and locals connected by Source Bridge.",
 };
 
 const services = [
   {
     icon: Users,
     title: "Through real people",
-    body: "Specialists, locals, and travellers with genuine access — not anonymous stock lists.",
+    body: "Specialists, travellers, expats, and locals with genuine access — not anonymous catalogues.",
   },
   {
     icon: MapPinned,
-    title: "Where they are",
-    body: "Thailand and Russia are our first community locations — more regions as members join.",
+    title: "First community locations",
+    body: "Thailand and Russia are where the community begins — not permanent-only limits. More regions as members join.",
   },
   {
     icon: Package,
     title: "Personal sourcing",
-    body: "Find a specific piece, gift, or hard-to-reach product through someone on the ground.",
+    body: "Find a specific piece, gift, or hard-to-reach item through someone on the ground.",
   },
   {
     icon: Briefcase,
     title: "Business sourcing",
-    body: "Wholesale, private-label, and procurement programs shaped with member expertise.",
+    body: "Wholesale, private-label, and procurement shaped with member expertise.",
   },
   {
     icon: Handshake,
@@ -58,7 +58,7 @@ const services = [
   {
     icon: Globe,
     title: "Community growth",
-    body: "One founding member today. The same profile structure welcomes the next members.",
+    body: "One equal member structure today. The same profile welcomes the next thousands.",
   },
 ];
 
@@ -67,9 +67,9 @@ export default function SourcingPage() {
     <div className="pt-28 pb-20 sm:pt-32 sm:pb-28">
       <Container>
         <SectionHeading
-          eyebrow="Product Sourcing"
+          eyebrow="Personal Sourcing"
           title="Sourced through people — not warehouses."
-          description="Personal and business sourcing via members of the community: specialists, locals, and travellers who can help because of where they are — or where they're going."
+          description="Specialists, travellers, expats, and locals who can help because of where they are — or where they're going."
           className="mb-14 max-w-3xl sm:mb-20"
         />
 
@@ -88,7 +88,7 @@ export default function SourcingPage() {
             <SectionHeading
               eyebrow="Request"
               title="Tell us what you need."
-              description="Share as much detail as you can. We'll connect your brief with the right human access — starting with our Thailand and Russia community."
+              description="Share as much detail as you can. We'll connect your brief with human access — starting with our Thailand and Russia community locations."
             />
             <ul className="mt-8 space-y-3 text-sm text-muted">
               <li>— People-powered sourcing, not company inventory</li>

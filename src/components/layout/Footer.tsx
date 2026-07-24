@@ -12,8 +12,8 @@ export function Footer() {
               {siteConfig.name.toUpperCase()}
             </p>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/65">
-              A people-powered marketplace for trusted local access. Members share
-              products and sourcing from where they are.
+              A people-powered platform for trusted local access. If you&apos;re
+              somewhere — or going somewhere — you can help someone.
             </p>
           </div>
 

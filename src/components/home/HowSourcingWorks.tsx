@@ -6,12 +6,12 @@ const steps = [
   {
     step: "01",
     title: "Share what you need",
-    body: "Tell us the product, quantity, budget, and destination. A clear brief helps the right people respond.",
+    body: "Tell us the piece, quantity, budget, and destination. A clear brief helps the right people respond.",
   },
   {
     step: "02",
     title: "Connect through people",
-    body: "We activate members and trusted networks — specialists, locals, and travellers with real access where it matters.",
+    body: "We activate members — specialists, locals, expats, and travellers with real access where it matters.",
   },
   {
     step: "03",
@@ -21,7 +21,7 @@ const steps = [
   {
     step: "04",
     title: "Deliver across borders",
-    body: "Members coordinate sourcing and shipping pathways — from local pickup to worldwide delivery.",
+    body: "Members coordinate sourcing and shipping pathways — from local handoff to international delivery.",
   },
 ];
 
@@ -31,9 +31,9 @@ export function HowSourcingWorks() {
       <Container>
         <div className="mb-14 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <SectionHeading
-            eyebrow="Process"
-            title="How Personal Sourcing Works"
-            description="Sourcing through real people — four clear steps from brief to delivery."
+            eyebrow="Personal Sourcing"
+            title="How people source for people"
+            description="Four clear steps from brief to delivery — through humans, not warehouses."
             tone="on-dark"
           />
           <Button
