@@ -31,7 +31,7 @@ export function PrimaryButton({
   ...props
 }: PrimaryButtonProps) {
   const classes = cn(
-    "inline-flex items-center justify-center gap-2 rounded-[5px] bg-electric px-6 py-3.5 text-sm font-semibold uppercase tracking-[0.1em] text-white transition-colors hover:bg-electric-hover disabled:pointer-events-none disabled:opacity-50",
+    "inline-flex items-center justify-center gap-2 rounded-lg bg-electric px-6 py-3.5 text-sm font-semibold uppercase tracking-[0.1em] text-white transition-colors hover:bg-electric-hover disabled:pointer-events-none disabled:opacity-50",
     className,
   );
 

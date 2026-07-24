@@ -3,8 +3,7 @@ import type { NavItem } from "@/lib/types";
 export const siteConfig = {
   name: "Source Bridge",
   tagline: "If you're somewhere, or you're going somewhere, you can help someone.",
-  description:
-    "Source Bridge connects people through location, travel and local access.",
+  description: "Unlocking the value of human location.",
   missionLine: "People are the bridge. Location is the value.",
   url: "https://sourcebridge.example",
   email: "info@sourcebridge.com",

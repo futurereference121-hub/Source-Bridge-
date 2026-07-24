@@ -16,11 +16,9 @@ export default function HomePage() {
       <section className="relative flex flex-1 flex-col overflow-hidden">
         <GlobalConnectionVisual />
 
-        <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center px-5 pb-16 pt-28 sm:px-8 sm:pb-20 lg:px-10 lg:pt-24">
-          <div className="max-w-xl lg:max-w-[34rem]">
-            <HeroMission />
-            <HeroActions />
-          </div>
+        <div className="relative z-10 mx-auto flex w-full max-w-4xl flex-1 flex-col items-center justify-center px-5 pb-24 pt-28 text-center sm:px-8 sm:pb-28 lg:px-10 lg:pt-24">
+          <HeroMission />
+          <HeroActions />
         </div>
       </section>
 

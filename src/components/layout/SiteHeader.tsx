@@ -43,7 +43,7 @@ export function SiteHeader() {
             </Link>
             <Link
               href={signedIn ? "/profile" : "/sign-in"}
-              className="inline-flex h-10 items-center rounded-[4px] border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
+              className="inline-flex h-10 items-center rounded-lg border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
             >
               {signedIn
                 ? account?.name?.split(" ")[0] || "Profile"

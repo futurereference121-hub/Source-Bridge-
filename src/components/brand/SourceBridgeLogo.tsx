@@ -11,8 +11,8 @@ type SourceBridgeLogoProps = {
 
 const COLORS = {
   white: "#ffffff",
-  navy: "#020C1D",
-  electric: "#1769E8",
+  navy: "#020B1C",
+  electric: "#3B82F6",
 } as const;
 
 export function SourceBridgeLogo({

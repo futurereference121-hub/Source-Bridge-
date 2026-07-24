@@ -1,25 +1,25 @@
 @import "tailwindcss";
 
 :root {
-  /* Source Bridge — navy / white / electric blue */
-  --navy: #020c1d;
+  /* Source Bridge — navy / white / electric blue (approved homepage) */
+  --navy: #020b1c;
   --navy-mid: #041a36;
-  --electric: #1769e8;
-  --electric-hover: #1258c4;
+  --electric: #3b82f6;
+  --electric-hover: #2563eb;
   --electric-soft: #e8f0fc;
 
   --background: #f4f6fa;
-  --foreground: #020c1d;
+  --foreground: #020b1c;
   --surface: #ffffff;
   --muted: #5a6578;
   --muted-light: #8a94a6;
   --border: #d5dce8;
   --stone: #e8edf5;
   --stone-dark: #c5cedc;
-  --accent: #1769e8;
-  --accent-hover: #1258c4;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
   --accent-soft: #e8f0fc;
-  --ink: #020c1d;
+  --ink: #020b1c;
   --success: #2a5a45;
 }
 
@@ -74,7 +74,9 @@ body {
 }
 
 .bg-hero-navy {
-  background: linear-gradient(135deg, #020c1d 0%, #041a36 48%, #031428 100%);
+  background:
+    radial-gradient(ellipse 75% 65% at 58% 48%, rgba(59, 130, 246, 0.12) 0%, transparent 58%),
+    linear-gradient(160deg, #020b1c 0%, #031428 40%, #041a36 70%, #020b1c 100%);
 }
 
 @keyframes fade-up {
@@ -131,10 +133,62 @@ body {
   animation: globe-node-pulse 3.2s ease-in-out infinite;
 }
 
+@keyframes globe-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.globe-float {
+  animation: globe-float 18s ease-in-out infinite;
+}
+
+@keyframes globe-drift {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(0.6deg) scale(1.012);
+  }
+}
+
+.globe-drift {
+  animation: globe-drift 48s ease-in-out infinite;
+}
+
+.btn-glow-primary {
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.25s ease,
+    transform 0.2s ease;
+}
+
+.btn-glow-primary:hover {
+  box-shadow: 0 0 22px rgba(59, 130, 246, 0.4);
+}
+
+.btn-glow-secondary {
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.25s ease,
+    transform 0.2s ease;
+}
+
+.btn-glow-secondary:hover {
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.22);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-in,
-  .globe-node-pulse {
+  .globe-node-pulse,
+  .globe-float,
+  .globe-drift {
     animation: none;
   }
 }
