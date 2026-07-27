@@ -1,6 +1,4 @@
 "use client";
-
-import { upload } from "@vercel/blob/client";
 import {
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGE_BYTES,
@@ -95,17 +93,10 @@ export async function compressImageFile(
   return new File([out], `${base}.${ext}`, { type: out.type });
 }
 
-function randomName(ext: string): string {
-  const rand =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID().slice(0, 12)
-      : Math.random().toString(36).slice(2, 10);
-  return `${Date.now()}-${rand}.${ext}`;
-}
-
 /**
  * Upload a profile/stock image.
- * Prefers direct Vercel Blob client upload; falls back to multipart `/api/upload`.
+ * Sends multipart data through our upload route so the server can store it
+ * with Vercel Blob using the project-connected store credentials.
  */
 export async function uploadProfileImageFile(opts: {
   file: File;
@@ -115,7 +106,7 @@ export async function uploadProfileImageFile(opts: {
   userId: string;
   onProgress?: (progress: ProfileUploadProgress) => void;
 }): Promise<ProfileUploadResult> {
-  const { folder, userId, replaceUrl, onProgress } = opts;
+  const { folder, replaceUrl, onProgress } = opts;
   const kind = opts.kind || (folder === "covers" ? "cover" : "photo");
 
   onProgress?.({ percent: 5, stage: "validating" });
@@ -128,56 +119,41 @@ export async function uploadProfileImageFile(opts: {
   if (stillInvalid) throw new Error(stillInvalid);
 
   const previewUrl = createLocalPreview(compressed);
-  const ext =
-    compressed.type === "image/webp"
-      ? "webp"
-      : compressed.type === "image/png"
-        ? "png"
-        : "jpg";
-  const pathname = `${folder}/${userId}/${randomName(ext)}`;
+  onProgress?.({ percent: 30, stage: "uploading" });
 
-  try {
-    onProgress?.({ percent: 30, stage: "uploading" });
-    const blob = await upload(pathname, compressed, {
-      access: "public",
-      handleUploadUrl: "/api/upload",
-      clientPayload: JSON.stringify({ folder, replaceUrl: replaceUrl || "" }),
-      multipart: compressed.size > 1_000_000,
-      onUploadProgress: (event) => {
-        const pct = 30 + Math.round((event.percentage || 0) * 0.65);
-        onProgress?.({ percent: Math.min(95, pct), stage: "uploading" });
-      },
-    });
-    onProgress?.({ percent: 100, stage: "done" });
-    return { url: blob.url, previewUrl };
-  } catch (err) {
-    // Fallback: multipart through our API (local / missing Blob client token flow)
-    const message = err instanceof Error ? err.message : String(err);
-    const shouldFallback =
-      message.includes("BLOB_READ_WRITE_TOKEN") ||
-      message.includes("Blob storage is not configured") ||
-      message.includes("Failed to retrieve") ||
-      message.includes("503") ||
-      message.includes("fetch");
-
-    if (!shouldFallback) {
-      URL.revokeObjectURL(previewUrl);
-      throw err instanceof Error ? err : new Error("Upload failed");
-    }
-
-    onProgress?.({ percent: 40, stage: "uploading" });
+  return await new Promise<ProfileUploadResult>((resolve, reject) => {
     const form = new FormData();
     form.append("file", compressed);
     form.append("folder", folder);
     if (replaceUrl) form.append("replaceUrl", replaceUrl);
 
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    const data = (await res.json()) as { error?: string; url?: string };
-    if (!res.ok || !data.url) {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.responseType = "json";
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const ratio = event.total > 0 ? event.loaded / event.total : 0;
+      const pct = 30 + Math.round(ratio * 65);
+      onProgress?.({ percent: Math.min(95, pct), stage: "uploading" });
+    };
+
+    xhr.onerror = () => {
       URL.revokeObjectURL(previewUrl);
-      throw new Error(data.error || "Upload failed");
-    }
-    onProgress?.({ percent: 100, stage: "done" });
-    return { url: data.url, previewUrl };
-  }
+      reject(new Error("Vercel Blob failed to upload."));
+    };
+
+    xhr.onload = () => {
+      const data = (xhr.response || {}) as { error?: string; url?: string };
+      if (xhr.status < 200 || xhr.status >= 300 || !data.url) {
+        URL.revokeObjectURL(previewUrl);
+        reject(new Error(data.error || "Vercel Blob failed to upload."));
+        return;
+      }
+      onProgress?.({ percent: 100, stage: "done" });
+      resolve({ url: data.url, previewUrl });
+    };
+
+    xhr.send(form);
+  });
 }

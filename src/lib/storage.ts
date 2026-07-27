@@ -8,12 +8,13 @@ import {
 export { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "@/lib/storage-constants";
 
 /**
- * Image storage — Vercel Blob for production, with optional local fallback for
- * offline/dev when BLOB_READ_WRITE_TOKEN is absent.
+ * Image storage — Vercel Blob in production, with optional local fallback for
+ * offline/dev when Blob credentials are unavailable.
  *
  * Env:
- *   BLOB_READ_WRITE_TOKEN — required for Vercel Blob (also auto-injected by Vercel)
- *   STORAGE_PROVIDER=vercel-blob|local — defaults to vercel-blob when token present
+ *   BLOB_STORE_ID + VERCEL_OIDC_TOKEN (auto on connected Vercel project)
+ *   BLOB_READ_WRITE_TOKEN (optional static token; still used outside Vercel)
+ *   STORAGE_PROVIDER=vercel-blob|local
  */
 
 export const PROFILE_IMAGE_FOLDERS = ["avatars", "covers"] as const;
@@ -36,7 +37,9 @@ function getProvider(): "vercel-blob" | "local" {
   const explicit = (process.env.STORAGE_PROVIDER || "").toLowerCase();
   if (explicit === "local") return "local";
   if (explicit === "vercel-blob") return "vercel-blob";
-  return process.env.BLOB_READ_WRITE_TOKEN ? "vercel-blob" : "local";
+  return process.env.BLOB_STORE_ID || process.env.BLOB_READ_WRITE_TOKEN
+    ? "vercel-blob"
+    : "local";
 }
 
 export function extensionFor(type: string): string {
@@ -117,17 +120,19 @@ async function saveToBlob(
   contentType: string,
   pathname: string,
 ): Promise<StorageResult> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN) {
     return {
       ok: false,
-      error: "BLOB_READ_WRITE_TOKEN is not configured",
+      error: "Vercel Blob is not configured",
     };
   }
   const blob = await put(pathname, buffer, {
     access: "public",
     contentType,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
     addRandomSuffix: false,
+    ...(process.env.BLOB_READ_WRITE_TOKEN
+      ? { token: process.env.BLOB_READ_WRITE_TOKEN }
+      : {}),
   });
   return {
     ok: true,
@@ -181,7 +186,7 @@ export async function storeImageForUser(
   }
 
   console.warn(
-    "[storage] Using local filesystem fallback (set BLOB_READ_WRITE_TOKEN for Vercel Blob).",
+    "[storage] Using local filesystem fallback (set Vercel Blob env vars for Blob storage).",
   );
   return saveLocalDev(buffer, contentType, pathname);
 }
@@ -201,8 +206,10 @@ export async function deleteStoredImageForUser(
       const { pathname } = new URL(urlOrPath);
       const clean = pathname.replace(/^\//, "");
       if (!pathnameBelongsToUser(clean, userId)) return;
-      if (!process.env.BLOB_READ_WRITE_TOKEN) return;
-      await del(urlOrPath, { token: process.env.BLOB_READ_WRITE_TOKEN });
+      const delOptions = process.env.BLOB_READ_WRITE_TOKEN
+        ? { token: process.env.BLOB_READ_WRITE_TOKEN }
+        : undefined;
+      await del(urlOrPath, delOptions);
     } catch {
       // ignore delete failures
     }
