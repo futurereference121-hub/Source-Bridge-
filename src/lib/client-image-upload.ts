@@ -36,6 +36,79 @@ export function createLocalPreview(file: File): string {
   return URL.createObjectURL(file);
 }
 
+export type SquareCropOptions = {
+  /** 1 = cover the square; >1 zooms in. */
+  zoom: number;
+  /** Pan from centered cover, in crop-viewport pixels. */
+  offsetX: number;
+  offsetY: number;
+  /** Output edge length in px (default 1024). */
+  outputSize?: number;
+  /** Encoder quality 0–1 (default 0.85). */
+  quality?: number;
+};
+
+/**
+ * Crop a square region from an image File using zoom + pan,
+ * then encode as WebP (JPEG fallback) via canvas.
+ */
+export async function cropImageToSquare(
+  file: File,
+  opts: SquareCropOptions,
+): Promise<File> {
+  const zoom = Math.max(1, opts.zoom);
+  const outputSize = Math.max(64, Math.round(opts.outputSize ?? 1024));
+  const quality = Math.min(1, Math.max(0.85, opts.quality ?? 0.85));
+
+  const bitmap = await createImageBitmap(file);
+  const imgW = bitmap.width;
+  const imgH = bitmap.height;
+  // Cover scale at zoom=1 for a unit viewport, then apply zoom.
+  const cover = Math.max(outputSize / imgW, outputSize / imgH);
+  const scale = cover * zoom;
+
+  const displayedW = imgW * scale;
+  const displayedH = imgH * scale;
+  // Centered top-left, then apply pan (same convention as the cropper UI).
+  let dx = (outputSize - displayedW) / 2 + opts.offsetX;
+  let dy = (outputSize - displayedH) / 2 + opts.offsetY;
+
+  // Clamp so the square stays covered.
+  const minX = outputSize - displayedW;
+  const minY = outputSize - displayedH;
+  dx = Math.min(0, Math.max(minX, dx));
+  dy = Math.min(0, Math.max(minY, dy));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize;
+  canvas.height = outputSize;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    bitmap.close();
+    throw new Error("Could not crop image.");
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bitmap, dx, dy, displayedW, displayedH);
+  bitmap.close();
+
+  const blob: Blob | null = await new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/webp", quality);
+  });
+
+  let out = blob;
+  if (!out || out.size === 0) {
+    out = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), "image/jpeg", quality);
+    });
+  }
+  if (!out) throw new Error("Could not encode cropped image.");
+
+  const ext = out.type === "image/webp" ? "webp" : "jpg";
+  const base = file.name.replace(/\.[^.]+$/, "") || "image";
+  return new File([out], `${base}-square.${ext}`, { type: out.type });
+}
+
 /**
  * Resize/compress in the browser with canvas.
  * Avatars → max 1024px; covers → max 1920px. Prefer WebP when supported.

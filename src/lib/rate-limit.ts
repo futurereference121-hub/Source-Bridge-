@@ -1,15 +1,19 @@
 import { prisma } from "@/lib/db";
 import {
   calendarDayKey,
+  DAILY_MESSAGE_LIMIT,
   DAILY_OPPORTUNITY_LIMIT,
+  DAILY_SOURCING_LIMIT,
   DAILY_STATUS_LIMIT,
 } from "@/lib/limits";
 
-export type RateLimitAction = "status" | "opportunity";
+export type RateLimitAction = "status" | "opportunity" | "message" | "sourcing";
 
 const LIMITS: Record<RateLimitAction, number> = {
   status: DAILY_STATUS_LIMIT,
   opportunity: DAILY_OPPORTUNITY_LIMIT,
+  message: DAILY_MESSAGE_LIMIT,
+  sourcing: DAILY_SOURCING_LIMIT,
 };
 
 export type RateLimitCheck = {

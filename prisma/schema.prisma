@@ -48,6 +48,13 @@ model User {
   following            Follow[]                  @relation("Follower")
   rateLimitEvents      RateLimitEvent[]
   identityRequests     IdentityVerificationRequest[]
+  conversationParts    ConversationParticipant[]
+  messagesSent         Message[]                 @relation("MessageSender")
+  sourcingSent         SourcingRequest[]         @relation("SourcingFrom")
+  sourcingReceived     SourcingRequest[]         @relation("SourcingTo")
+  transactionsAsBuyer  Transaction[]             @relation("TxnBuyer")
+  transactionsAsSeller Transaction[]             @relation("TxnSeller")
+  blockedConversations ConversationBlock[]
 }
 
 model Session {
@@ -130,43 +137,74 @@ model Opportunity {
   closedAt    DateTime?
   postedAt    DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  conversations Conversation[]
+  sourcingRequests SourcingRequest[]
+  transactions Transaction[]
 
   @@index([userId, postedAt])
 }
 
 model StockListing {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String
-  slug         String   @unique
-  description  String   @default("")
-  category     String
-  /// JSON string[] of image URLs/paths
-  images       String   @default("[]")
-  quantity     String   @default("")
-  availability String   @default("available")
-  location     String   @default("")
-  price        Float?
-  currency     String   @default("USD")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name              String
+  slug              String   @unique
+  description       String   @default("")
+  /// Product family — "clothing" today; other kinds can add attribute sets later.
+  productKind       String   @default("clothing")
+  category          String
+  subcategory       String   @default("")
+  /// Ordered image URLs (JSON string[]). First image is the cover.
+  images            String   @default("[]")
+  /// Legacy free-text quantity (non-clothing / fallback). Prefer sizes for clothing.
+  quantity          String   @default("")
+  /// Clothing sizes JSON string[] — S, M, L, XL, XXL, Multiple sizes available
+  sizes             String   @default("[]")
+  material          String   @default("")
+  brand             String   @default("")
+  condition         String   @default("")
+  colour            String   @default("")
+  pattern           String   @default("")
+  fit               String   @default("")
+  gender            String   @default("")
+  availability      String   @default("available")
+  /// Legacy single location string — prefer shipFromCity/Country.
+  location          String   @default("")
+  shipFromCity      String   @default("")
+  shipFromCountry   String   @default("")
+  shippingAvailable Boolean  @default(false)
+  price             Float?
+  currency          String   @default("USD")
+  /// Extensible attribute bag for future product kinds (JSON object).
+  attributes        String   @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  conversations     Conversation[]
+  sourcingRequests  SourcingRequest[]
+  transactions      Transaction[]
 
   @@index([userId])
+  @@index([slug])
+  @@index([productKind, category])
 }
 
 model Review {
-  id         String   @id @default(cuid())
-  revieweeId String
-  reviewee   User     @relation("Reviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
-  reviewerId String?
-  reviewer   User?    @relation("Reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
-  authorName String
-  rating     Int
-  text       String
-  createdAt  DateTime @default(now())
+  id            String       @id @default(cuid())
+  revieweeId    String
+  reviewee      User         @relation("Reviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
+  reviewerId    String?
+  reviewer      User?        @relation("Reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  authorName    String
+  rating        Int
+  text          String
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
 
+  @@unique([transactionId, reviewerId])
   @@index([revieweeId])
+  @@index([transactionId])
 }
 
 /// followingId may reference a real User OR a seed member id (no FK on target).
@@ -193,7 +231,7 @@ model Category {
   createdAt   DateTime @default(now())
 }
 
-/// Server-side daily action counters (status / opportunity). Timezone: APP_TIMEZONE or UTC.
+/// Server-side daily action counters (status / opportunity / message). Timezone: APP_TIMEZONE or UTC.
 model RateLimitEvent {
   id        String   @id @default(cuid())
   userId    String
@@ -217,4 +255,139 @@ model IdentityVerificationRequest {
   reviewedAt DateTime?
 
   @@index([userId, status])
+}
+
+/// Internal messaging thread between Source Bridge users.
+model Conversation {
+  id               String                    @id @default(cuid())
+  subject          String                    @default("")
+  /// listing | opportunity | sourcing | direct | trip
+  contextType      String                    @default("direct")
+  listingId        String?
+  listing          StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId    String?
+  opportunity      Opportunity?              @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  tripId           String?
+  sourcingRequestId String?                  @unique
+  sourcingRequest  SourcingRequest?          @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  closedAt         DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  lastMessageAt    DateTime?
+  participants     ConversationParticipant[]
+  messages         Message[]
+  blocks           ConversationBlock[]
+  transactions     Transaction[]
+
+  @@index([updatedAt])
+  @@index([listingId])
+  @@index([opportunityId])
+  @@index([lastMessageAt])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime?
+  joinedAt       DateTime     @default(now())
+  leftAt         DateTime?
+
+  @@unique([conversationId, userId])
+  @@index([userId, lastReadAt])
+}
+
+model Message {
+  id             String              @id @default(cuid())
+  conversationId String
+  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User                @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  body           String              @default("")
+  createdAt      DateTime            @default(now())
+  attachments    MessageAttachment[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}
+
+model MessageAttachment {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  url       String
+  pathname  String   @default("")
+  mimeType  String   @default("")
+  sizeBytes Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+}
+
+model ConversationBlock {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+}
+
+model SourcingRequest {
+  id             String        @id @default(cuid())
+  fromUserId     String
+  fromUser       User          @relation("SourcingFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId       String
+  toUser         User          @relation("SourcingTo", fields: [toUserId], references: [id], onDelete: Cascade)
+  listingId      String?
+  listing        StockListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId  String?
+  opportunity    Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  message        String
+  status         String        @default("open")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  conversation   Conversation?
+  transactions   Transaction[]
+
+  @@index([fromUserId, toUserId])
+  @@index([toUserId, createdAt])
+  @@index([listingId])
+  @@index([opportunityId])
+}
+
+/// Lifecycle ready for future escrow — no payment processing yet.
+model Transaction {
+  id                String          @id @default(cuid())
+  /// REQUESTED | ACCEPTED | IN_PROGRESS | COMPLETED | CANCELLED | DISPUTED
+  status            String          @default("REQUESTED")
+  buyerId           String
+  buyer             User            @relation("TxnBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId          String
+  seller            User            @relation("TxnSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  conversationId    String?
+  conversation      Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  sourcingRequestId String?
+  sourcingRequest   SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  listingId         String?
+  listing           StockListing?   @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId     String?
+  opportunity       Opportunity?    @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  title             String          @default("")
+  notes             String          @default("")
+  amount            Float?
+  currency          String          @default("USD")
+  completedAt       DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  reviews           Review[]
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+  @@index([conversationId])
+  @@index([status, completedAt])
 }

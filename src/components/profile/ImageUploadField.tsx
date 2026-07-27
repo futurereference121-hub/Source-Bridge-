@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { SquareImageCropper } from "@/components/media/SquareImageCropper";
 import {
   createLocalPreview,
   uploadProfileImageFile,
@@ -37,6 +38,7 @@ export function ImageUploadField({
   const [preview, setPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProfileUploadProgress | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cropSource, setCropSource] = useState<File | null>(null);
   const previewRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -51,14 +53,18 @@ export function ImageUploadField({
     setPreview(url);
   }
 
-  async function onFile(file: File | null) {
+  function onFileSelect(file: File | null) {
     if (!file || busy || disabled) return;
     const err = validateImageFileClient(file);
     if (err) {
       showToast(err);
       return;
     }
+    setCropSource(file);
+  }
 
+  async function onCropped(file: File) {
+    setCropSource(null);
     const local = createLocalPreview(file);
     setPreviewUrl(local);
     setBusy(true);
@@ -73,7 +79,6 @@ export function ImageUploadField({
         replaceUrl: value || undefined,
         onProgress: setProgress,
       });
-      // Prefer blob URL for persistence; keep local preview until parent re-renders
       setPreviewUrl(result.previewUrl);
       await onUploaded(result.url);
       showToast(kind === "photo" ? "Photo uploaded" : "Cover uploaded");
@@ -153,7 +158,7 @@ export function ImageUploadField({
             className="hidden"
             disabled={busy || disabled}
             onChange={(e) => {
-              void onFile(e.target.files?.[0] || null);
+              onFileSelect(e.target.files?.[0] || null);
               e.target.value = "";
             }}
           />
@@ -163,6 +168,17 @@ export function ImageUploadField({
         <p className="mt-1.5 text-[11px] text-white/35">
           JPG, PNG, or WebP · max 5 MB
         </p>
+      ) : null}
+
+      {cropSource ? (
+        <SquareImageCropper
+          source={cropSource}
+          open
+          title={kind === "cover" ? "Crop cover" : "Crop photo"}
+          outputSize={kind === "cover" ? 1280 : 1024}
+          onCancel={() => setCropSource(null)}
+          onConfirm={onCropped}
+        />
       ) : null}
     </div>
   );

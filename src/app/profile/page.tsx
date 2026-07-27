@@ -263,12 +263,15 @@ export default function ProfileDashboardPage() {
       <Container className="max-w-4xl">
         <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-white/40">Manage profile</p>
+            <p className="text-xs uppercase tracking-[0.16em] text-white/40">Account &amp; deep manage</p>
             <h1 className="mt-2 font-display text-4xl">{account.name}</h1>
             <p className="mt-1 text-white/50">@{account.username}</p>
+            <p className="mt-2 max-w-md text-sm text-white/40">
+              Your public profile is the main dashboard. Use this page for full network, stock, and account tools.
+            </p>
           </div>
           <div className="flex flex-wrap gap-4 text-sm">
-            <Link href={`/members/${account.slug}`} className="text-electric hover:text-electric-hover">Preview public profile</Link>
+            <Link href={`/members/${account.slug}`} className="text-electric hover:text-electric-hover">Back to dashboard</Link>
             <Link href="/profile/settings" className="text-white/60 hover:text-white">Account settings</Link>
             <button type="button" onClick={() => void signOut()} className="text-white/60 hover:text-white">Sign out</button>
           </div>

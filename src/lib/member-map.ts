@@ -200,23 +200,97 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
 
 export function dbStockToListing(row: DbStock): Listing {
   const images = parseJsonArray(row.images);
+  const sizes = parseJsonArray(
+    "sizes" in row && typeof row.sizes === "string" ? row.sizes : "[]",
+  );
+  const shipCity =
+    "shipFromCity" in row && typeof row.shipFromCity === "string"
+      ? row.shipFromCity
+      : "";
+  const shipCountry =
+    "shipFromCountry" in row && typeof row.shipFromCountry === "string"
+      ? row.shipFromCountry
+      : "";
+  const shippingAvailable =
+    "shippingAvailable" in row && typeof row.shippingAvailable === "boolean"
+      ? row.shippingAvailable
+      : false;
+  const locationLabel =
+    shipCity && shipCountry
+      ? `${shipCity}, ${shipCountry}`
+      : shipCity || shipCountry || row.location || "";
+
+  const specs: Record<string, string> = {};
+  const subcategory =
+    "subcategory" in row && typeof row.subcategory === "string"
+      ? row.subcategory
+      : "";
+  const material =
+    "material" in row && typeof row.material === "string" ? row.material : "";
+  const brand =
+    "brand" in row && typeof row.brand === "string" ? row.brand : "";
+  const condition =
+    "condition" in row && typeof row.condition === "string"
+      ? row.condition
+      : "";
+  const colour =
+    "colour" in row && typeof row.colour === "string" ? row.colour : "";
+  const pattern =
+    "pattern" in row && typeof row.pattern === "string" ? row.pattern : "";
+  const fit = "fit" in row && typeof row.fit === "string" ? row.fit : "";
+  const gender =
+    "gender" in row && typeof row.gender === "string" ? row.gender : "";
+
+  if (subcategory) specs.Subcategory = subcategory;
+  if (material) specs.Material = material;
+  if (brand) specs.Brand = brand;
+  if (condition) specs.Condition = condition;
+  if (colour) specs.Colour = colour;
+  if (pattern) specs.Pattern = pattern;
+  if (fit) specs.Fit = fit;
+  if (gender) specs["Intended wearer"] = gender;
+  if (sizes.length) specs.Sizes = sizes.join(", ");
+  else if (row.quantity) specs.Quantity = row.quantity;
+
   return {
     id: row.id,
     slug: row.slug,
     name: row.name,
     description: row.description,
     category: row.category,
+    subcategory: subcategory || undefined,
     images: images.length ? images : [PLACEHOLDER_PRODUCT],
     price: row.price ?? 0,
     currency: (row.currency as Listing["currency"]) || "USD",
     memberId: row.userId,
-    country: "",
-    currentLocation: row.location || "",
-    shippingAvailable: false,
+    country: shipCountry || "",
+    currentLocation: locationLabel,
+    shippingAvailable,
     availability: row.availability as ListingAvailability,
     tags: [],
     featured: false,
     quantity: row.quantity,
+    sizes,
+    productKind:
+      "productKind" in row && typeof row.productKind === "string"
+        ? row.productKind
+        : "clothing",
+    material: material || undefined,
+    brand: brand || undefined,
+    condition: condition || undefined,
+    colour: colour || undefined,
+    pattern: pattern || undefined,
+    fit: fit || undefined,
+    gender: gender || undefined,
+    shipFromCity: shipCity || undefined,
+    shipFromCountry: shipCountry || undefined,
+    specs: Object.keys(specs).length ? specs : undefined,
+    shippingNote: shippingAvailable
+      ? `Shipped from ${locationLabel || "seller location"}`
+      : locationLabel
+        ? `Local arrangement · ${locationLabel}`
+        : undefined,
+    isDbListing: true,
   };
 }
 

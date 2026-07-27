@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Star } from "lucide-react";
 import type { Listing, Member } from "@/lib/types";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
+import {
+  ProfileTabs,
+  parseProfileTab,
+} from "@/components/profile/ProfileTabs";
+import { ProfileEditHost } from "@/components/profile/ProfileEditHost";
 import { Container } from "@/components/ui/Container";
 import { getListingsForMember } from "@/data/products";
 import { isStatusActive } from "@/lib/member-status";
@@ -19,13 +24,118 @@ type MemberProfileViewProps = {
   listings?: Listing[];
 };
 
-export function MemberProfileView({
+export function MemberProfileView(props: MemberProfileViewProps) {
+  return (
+    <Suspense fallback={<MemberProfileFallback {...props} />}>
+      <MemberProfileViewInner {...props} />
+    </Suspense>
+  );
+}
+
+function MemberProfileFallback({
+  member,
+  isOwner,
+  listings = getListingsForMember(member),
+}: MemberProfileViewProps) {
+  return (
+    <div className="bg-app-navy pb-28 text-white md:pb-24">
+      <Container>
+        <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileTabs slug={member.slug} isOwner={isOwner} active="public" />
+        <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
+          <PublicProfilePanels
+            member={member}
+            isOwner={isOwner}
+            listings={listings}
+          />
+        </div>
+      </Container>
+    </div>
+  );
+}
+
+function MemberProfileViewInner({
   member,
   isOwner,
   listings = getListingsForMember(member),
 }: MemberProfileViewProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { showToast } = useAppUi();
+  const activeTab = parseProfileTab(searchParams.get("tab"), isOwner);
+
+  useEffect(() => {
+    if (!isOwner) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("welcome") !== "1") return;
+    showToast("Your Source Bridge profile is ready.");
+    const next = new URLSearchParams(params);
+    next.delete("welcome");
+    const qs = next.toString();
+    router.replace(qs ? `/members/${member.slug}?${qs}` : `/members/${member.slug}`, {
+      scroll: false,
+    });
+  }, [isOwner, member.slug, router, showToast]);
+
+  return (
+    <div className="bg-app-navy pb-28 text-white md:pb-24">
+      <Container>
+        <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileTabs slug={member.slug} isOwner={isOwner} active={activeTab} />
+
+        <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
+          {activeTab === "public" ? (
+            <PublicProfilePanels
+              member={member}
+              isOwner={isOwner}
+              listings={listings}
+            />
+          ) : null}
+
+          {activeTab === "activity" && isOwner ? (
+            <ActivityTab member={member} />
+          ) : null}
+
+          {activeTab === "listings" ? (
+            <ListingsTab
+              listings={listings}
+              isOwner={isOwner}
+              slug={member.slug}
+            />
+          ) : null}
+
+          {activeTab === "messages" && isOwner ? <MessagesTab /> : null}
+
+          {activeTab === "reviews" ? (
+            <ProfilePanel title="Reviews">
+              {member.reviews.length ? (
+                <ReviewsCarousel reviews={member.reviews} />
+              ) : (
+                <EmptyCopy>No reviews yet.</EmptyCopy>
+              )}
+            </ProfilePanel>
+          ) : null}
+
+          {activeTab === "settings" && isOwner ? (
+            <SettingsTab />
+          ) : null}
+        </div>
+
+        {isOwner ? <ProfileEditHost member={member} /> : null}
+      </Container>
+    </div>
+  );
+}
+
+function PublicProfilePanels({
+  member,
+  isOwner,
+  listings,
+}: {
+  member: Member;
+  isOwner: boolean;
+  listings: Listing[];
+}) {
   const statusActive = isStatusActive(member.status);
   const opportunities = member.opportunities?.length
     ? member.opportunities
@@ -41,75 +151,69 @@ export function MemberProfileView({
       )
     : [];
 
-  useEffect(() => {
-    if (!isOwner) return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("welcome") !== "1") return;
-    showToast("Your Source Bridge profile is ready.");
-    router.replace(`/members/${member.slug}`, { scroll: false });
-  }, [isOwner, member.slug, router, showToast]);
-
   return (
-    <div className="bg-app-navy pb-28 text-white md:pb-24">
-      <Container>
-        <ProfileHeader member={member} isOwner={isOwner} />
+    <>
+      <div className="grid gap-5 md:grid-cols-2 md:gap-6">
+        <ProfilePanel title="Current Location">
+          <p className="text-lg text-white">{member.location.label}</p>
+        </ProfilePanel>
 
-        <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
-          <div className="grid gap-5 md:grid-cols-2 md:gap-6">
-            <ProfilePanel title="Current Location">
-              <p className="text-lg text-white">{member.location.label}</p>
-            </ProfilePanel>
+        <ProfilePanel title="Upcoming Travels">
+          {member.trips.length ? (
+            <ul className="space-y-3">
+              {member.trips.map((trip) => (
+                <li key={trip.id} className="text-base text-white/90">
+                  <span>
+                    {trip.city}
+                    {trip.country && trip.country !== "—"
+                      ? `, ${trip.country}`
+                      : ""}
+                  </span>
+                  <span className="mt-0.5 block text-sm text-white/45">
+                    {trip.dateRange}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyCopy>No upcoming travel added.</EmptyCopy>
+          )}
+          {isOwner ? (
+            <OwnerLink href={`/members/${member.slug}?edit=travel`}>
+              Manage Trips
+            </OwnerLink>
+          ) : null}
+        </ProfilePanel>
+      </div>
 
-            <ProfilePanel title="Upcoming Travels">
-              {member.trips.length ? (
-                <ul className="space-y-3">
-                  {member.trips.map((trip) => (
-                    <li key={trip.id} className="text-base text-white/90">
-                      <span>
-                        {trip.city}
-                        {trip.country && trip.country !== "—"
-                          ? `, ${trip.country}`
-                          : ""}
-                      </span>
-                      <span className="mt-0.5 block text-sm text-white/45">
-                        {trip.dateRange}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <EmptyCopy>No upcoming travel added.</EmptyCopy>
-              )}
-              {isOwner ? (
-                <OwnerLink href="/profile#trips">Manage Trips</OwnerLink>
-              ) : null}
-            </ProfilePanel>
-          </div>
+      <div className="grid gap-5 md:grid-cols-2 md:gap-6">
+        <ProfilePanel title="Status">
+          {statusActive && member.status ? (
+            <p className="text-base leading-snug text-white/90">
+              {member.status.text}
+            </p>
+          ) : (
+            <EmptyCopy>No active status.</EmptyCopy>
+          )}
+          {isOwner ? (
+            <OwnerLink href={`/members/${member.slug}?edit=status`}>
+              Edit Status
+            </OwnerLink>
+          ) : null}
+        </ProfilePanel>
 
-          <div className="grid gap-5 md:grid-cols-2 md:gap-6">
-            <ProfilePanel title="Status">
-              {statusActive && member.status ? (
-                <p className="text-base leading-snug text-white/90">
-                  {member.status.text}
-                </p>
-              ) : (
-                <EmptyCopy>No active status.</EmptyCopy>
-              )}
-              {isOwner ? (
-                <OwnerLink href="/profile#status">Edit Status</OwnerLink>
-              ) : null}
-            </ProfilePanel>
-
-            <ProfilePanel title="Submit Opportunity">
-              {opportunities.length ? (
-                <div className="space-y-5">
-                  {opportunities.map((opportunity) => (
-                  <div key={opportunity.id}>
+        <ProfilePanel title="Submit Opportunity">
+          {opportunities.length ? (
+            <div className="space-y-5">
+              {opportunities.map((opportunity) => (
+                <div key={opportunity.id}>
                   <p className="text-base font-medium leading-snug text-white/90">
                     {opportunity.title || opportunity.summary}
                   </p>
                   {opportunity.description ? (
-                    <p className="mt-1.5 text-sm leading-relaxed text-white/55">{opportunity.description}</p>
+                    <p className="mt-1.5 text-sm leading-relaxed text-white/55">
+                      {opportunity.description}
+                    </p>
                   ) : null}
                   <dl className="mt-4 space-y-2 text-sm text-white/55">
                     {opportunity.availability ? (
@@ -142,64 +246,252 @@ export function MemberProfileView({
                       Known for this place: {suggestions.join(" · ")}
                     </p>
                   ) : null}
-                  </div>
-                  ))}
+                  {isOwner ? (
+                    <OwnerLink
+                      href={`/members/${member.slug}?edit=opportunity&id=${opportunity.id}`}
+                    >
+                      Edit Opportunity
+                    </OwnerLink>
+                  ) : null}
                 </div>
-              ) : (
-                <EmptyCopy>No opportunity submitted.</EmptyCopy>
-              )}
-              {isOwner ? (
-                <OwnerLink href="/profile#opportunities">
-                  Add Opportunity
-                </OwnerLink>
-              ) : null}
-            </ProfilePanel>
-          </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyCopy>No opportunity submitted.</EmptyCopy>
+          )}
+          {isOwner ? (
+            <OwnerLink href={`/members/${member.slug}?edit=opportunity`}>
+              Add Opportunity
+            </OwnerLink>
+          ) : null}
+        </ProfilePanel>
+      </div>
 
-          <ProfilePanel title="Network Reach">
-            {member.network.length ? (
-              <ul className="flex flex-wrap gap-2">
-                {member.network.map((n) => (
-                  <li
-                    key={`${n.city}-${n.country}`}
-                    className="rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5 text-sm text-white/80"
-                  >
-                    {n.city}
-                    <span className="text-white/40"> · {n.country}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyCopy>No network locations added.</EmptyCopy>
-            )}
-          </ProfilePanel>
-
-          <ProfilePanel title="Available Stock">
-            {listings.length ? (
-              <StockThumbnails listings={listings} />
-            ) : (
-              <EmptyCopy>No stock listed yet.</EmptyCopy>
-            )}
-            {isOwner ? (
-              <Link
-                href="/profile#stock"
-                className="mt-4 inline-flex text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+      <ProfilePanel title="Network Reach">
+        {member.network.length ? (
+          <ul className="flex flex-wrap gap-2">
+            {member.network.map((n) => (
+              <li
+                key={`${n.city}-${n.country}`}
+                className="rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5 text-sm text-white/80"
               >
-                Manage stock
-              </Link>
-            ) : null}
-          </ProfilePanel>
+                {n.city}
+                <span className="text-white/40"> · {n.country}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyCopy>No network locations added.</EmptyCopy>
+        )}
+      </ProfilePanel>
 
-          <ProfilePanel title="Reviews">
-            {member.reviews.length ? (
-              <ReviewsCarousel reviews={member.reviews} />
-            ) : (
-              <EmptyCopy>No reviews yet.</EmptyCopy>
-            )}
-          </ProfilePanel>
+      <ProfilePanel title="Available Stock">
+        {listings.length ? (
+          <StockThumbnails listings={listings} />
+        ) : (
+          <EmptyCopy>No stock listed yet.</EmptyCopy>
+        )}
+        {isOwner ? (
+          <OwnerLink href={`/members/${member.slug}?edit=listing`}>
+            Manage stock
+          </OwnerLink>
+        ) : null}
+      </ProfilePanel>
+
+      <ProfilePanel title="Reviews">
+        {member.reviews.length ? (
+          <ReviewsCarousel reviews={member.reviews} />
+        ) : (
+          <EmptyCopy>No reviews yet.</EmptyCopy>
+        )}
+      </ProfilePanel>
+    </>
+  );
+}
+
+function ActivityTab({ member }: { member: Member }) {
+  const statusActive = isStatusActive(member.status);
+  const opportunities = member.opportunities?.length
+    ? member.opportunities
+    : member.opportunity
+      ? [member.opportunity]
+      : [];
+
+  const items: { id: string; kind: string; title: string; detail: string }[] =
+    [];
+
+  if (statusActive && member.status) {
+    items.push({
+      id: "status",
+      kind: "Status",
+      title: member.status.text,
+      detail: `Active until ${new Date(member.status.expiresAt).toLocaleString()}`,
+    });
+  }
+
+  for (const opp of opportunities) {
+    items.push({
+      id: opp.id,
+      kind: "Opportunity",
+      title: opp.title || opp.summary,
+      detail: [opp.city, opp.country].filter(Boolean).join(", "),
+    });
+  }
+
+  return (
+    <ProfilePanel title="Activity">
+      {items.length ? (
+        <ul className="space-y-3">
+          {items.map((item) => (
+            <li
+              key={item.id}
+              className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric/80">
+                {item.kind}
+              </p>
+              <p className="mt-1 text-sm text-white/90">{item.title}</p>
+              {item.detail ? (
+                <p className="mt-1 text-xs text-white/40">{item.detail}</p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyCopy>No recent status or opportunities.</EmptyCopy>
+      )}
+      <div className="mt-4 flex flex-wrap gap-4">
+        <OwnerLink href={`/members/${member.slug}?edit=status`} className="">
+          Update Status
+        </OwnerLink>
+        <OwnerLink href={`/members/${member.slug}?edit=opportunity`} className="">
+          Post Opportunity
+        </OwnerLink>
+      </div>
+    </ProfilePanel>
+  );
+}
+
+function ListingsTab({
+  listings,
+  isOwner,
+  slug,
+}: {
+  listings: Listing[];
+  isOwner: boolean;
+  slug: string;
+}) {
+  return (
+    <ProfilePanel title="Listings">
+      {listings.length ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          {listings.map((listing) => (
+            <div key={listing.id} className="group relative">
+              <Link
+                href={`/marketplace/${listing.slug}`}
+                className="relative block aspect-square overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10"
+              >
+                <Image
+                  src={listing.images[0]}
+                  alt={listing.name}
+                  fill
+                  sizes="200px"
+                  className="object-cover transition-transform duration-300 group-hover:scale-105"
+                />
+              </Link>
+              <p className="mt-2 truncate text-sm text-white/80">{listing.name}</p>
+              {isOwner ? (
+                <Link
+                  href={`/members/${slug}?edit=listing&id=${listing.id}`}
+                  className="mt-1 inline-flex text-[10px] uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+                >
+                  Edit
+                </Link>
+              ) : null}
+            </div>
+          ))}
         </div>
-      </Container>
-    </div>
+      ) : (
+        <EmptyCopy>No stock listed yet.</EmptyCopy>
+      )}
+      {isOwner ? (
+        <OwnerLink href={`/members/${slug}?edit=listing`}>
+          Add listing
+        </OwnerLink>
+      ) : null}
+    </ProfilePanel>
+  );
+}
+
+function MessagesTab() {
+  const [unread, setUnread] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/conversations")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setUnread(data.unreadCount ?? 0);
+      })
+      .catch(() => {
+        /* ignore — inbox link still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <ProfilePanel title="Messages">
+      <p className="text-sm text-white/55">
+        Open your inbox to continue conversations with buyers and providers.
+      </p>
+      {unread != null ? (
+        <p className="mt-3 text-sm text-white/70">
+          {unread === 0
+            ? "No unread messages."
+            : `${unread} unread message${unread === 1 ? "" : "s"}.`}
+        </p>
+      ) : null}
+      <Link
+        href="/messages"
+        className="mt-5 inline-flex h-11 items-center rounded-lg bg-electric px-5 text-xs font-medium uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
+      >
+        Open inbox
+      </Link>
+    </ProfilePanel>
+  );
+}
+
+function SettingsTab() {
+  return (
+    <ProfilePanel title="Settings">
+      <ul className="space-y-3 text-sm">
+        <li>
+          <Link
+            href="/profile"
+            className="text-electric hover:text-electric-hover"
+          >
+            Manage profile (deep edit)
+          </Link>
+          <p className="mt-1 text-xs text-white/40">
+            Network, stock, and full account tools.
+          </p>
+        </li>
+        <li>
+          <Link
+            href="/profile/settings"
+            className="text-electric hover:text-electric-hover"
+          >
+            Account settings
+          </Link>
+          <p className="mt-1 text-xs text-white/40">
+            Email, security, and sign-out.
+          </p>
+        </li>
+      </ul>
+    </ProfilePanel>
   );
 }
 
@@ -227,14 +519,16 @@ function EmptyCopy({ children }: { children: ReactNode }) {
 function OwnerLink({
   href,
   children,
+  className = "mt-4",
 }: {
   href: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
     <Link
       href={href}
-      className="mt-4 inline-flex text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+      className={`inline-flex text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover ${className}`}
     >
       {children}
     </Link>
@@ -252,11 +546,7 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StockThumbnails({
-  listings,
-}: {
-  listings: Listing[];
-}) {
+function StockThumbnails({ listings }: { listings: Listing[] }) {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? listings : listings.slice(0, 6);
 
@@ -292,11 +582,7 @@ function StockThumbnails({
   );
 }
 
-function ReviewsCarousel({
-  reviews,
-}: {
-  reviews: Member["reviews"];
-}) {
+function ReviewsCarousel({ reviews }: { reviews: Member["reviews"] }) {
   return (
     <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-2 snap-x snap-mandatory">
       {reviews.map((review) => (

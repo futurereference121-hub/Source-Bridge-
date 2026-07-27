@@ -2,10 +2,26 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { jsonError, stockSchema } from "@/lib/validation";
+import { CLOTHING_CATEGORIES } from "@/lib/clothing";
 import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+async function assertCategoryAllowed(category: string, productKind: string) {
+  if (productKind === "clothing") {
+    const ok = CLOTHING_CATEGORIES.some(
+      (c) => c.toLowerCase() === category.toLowerCase(),
+    );
+    if (!ok) return jsonError("Select a clothing category", 400);
+    return null;
+  }
+  const allowed = await listCategoryNames();
+  if (!allowed.some((c) => c.toLowerCase() === category.toLowerCase())) {
+    return jsonError("Select a category from the list", 400);
+  }
+  return null;
+}
 
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
@@ -22,14 +38,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
     const data = parsed.data;
+    const productKind = data.productKind || existing.productKind || "clothing";
     if (data.category) {
-      const allowed = await listCategoryNames();
-      if (
-        !allowed.some((c) => c.toLowerCase() === data.category!.toLowerCase())
-      ) {
-        return jsonError("Select a category from the list", 400);
-      }
+      const catErr = await assertCategoryAllowed(data.category, productKind);
+      if (catErr) return catErr;
     }
+
+    const shipCity = data.shipFromCity ?? existing.shipFromCity;
+    const shipCountry = data.shipFromCountry ?? existing.shipFromCountry;
+    const shipLabel =
+      shipCity && shipCountry ? `${shipCity}, ${shipCountry}` : existing.location;
 
     const row = await prisma.stockListing.update({
       where: { id },
@@ -38,15 +56,40 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         ...(data.description !== undefined
           ? { description: data.description }
           : {}),
+        ...(data.productKind !== undefined
+          ? { productKind: data.productKind }
+          : {}),
         ...(data.category !== undefined ? { category: data.category } : {}),
+        ...(data.subcategory !== undefined
+          ? { subcategory: data.subcategory }
+          : {}),
         ...(data.images !== undefined
           ? { images: JSON.stringify(data.images) }
           : {}),
         ...(data.quantity !== undefined ? { quantity: data.quantity } : {}),
+        ...(data.sizes !== undefined
+          ? { sizes: JSON.stringify(data.sizes) }
+          : {}),
+        ...(data.material !== undefined ? { material: data.material } : {}),
+        ...(data.brand !== undefined ? { brand: data.brand } : {}),
+        ...(data.condition !== undefined ? { condition: data.condition } : {}),
+        ...(data.colour !== undefined ? { colour: data.colour } : {}),
+        ...(data.pattern !== undefined ? { pattern: data.pattern } : {}),
+        ...(data.fit !== undefined ? { fit: data.fit } : {}),
+        ...(data.gender !== undefined ? { gender: data.gender } : {}),
         ...(data.availability !== undefined
           ? { availability: data.availability }
           : {}),
-        ...(data.location !== undefined ? { location: data.location } : {}),
+        ...(data.shipFromCity !== undefined
+          ? { shipFromCity: data.shipFromCity }
+          : {}),
+        ...(data.shipFromCountry !== undefined
+          ? { shipFromCountry: data.shipFromCountry }
+          : {}),
+        ...(data.shippingAvailable !== undefined
+          ? { shippingAvailable: data.shippingAvailable }
+          : {}),
+        location: data.location !== undefined ? data.location : shipLabel,
         ...(data.price !== undefined ? { price: data.price } : {}),
         ...(data.currency !== undefined ? { currency: data.currency } : {}),
       },

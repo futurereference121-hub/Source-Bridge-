@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { PUBLIC_DISPLAY_MESSAGE_MAX, STATUS_TEXT_MAX } from "@/lib/limits";
+import {
+  MESSAGE_ATTACHMENTS_MAX,
+  MESSAGE_BODY_MAX,
+  PUBLIC_DISPLAY_MESSAGE_MAX,
+  STATUS_TEXT_MAX,
+} from "@/lib/limits";
 
 export const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_]{1,28}[a-z0-9])?$/i;
 
@@ -72,17 +77,34 @@ export const tripSchema = z.object({
 });
 
 export const stockSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  description: z.string().trim().max(4000).optional().default(""),
-  category: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1, "Name required").max(120),
+  description: z.string().trim().min(1, "Description required").max(4000),
+  productKind: z.enum(["clothing", "general"]).default("clothing"),
+  category: z.string().trim().min(1, "Category required").max(80),
+  subcategory: z.string().trim().max(80).optional().default(""),
   quantity: z.string().trim().max(40).optional().default(""),
+  sizes: z.array(z.string().trim().min(1).max(40)).max(12).optional().default([]),
+  material: z.string().trim().max(80).optional().default(""),
+  brand: z.string().trim().max(80).optional().default(""),
+  condition: z.string().trim().max(80).optional().default(""),
+  colour: z.string().trim().max(80).optional().default(""),
+  pattern: z.string().trim().max(80).optional().default(""),
+  fit: z.string().trim().max(80).optional().default(""),
+  gender: z.string().trim().max(40).optional().default(""),
   availability: z
     .enum(["available", "limited", "made_to_order", "to_source"])
     .default("available"),
   location: z.string().trim().max(120).optional().default(""),
-  price: z.number().nonnegative().optional().nullable(),
+  shipFromCity: z.string().trim().min(1, "Shipped from city required").max(80),
+  shipFromCountry: z
+    .string()
+    .trim()
+    .min(1, "Shipped from country required")
+    .max(80),
+  shippingAvailable: z.boolean().default(false),
+  price: z.number().nonnegative("Price required"),
   currency: z.string().trim().max(8).optional().default("USD"),
-  images: z.array(z.string()).max(12).optional().default([]),
+  images: z.array(z.string().trim().min(1)).min(1, "Add at least one image").max(12),
 });
 
 export const onboardingIdentitySchema = z.object({
@@ -105,6 +127,94 @@ export const onboardingHelpSchema = z.object({
   publicDisplayMessage: publicDisplayMessageSchema.optional().default(""),
   statusText: z.string().trim().max(STATUS_TEXT_MAX).optional().default(""),
   opportunity: opportunitySchema.optional().nullable(),
+});
+
+export const conversationContextTypeSchema = z.enum([
+  "listing",
+  "opportunity",
+  "sourcing",
+  "direct",
+  "trip",
+]);
+
+export const createConversationSchema = z
+  .object({
+    toUserId: z.string().trim().min(1, "toUserId required"),
+    contextType: conversationContextTypeSchema.default("direct"),
+    listingId: z.string().trim().min(1).optional().nullable(),
+    opportunityId: z.string().trim().min(1).optional().nullable(),
+    subject: z.string().trim().max(200).optional().default(""),
+    initialMessage: z
+      .string()
+      .trim()
+      .min(1, "Message required")
+      .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`),
+  })
+  .refine((v) => !(v.listingId && v.opportunityId), {
+    message: "Provide listingId or opportunityId, not both",
+  });
+
+export const sendMessageSchema = z.object({
+  text: z
+    .string()
+    .trim()
+    .min(1, "Message required")
+    .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`),
+  attachmentUrls: z
+    .array(z.string().trim().url())
+    .max(MESSAGE_ATTACHMENTS_MAX, `Max ${MESSAGE_ATTACHMENTS_MAX} attachments`)
+    .optional()
+    .default([]),
+});
+
+export const sourcingRequestSchema = z
+  .object({
+    toUserId: z.string().trim().min(1, "toUserId required"),
+    message: z
+      .string()
+      .trim()
+      .min(1, "Message required")
+      .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`),
+    listingId: z.string().trim().min(1).optional().nullable(),
+    opportunityId: z.string().trim().min(1).optional().nullable(),
+  })
+  .refine((v) => !(v.listingId && v.opportunityId), {
+    message: "Provide listingId or opportunityId, not both",
+  });
+
+export const transactionStatusSchema = z.enum([
+  "REQUESTED",
+  "ACCEPTED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "DISPUTED",
+]);
+
+export const createTransactionSchema = z.object({
+  sellerId: z.string().trim().min(1, "sellerId required"),
+  buyerId: z.string().trim().min(1).optional(),
+  conversationId: z.string().trim().min(1).optional().nullable(),
+  sourcingRequestId: z.string().trim().min(1).optional().nullable(),
+  listingId: z.string().trim().min(1).optional().nullable(),
+  opportunityId: z.string().trim().min(1).optional().nullable(),
+  title: z.string().trim().max(200).optional().default(""),
+  notes: z.string().trim().max(2000).optional().default(""),
+  amount: z.number().nonnegative().optional().nullable(),
+  currency: z.string().trim().max(8).optional().default("USD"),
+});
+
+export const patchTransactionSchema = z.object({
+  status: transactionStatusSchema,
+  notes: z.string().trim().max(2000).optional(),
+  title: z.string().trim().max(200).optional(),
+  amount: z.number().nonnegative().optional().nullable(),
+});
+
+export const createReviewSchema = z.object({
+  transactionId: z.string().trim().min(1, "transactionId required"),
+  rating: z.number().int().min(1, "Rating must be 1–5").max(5, "Rating must be 1–5"),
+  text: z.string().trim().min(1, "Review text required").max(2000),
 });
 
 export function jsonError(message: string, status = 400, extra?: Record<string, unknown>) {

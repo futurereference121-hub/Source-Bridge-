@@ -125,12 +125,50 @@ export interface Verification {
   badges: VerificationBadge[];
 }
 
+export interface Listing {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  subcategory?: string;
+  images: string[];
+  price: number;
+  currency: Currency;
+  memberId: string;
+  country: string;
+  currentLocation: string;
+  shippingAvailable: boolean;
+  supplier?: SupplierInfo;
+  availability: ListingAvailability;
+  tags: string[];
+  featured: boolean;
+  specs?: Record<string, string>;
+  shippingNote?: string;
+  quantity?: string;
+  /** Clothing sizes — replaces quantity for clothing listings. */
+  sizes?: string[];
+  productKind?: "clothing" | "general" | string;
+  material?: string;
+  brand?: string;
+  condition?: string;
+  colour?: string;
+  pattern?: string;
+  fit?: string;
+  gender?: string;
+  shipFromCity?: string;
+  shipFromCountry?: string;
+  /** True when sourced from PostgreSQL rather than seed catalogue. */
+  isDbListing?: boolean;
+}
+
 export interface Review {
   id: string;
   authorName: string;
   rating: number;
   text: string;
   dateLabel: string;
+  transactionTitle?: string;
 }
 
 export interface ActivityItemData {
@@ -223,29 +261,7 @@ export interface Member {
   followingCount?: number;
 }
 
-/** Listing — belongs to a member, never company inventory. */
-export interface Listing {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  category: string;
-  subcategory?: string;
-  images: string[];
-  price: number;
-  currency: Currency;
-  memberId: string;
-  country: string;
-  currentLocation: string;
-  shippingAvailable: boolean;
-  supplier?: SupplierInfo;
-  availability: ListingAvailability;
-  tags: string[];
-  featured: boolean;
-  specs?: Record<string, string>;
-  shippingNote?: string;
-  quantity?: string;
-}
+/** Listing type is defined above with clothing/shipping fields. */
 
 export interface Category {
   id: string;

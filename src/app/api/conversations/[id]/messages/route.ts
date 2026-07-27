@@ -1,0 +1,141 @@
+import { NextRequest } from "next/server";
+import { prisma } from "@/lib/db";
+import { requireSessionUser } from "@/lib/auth";
+import { assertDailyLimit, recordDailyAction } from "@/lib/rate-limit";
+import {
+  assertNotBlocked,
+  isAllowedAttachmentUrl,
+  mapMessage,
+  markRead,
+  participantUserSelect,
+  requireParticipant,
+  safePathname,
+} from "@/lib/messaging";
+import { jsonError, sendMessageSchema } from "@/lib/validation";
+
+const DEFAULT_LIMIT = 30;
+const MAX_LIMIT = 100;
+
+type Params = { params: Promise<{ id: string }> };
+
+export async function GET(req: NextRequest, { params }: Params) {
+  try {
+    const user = await requireSessionUser();
+    const { id } = await params;
+    await requireParticipant(id, user.id);
+
+    const sp = req.nextUrl.searchParams;
+    const cursor = sp.get("cursor") || undefined;
+    const limit = Math.min(
+      Math.max(Number(sp.get("limit") || DEFAULT_LIMIT) || DEFAULT_LIMIT, 1),
+      MAX_LIMIT,
+    );
+
+    const rows = await prisma.message.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: "desc" },
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: {
+        attachments: true,
+        sender: { select: participantUserSelect },
+      },
+    });
+
+    const slice = rows.slice(0, limit);
+    // Return chronological (oldest → newest) for chat UI
+    const messages = [...slice].reverse().map(mapMessage);
+
+    return Response.json({
+      messages,
+      nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
+    });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    const message =
+      err instanceof Error ? err.message : "Failed to load messages";
+    if (status === 401) return jsonError("Sign in required", 401);
+    if (status >= 400 && status < 500) return jsonError(message, status);
+    console.error("[messages:list]", err);
+    return jsonError(message, status);
+  }
+}
+
+export async function POST(req: NextRequest, { params }: Params) {
+  try {
+    const user = await requireSessionUser();
+    if (!user.emailVerified) return jsonError("Verify email first", 403);
+    if (!user.onboardingComplete) {
+      return jsonError("Complete your profile before messaging", 403);
+    }
+
+    const { id } = await params;
+    await requireParticipant(id, user.id);
+    await assertNotBlocked(id);
+
+    const body = await req.json();
+    const parsed = sendMessageSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(parsed.error.issues[0]?.message || "Invalid message", 400);
+    }
+
+    for (const url of parsed.data.attachmentUrls) {
+      if (!isAllowedAttachmentUrl(url, user.id)) {
+        return jsonError("Invalid attachment URL for this account", 400);
+      }
+    }
+
+    await assertDailyLimit(user.id, "message");
+    const now = new Date();
+
+    const message = await prisma.$transaction(async (tx) => {
+      const msg = await tx.message.create({
+        data: {
+          conversationId: id,
+          senderId: user.id,
+          body: parsed.data.text,
+          createdAt: now,
+          attachments:
+            parsed.data.attachmentUrls.length > 0
+              ? {
+                  create: parsed.data.attachmentUrls.map((url) => ({
+                    url,
+                    pathname: safePathname(url),
+                  })),
+                }
+              : undefined,
+        },
+        include: {
+          attachments: true,
+          sender: { select: participantUserSelect },
+        },
+      });
+      await tx.conversation.update({
+        where: { id },
+        data: { lastMessageAt: now, updatedAt: now },
+      });
+      await markRead(id, user.id, tx);
+      return msg;
+    });
+
+    const limit = await recordDailyAction(user.id, "message", now);
+
+    return Response.json(
+      {
+        ok: true,
+        message: mapMessage(message),
+        limit,
+      },
+      { status: 201 },
+    );
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    const message =
+      err instanceof Error ? err.message : "Failed to send message";
+    if (status === 401) return jsonError("Sign in required", 401);
+    if (status === 429) return jsonError(message, 429);
+    if (status >= 400 && status < 500) return jsonError(message, status);
+    console.error("[messages:send]", err);
+    return jsonError(message, status);
+  }
+}
