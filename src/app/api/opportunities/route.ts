@@ -57,6 +57,12 @@ export async function POST(req: NextRequest) {
   try {
     const user = await requireSessionUser();
     if (!user.emailVerified) return jsonError("Verify email first", 403);
+    if (!user.onboardingComplete) {
+      return jsonError(
+        "Complete your profile before submitting an opportunity",
+        403,
+      );
+    }
 
     const body = await req.json();
     const parsed = opportunitySchema.safeParse(body);

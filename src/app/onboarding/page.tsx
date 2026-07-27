@@ -1,16 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Container } from "@/components/ui/Container";
-import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { IdentityStep } from "@/components/onboarding/IdentityStep";
 import { LocationStep } from "@/components/onboarding/LocationStep";
 import { HelpStep } from "@/components/onboarding/HelpStep";
 
-type Step = "identity" | "location" | "help" | "done";
+type Step = "identity" | "location" | "help";
 
 async function postOnboarding(body: Record<string, unknown>) {
   const res = await fetch("/api/onboarding", {
@@ -22,6 +20,8 @@ async function postOnboarding(body: Record<string, unknown>) {
     error?: string;
     message?: string;
     next?: string;
+    slug?: string;
+    complete?: boolean;
   };
   if (!res.ok) throw new Error(data.error || "Onboarding failed");
   return data;
@@ -49,6 +49,7 @@ export default function OnboardingPage() {
       departure: string;
     }[],
   });
+  const [finishing, setFinishing] = useState(false);
 
   useEffect(() => {
     if (!authReady) return;
@@ -60,8 +61,12 @@ export default function OnboardingPage() {
       router.replace("/check-email");
       return;
     }
+    if (account.onboardingComplete && account.slug) {
+      router.replace(`/members/${account.slug}`);
+      return;
+    }
     if (account.onboardingComplete) {
-      router.replace("/profile");
+      router.replace("/explore");
       return;
     }
     setIdentity((prev) => ({
@@ -72,35 +77,39 @@ export default function OnboardingPage() {
     }));
   }, [authReady, account, router]);
 
-  if (!authReady || !account || !account.emailVerified || account.onboardingComplete) {
+  if (
+    !authReady ||
+    !account ||
+    !account.emailVerified ||
+    account.onboardingComplete ||
+    finishing
+  ) {
     return (
       <div className="bg-app-navy min-h-[100svh] pt-28 pb-20 text-white">
         <Container className="max-w-xl">
-          <p className="text-white/50">Loading…</p>
+          <p className="text-white/50">
+            {finishing ? "Opening your profile…" : "Loading…"}
+          </p>
         </Container>
       </div>
     );
   }
 
   const stepIndex =
-    step === "identity" ? 1 : step === "location" ? 2 : step === "help" ? 3 : 3;
+    step === "identity" ? 1 : step === "location" ? 2 : 3;
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white sm:pt-32">
       <Container className="max-w-xl">
-        {step !== "done" ? (
-          <>
-            <p className="text-xs uppercase tracking-[0.16em] text-electric">
-              Step {stepIndex} of 3
-            </p>
-            <h1 className="mt-2 text-4xl font-bold tracking-tight text-white">
-              Set up your profile
-            </h1>
-            <p className="mt-3 text-white/55">
-              A few steps so others know who you are and how you can help.
-            </p>
-          </>
-        ) : null}
+        <p className="text-xs uppercase tracking-[0.16em] text-electric">
+          Step {stepIndex} of 3
+        </p>
+        <h1 className="mt-2 text-4xl font-bold tracking-tight text-white">
+          Set up your profile
+        </h1>
+        <p className="mt-3 text-white/55">
+          A few steps so others know who you are and how you can help.
+        </p>
 
         <div className="mt-10">
           {step === "identity" ? (
@@ -144,6 +153,7 @@ export default function OnboardingPage() {
             <HelpStep
               showToast={showToast}
               onFinish={async (values) => {
+                setFinishing(true);
                 try {
                   const data = await postOnboarding({
                     step: "help",
@@ -153,37 +163,18 @@ export default function OnboardingPage() {
                     opportunity: values.opportunity,
                   });
                   await refreshAccount();
-                  showToast(data.message || "Profile ready");
-                  setStep("done");
+                  const next =
+                    data.next ||
+                    (data.slug ? `/members/${data.slug}?welcome=1` : "/explore");
+                  router.replace(next);
                 } catch (err) {
+                  setFinishing(false);
                   showToast(
-                    err instanceof Error ? err.message : "Could not finish",
+                    err instanceof Error ? err.message : "Could not finish profile",
                   );
                 }
               }}
             />
-          ) : null}
-
-          {step === "done" ? (
-            <div className="panel-navy rounded-xl px-5 py-8 text-center sm:px-8">
-              <h2 className="text-3xl font-bold tracking-tight text-white">
-                Your Source Bridge profile is ready.
-              </h2>
-              <p className="mt-3 text-white/60">
-                Manage your status, opportunities, and network from your profile.
-              </p>
-              <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <PrimaryButton href="/profile" showArrow={false}>
-                  Go to profile
-                </PrimaryButton>
-                <Link
-                  href="/explore"
-                  className="inline-flex h-12 items-center rounded-lg border border-white/15 px-5 text-sm font-medium text-white/80 hover:border-electric/40"
-                >
-                  Explore members
-                </Link>
-              </div>
-            </div>
           ) : null}
         </div>
       </Container>

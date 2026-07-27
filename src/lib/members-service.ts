@@ -91,7 +91,14 @@ export async function getMemberBySlugAsync(slug: string): Promise<Member | null>
 
   try {
     const user = await prisma.user.findFirst({
-      where: { OR: [{ slug }, { username: slug }] },
+      where: {
+        OR: [{ slug }, { username: slug }],
+        // Incomplete onboarding profiles are never public.
+        onboardingComplete: true,
+        emailVerified: true,
+        username: { not: null },
+        slug: { not: null },
+      },
       include: userInclude,
     });
     if (!user) return null;
@@ -116,8 +123,14 @@ export async function getMemberByIdAsync(id: string): Promise<Member | null> {
   const seed = seedMembers.find((m) => m.id === id);
   if (seed) return withSeedDefaults(seed);
   try {
-    const user = await prisma.user.findUnique({
-      where: { id },
+    const user = await prisma.user.findFirst({
+      where: {
+        id,
+        onboardingComplete: true,
+        emailVerified: true,
+        username: { not: null },
+        slug: { not: null },
+      },
       include: userInclude,
     });
     if (!user) return null;
@@ -145,7 +158,12 @@ export async function getMemberByUsernameAsync(
   if (seed) return withSeedDefaults(seed);
   try {
     const user = await prisma.user.findFirst({
-      where: { username: handle },
+      where: {
+        username: handle,
+        onboardingComplete: true,
+        emailVerified: true,
+        slug: { not: null },
+      },
       include: userInclude,
     });
     if (!user) return null;

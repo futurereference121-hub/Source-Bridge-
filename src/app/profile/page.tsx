@@ -314,7 +314,7 @@ export default function ProfileDashboardPage() {
           </form>
         </Panel>
 
-        <Panel title="Status Update">
+        <Panel title="Status Update" id="status">
           <p className="text-sm text-white/45">Expires after 24 hours. {statusLimit ? `${statusLimit.remaining} of ${statusLimit.limit} posts remaining today.` : "Maximum 3 per day."}</p>
           <form onSubmit={publishStatus} className="mt-4 flex flex-col gap-3 sm:flex-row">
             <input className={inputClass} maxLength={120} value={status} onChange={(e) => setStatus(e.target.value)} placeholder="Share a short update" required />
@@ -322,7 +322,7 @@ export default function ProfileDashboardPage() {
           </form>
         </Panel>
 
-        <Panel title="Opportunities">
+        <Panel title="Opportunities" id="opportunities">
           <p className="text-sm text-white/45">{opportunityLimit ? `${opportunityLimit.remaining} of ${opportunityLimit.limit} new posts remaining today.` : "Maximum 3 new posts per day."}</p>
           <div className="mt-4 space-y-3">
             {opportunities.filter((o) => o.active).map((o) => (
@@ -363,7 +363,7 @@ export default function ProfileDashboardPage() {
           </form>
         </Panel>
 
-        <Panel title="Upcoming Travels">
+        <Panel title="Upcoming Travels" id="trips">
           <div className="space-y-2">
             {trips.map((t) => (
               <ManageRow key={t.id} title={`${t.city}, ${t.country}`} detail={`${t.arrival} → ${t.departure}`}>

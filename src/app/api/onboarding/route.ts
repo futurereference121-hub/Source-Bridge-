@@ -9,8 +9,8 @@ import {
   slugFromUsername,
 } from "@/lib/validation";
 import { isUsernameAvailable } from "@/lib/members-service";
-import { assertDailyLimit, recordDailyAction } from "@/lib/rate-limit";
-import { STATUS_TTL_MS } from "@/lib/limits";
+import { assertDailyLimit } from "@/lib/rate-limit";
+import { calendarDayKey, STATUS_TTL_MS } from "@/lib/limits";
 import { listCategoryNames } from "@/lib/categories-db";
 import { pathnameBelongsToUser } from "@/lib/storage";
 
@@ -129,8 +129,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Require identity basics before completing
-      const current = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      const current = await prisma.user.findUniqueOrThrow({
+        where: { id: user.id },
+      });
+
+      // Idempotent: already completed → do not republish status/opportunities.
+      if (current.onboardingComplete && current.slug) {
+        return Response.json({
+          ok: true,
+          step: "help",
+          complete: true,
+          slug: current.slug,
+          next: `/members/${current.slug}?welcome=1`,
+          message: "Your Source Bridge profile is ready.",
+        });
+      }
+
       if (!current.username || !current.slug) {
         return jsonError("Complete identity step first", 400);
       }
@@ -138,54 +152,89 @@ export async function POST(req: NextRequest) {
         return jsonError("Complete location step first", 400);
       }
 
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          specialties: JSON.stringify(data.specialties),
-          publicDisplayMessage: data.publicDisplayMessage || "",
-          onboardingComplete: true,
-        },
-      });
-
-      if (data.statusText?.trim()) {
-        await assertDailyLimit(user.id, "status");
-        const now = new Date();
-        await prisma.statusUpdate.create({
-          data: {
-            userId: user.id,
-            text: data.statusText.trim(),
-            postedAt: now,
-            expiresAt: new Date(now.getTime() + STATUS_TTL_MS),
-          },
-        });
-        await recordDailyAction(user.id, "status", now);
-      }
-
+      const statusText = data.statusText?.trim() || "";
       if (data.opportunity) {
         const catOk = allowedSet.has(data.opportunity.category.toLowerCase());
         if (!catOk) return jsonError("Unknown opportunity category", 400);
-        await assertDailyLimit(user.id, "opportunity");
-        await prisma.opportunity.create({
+      }
+
+      // Pre-check daily limits before the completion transaction.
+      if (statusText) await assertDailyLimit(user.id, "status");
+      if (data.opportunity) await assertDailyLimit(user.id, "opportunity");
+
+      const now = new Date();
+      const dayKey = calendarDayKey(now);
+      const completed = await prisma.$transaction(async (tx) => {
+        const fresh = await tx.user.findUniqueOrThrow({
+          where: { id: user.id },
+        });
+        if (fresh.onboardingComplete && fresh.slug) {
+          return { slug: fresh.slug, alreadyComplete: true as const };
+        }
+        if (!fresh.username || !fresh.slug) {
+          throw Object.assign(new Error("Complete identity step first"), {
+            status: 400,
+          });
+        }
+        if (!fresh.city || !fresh.country) {
+          throw Object.assign(new Error("Complete location step first"), {
+            status: 400,
+          });
+        }
+
+        await tx.user.update({
+          where: { id: user.id },
           data: {
-            userId: user.id,
-            title: data.opportunity.title,
-            description: data.opportunity.description,
-            city: data.opportunity.city,
-            country: data.opportunity.country,
-            category: data.opportunity.category,
-            expiresAt: data.opportunity.expiresAt
-              ? new Date(data.opportunity.expiresAt)
-              : null,
+            specialties: JSON.stringify(data.specialties),
+            publicDisplayMessage: data.publicDisplayMessage || "",
+            onboardingComplete: true,
           },
         });
-        await recordDailyAction(user.id, "opportunity");
-      }
+
+        // Publish optional onboarding status/opportunity only with completion.
+        if (statusText) {
+          await tx.statusUpdate.create({
+            data: {
+              userId: user.id,
+              text: statusText,
+              postedAt: now,
+              expiresAt: new Date(now.getTime() + STATUS_TTL_MS),
+            },
+          });
+          await tx.rateLimitEvent.create({
+            data: { userId: user.id, action: "status", dayKey },
+          });
+        }
+
+        if (data.opportunity) {
+          await tx.opportunity.create({
+            data: {
+              userId: user.id,
+              title: data.opportunity.title,
+              description: data.opportunity.description,
+              city: data.opportunity.city,
+              country: data.opportunity.country,
+              category: data.opportunity.category,
+              expiresAt: data.opportunity.expiresAt
+                ? new Date(data.opportunity.expiresAt)
+                : null,
+              postedAt: now,
+            },
+          });
+          await tx.rateLimitEvent.create({
+            data: { userId: user.id, action: "opportunity", dayKey },
+          });
+        }
+
+        return { slug: fresh.slug, alreadyComplete: false as const };
+      });
 
       return Response.json({
         ok: true,
         step: "help",
         complete: true,
-        next: "/profile",
+        slug: completed.slug,
+        next: `/members/${completed.slug}?welcome=1`,
         message: "Your Source Bridge profile is ready.",
       });
     }

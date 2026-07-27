@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Star } from "lucide-react";
 import type { Listing, Member } from "@/lib/types";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
@@ -10,6 +11,7 @@ import { Container } from "@/components/ui/Container";
 import { getListingsForMember } from "@/data/products";
 import { isStatusActive } from "@/lib/member-status";
 import { getLocationSuggestions } from "@/data/location-suggestions";
+import { useAppUi } from "@/components/providers/AppProviders";
 
 type MemberProfileViewProps = {
   member: Member;
@@ -22,6 +24,8 @@ export function MemberProfileView({
   isOwner,
   listings = getListingsForMember(member),
 }: MemberProfileViewProps) {
+  const router = useRouter();
+  const { showToast } = useAppUi();
   const statusActive = isStatusActive(member.status);
   const opportunities = member.opportunities?.length
     ? member.opportunities
@@ -36,6 +40,14 @@ export function MemberProfileView({
         opportunities[0].countryCode,
       )
     : [];
+
+  useEffect(() => {
+    if (!isOwner) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("welcome") !== "1") return;
+    showToast("Your Source Bridge profile is ready.");
+    router.replace(`/members/${member.slug}`, { scroll: false });
+  }, [isOwner, member.slug, router, showToast]);
 
   return (
     <div className="bg-app-navy pb-28 text-white md:pb-24">
@@ -68,6 +80,9 @@ export function MemberProfileView({
               ) : (
                 <EmptyCopy>No upcoming travel added.</EmptyCopy>
               )}
+              {isOwner ? (
+                <OwnerLink href="/profile#trips">Manage Trips</OwnerLink>
+              ) : null}
             </ProfilePanel>
           </div>
 
@@ -80,6 +95,9 @@ export function MemberProfileView({
               ) : (
                 <EmptyCopy>No active status.</EmptyCopy>
               )}
+              {isOwner ? (
+                <OwnerLink href="/profile#status">Edit Status</OwnerLink>
+              ) : null}
             </ProfilePanel>
 
             <ProfilePanel title="Submit Opportunity">
@@ -130,6 +148,11 @@ export function MemberProfileView({
               ) : (
                 <EmptyCopy>No opportunity submitted.</EmptyCopy>
               )}
+              {isOwner ? (
+                <OwnerLink href="/profile#opportunities">
+                  Add Opportunity
+                </OwnerLink>
+              ) : null}
             </ProfilePanel>
           </div>
 
@@ -199,6 +222,23 @@ function ProfilePanel({
 
 function EmptyCopy({ children }: { children: ReactNode }) {
   return <p className="text-sm text-white/40">{children}</p>;
+}
+
+function OwnerLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="mt-4 inline-flex text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+    >
+      {children}
+    </Link>
+  );
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

@@ -83,9 +83,23 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
         <div className="flex flex-wrap items-center gap-3">
           {isOwner ? (
-            <PrimaryButton href="/profile" showArrow={false} className="rounded-lg">
-              Edit / Manage Profile
-            </PrimaryButton>
+            <>
+              <PrimaryButton href="/profile" showArrow={false} className="rounded-lg">
+                Edit Profile
+              </PrimaryButton>
+              <Link
+                href="/profile#status"
+                className="inline-flex h-11 items-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 hover:border-white/50 hover:bg-white/5"
+              >
+                Edit Status
+              </Link>
+              <Link
+                href="/profile#opportunities"
+                className="inline-flex h-11 items-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 hover:border-white/50 hover:bg-white/5"
+              >
+                Add Opportunity
+              </Link>
+            </>
           ) : (
             <>
           <button
