@@ -39,8 +39,8 @@ export function Hero({
           {subhead}
         </p>
         <div className="animate-fade-up animate-delay-3 mt-10 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button href="/marketplace" variant="primary" size="lg" className="bg-white text-ink hover:bg-stone">
-            Explore Marketplace
+          <Button href="/explore" variant="primary" size="lg" className="bg-white text-ink hover:bg-stone">
+            Explore
           </Button>
           <Button
             href="/sourcing"

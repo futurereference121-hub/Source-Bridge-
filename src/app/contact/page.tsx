@@ -45,8 +45,8 @@ export default function ContactPage() {
                   body: "How Source Bridge works, community direction, and partnership interest.",
                 },
                 {
-                  title: "Marketplace",
-                  body: "Questions about Available Finds, member listings, or discovery.",
+                  title: "Explore",
+                  body: "Questions about finding members, discovery, or Available Finds.",
                 },
                 {
                   title: "Sourcing",

@@ -10,6 +10,8 @@ import {
   UserRound,
 } from "lucide-react";
 import { mobileNavItems } from "@/lib/site";
+import { useAppUi } from "@/components/providers/AppProviders";
+import { accountHomePath } from "@/components/layout/AccountMenu";
 
 const ICONS = {
   "/": Home,
@@ -21,10 +23,11 @@ const ICONS = {
 
 export function MobileNav() {
   const pathname = usePathname();
+  const { signedIn, account } = useAppUi();
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background/95 backdrop-blur-md md:hidden"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-navy/95 backdrop-blur-md md:hidden"
       aria-label="Mobile"
     >
       <ul className="mx-auto flex h-16 max-w-lg items-stretch justify-between px-2">
@@ -34,12 +37,16 @@ export function MobileNav() {
             item.href === "/"
               ? pathname === "/"
               : pathname.startsWith(item.href);
+          const href =
+            item.href === "/profile" && signedIn
+              ? accountHomePath(account)
+              : item.href;
           return (
             <li key={item.href} className="flex-1">
               <Link
-                href={item.href}
+                href={href}
                 className={`flex h-full flex-col items-center justify-center gap-1 text-[10px] uppercase tracking-[0.12em] ${
-                  active ? "text-electric" : "text-muted"
+                  active ? "text-electric" : "text-white/55"
                 }`}
               >
                 <Icon size={20} strokeWidth={active ? 1.75 : 1.5} />

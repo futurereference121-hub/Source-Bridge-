@@ -11,17 +11,13 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getAccount,
-  getFollows,
   getSavedProfiles,
-  isSignedIn,
-  saveAccount,
   saveSearch,
-  toggleFollow,
   toggleSavedProfile,
-  type PrototypeAccount,
 } from "@/lib/prototype-store";
-import type { AccountIntent } from "@/lib/types";
+import type { AccountIntent, AccountSession } from "@/lib/types";
+
+const VERIFY_PREVIEW_KEY = "sb_verify_preview";
 
 type Toast = { id: number; message: string };
 
@@ -36,8 +32,9 @@ type PromptState = {
 } | null;
 
 type AppUiContextValue = {
-  account: PrototypeAccount | null;
+  account: AccountSession | null;
   signedIn: boolean;
+  authReady: boolean;
   follows: string[];
   savedProfiles: string[];
   toast: Toast | null;
@@ -45,62 +42,135 @@ type AppUiContextValue = {
   showToast: (message: string) => void;
   closePrompt: () => void;
   requireAuth: (actionLabel?: string) => boolean;
-  followMember: (memberId: string, name: string) => void;
+  followMember: (memberId: string, name: string) => Promise<void> | void;
   saveProfile: (memberId: string, name: string) => void;
   saveCurrentSearch: (label: string) => void;
-  join: (data: { name: string; email: string; intent: AccountIntent }) => void;
-  signIn: (data: { email: string; name?: string }) => void;
+  join: (data: {
+    name: string;
+    email: string;
+    intent: AccountIntent;
+  }) => Promise<void>;
+  signIn: (data: { email: string }) => Promise<void>;
+  signOut: () => Promise<void>;
+  refreshAccount: () => Promise<AccountSession | null>;
   openPlaceholder: (title: string, message: string) => void;
 };
 
 const AppUiContext = createContext<AppUiContextValue | null>(null);
 
+async function parseError(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: string };
+    if (data.error) return data.error;
+  } catch {
+    /* ignore */
+  }
+  return "Something went wrong";
+}
+
 export function AppProviders({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [account, setAccount] = useState<PrototypeAccount | null>(null);
+  const [account, setAccount] = useState<AccountSession | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [follows, setFollows] = useState<string[]>([]);
   const [savedProfiles, setSavedProfiles] = useState<string[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
   const [prompt, setPrompt] = useState<PromptState>(null);
   const [toastTimer, setToastTimer] = useState<number | null>(null);
 
-  useEffect(() => {
-    setAccount(getAccount());
-    setFollows(getFollows());
-    setSavedProfiles(getSavedProfiles());
+  const showToast = useCallback(
+    (message: string) => {
+      const id = Date.now();
+      setToast({ id, message });
+      if (toastTimer) window.clearTimeout(toastTimer);
+      const t = window.setTimeout(() => setToast(null), 2800);
+      setToastTimer(t);
+    },
+    [toastTimer],
+  );
+
+  const loadFollows = useCallback(async () => {
+    try {
+      const res = await fetch("/api/follow?kind=following");
+      if (!res.ok) {
+        setFollows([]);
+        return;
+      }
+      const data = (await res.json()) as { items?: { id: string }[] };
+      setFollows((data.items || []).map((i) => i.id));
+    } catch {
+      setFollows([]);
+    }
   }, []);
 
-  const showToast = useCallback((message: string) => {
-    const id = Date.now();
-    setToast({ id, message });
-    if (toastTimer) window.clearTimeout(toastTimer);
-    const t = window.setTimeout(() => setToast(null), 2800);
-    setToastTimer(t);
-  }, [toastTimer]);
+  const refreshAccount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/me");
+      const data = (await res.json()) as { account: AccountSession | null };
+      setAccount(data.account);
+      if (data.account) {
+        await loadFollows();
+      } else {
+        setFollows([]);
+      }
+      return data.account;
+    } catch {
+      setAccount(null);
+      setFollows([]);
+      return null;
+    }
+  }, [loadFollows]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setSavedProfiles(getSavedProfiles());
+      await refreshAccount();
+      if (!cancelled) setAuthReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshAccount]);
 
   const closePrompt = useCallback(() => setPrompt(null), []);
 
-  const requireAuth = useCallback(
-    (actionLabel = "continue") => {
-      if (isSignedIn()) return true;
-      setPrompt({
-        kind: "auth",
-        title: "Join to continue",
-        message: `Sign in or join Source Bridge to ${actionLabel}.`,
-        confirmLabel: "Join",
-        href: "/join",
-      });
-      return false;
-    },
-    [],
-  );
+  const requireAuth = useCallback((actionLabel = "continue") => {
+    if (account) return true;
+    setPrompt({
+      kind: "auth",
+      title: "Join to continue",
+      message: `Sign in or join Source Bridge to ${actionLabel}.`,
+      confirmLabel: "Join",
+      href: "/join",
+    });
+    return false;
+  }, [account]);
 
   const followMember = useCallback(
-    (memberId: string, name: string) => {
+    async (memberId: string, name: string) => {
       if (!requireAuth("follow members")) return;
-      const following = toggleFollow(memberId);
-      setFollows(getFollows());
-      showToast(following ? `Following ${name}` : `Unfollowed ${name}`);
+      try {
+        const res = await fetch("/api/follow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ memberId }),
+        });
+        if (!res.ok) {
+          showToast(await parseError(res));
+          return;
+        }
+        const data = (await res.json()) as { following: boolean };
+        setFollows((prev) => {
+          const set = new Set(prev);
+          if (data.following) set.add(memberId);
+          else set.delete(memberId);
+          return Array.from(set);
+        });
+        showToast(data.following ? `Following ${name}` : `Unfollowed ${name}`);
+      } catch {
+        showToast("Could not update follow");
+      }
     },
     [requireAuth, showToast],
   );
@@ -125,43 +195,66 @@ export function AppProviders({ children }: { children: ReactNode }) {
   );
 
   const join = useCallback(
-    (data: { name: string; email: string; intent: AccountIntent }) => {
-      const next: PrototypeAccount = {
-        name: data.name,
-        email: data.email,
-        intent: data.intent,
-        createdAt: new Date().toISOString(),
+    async (data: { name: string; email: string; intent: AccountIntent }) => {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        showToast(await parseError(res));
+        return;
+      }
+      const payload = (await res.json()) as {
+        account: AccountSession;
+        previewUrl?: string | null;
+        next?: string;
       };
-      saveAccount(next);
-      setAccount(next);
+      setAccount(payload.account);
+      if (payload.previewUrl) {
+        sessionStorage.setItem(VERIFY_PREVIEW_KEY, payload.previewUrl);
+      }
       showToast("Welcome to Source Bridge");
-      router.push("/explore");
+      router.push(payload.next || "/check-email");
     },
     [router, showToast],
   );
 
   const signIn = useCallback(
-    (data: { email: string; name?: string }) => {
-      const existing = getAccount();
-      const next: PrototypeAccount = existing ?? {
-        name: data.name || data.email.split("@")[0] || "Member",
-        email: data.email,
-        intent: "both",
-        createdAt: new Date().toISOString(),
-      };
-      if (!existing) {
-        next.email = data.email;
-        if (data.name) next.name = data.name;
-      } else {
-        next.email = data.email;
+    async (data: { email: string }) => {
+      const res = await fetch("/api/auth/sign-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: data.email }),
+      });
+      if (!res.ok) {
+        showToast(await parseError(res));
+        return;
       }
-      saveAccount(next);
-      setAccount(next);
+      const payload = (await res.json()) as {
+        account: AccountSession;
+        next?: string;
+      };
+      setAccount(payload.account);
+      await loadFollows();
       showToast("Signed in");
-      router.push("/explore");
+      router.push(payload.next || "/explore");
     },
-    [router, showToast],
+    [loadFollows, router, showToast],
   );
+
+  const signOut = useCallback(async () => {
+    try {
+      await fetch("/api/auth/sign-out", { method: "POST" });
+    } catch {
+      /* still clear local */
+    }
+    setAccount(null);
+    setFollows([]);
+    sessionStorage.removeItem(VERIFY_PREVIEW_KEY);
+    showToast("Signed out");
+    router.push("/");
+  }, [router, showToast]);
 
   const openPlaceholder = useCallback((title: string, message: string) => {
     setPrompt({
@@ -176,6 +269,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     () => ({
       account,
       signedIn: Boolean(account),
+      authReady,
       follows,
       savedProfiles,
       toast,
@@ -188,10 +282,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
       saveCurrentSearch,
       join,
       signIn,
+      signOut,
+      refreshAccount,
       openPlaceholder,
     }),
     [
       account,
+      authReady,
       follows,
       savedProfiles,
       toast,
@@ -204,6 +301,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
       saveCurrentSearch,
       join,
       signIn,
+      signOut,
+      refreshAccount,
       openPlaceholder,
     ],
   );
@@ -214,20 +313,20 @@ export function AppProviders({ children }: { children: ReactNode }) {
       {toast ? (
         <div
           role="status"
-          className="fixed bottom-24 left-1/2 z-[70] max-w-sm -translate-x-1/2 border border-border bg-ink px-4 py-3 text-sm text-white shadow-lg md:bottom-8"
+          className="fixed bottom-24 left-1/2 z-[70] max-w-sm -translate-x-1/2 rounded-lg border border-white/15 bg-[#04122a] px-4 py-3 text-sm text-white shadow-lg md:bottom-8"
         >
           {toast.message}
         </div>
       ) : null}
       {prompt ? (
-        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-ink/40 p-4 sm:items-center">
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/55 p-4 sm:items-center">
           <div
             role="dialog"
             aria-modal="true"
-            className="w-full max-w-md border border-border bg-surface p-6 shadow-xl"
+            className="panel-navy w-full max-w-md rounded-xl p-6 text-white shadow-xl"
           >
-            <h2 className="font-display text-2xl text-ink">{prompt.title}</h2>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
+            <h2 className="font-display text-2xl text-white">{prompt.title}</h2>
+            <p className="mt-3 text-sm leading-relaxed text-white/65">
               {prompt.message}
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
@@ -235,7 +334,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
                 <>
                   <button
                     type="button"
-                    className="inline-flex h-11 items-center bg-accent px-5 text-sm font-medium text-white hover:bg-accent-hover"
+                    className="inline-flex h-11 items-center rounded-lg bg-electric px-5 text-sm font-medium text-white hover:bg-electric-hover"
                     onClick={() => {
                       closePrompt();
                       router.push(prompt.href || "/join");
@@ -245,7 +344,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
                   </button>
                   <button
                     type="button"
-                    className="inline-flex h-11 items-center border border-border px-5 text-sm font-medium text-ink hover:border-ink"
+                    className="inline-flex h-11 items-center rounded-lg border border-white/20 px-5 text-sm font-medium text-white hover:border-electric/50"
                     onClick={() => {
                       closePrompt();
                       router.push("/sign-in");
@@ -255,7 +354,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
                   </button>
                   <button
                     type="button"
-                    className="inline-flex h-11 items-center px-3 text-sm text-muted hover:text-ink"
+                    className="inline-flex h-11 items-center px-3 text-sm text-white/50 hover:text-white"
                     onClick={closePrompt}
                   >
                     Cancel
@@ -264,7 +363,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
               ) : (
                 <button
                   type="button"
-                  className="inline-flex h-11 items-center bg-accent px-5 text-sm font-medium text-white hover:bg-accent-hover"
+                  className="inline-flex h-11 items-center rounded-lg bg-electric px-5 text-sm font-medium text-white hover:bg-electric-hover"
                   onClick={closePrompt}
                 >
                   {prompt.confirmLabel || "Got it"}
@@ -283,3 +382,5 @@ export function useAppUi() {
   if (!ctx) throw new Error("useAppUi must be used within AppProviders");
   return ctx;
 }
+
+export { VERIFY_PREVIEW_KEY };

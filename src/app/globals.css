@@ -74,9 +74,76 @@ body {
 }
 
 .bg-hero-navy {
-  background:
-    radial-gradient(ellipse 75% 65% at 58% 48%, rgba(59, 130, 246, 0.12) 0%, transparent 58%),
-    linear-gradient(160deg, #020b1c 0%, #031428 40%, #041a36 70%, #020b1c 100%);
+  /* Same deep navy as the globe scene — no directional colour split */
+  background-color: #020b1c;
+}
+
+/* Continuous deep-navy app shell (Explore, Profiles, Dashboard) */
+.bg-app-navy {
+  background-color: #020b1c;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -10%, rgba(59, 130, 246, 0.16), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 85% 30%, rgba(4, 26, 54, 0.9), transparent 50%),
+    radial-gradient(ellipse 50% 35% at 10% 70%, rgba(59, 130, 246, 0.06), transparent 45%);
+}
+
+.panel-navy {
+  background: linear-gradient(
+    165deg,
+    rgba(8, 28, 56, 0.92) 0%,
+    rgba(4, 18, 40, 0.88) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 12px 40px rgba(0, 0, 0, 0.28);
+}
+
+.panel-navy-soft {
+  background: rgba(6, 22, 46, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.card-navy {
+  background: linear-gradient(
+    160deg,
+    rgba(10, 32, 62, 0.95) 0%,
+    rgba(4, 18, 40, 0.92) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.25s ease;
+}
+
+.card-navy:hover {
+  border-color: rgba(59, 130, 246, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.12),
+    0 0 28px rgba(59, 130, 246, 0.12),
+    0 14px 36px rgba(0, 0, 0, 0.3);
+}
+
+.input-navy {
+  background: rgba(2, 11, 28, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+  outline: none;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.input-navy::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.input-navy:focus {
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
 
 @keyframes fade-up {

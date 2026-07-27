@@ -18,7 +18,7 @@ export default function CategoriesPage() {
         <SectionHeading
           eyebrow="Categories"
           title="Find your way through Available Finds."
-          description="Browse by category and subcategory — the same structure used throughout the marketplace."
+          description="Browse by category — then find members who source in those areas on Explore."
           className="mb-14 sm:mb-20"
         />
 
@@ -26,7 +26,7 @@ export default function CategoriesPage() {
           {categories.map((category) => (
             <section key={category.id} className="grid gap-8 lg:grid-cols-2 lg:gap-14">
               <Link
-                href={`/marketplace?category=${encodeURIComponent(category.name)}`}
+                href={`/explore?q=${encodeURIComponent(category.name)}`}
                 className="group relative aspect-[4/5] overflow-hidden bg-stone sm:aspect-[16/11] lg:aspect-auto lg:min-h-[420px]"
               >
                 <Image
@@ -48,7 +48,7 @@ export default function CategoriesPage() {
                   {category.subcategories.map((sub) => (
                     <li key={sub.id}>
                       <Link
-                        href={`/marketplace?category=${encodeURIComponent(category.name)}&subcategory=${encodeURIComponent(sub.name)}`}
+                        href={`/explore?q=${encodeURIComponent(sub.name)}`}
                         className="block border-b border-border py-3 text-sm text-ink transition-colors hover:text-accent"
                       >
                         {sub.name}
@@ -57,10 +57,10 @@ export default function CategoriesPage() {
                   ))}
                 </ul>
                 <Link
-                  href={`/marketplace?category=${encodeURIComponent(category.name)}`}
+                  href={`/explore?q=${encodeURIComponent(category.name)}`}
                   className="mt-8 inline-flex text-xs font-medium uppercase tracking-[0.16em] text-accent hover:text-accent-hover"
                 >
-                  Browse {category.name} →
+                  Explore {category.name} →
                 </Link>
               </div>
             </section>

@@ -1,4 +1,6 @@
-import type { ExploreFilters, Member } from "@/lib/types";
+import type { ExploreFilters, Listing, Member } from "@/lib/types";
+import { searchMembers } from "@/lib/search-members";
+import { products } from "@/data/products";
 
 export const emptyExploreFilters: ExploreFilters = {
   query: "",
@@ -11,21 +13,32 @@ export const emptyExploreFilters: ExploreFilters = {
   travellingSoon: false,
 };
 
+/**
+ * Filter + search members. Query matching delegates to searchMembers
+ * so semantic AI can replace the matcher later.
+ */
 export function filterMembers(
   members: Member[],
   filters: ExploreFilters,
+  listings: Listing[] = products,
 ): Member[] {
-  const q = filters.query.trim().toLowerCase();
+  const results = searchMembers(filters.query, members, listings);
 
-  return members.filter((member) => {
+  return results.filter((member) => {
     if (filters.country && member.location.country !== filters.country) {
-      const connected = member.connectedCountries.some(
-        (c) => c.country === filters.country,
-      );
+      const connected =
+        member.connectedCountries.some((c) => c.country === filters.country) ||
+        member.network.some((n) => n.country === filters.country);
       if (!connected) return false;
     }
 
-    if (filters.city && member.location.city !== filters.city) return false;
+    if (filters.city) {
+      const inCity =
+        member.location.city === filters.city ||
+        member.network.some((n) => n.city === filters.city) ||
+        member.trips.some((t) => t.city === filters.city);
+      if (!inCity) return false;
+    }
 
     if (filters.service) {
       const hasService = member.services.some(
@@ -50,27 +63,6 @@ export function filterMembers(
       return false;
     }
 
-    if (!q) return true;
-
-    const haystack = [
-      member.fullName,
-      member.howICanHelp,
-      member.bio,
-      member.location.label,
-      member.location.city,
-      member.location.country,
-      member.memberType,
-      member.availabilityLabel,
-      ...member.services.map((s) => s.label),
-      ...member.connectedCountries.map((c) => c.country),
-      ...member.languages,
-      member.upcomingJourney
-        ? `${member.upcomingJourney.from} ${member.upcomingJourney.to}`
-        : "",
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return haystack.includes(q);
+    return true;
   });
 }

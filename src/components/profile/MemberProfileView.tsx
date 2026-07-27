@@ -1,127 +1,282 @@
 "use client";
 
-import type { Member } from "@/lib/types";
+import { useState, type ReactNode } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { Star } from "lucide-react";
+import type { Listing, Member } from "@/lib/types";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
-import { ServiceTag } from "@/components/members/ServiceTag";
-import { JourneyGrid } from "@/components/trust/JourneyCard";
-import { ListingCard } from "@/components/marketplace/ListingCard";
-import { ActivityItem } from "@/components/activity/ActivityItem";
 import { Container } from "@/components/ui/Container";
 import { getListingsForMember } from "@/data/products";
-import { Star } from "lucide-react";
+import { isStatusActive } from "@/lib/member-status";
+import { getLocationSuggestions } from "@/data/location-suggestions";
 
 type MemberProfileViewProps = {
   member: Member;
+  isOwner: boolean;
+  listings?: Listing[];
 };
 
-export function MemberProfileView({ member }: MemberProfileViewProps) {
-  const listings = getListingsForMember(member);
-  const countries = member.connectedCountries;
+export function MemberProfileView({
+  member,
+  isOwner,
+  listings = getListingsForMember(member),
+}: MemberProfileViewProps) {
+  const statusActive = isStatusActive(member.status);
+  const opportunities = member.opportunities?.length
+    ? member.opportunities
+    : member.opportunity
+      ? [member.opportunity]
+      : [];
+  const suggestions = opportunities[0]
+    ? getLocationSuggestions(
+        opportunities[0].city,
+        opportunities[0].country,
+        opportunities[0].cityCode,
+        opportunities[0].countryCode,
+      )
+    : [];
 
   return (
-    <div className="pb-24 md:pb-20">
+    <div className="bg-app-navy pb-28 text-white md:pb-24">
       <Container>
-        <ProfileHeader member={member} />
+        <ProfileHeader member={member} isOwner={isOwner} />
 
-        <section className="mt-12 max-w-3xl">
-          <h2 className="text-xs uppercase tracking-[0.18em] text-muted">
-            How I can help
-          </h2>
-          <p className="mt-3 text-lg leading-relaxed text-ink">{member.howICanHelp}</p>
-          <p className="mt-4 text-base leading-relaxed text-muted">{member.bio}</p>
-          <p className="mt-4 text-sm text-muted">
-            Speaks {member.languages.join(", ")}
-          </p>
-        </section>
+        <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
+          <div className="grid gap-5 md:grid-cols-2 md:gap-6">
+            <ProfilePanel title="Current Location">
+              <p className="text-lg text-white">{member.location.label}</p>
+            </ProfilePanel>
 
-        <section className="mt-12">
-          <h2 className="text-xs uppercase tracking-[0.18em] text-muted">
-            Connected countries
-          </h2>
-          <ul className="mt-4 flex flex-wrap gap-2">
-            {countries.map((c) => (
-              <li
-                key={`${c.country}-${c.kind}`}
-                className="border border-border bg-surface px-3 py-2 text-sm text-ink"
-              >
-                {c.country}
-                <span className="ml-2 text-xs uppercase tracking-[0.12em] text-muted">
-                  {c.kind}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="mt-12">
-          <h2 className="text-xs uppercase tracking-[0.18em] text-muted">Services</h2>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {member.services.map((s) => (
-              <ServiceTag key={s.id} label={s.label} />
-            ))}
+            <ProfilePanel title="Upcoming Travels">
+              {member.trips.length ? (
+                <ul className="space-y-3">
+                  {member.trips.map((trip) => (
+                    <li key={trip.id} className="text-base text-white/90">
+                      <span>
+                        {trip.city}
+                        {trip.country && trip.country !== "—"
+                          ? `, ${trip.country}`
+                          : ""}
+                      </span>
+                      <span className="mt-0.5 block text-sm text-white/45">
+                        {trip.dateRange}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyCopy>No upcoming travel added.</EmptyCopy>
+              )}
+            </ProfilePanel>
           </div>
-        </section>
 
-        <section className="mt-12">
-          <h2 className="mb-4 text-xs uppercase tracking-[0.18em] text-muted">
-            Journeys
-          </h2>
-          <JourneyGrid journeys={member.journeys} />
-        </section>
+          <div className="grid gap-5 md:grid-cols-2 md:gap-6">
+            <ProfilePanel title="Status">
+              {statusActive && member.status ? (
+                <p className="text-base leading-snug text-white/90">
+                  {member.status.text}
+                </p>
+              ) : (
+                <EmptyCopy>No active status.</EmptyCopy>
+              )}
+            </ProfilePanel>
 
-        <section className="mt-14">
-          <h2 className="text-xs uppercase tracking-[0.18em] text-muted">
-            Available finds
-          </h2>
-          <p className="mt-2 max-w-xl text-sm text-muted">
-            Listings shared by this member — secondary to who they are and where
-            they can help.
-          </p>
-          {listings.length ? (
-            <div className="mt-8 grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
-              {listings.map((listing) => (
-                <ListingCard key={listing.id} listing={listing} member={member} />
-              ))}
-            </div>
-          ) : (
-            <p className="mt-6 text-sm text-muted">No finds listed yet.</p>
-          )}
-        </section>
-
-        <section className="mt-14 grid gap-10 lg:grid-cols-2">
-          <div>
-            <h2 className="text-xs uppercase tracking-[0.18em] text-muted">Reviews</h2>
-            <ul className="mt-4 space-y-4">
-              {member.reviews.map((review) => (
-                <li key={review.id} className="border border-border bg-surface p-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium text-ink">{review.authorName}</p>
-                    <span className="inline-flex items-center gap-1 text-sm text-muted">
-                      <Star size={13} className="fill-accent text-accent" />
-                      {review.rating.toFixed(1)}
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm leading-relaxed text-muted">
-                    {review.text}
+            <ProfilePanel title="Submit Opportunity">
+              {opportunities.length ? (
+                <div className="space-y-5">
+                  {opportunities.map((opportunity) => (
+                  <div key={opportunity.id}>
+                  <p className="text-base font-medium leading-snug text-white/90">
+                    {opportunity.title || opportunity.summary}
                   </p>
-                  <p className="mt-3 text-xs text-muted-light">{review.dateLabel}</p>
-                </li>
-              ))}
-            </ul>
+                  {opportunity.description ? (
+                    <p className="mt-1.5 text-sm leading-relaxed text-white/55">{opportunity.description}</p>
+                  ) : null}
+                  <dl className="mt-4 space-y-2 text-sm text-white/55">
+                    {opportunity.availability ? (
+                      <Detail
+                        label="Availability"
+                        value={opportunity.availability}
+                      />
+                    ) : null}
+                    {opportunity.travel ? (
+                      <Detail label="Travel" value={opportunity.travel} />
+                    ) : null}
+                    {opportunity.localAccess ? (
+                      <Detail
+                        label="Local access"
+                        value={opportunity.localAccess}
+                      />
+                    ) : null}
+                    {opportunity.stock ? (
+                      <Detail label="Stock" value={opportunity.stock} />
+                    ) : null}
+                    {opportunity.categories.length ? (
+                      <Detail
+                        label="Categories"
+                        value={opportunity.categories.join(" · ")}
+                      />
+                    ) : null}
+                  </dl>
+                  {suggestions.length ? (
+                    <p className="mt-4 text-xs text-white/35">
+                      Known for this place: {suggestions.join(" · ")}
+                    </p>
+                  ) : null}
+                  </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyCopy>No opportunity submitted.</EmptyCopy>
+              )}
+            </ProfilePanel>
           </div>
 
-          <div>
-            <h2 className="text-xs uppercase tracking-[0.18em] text-muted">
-              Recent activity
-            </h2>
-            <ul className="mt-2 border border-border bg-surface px-5">
-              {member.recentActivity.map((item) => (
-                <ActivityItem key={item.id} item={item} />
-              ))}
-            </ul>
-          </div>
-        </section>
+          <ProfilePanel title="Network Reach">
+            {member.network.length ? (
+              <ul className="flex flex-wrap gap-2">
+                {member.network.map((n) => (
+                  <li
+                    key={`${n.city}-${n.country}`}
+                    className="rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1.5 text-sm text-white/80"
+                  >
+                    {n.city}
+                    <span className="text-white/40"> · {n.country}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyCopy>No network locations added.</EmptyCopy>
+            )}
+          </ProfilePanel>
+
+          <ProfilePanel title="Available Stock">
+            {listings.length ? (
+              <StockThumbnails listings={listings} />
+            ) : (
+              <EmptyCopy>No stock listed yet.</EmptyCopy>
+            )}
+            {isOwner ? (
+              <Link
+                href="/profile#stock"
+                className="mt-4 inline-flex text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+              >
+                Manage stock
+              </Link>
+            ) : null}
+          </ProfilePanel>
+
+          <ProfilePanel title="Reviews">
+            {member.reviews.length ? (
+              <ReviewsCarousel reviews={member.reviews} />
+            ) : (
+              <EmptyCopy>No reviews yet.</EmptyCopy>
+            )}
+          </ProfilePanel>
+        </div>
       </Container>
+    </div>
+  );
+}
+
+function ProfilePanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel-navy rounded-xl px-5 py-5 sm:px-6 sm:py-6">
+      <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+        {title}
+      </h2>
+      <div className="mt-3.5">{children}</div>
+    </section>
+  );
+}
+
+function EmptyCopy({ children }: { children: ReactNode }) {
+  return <p className="text-sm text-white/40">{children}</p>;
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
+      <dt className="shrink-0 text-xs uppercase tracking-[0.12em] text-white/35 sm:w-28">
+        {label}
+      </dt>
+      <dd className="text-white/80">{value}</dd>
+    </div>
+  );
+}
+
+function StockThumbnails({
+  listings,
+}: {
+  listings: Listing[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? listings : listings.slice(0, 6);
+
+  return (
+    <div>
+      <div className="-mx-1 flex gap-2.5 overflow-x-auto px-1 pb-1.5">
+        {visible.map((listing) => (
+          <Link
+            key={listing.id}
+            href={`/marketplace/${listing.slug}`}
+            className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10 sm:h-[72px] sm:w-[72px]"
+          >
+            <Image
+              src={listing.images[0]}
+              alt={listing.name}
+              fill
+              sizes="72px"
+              className="object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+          </Link>
+        ))}
+      </div>
+      {listings.length > 6 ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-3 text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+        >
+          {expanded ? "Show less" : `Show all ${listings.length}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewsCarousel({
+  reviews,
+}: {
+  reviews: Member["reviews"];
+}) {
+  return (
+    <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-2 snap-x snap-mandatory">
+      {reviews.map((review) => (
+        <article
+          key={review.id}
+          className="w-[min(100%,280px)] shrink-0 snap-start rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-white">{review.authorName}</p>
+            <span className="inline-flex items-center gap-1 text-sm text-white/55">
+              <Star size={13} className="fill-electric text-electric" />
+              {review.rating.toFixed(1)}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-white/60">
+            {review.text}
+          </p>
+          <p className="mt-3 text-xs text-white/30">{review.dateLabel}</p>
+        </article>
+      ))}
     </div>
   );
 }

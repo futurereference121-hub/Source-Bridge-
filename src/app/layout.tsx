@@ -19,14 +19,14 @@ const cormorant = Cormorant({
 
 export const metadata: Metadata = {
   title: {
-    default: `${siteConfig.name} | People-Powered Marketplace`,
+    default: `${siteConfig.name} | People-Powered Network`,
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
   keywords: [
-    "people-powered marketplace",
+    "people-powered network",
     "personal sourcing",
-    "member listings",
+    "member profiles",
     "local access",
     "travel access",
   ],

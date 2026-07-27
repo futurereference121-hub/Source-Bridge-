@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Real accounts. Seed/prototype members stay in src/data/members.ts.
+model User {
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  /// Email ownership confirmed via token. NEVER grants Verified badge.
+  emailVerified        Boolean   @default(false)
+  /// Identity verification only — set by admin/passport review later. Users cannot self-set.
+  identityVerified     Boolean   @default(false)
+  isAdmin              Boolean   @default(false)
+  /// Signup / display name (required at join).
+  name                 String
+  /// Unique URL-safe handle without @. Null until onboarding.
+  username             String?   @unique
+  slug                 String?   @unique
+  photo                String    @default("")
+  cover                String    @default("")
+  bio                  String    @default("")
+  /// ≤160 chars. Blank for new users. Hidden on public UI when empty.
+  publicDisplayMessage String    @default("")
+  city                 String    @default("")
+  country              String    @default("")
+  memberType           String    @default("")
+  intent               String    @default("both")
+  /// JSON string[] of category names from global list.
+  specialties          String    @default("[]")
+  onboardingComplete   Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  sessions             Session[]
+  emailTokens          EmailVerificationToken[]
+  networkLocations     NetworkLocation[]
+  trips                Trip[]
+  statuses             StatusUpdate[]
+  opportunities        Opportunity[]
+  listings             StockListing[]
+  reviewsReceived      Review[]                  @relation("Reviewee")
+  reviewsWritten       Review[]                  @relation("Reviewer")
+  following            Follow[]                  @relation("Follower")
+  rateLimitEvents      RateLimitEvent[]
+  identityRequests     IdentityVerificationRequest[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Email address this token verifies (supports change-email).
+  email     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model NetworkLocation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city      String
+  country   String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, sortOrder])
+}
+
+model Trip {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city       String
+  country    String
+  /// ISO date YYYY-MM-DD
+  arrival    String
+  /// ISO date YYYY-MM-DD
+  departure  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+}
+
+/// Newest non-expired status is the active one. Max 3 creates per calendar day.
+model StatusUpdate {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  text      String
+  postedAt  DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId, postedAt])
+}
+
+/// Multiple opportunities allowed. Closed/expired are not active. Max 3 new/day.
+model Opportunity {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  city        String
+  country     String
+  category    String
+  expiresAt   DateTime?
+  closedAt    DateTime?
+  postedAt    DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId, postedAt])
+}
+
+model StockListing {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  slug         String   @unique
+  description  String   @default("")
+  category     String
+  /// JSON string[] of image URLs/paths
+  images       String   @default("[]")
+  quantity     String   @default("")
+  availability String   @default("available")
+  location     String   @default("")
+  price        Float?
+  currency     String   @default("USD")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  revieweeId String
+  reviewee   User     @relation("Reviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
+  reviewerId String?
+  reviewer   User?    @relation("Reviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  authorName String
+  rating     Int
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([revieweeId])
+}
+
+/// followingId may reference a real User OR a seed member id (no FK on target).
+model Follow {
+  id              String   @id @default(cuid())
+  followerId      String
+  follower        User     @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId     String
+  followingIsSeed Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+/// Global categories — only admins create/remove. Users select from this list.
+model Category {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String   @unique
+  description String   @default("")
+  image       String   @default("")
+  createdAt   DateTime @default(now())
+}
+
+/// Server-side daily action counters (status / opportunity). Timezone: APP_TIMEZONE or UTC.
+model RateLimitEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  /// Calendar day key YYYY-MM-DD in APP_TIMEZONE
+  dayKey    String
+  createdAt DateTime @default(now())
+
+  @@index([userId, action, dayKey])
+}
+
+/// Passport / identity review — modeled only; no admin UI in this stage.
+model IdentityVerificationRequest {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     String    @default("pending")
+  notes      String    @default("")
+  createdAt  DateTime  @default(now())
+  reviewedAt DateTime?
+
+  @@index([userId, status])
+}

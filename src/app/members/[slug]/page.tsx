@@ -1,34 +1,52 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { members, getMemberBySlug } from "@/data/members";
 import { MemberProfileView } from "@/components/profile/MemberProfileView";
+import { getMemberBySlugAsync } from "@/lib/members-service";
+import { getSessionUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { dbStockToListing } from "@/lib/member-map";
+import { getListingsForMember } from "@/data/products";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
 };
 
-export async function generateStaticParams() {
-  return members.map((m) => ({ slug: m.slug }));
-}
-
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  const member = getMemberBySlug(slug);
+  const member = await getMemberBySlugAsync(slug);
   if (!member) return { title: "Member" };
   return {
-    title: member.fullName,
+    title: `@${member.username}`,
     description: member.howICanHelp,
   };
 }
 
 export default async function MemberProfilePage({ params }: PageProps) {
   const { slug } = await params;
-  const member = getMemberBySlug(slug);
+  const [member, session] = await Promise.all([
+    getMemberBySlugAsync(slug),
+    getSessionUser(),
+  ]);
   if (!member) notFound();
+
+  const isOwner =
+    session?.id === member.id ||
+    Boolean(
+      session?.username &&
+        session.username.toLowerCase() === member.username.toLowerCase(),
+    );
+  const listings = member.isRealAccount
+    ? (
+        await prisma.stockListing.findMany({
+          where: { userId: member.id },
+          orderBy: { createdAt: "desc" },
+        })
+      ).map(dbStockToListing)
+    : getListingsForMember(member);
 
   return (
     <div className="pt-16 sm:pt-20">
-      <MemberProfileView member={member} />
+      <MemberProfileView member={member} isOwner={isOwner} listings={listings} />
     </div>
   );
 }

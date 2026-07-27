@@ -29,11 +29,67 @@ export interface Location {
   country: string;
   /** Display string, e.g. "Bangkok, Thailand" */
   label: string;
+  /** Optional ISO-style codes for suggestion maps */
+  cityCode?: string;
+  countryCode?: string;
 }
 
 export interface CountryConnection {
   country: string;
   kind: "lives" | "visits" | "sources" | "travels";
+}
+
+/** City in a member's available network. */
+export interface NetworkCity {
+  city: string;
+  country: string;
+  countryCode?: string;
+  cityCode?: string;
+}
+
+/** Upcoming trip — simple schedule line, not a calendar. */
+export interface Trip {
+  id: string;
+  city: string;
+  country: string;
+  /** ISO date YYYY-MM-DD when available */
+  arrival?: string;
+  /** ISO date YYYY-MM-DD when available */
+  departure?: string;
+  /** Display range, e.g. "12–28 August" or "2026-08-12 → 2026-08-28" */
+  dateRange: string;
+}
+
+/** Max one active status per member; expires after 24h. */
+export interface MemberStatus {
+  text: string;
+  postedAt: string;
+  expiresAt: string;
+}
+
+/**
+ * Opportunity post — separate from status.
+ * Structured location codes enable controlled category suggestions later.
+ */
+export interface Opportunity {
+  id: string;
+  /** Primary title (new). Falls back to summary for seed data. */
+  title?: string;
+  summary: string;
+  description?: string;
+  availability?: string;
+  travel?: string;
+  localAccess?: string;
+  stock?: string;
+  categories: string[];
+  category?: string;
+  city: string;
+  country: string;
+  cityCode?: string;
+  countryCode?: string;
+  postedAt: string;
+  expiresAt?: string | null;
+  closedAt?: string | null;
 }
 
 export interface Service {
@@ -64,6 +120,7 @@ export interface VerificationBadge {
 }
 
 export interface Verification {
+  /** ONLY source of Verified badge in UI. Never granted for email verification. */
   identityVerified: boolean;
   badges: VerificationBadge[];
 }
@@ -84,6 +141,22 @@ export interface ActivityItemData {
   dateLabel: string;
 }
 
+/** Live feed item — status or opportunity, no social features. */
+export type FeedItemKind = "status" | "opportunity";
+
+export interface FeedItem {
+  id: string;
+  kind: FeedItemKind;
+  memberId: string;
+  memberSlug: string;
+  username: string;
+  fullName: string;
+  photo: string;
+  text: string;
+  postedAt: string;
+  expiresAt?: string;
+}
+
 /** Internal only — never render on the customer storefront. */
 export interface SupplierInfo {
   code: string;
@@ -92,26 +165,47 @@ export interface SupplierInfo {
 }
 
 /**
- * Public member profile. Every listing belongs to a member —
- * people are the bridge; location is the value.
+ * Public member profile. Profiles are the product;
+ * listings attach to people.
  */
 export interface Member {
   id: string;
   slug: string;
+  /** Primary identity, without @ — e.g. "globalnomad" */
+  username: string;
   fullName: string;
   photo: string;
   cover: string;
   location: Location;
-  /** Short help pitch shown on cards and profile. */
+  /**
+   * Public Display Message (≤160). Prefer this over howICanHelp for cards.
+   * Blank for new real accounts — hide blue box when empty.
+   */
+  publicDisplayMessage?: string;
+  /** @deprecated Prefer publicDisplayMessage; kept for seed compatibility. */
   howICanHelp: string;
   /** Longer bio for profile. */
   bio: string;
   memberType: MemberType;
   verification: Verification;
+  /** Explicit mirrors — Verified badge uses identityVerified ONLY. */
+  emailVerified?: boolean;
+  identityVerified?: boolean;
+  /** Internal / seed only — never render Bridge Score in UI. */
   bridgeScore: number;
   rating: number;
   completedRequests: number;
   services: Service[];
+  /** Cities the member can help from / through. */
+  network: NetworkCity[];
+  /** Upcoming trips as simple schedule lines. */
+  trips: Trip[];
+  /** Max one active status; null when none / expired. */
+  status: MemberStatus | null;
+  /** Newest active opportunity (compat). */
+  opportunity: Opportunity | null;
+  /** All active opportunities for real accounts. */
+  opportunities?: Opportunity[];
   connectedCountries: CountryConnection[];
   upcomingJourney?: Journey | null;
   journeys: Journey[];
@@ -124,9 +218,12 @@ export interface Member {
   joinedAt?: string;
   /** Subtle prototype note when profile is seed data. */
   isPrototype?: boolean;
+  isRealAccount?: boolean;
+  followerCount?: number;
+  followingCount?: number;
 }
 
-/** Marketplace listing — belongs to a member, never company inventory. */
+/** Listing — belongs to a member, never company inventory. */
 export interface Listing {
   id: string;
   slug: string;
@@ -147,6 +244,7 @@ export interface Listing {
   featured: boolean;
   specs?: Record<string, string>;
   shippingNote?: string;
+  quantity?: string;
 }
 
 export interface Category {
@@ -178,6 +276,20 @@ export interface ExploreFilters {
   verifiedOnly: boolean;
   availableNow: boolean;
   travellingSoon: boolean;
+}
+
+/** Client session account (safe public fields). */
+export interface AccountSession {
+  id: string;
+  email: string;
+  emailVerified: boolean;
+  identityVerified: boolean;
+  name: string;
+  username: string | null;
+  slug: string | null;
+  photo: string;
+  onboardingComplete: boolean;
+  intent: string;
 }
 
 /** @deprecated Prefer Listing */

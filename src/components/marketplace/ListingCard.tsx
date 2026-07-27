@@ -57,7 +57,7 @@ export function ListingCard({
             </div>
             <div className="min-w-0">
               <p className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
-                <span className="truncate">{member.fullName}</span>
+                <span className="truncate">@{member.username}</span>
                 {member.verification.identityVerified ? (
                   <BadgeCheck
                     size={14}

@@ -70,8 +70,8 @@ export default function AboutPage() {
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button href="/marketplace" size="lg">
-              Explore Marketplace
+            <Button href="/explore" size="lg">
+              Explore
             </Button>
             <Button href="/sourcing" variant="outline" size="lg">
               Request Sourcing

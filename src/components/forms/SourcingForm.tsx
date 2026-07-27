@@ -46,7 +46,7 @@ export function SourcingForm() {
         <h3 className="mt-3 font-display text-3xl text-ink">Thank you.</h3>
         <p className="mt-3 max-w-md text-muted">
           We&apos;ll connect your brief with people who can help. Meanwhile, explore
-          Available Finds in the marketplace.
+          people on Explore.
         </p>
         <Button
           type="button"

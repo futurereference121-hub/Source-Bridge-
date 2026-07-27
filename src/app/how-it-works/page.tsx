@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 const sections = [
   {
-    title: "Browse the market",
+    title: "Browse Explore",
     body: "Open Explore to discover members by place, service, availability, and journey. Guests can browse freely — no account required to see who is somewhere, or going somewhere.",
   },
   {
@@ -36,7 +36,7 @@ const sections = [
   },
   {
     title: "Buyers and providers",
-    body: "Buyers find help through people and place. Providers earn by offering local access, inspection, carrying, or specialist knowledge. The marketplace is the people.",
+    body: "Buyers find help through people and place. Providers earn by offering local access, inspection, carrying, or specialist knowledge. The network is the people.",
   },
 ];
 

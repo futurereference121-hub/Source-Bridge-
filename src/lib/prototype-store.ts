@@ -1,15 +1,31 @@
-import type { AccountIntent } from "@/lib/types";
+import type {
+  AccountIntent,
+  MemberStatus,
+  NetworkCity,
+  Opportunity,
+  Trip,
+} from "@/lib/types";
 
 const ACCOUNT_KEY = "sb_account";
 const FOLLOWS_KEY = "sb_follows";
 const SAVED_PROFILES_KEY = "sb_saved_profiles";
 const SAVED_SEARCHES_KEY = "sb_saved_searches";
+const DASHBOARD_KEY = "sb_dashboard_profile";
 
 export type PrototypeAccount = {
   name: string;
   email: string;
   intent: AccountIntent;
   createdAt: string;
+};
+
+/** Prototype dashboard persistence (localStorage). */
+export type DashboardProfile = {
+  status: MemberStatus | null;
+  opportunity: Opportunity | null;
+  trips: Trip[];
+  network: NetworkCity[];
+  stockNote: string;
 };
 
 function canUseStorage() {
@@ -34,6 +50,18 @@ export function saveAccount(account: PrototypeAccount) {
 export function clearAccount() {
   if (!canUseStorage()) return;
   localStorage.removeItem(ACCOUNT_KEY);
+  localStorage.removeItem(DASHBOARD_KEY);
+}
+
+/** Reset editable profile fields to empty (real new-account default). */
+export function resetDashboardProfile() {
+  saveDashboardProfile({
+    status: null,
+    opportunity: null,
+    trips: [],
+    network: [],
+    stockNote: "",
+  });
 }
 
 export function isSignedIn(): boolean {
@@ -92,4 +120,27 @@ export function saveSearch(label: string) {
   const current = getSavedSearches();
   const next = [label, ...current.filter((s) => s !== label)].slice(0, 8);
   localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(next));
+}
+
+export function getDashboardProfile(): DashboardProfile {
+  const empty: DashboardProfile = {
+    status: null,
+    opportunity: null,
+    trips: [],
+    network: [],
+    stockNote: "",
+  };
+  if (!canUseStorage()) return empty;
+  try {
+    const raw = localStorage.getItem(DASHBOARD_KEY);
+    if (!raw) return empty;
+    return { ...empty, ...(JSON.parse(raw) as Partial<DashboardProfile>) };
+  } catch {
+    return empty;
+  }
+}
+
+export function saveDashboardProfile(profile: DashboardProfile) {
+  if (!canUseStorage()) return;
+  localStorage.setItem(DASHBOARD_KEY, JSON.stringify(profile));
 }

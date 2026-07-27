@@ -7,10 +7,14 @@ import { Menu, X } from "lucide-react";
 import { homeNavItems, navItems } from "@/lib/site";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { SourceBridgeLogo } from "@/components/brand/SourceBridgeLogo";
+import {
+  AccountMenu,
+  AccountMenuMobileLinks,
+} from "@/components/layout/AccountMenu";
 
 export function SiteHeader() {
   const pathname = usePathname();
-  const { signedIn, account } = useAppUi();
+  const { signedIn } = useAppUi();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -41,14 +45,16 @@ export function SiteHeader() {
             >
               How It Works
             </Link>
-            <Link
-              href={signedIn ? "/profile" : "/sign-in"}
-              className="inline-flex h-10 items-center rounded-lg border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
-            >
-              {signedIn
-                ? account?.name?.split(" ")[0] || "Profile"
-                : "Sign In / Up"}
-            </Link>
+            {signedIn ? (
+              <AccountMenu variant="home" />
+            ) : (
+              <Link
+                href="/sign-in"
+                className="inline-flex h-10 items-center rounded-lg border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
+              >
+                Sign In / Up
+              </Link>
+            )}
           </nav>
 
           <button
@@ -70,14 +76,16 @@ export function SiteHeader() {
               >
                 How It Works
               </Link>
-              <Link
-                href={signedIn ? "/profile" : "/sign-in"}
-                className="mt-1 inline-flex w-fit rounded-[4px] border border-white/80 px-4 py-2.5 text-sm font-medium uppercase tracking-[0.14em] text-white"
-              >
-                {signedIn
-                  ? account?.name?.split(" ")[0] || "Profile"
-                  : "Sign In / Up"}
-              </Link>
+              {signedIn ? (
+                <AccountMenuMobileLinks onNavigate={() => setOpen(false)} />
+              ) : (
+                <Link
+                  href="/sign-in"
+                  className="mt-1 inline-flex w-fit rounded-[4px] border border-white/80 px-4 py-2.5 text-sm font-medium uppercase tracking-[0.14em] text-white"
+                >
+                  Sign In / Up
+                </Link>
+              )}
             </nav>
           </div>
         ) : null}
@@ -119,14 +127,7 @@ export function SiteHeader() {
               </Link>
             );
           })}
-          {signedIn ? (
-            <Link
-              href="/profile"
-              className="text-xs font-medium uppercase tracking-[0.14em] text-white"
-            >
-              {account?.name?.split(" ")[0] || "Profile"}
-            </Link>
-          ) : null}
+          {signedIn ? <AccountMenu variant="internal" /> : null}
         </nav>
 
         <button
@@ -142,25 +143,35 @@ export function SiteHeader() {
       {open ? (
         <div className="border-t border-white/10 bg-navy lg:hidden">
           <nav className="mx-auto flex max-w-7xl flex-col gap-1 px-5 py-6 sm:px-8">
-            {navItems.map((item) => {
-              const active = pathname.startsWith(item.href);
-              const isJoin = item.href === "/join";
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`py-3 text-sm font-medium uppercase tracking-[0.14em] ${
-                    isJoin
-                      ? "mt-2 inline-flex w-fit rounded-[5px] bg-electric px-5 py-3 text-white"
-                      : active
-                        ? "text-white"
-                        : "text-white/65"
-                  }`}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
+            {navItems
+              .filter((item) => {
+                if (!signedIn) return true;
+                return item.href !== "/sign-in" && item.href !== "/join";
+              })
+              .map((item) => {
+                const active = pathname.startsWith(item.href);
+                const isJoin = item.href === "/join";
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`py-3 text-sm font-medium uppercase tracking-[0.14em] ${
+                      isJoin
+                        ? "mt-2 inline-flex w-fit rounded-[5px] bg-electric px-5 py-3 text-white"
+                        : active
+                          ? "text-white"
+                          : "text-white/65"
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            {signedIn ? (
+              <div className="mt-1 flex flex-col gap-1 border-t border-white/10 pt-2">
+                <AccountMenuMobileLinks onNavigate={() => setOpen(false)} />
+              </div>
+            ) : null}
           </nav>
         </div>
       ) : null}
