@@ -105,6 +105,7 @@ export default function OnboardingPage() {
         <div className="mt-10">
           {step === "identity" ? (
             <IdentityStep
+              userId={account.id}
               initial={identity}
               showToast={showToast}
               onContinue={async (values) => {

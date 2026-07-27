@@ -4,6 +4,30 @@ import { getSessionUser, requireSessionUser, toPublicAccount } from "@/lib/auth"
 import { jsonError, publicDisplayMessageSchema } from "@/lib/validation";
 import { z } from "zod";
 import { getMemberByIdAsync, toPublicMemberJson } from "@/lib/members-service";
+import { pathnameBelongsToUser } from "@/lib/storage";
+
+function isAllowedProfileImageUrl(url: string, userId: string): boolean {
+  if (!url || !url.trim()) return true;
+  const value = url.trim();
+  try {
+    if (value.startsWith("https://")) {
+      const parsed = new URL(value);
+      const hostOk =
+        parsed.hostname.endsWith(".public.blob.vercel-storage.com") ||
+        parsed.hostname.endsWith(".blob.vercel-storage.com");
+      if (!hostOk) return false;
+      return pathnameBelongsToUser(parsed.pathname, userId);
+    }
+  } catch {
+    return false;
+  }
+  // Local/dev uploads namespaced by user
+  const cleaned = value.replace(/^\//, "");
+  if (cleaned.startsWith("uploads/")) {
+    return pathnameBelongsToUser(cleaned.slice("uploads/".length), userId);
+  }
+  return false;
+}
 
 const profileUpdateSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -52,6 +76,14 @@ export async function PATCH(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
     const data = parsed.data;
+    if (
+      (data.photo !== undefined &&
+        !isAllowedProfileImageUrl(data.photo, user.id)) ||
+      (data.cover !== undefined &&
+        !isAllowedProfileImageUrl(data.cover, user.id))
+    ) {
+      return jsonError("Invalid image URL for this account", 400);
+    }
     const updated = await prisma.user.update({
       where: { id: user.id },
       data: {

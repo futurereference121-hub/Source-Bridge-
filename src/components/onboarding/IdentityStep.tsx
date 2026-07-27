@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import Image from "next/image";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { ImageUploadField } from "@/components/profile/ImageUploadField";
 
 type IdentityValues = {
   username: string;
@@ -13,12 +13,18 @@ type IdentityValues = {
 };
 
 type Props = {
+  userId: string;
   initial: IdentityValues;
   onContinue: (values: IdentityValues) => Promise<void>;
   showToast: (message: string) => void;
 };
 
-export function IdentityStep({ initial, onContinue, showToast }: Props) {
+export function IdentityStep({
+  userId,
+  initial,
+  onContinue,
+  showToast,
+}: Props) {
   const [username, setUsername] = useState(initial.username);
   const [fullName, setFullName] = useState(initial.fullName);
   const [bio, setBio] = useState(initial.bio);
@@ -28,7 +34,6 @@ export function IdentityStep({ initial, onContinue, showToast }: Props) {
     "idle" | "checking" | "ok" | "taken" | "invalid"
   >("idle");
   const [availabilityMsg, setAvailabilityMsg] = useState("");
-  const [uploading, setUploading] = useState<"photo" | "cover" | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -67,46 +72,6 @@ export function IdentityStep({ initial, onContinue, showToast }: Props) {
     }, 400);
     return () => window.clearTimeout(t);
   }, [username]);
-
-  async function uploadFile(file: File, folder: "avatars" | "covers") {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("folder", folder);
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    const data = (await res.json()) as { error?: string; url?: string };
-    if (!res.ok || !data.url) {
-      throw new Error(data.error || "Upload failed");
-    }
-    return data.url;
-  }
-
-  async function onPhotoChange(file: File | null) {
-    if (!file) return;
-    setUploading("photo");
-    try {
-      const url = await uploadFile(file, "avatars");
-      setPhoto(url);
-      showToast("Photo uploaded");
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(null);
-    }
-  }
-
-  async function onCoverChange(file: File | null) {
-    if (!file) return;
-    setUploading("cover");
-    try {
-      const url = await uploadFile(file, "covers");
-      setCover(url);
-      showToast("Cover uploaded");
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(null);
-    }
-  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -185,72 +150,28 @@ export function IdentityStep({ initial, onContinue, showToast }: Props) {
       </label>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <p className="text-xs uppercase tracking-[0.14em] text-white/45">
-            Profile photo
-          </p>
-          <div className="mt-2 flex items-center gap-3">
-            <div className="relative h-16 w-16 overflow-hidden rounded-full border border-white/15 bg-white/5">
-              {photo ? (
-                <Image
-                  src={photo}
-                  alt=""
-                  fill
-                  sizes="64px"
-                  unoptimized
-                  className="object-cover"
-                />
-              ) : null}
-            </div>
-            <label className="cursor-pointer text-sm text-electric hover:underline">
-              {uploading === "photo"
-                ? "Uploading…"
-                : photo
-                  ? "Replace"
-                  : "Upload"}
-              <input
-                type="file"
-                accept="image/*"
-                className="hidden"
-                disabled={uploading !== null}
-                onChange={(e) => onPhotoChange(e.target.files?.[0] || null)}
-              />
-            </label>
-          </div>
-        </div>
-        <div>
-          <p className="text-xs uppercase tracking-[0.14em] text-white/45">
-            Cover <span className="normal-case tracking-normal">(optional)</span>
-          </p>
-          <div className="mt-2">
-            <div className="relative h-16 w-full overflow-hidden rounded-lg border border-white/15 bg-white/5">
-              {cover ? (
-                <Image
-                  src={cover}
-                  alt=""
-                  fill
-                  sizes="400px"
-                  unoptimized
-                  className="object-cover"
-                />
-              ) : null}
-            </div>
-            <label className="mt-2 inline-block cursor-pointer text-sm text-electric hover:underline">
-              {uploading === "cover"
-                ? "Uploading…"
-                : cover
-                  ? "Replace"
-                  : "Upload"}
-              <input
-                type="file"
-                accept="image/*"
-                className="hidden"
-                disabled={uploading !== null}
-                onChange={(e) => onCoverChange(e.target.files?.[0] || null)}
-              />
-            </label>
-          </div>
-        </div>
+        <ImageUploadField
+          label="Profile photo"
+          folder="avatars"
+          kind="photo"
+          variant="avatar"
+          value={photo}
+          userId={userId}
+          onUploaded={(url) => setPhoto(url)}
+          showToast={showToast}
+          disabled={submitting}
+        />
+        <ImageUploadField
+          label="Cover (optional)"
+          folder="covers"
+          kind="cover"
+          variant="cover"
+          value={cover}
+          userId={userId}
+          onUploaded={(url) => setCover(url)}
+          showToast={showToast}
+          disabled={submitting}
+        />
       </div>
 
       <label className="block text-xs uppercase tracking-[0.14em] text-white/45">
@@ -269,7 +190,9 @@ export function IdentityStep({ initial, onContinue, showToast }: Props) {
       <PrimaryButton
         type="submit"
         showArrow={false}
-        disabled={submitting || availability === "taken" || availability === "invalid"}
+        disabled={
+          submitting || availability === "taken" || availability === "invalid"
+        }
       >
         {submitting ? "Saving…" : "Continue"}
       </PrimaryButton>

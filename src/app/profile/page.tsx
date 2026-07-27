@@ -7,8 +7,10 @@ import { useRouter } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
-import { memberCover, memberPhoto } from "@/lib/placeholders";
+import { ImageUploadField } from "@/components/profile/ImageUploadField";
+import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import type { Listing } from "@/lib/types";
+import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 
 type Limit = { used: number; remaining: number; limit: number };
 type OpportunityRow = {
@@ -104,19 +106,28 @@ export default function ProfileDashboardPage() {
     });
   }
 
-  async function upload(file: File, folder: "avatars" | "covers" | "stock") {
-    const form = new FormData(); form.append("file", file); form.append("folder", folder);
-    const data = await api("/api/upload", { method: "POST", body: form });
-    return data.url as string;
+  async function onProfileImageUploaded(kind: "photo" | "cover", url: string) {
+    setProfile((p) => ({ ...p, [kind]: url }));
+    await api("/api/profile", json("PATCH", { [kind]: url }));
+    if (kind === "photo") await refreshAccount();
   }
 
-  async function uploadProfileImage(file: File, kind: "photo" | "cover") {
-    await run(kind, async () => {
-      const url = await upload(file, kind === "photo" ? "avatars" : "covers");
-      setProfile((p) => ({ ...p, [kind]: url }));
-      await api("/api/profile", json("PATCH", { [kind]: url }));
-      if (kind === "photo") await refreshAccount();
-      showToast(`${kind === "photo" ? "Photo" : "Cover"} updated`);
+  async function uploadStockImages(files: FileList | null) {
+    if (!files?.length || !account) return;
+    await run("stock-images", async () => {
+      const urls: string[] = [];
+      for (const file of Array.from(files)) {
+        const result = await uploadProfileImageFile({
+          file,
+          folder: "stock",
+          kind: "stock",
+          userId: account.id,
+        });
+        if (result.previewUrl) URL.revokeObjectURL(result.previewUrl);
+        urls.push(result.url);
+      }
+      setStockForm((f) => ({ ...f, images: [...f.images, ...urls].slice(0, 12) }));
+      showToast("Images uploaded");
     });
   }
 
@@ -207,15 +218,6 @@ export default function ProfileDashboardPage() {
     });
   }
 
-  async function uploadStockImages(files: FileList | null) {
-    if (!files?.length) return;
-    await run("stock-images", async () => {
-      const urls = await Promise.all(Array.from(files).map((file) => upload(file, "stock")));
-      setStockForm((f) => ({ ...f, images: [...f.images, ...urls].slice(0, 12) }));
-      showToast("Images uploaded");
-    });
-  }
-
   async function saveStock(e: FormEvent) {
     e.preventDefault();
     await run("stock", async () => {
@@ -274,15 +276,29 @@ export default function ProfileDashboardPage() {
 
         <Panel title="Public profile" className="mt-10">
           <form onSubmit={saveProfile} className="space-y-4">
-            <div className="grid gap-5 sm:grid-cols-[140px_1fr]">
-              <div className="space-y-4">
-                <Image src={memberPhoto(profile.photo)} alt="" width={112} height={112} className="h-28 w-28 rounded-xl object-cover" />
-                <FileButton label={busy === "photo" ? "Uploading…" : "Replace photo"} onChange={(f) => void uploadProfileImage(f, "photo")} />
-              </div>
-              <div className="space-y-3">
-                <Image src={memberCover(profile.cover)} alt="" width={640} height={180} className="h-32 w-full rounded-xl object-cover" />
-                <FileButton label={busy === "cover" ? "Uploading…" : "Replace cover"} onChange={(f) => void uploadProfileImage(f, "cover")} />
-              </div>
+            <div className="grid gap-5 sm:grid-cols-[160px_1fr]">
+              <ImageUploadField
+                label="Profile photo"
+                folder="avatars"
+                kind="photo"
+                variant="avatar"
+                value={profile.photo}
+                userId={account.id}
+                showToast={showToast}
+                disabled={Boolean(busy)}
+                onUploaded={(url) => onProfileImageUploaded("photo", url)}
+              />
+              <ImageUploadField
+                label="Cover image"
+                folder="covers"
+                kind="cover"
+                variant="cover"
+                value={profile.cover}
+                userId={account.id}
+                showToast={showToast}
+                disabled={Boolean(busy)}
+                onUploaded={(url) => onProfileImageUploaded("cover", url)}
+              />
             </div>
             <Field label="Public Display Message">
               <textarea className={`${inputClass} min-h-24 py-3`} maxLength={160} value={profile.publicDisplayMessage} onChange={(e) => setProfile({ ...profile, publicDisplayMessage: e.target.value })} />
@@ -435,6 +451,6 @@ function CategorySelect({ categories, value, onChange }: { categories: CategoryR
   return <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)} required><option value="">Select category</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select>;
 }
 function FileButton({ label, onChange, onFiles, multiple = false }: { label: string; onChange?: (file: File) => void; onFiles?: (files: FileList) => void; multiple?: boolean }) {
-  return <label className="inline-flex h-10 cursor-pointer items-center rounded-lg border border-white/20 px-4 text-xs text-white/70 hover:border-electric/50 hover:text-white">{label}<input type="file" accept="image/*" multiple={multiple} className="sr-only" onChange={(e) => { if (multiple && e.target.files) onFiles?.(e.target.files); else if (e.target.files?.[0]) onChange?.(e.target.files[0]); e.target.value = ""; }} /></label>;
+  return <label className="inline-flex h-10 cursor-pointer items-center rounded-lg border border-white/20 px-4 text-xs text-white/70 hover:border-electric/50 hover:text-white">{label}<input type="file" accept={IMAGE_ACCEPT_ATTR} multiple={multiple} className="sr-only" onChange={(e) => { if (multiple && e.target.files) onFiles?.(e.target.files); else if (e.target.files?.[0]) onChange?.(e.target.files[0]); e.target.value = ""; }} /></label>;
 }
 const inputClass = "input-navy h-11 w-full rounded-lg px-4 text-sm";

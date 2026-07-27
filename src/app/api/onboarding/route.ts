@@ -12,6 +12,29 @@ import { isUsernameAvailable } from "@/lib/members-service";
 import { assertDailyLimit, recordDailyAction } from "@/lib/rate-limit";
 import { STATUS_TTL_MS } from "@/lib/limits";
 import { listCategoryNames } from "@/lib/categories-db";
+import { pathnameBelongsToUser } from "@/lib/storage";
+
+function isAllowedProfileImageUrl(url: string, userId: string): boolean {
+  if (!url || !url.trim()) return true;
+  const value = url.trim();
+  try {
+    if (value.startsWith("https://")) {
+      const parsed = new URL(value);
+      const hostOk =
+        parsed.hostname.endsWith(".public.blob.vercel-storage.com") ||
+        parsed.hostname.endsWith(".blob.vercel-storage.com");
+      if (!hostOk) return false;
+      return pathnameBelongsToUser(parsed.pathname, userId);
+    }
+  } catch {
+    return false;
+  }
+  const cleaned = value.replace(/^\//, "");
+  if (cleaned.startsWith("uploads/")) {
+    return pathnameBelongsToUser(cleaned.slice("uploads/".length), userId);
+  }
+  return false;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -29,6 +52,12 @@ export async function POST(req: NextRequest) {
         return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
       }
       const data = parsed.data;
+      if (
+        !isAllowedProfileImageUrl(data.photo || "", user.id) ||
+        !isAllowedProfileImageUrl(data.cover || "", user.id)
+      ) {
+        return jsonError("Invalid image URL for this account", 400);
+      }
       const available = await isUsernameAvailable(data.username, user.id);
       if (!available) return jsonError("Username is taken", 409);
 
