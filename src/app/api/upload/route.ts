@@ -21,6 +21,12 @@ export async function POST(req: Request) {
     const form = await req.formData();
     const file = form.get("file");
     const folder = normalizeUploadFolder(form.get("folder"));
+    if (folder === "verification") {
+      return jsonError(
+        "Identity documents must be uploaded via the verification workflow",
+        400,
+      );
+    }
     const replaceUrlRaw = form.get("replaceUrl");
     const replaceUrl =
       typeof replaceUrlRaw === "string" ? replaceUrlRaw : undefined;

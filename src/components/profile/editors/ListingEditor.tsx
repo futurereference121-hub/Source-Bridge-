@@ -442,6 +442,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               images={form.images}
               onChange={(images) => setForm({ ...form, images })}
               showToast={showToast}
+              maxImages={6}
               disabled={busy}
             />
           </div>

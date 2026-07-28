@@ -19,14 +19,15 @@ export { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "@/lib/storage-constants";
 
 export const PROFILE_IMAGE_FOLDERS = ["avatars", "covers"] as const;
 export type ProfileImageFolder = (typeof PROFILE_IMAGE_FOLDERS)[number];
-export type UploadFolder = ProfileImageFolder | "stock" | "misc";
+export type UploadFolder = ProfileImageFolder | "stock" | "misc" | "verification";
 
 export type StoredImage = {
-  /** Public absolute URL (Blob) or local path */
+  /** Absolute URL (Blob) or local path — private verification URLs must not be exposed publicly */
   url: string;
   contentType: string;
   size: number;
   pathname?: string;
+  access?: "public" | "private";
 };
 
 export type StorageResult =
@@ -72,7 +73,7 @@ export function validateImageFile(file: {
 }
 
 function isUploadFolder(value: string): value is UploadFolder {
-  return ["avatars", "covers", "stock", "misc"].includes(value);
+  return ["avatars", "covers", "stock", "misc", "verification"].includes(value);
 }
 
 export function normalizeUploadFolder(raw: unknown): UploadFolder {
@@ -101,7 +102,8 @@ export function pathnameBelongsToUser(
     clean.startsWith(`avatars/${userId}/`) ||
     clean.startsWith(`covers/${userId}/`) ||
     clean.startsWith(`stock/${userId}/`) ||
-    clean.startsWith(`misc/${userId}/`)
+    clean.startsWith(`misc/${userId}/`) ||
+    clean.startsWith(`verification/${userId}/`)
   );
 }
 
@@ -119,6 +121,7 @@ async function saveToBlob(
   buffer: Buffer,
   contentType: string,
   pathname: string,
+  access: "public" | "private" = "public",
 ): Promise<StorageResult> {
   if (!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN) {
     return {
@@ -127,7 +130,7 @@ async function saveToBlob(
     };
   }
   const blob = await put(pathname, buffer, {
-    access: "public",
+    access,
     contentType,
     addRandomSuffix: false,
     ...(process.env.BLOB_READ_WRITE_TOKEN
@@ -141,6 +144,7 @@ async function saveToBlob(
       pathname: blob.pathname,
       contentType,
       size: buffer.length,
+      access,
     },
   };
 }
@@ -169,7 +173,11 @@ async function saveLocalDev(
 
 export async function storeImageForUser(
   file: File | Blob,
-  opts: { userId: string; folder?: UploadFolder },
+  opts: {
+    userId: string;
+    folder?: UploadFolder;
+    access?: "public" | "private";
+  },
 ): Promise<StorageResult> {
   const contentType = file.type || "application/octet-stream";
   const size = file.size;
@@ -177,18 +185,48 @@ export async function storeImageForUser(
   if (validationError) return { ok: false, error: validationError };
 
   const folder = opts.folder || "misc";
+  const access =
+    opts.access || (folder === "verification" ? "private" : "public");
   const pathname = blobPathForUser(opts.userId, folder, contentType);
   const buffer = Buffer.from(await file.arrayBuffer());
   const provider = getProvider();
 
   if (provider === "vercel-blob") {
-    return saveToBlob(buffer, contentType, pathname);
+    return saveToBlob(buffer, contentType, pathname, access);
   }
 
   console.warn(
     "[storage] Using local filesystem fallback (set Vercel Blob env vars for Blob storage).",
   );
+  // Verification must never land in public/ — keep under private/.
+  if (access === "private" || folder === "verification") {
+    return saveLocalPrivate(buffer, contentType, pathname);
+  }
   return saveLocalDev(buffer, contentType, pathname);
+}
+
+async function saveLocalPrivate(
+  buffer: Buffer,
+  contentType: string,
+  pathname: string,
+): Promise<StorageResult> {
+  const { mkdir, writeFile } = await import("fs/promises");
+  const path = await import("path");
+  const absolutePath = path.join(process.cwd(), "private", pathname);
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, buffer);
+  // Opaque local reference — served only via authenticated verification document API.
+  const url = `private://${pathname.replace(/\\/g, "/")}`;
+  return {
+    ok: true,
+    image: {
+      url,
+      pathname: pathname.replace(/\\/g, "/"),
+      contentType,
+      size: buffer.length,
+      access: "private",
+    },
+  };
 }
 
 /**
@@ -200,6 +238,19 @@ export async function deleteStoredImageForUser(
   userId: string,
 ): Promise<void> {
   if (!urlOrPath || !userId) return;
+
+  if (urlOrPath.startsWith("private://")) {
+    const pathname = urlOrPath.slice("private://".length);
+    if (!pathnameBelongsToUser(pathname, userId)) return;
+    try {
+      const { unlink } = await import("fs/promises");
+      const path = await import("path");
+      await unlink(path.join(process.cwd(), "private", pathname));
+    } catch {
+      // ignore
+    }
+    return;
+  }
 
   if (isOurBlobUrl(urlOrPath)) {
     try {

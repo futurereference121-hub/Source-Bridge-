@@ -93,10 +93,41 @@ export default function AccountSettingsPage() {
                 )
               }
               title="Identity verified"
-              status={account.identityVerified ? "Verified" : "Not verified"}
-              statusTone={account.identityVerified ? "good" : "muted"}
-              detail="The Verified badge reflects identity verification only. It is reviewed and granted by Source Bridge — it cannot be self-verified or enabled from settings."
+              status={
+                account.identityVerified
+                  ? "Verified"
+                  : (account.identityVerificationStatus || "UNVERIFIED").toUpperCase() ===
+                      "PENDING"
+                    ? "Pending review"
+                    : (account.identityVerificationStatus || "").toUpperCase() ===
+                        "REJECTED"
+                      ? "Rejected"
+                      : "Not verified"
+              }
+              statusTone={
+                account.identityVerified
+                  ? "good"
+                  : (account.identityVerificationStatus || "").toUpperCase() ===
+                      "PENDING"
+                    ? "warn"
+                    : "muted"
+              }
+              detail="The Verified badge appears only after Source Bridge approves your identity documents. Completing onboarding or verifying email never grants the badge."
             />
+            {!account.identityVerified ? (
+              <div className="mt-5">
+                <PrimaryButton
+                  href="/profile/settings/verification"
+                  showArrow={false}
+                  className="rounded-lg"
+                >
+                  {(account.identityVerificationStatus || "").toUpperCase() ===
+                  "PENDING"
+                    ? "View verification request"
+                    : "Request Verification"}
+                </PrimaryButton>
+              </div>
+            ) : null}
           </div>
         </section>
 

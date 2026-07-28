@@ -23,7 +23,7 @@ export function ListingImageManager({
   images,
   onChange,
   showToast,
-  maxImages = 12,
+  maxImages = 6,
   disabled,
 }: Props) {
   const [cropSource, setCropSource] = useState<File | null>(null);

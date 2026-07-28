@@ -1,54 +1,74 @@
+import { getListingBySlugAsync } from "@/lib/listings-service";
+import { getMemberForListingAsync } from "@/lib/listings-service";
 import { prisma } from "@/lib/db";
-import { dbStockToListing } from "@/lib/member-map";
 import { jsonError } from "@/lib/validation";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 /**
  * Public checkout bootstrap: listing + seller's enabled crypto payment methods.
- * Does not expose private keys or disabled methods.
+ * Supports real DB listings and seed/demo catalogue listings.
  */
 export async function GET(_req: Request, ctx: Ctx) {
   try {
     const { slug } = await ctx.params;
-    const listing = await prisma.stockListing.findUnique({
-      where: { slug },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            username: true,
-            slug: true,
-            photo: true,
-          },
-        },
-      },
-    });
+    const listing = await getListingBySlugAsync(slug);
     if (!listing) return jsonError("Listing not found", 404);
 
-    const methods = await prisma.sellerPaymentMethod.findMany({
-      where: {
-        userId: listing.userId,
-        kind: "crypto",
-        enabled: true,
-      },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        kind: true,
-        networkName: true,
-        address: true,
-        qrImageUrl: true,
-        instructions: true,
-      },
-    });
+    const member = await getMemberForListingAsync(listing);
+    const seller = member
+      ? {
+          id: member.id,
+          name: member.fullName,
+          username: member.username,
+          slug: member.slug,
+          photo: member.photo,
+        }
+      : {
+          id: listing.memberId,
+          name: "Source Bridge member",
+          username: null,
+          slug: null,
+          photo: "",
+        };
+
+    let methods: Array<{
+      id: string;
+      kind: string;
+      networkName: string;
+      address: string;
+      qrImageUrl: string;
+      instructions: string;
+    }> = [];
+
+    if (listing.isDbListing) {
+      methods = await prisma.sellerPaymentMethod.findMany({
+        where: {
+          userId: listing.memberId,
+          kind: "crypto",
+          enabled: true,
+        },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          kind: true,
+          networkName: true,
+          address: true,
+          qrImageUrl: true,
+          instructions: true,
+        },
+      });
+    }
 
     return Response.json({
-      listing: dbStockToListing(listing),
-      seller: listing.user,
+      listing,
+      seller,
       cryptoPaymentMethods: methods,
       stripeConfigured: false,
+      isDemo: !listing.isDbListing,
+      message: listing.isDbListing
+        ? null
+        : "Demo listing — checkout UI is available for review. Live pending transactions apply to real member listings.",
     });
   } catch (err) {
     console.error("[checkout:listing]", err);

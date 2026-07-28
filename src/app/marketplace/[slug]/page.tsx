@@ -19,6 +19,7 @@ import { ListingPurchasePanel } from "@/components/marketplace/ListingPurchasePa
 
 type PageProps = {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ preview?: string }>;
 };
 
 export const dynamic = "force-dynamic";
@@ -33,8 +34,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function ListingDetailPage({ params }: PageProps) {
+export default async function ListingDetailPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { slug } = await params;
+  const query = await searchParams;
   const listing = await getListingBySlugAsync(slug);
   if (!listing) notFound();
 
@@ -49,9 +54,10 @@ export default async function ListingDetailPage({ params }: PageProps) {
       ? `${listing.shipFromCity}, ${listing.shipFromCountry}`
       : listing.currentLocation || listing.country || null;
 
-  const isOwner = Boolean(
-    session && listing.isDbListing && session.id === listing.memberId,
-  );
+  const isOwner =
+    Boolean(session && listing.isDbListing && session.id === listing.memberId) &&
+    query.preview !== "1";
+  const isDemo = !listing.isDbListing;
 
   return (
     <div className="bg-app-navy pt-28 pb-20 text-white sm:pt-32 sm:pb-28">
@@ -140,16 +146,22 @@ export default async function ListingDetailPage({ params }: PageProps) {
                     View profile
                   </Button>
                 </div>
-                {listing.isDbListing ? (
-                  <ListingPurchasePanel
-                    listing={listing}
-                    sellerId={member.id}
-                    isOwner={isOwner}
-                    memberSlug={member.slug}
-                  />
-                ) : null}
+                <ListingPurchasePanel
+                  listing={listing}
+                  sellerId={member.id}
+                  isOwner={isOwner}
+                  memberSlug={member.slug}
+                  isDemo={isDemo}
+                />
               </div>
-            ) : null}
+            ) : (
+              <ListingPurchasePanel
+                listing={listing}
+                sellerId={listing.memberId}
+                isOwner={false}
+                isDemo={isDemo}
+              />
+            )}
           </div>
         </div>
 

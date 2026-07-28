@@ -126,7 +126,21 @@ export async function POST(req: NextRequest) {
         user: { select: partySelect },
       },
     });
-    if (!listing) return jsonError("Listing not found", 404);
+    if (!listing) {
+      // Seed/demo catalogue IDs are not in PostgreSQL — keep checkout UI
+      // available without creating a live paid/pending marketplace txn.
+      return Response.json({
+        ok: true,
+        demo: true,
+        transaction: null,
+        checkout: {
+          mode: paymentMethod,
+          stripeConfigured: false,
+          message:
+            "Demo listing checkout preview. Card marketplace payments (Stripe Connect) are not activated. Live pending transactions apply to real member listings only. No payment was taken.",
+        },
+      });
+    }
 
     if (listing.userId === user.id) {
       return jsonError("You cannot buy your own listing", 400);

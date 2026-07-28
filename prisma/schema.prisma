@@ -15,6 +15,8 @@ model User {
   emailVerified        Boolean   @default(false)
   /// Identity verification only — set by admin/passport review later. Users cannot self-set.
   identityVerified     Boolean   @default(false)
+  /// UNVERIFIED | PENDING | VERIFIED | REJECTED — badge only when VERIFIED
+  identityVerificationStatus String @default("UNVERIFIED")
   isAdmin              Boolean   @default(false)
   /// Signup / display name (required at join).
   name                 String
@@ -249,17 +251,43 @@ model RateLimitEvent {
   @@index([userId, action, dayKey])
 }
 
-/// Passport / identity review — modeled only; no admin UI in this stage.
+/// Passport / identity review — documents are private; badge only when VERIFIED.
 model IdentityVerificationRequest {
-  id         String    @id @default(cuid())
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status     String    @default("pending")
-  notes      String    @default("")
-  createdAt  DateTime  @default(now())
-  reviewedAt DateTime?
+  id              String                  @id @default(cuid())
+  userId          String
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// UNVERIFIED is account default; request statuses: PENDING | VERIFIED | REJECTED
+  status          String                  @default("PENDING")
+  documentType    String                  @default("")
+  /// passport | national_id | driving_licence
+  notes           String                  @default("")
+  rejectionReason String                  @default("")
+  reviewerId      String?
+  reviewedAt      DateTime?
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  documents       VerificationDocument[]
 
   @@index([userId, status])
+  @@index([status, createdAt])
+}
+
+model VerificationDocument {
+  id          String                       @id @default(cuid())
+  requestId   String
+  request     IdentityVerificationRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  /// front | back | selfie
+  kind        String
+  /// Private Blob URL or pathname — never expose publicly
+  url         String
+  pathname    String                       @default("")
+  mimeType    String                       @default("")
+  sizeBytes   Int                          @default(0)
+  createdAt   DateTime                     @default(now())
+
+  @@index([requestId])
 }
 
 /// Internal messaging thread between Source Bridge users.

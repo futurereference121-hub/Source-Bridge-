@@ -14,6 +14,8 @@ type Props = {
   sellerId: string;
   isOwner: boolean;
   memberSlug?: string;
+  /** Seed/prototype listings still show Buy + Contact for buyers. */
+  isDemo?: boolean;
 };
 
 function saleStatusLabel(status?: string) {
@@ -34,15 +36,21 @@ export function ListingPurchasePanel({
   sellerId,
   isOwner,
   memberSlug,
+  isDemo = false,
 }: Props) {
   const router = useRouter();
-  const { account, requireAuth, showToast } = useAppUi();
+  const { account, requireAuth, showToast, openPlaceholder } = useAppUi();
   const [selectedSize, setSelectedSize] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const sizes = listing.sizes || [];
-  const needsSize = sizes.length > 0;
+  const sizes =
+    listing.sizes?.length
+      ? listing.sizes
+      : listing.specs?.Sizes
+        ? listing.specs.Sizes.split(/[,·|/]/).map((s) => s.trim()).filter(Boolean)
+        : [];
+  const needsSize = sizes.length > 0 && !sizes.some((s) => /multiple/i.test(s) && sizes.length === 1);
   const saleStatus = (listing.saleStatus || "AVAILABLE").toUpperCase();
   const canBuy = saleStatus === "AVAILABLE";
   const ownerSlug =
@@ -84,46 +92,57 @@ export function ListingPurchasePanel({
     setCheckoutOpen(true);
   }
 
-  if (isOwner) {
-    return (
-      <div className="mt-4 space-y-3">
-        <p className="text-sm text-white/55">
-          You own this listing · {saleStatusLabel(saleStatus)}
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <PrimaryButton
-            href={
-              ownerSlug
-                ? `/members/${ownerSlug}?edit=listing&id=${listing.id}`
-                : `/profile?edit=listing&id=${listing.id}`
-            }
-            showArrow={false}
-            className="rounded-lg"
-          >
-            Edit Listing
-          </PrimaryButton>
-          <button
-            type="button"
-            disabled={deleting}
-            onClick={() => void onDelete()}
-            className="inline-flex h-11 items-center rounded-lg border border-red-400/40 px-5 text-xs font-medium uppercase tracking-[0.14em] text-red-300 transition-colors hover:border-red-400/70 hover:text-red-200 disabled:opacity-50"
-          >
-            {deleting ? "Deleting…" : "Delete Listing"}
-          </button>
-          <Button
-            href={`/marketplace/${listing.slug}`}
-            variant="outline"
-            className="border-white/25 text-white hover:border-white/50 hover:bg-white/5"
-          >
-            View Public Preview
-          </Button>
-        </div>
-      </div>
+  function onDemoContact() {
+    if (!requireAuth("contact this member")) return;
+    openPlaceholder(
+      "Demo listing",
+      "This is a Source Bridge demo listing. Contact Seller works the same way on real member listings — messaging opens from Buy → Contact Seller or the Contact Seller button.",
     );
   }
 
   return (
-    <div className="mt-4 space-y-4">
+    <div className="mt-6 space-y-4 border-t border-white/10 pt-6">
+      {isOwner ? (
+        <div className="space-y-3">
+          <p className="text-sm text-white/55">
+            Owner preview · {saleStatusLabel(saleStatus)}
+            {isDemo ? " · Demo catalogue" : ""}
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {!isDemo ? (
+              <>
+                <PrimaryButton
+                  href={
+                    ownerSlug
+                      ? `/members/${ownerSlug}?edit=listing&id=${listing.id}`
+                      : `/profile?edit=listing&id=${listing.id}`
+                  }
+                  showArrow={false}
+                  className="rounded-lg"
+                >
+                  Edit Listing
+                </PrimaryButton>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => void onDelete()}
+                  className="inline-flex h-11 items-center rounded-lg border border-red-400/40 px-5 text-xs font-medium uppercase tracking-[0.14em] text-red-300 transition-colors hover:border-red-400/70 hover:text-red-200 disabled:opacity-50"
+                >
+                  {deleting ? "Deleting…" : "Delete Listing"}
+                </button>
+              </>
+            ) : null}
+            <Button
+              href={`/marketplace/${listing.slug}?preview=1`}
+              variant="outline"
+              className="border-white/25 text-white hover:border-white/50 hover:bg-white/5"
+            >
+              View Public Preview
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {!canBuy ? (
         <p className="text-sm font-medium text-amber-300/90">
           {saleStatusLabel(saleStatus)} — purchase is unavailable
@@ -167,13 +186,21 @@ export function ListingPurchasePanel({
         >
           Buy
         </PrimaryButton>
-        {listing.isDbListing ? (
+        {isDemo || !listing.isDbListing ? (
+          <button
+            type="button"
+            onClick={onDemoContact}
+            className="inline-flex h-11 items-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 transition-colors hover:border-white/50 hover:bg-white/5"
+          >
+            Contact Seller
+          </button>
+        ) : (
           <ContactSellerButton
             toUserId={sellerId}
             listingId={listing.id}
             listingName={listing.name}
           />
-        ) : null}
+        )}
       </div>
 
       <CheckoutOptionsModal
@@ -184,6 +211,7 @@ export function ListingPurchasePanel({
         sellerId={sellerId}
         listingId={listing.id}
         listingName={listing.name}
+        isDemo={isDemo || !listing.isDbListing}
       />
     </div>
   );

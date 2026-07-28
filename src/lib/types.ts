@@ -304,6 +304,8 @@ export interface AccountSession {
   email: string;
   emailVerified: boolean;
   identityVerified: boolean;
+  /** UNVERIFIED | PENDING | VERIFIED | REJECTED */
+  identityVerificationStatus?: string;
   name: string;
   username: string | null;
   slug: string | null;

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
+import { useAppUi } from "@/components/providers/AppProviders";
 
 type Props = {
   open: boolean;
@@ -13,6 +14,7 @@ type Props = {
   sellerId: string;
   listingId: string;
   listingName: string;
+  isDemo?: boolean;
 };
 
 export function CheckoutOptionsModal({
@@ -23,9 +25,11 @@ export function CheckoutOptionsModal({
   sellerId,
   listingId,
   listingName,
+  isDemo = false,
 }: Props) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const { openPlaceholder, requireAuth } = useAppUi();
 
   useEffect(() => {
     const el = dialogRef.current;
@@ -39,6 +43,15 @@ export function CheckoutOptionsModal({
     if (selectedSize) params.set("size", selectedSize);
     onClose();
     router.push(`/checkout/${listingSlug}?${params.toString()}`);
+  }
+
+  function onDemoContact() {
+    if (!requireAuth("contact this member")) return;
+    onClose();
+    openPlaceholder(
+      "Demo listing",
+      "Contact Seller works on real member listings. This demo listing still opens the full Buy → checkout interface so you can review Card and Crypto flows.",
+    );
   }
 
   if (!open) return null;
@@ -88,18 +101,30 @@ export function CheckoutOptionsModal({
             Pay with Cryptocurrency
           </button>
           <div className="pt-1">
-            <ContactSellerButton
-              toUserId={sellerId}
-              listingId={listingId}
-              listingName={listingName}
-              label="Contact Seller"
-            />
+            {isDemo ? (
+              <button
+                type="button"
+                onClick={onDemoContact}
+                className="inline-flex h-11 w-full items-center justify-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 transition-colors hover:border-white/50 hover:bg-white/5"
+              >
+                Contact Seller
+              </button>
+            ) : (
+              <ContactSellerButton
+                toUserId={sellerId}
+                listingId={listingId}
+                listingName={listingName}
+                label="Contact Seller"
+              />
+            )}
           </div>
         </div>
 
         <p className="mt-5 text-xs leading-relaxed text-white/45">
-          Card payments are not active yet. Crypto and contact options create a
-          pending transaction — Source Bridge never auto-marks payment as paid.
+          Card marketplace payments are not activated yet (Stripe Connect). The
+          Buy interface stays available for future Stripe Connect and escrow
+          integration. Crypto and contact options create pending transactions
+          only — Source Bridge never auto-marks payment as paid.
         </p>
       </div>
     </dialog>

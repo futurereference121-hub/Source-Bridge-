@@ -32,6 +32,8 @@ type CheckoutBootstrap = {
   seller: SellerInfo;
   cryptoPaymentMethods: CryptoMethod[];
   stripeConfigured: boolean;
+  isDemo?: boolean;
+  message?: string | null;
 };
 
 type Props = {
@@ -57,6 +59,8 @@ export function CheckoutPageClient({ slug }: Props) {
   const [transactionId, setTransactionId] = useState<string | null>(null);
   const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [hashSubmitted, setHashSubmitted] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
+  const [demoPreviewDone, setDemoPreviewDone] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,6 +70,10 @@ export function CheckoutPageClient({ slug }: Props) {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Listing not found");
       setData(json as CheckoutBootstrap);
+      setIsDemo(Boolean((json as CheckoutBootstrap).isDemo));
+      if ((json as CheckoutBootstrap).message) {
+        setCheckoutMessage((json as CheckoutBootstrap).message || null);
+      }
       const methods = (json as CheckoutBootstrap).cryptoPaymentMethods || [];
       if (methods.length) setSelectedMethodId(methods[0].id);
     } catch (err) {
@@ -123,11 +131,16 @@ export function CheckoutPageClient({ slug }: Props) {
       if (!res.ok) throw new Error(json.error || "Checkout failed");
       setTransactionId(json.transaction?.id || null);
       setCheckoutMessage(json.checkout?.message || null);
-      showToast(
-        method === "card"
-          ? "Pending unpaid order created"
-          : "Crypto order created — send payment then submit hash",
-      );
+      if (json.demo) {
+        setDemoPreviewDone(true);
+        showToast("Demo checkout preview — no live order created");
+      } else {
+        showToast(
+          method === "card"
+            ? "Pending unpaid order created"
+            : "Crypto order created — send payment then submit hash",
+        );
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Checkout failed");
     } finally {
@@ -264,12 +277,25 @@ export function CheckoutPageClient({ slug }: Props) {
             {checkoutMessage ? (
               <p className="mt-3 text-sm text-amber-200/90">{checkoutMessage}</p>
             ) : null}
-            {transactionId ? (
+            {isDemo ? (
+              <p className="mt-3 text-sm text-white/55">
+                Demo listing — checkout options are available for review. No live
+                marketplace transaction is created.
+              </p>
+            ) : null}
+            {transactionId || demoPreviewDone ? (
               <div className="mt-5 space-y-3">
-                <p className="text-sm text-white/55">
-                  Pending unpaid order created. Reference:{" "}
-                  <span className="font-mono text-white/80">{transactionId}</span>
-                </p>
+                {transactionId ? (
+                  <p className="text-sm text-white/55">
+                    Pending unpaid order created. Reference:{" "}
+                    <span className="font-mono text-white/80">{transactionId}</span>
+                  </p>
+                ) : (
+                  <p className="text-sm text-white/55">
+                    Demo preview recorded. No payment was taken and no pending
+                    database order was created.
+                  </p>
+                )}
                 <p className="text-xs text-white/40">
                   This is not a successful payment. Contact the seller or wait
                   until card checkout is enabled.
@@ -291,7 +317,11 @@ export function CheckoutPageClient({ slug }: Props) {
                   onClick={() => void createPendingCheckout()}
                   className="rounded-lg"
                 >
-                  {busy ? "Creating…" : "Create pending order"}
+                  {busy
+                    ? "Creating…"
+                    : isDemo
+                      ? "Preview pending order"
+                      : "Create pending order"}
                 </PrimaryButton>
               </div>
             )}
@@ -304,10 +334,29 @@ export function CheckoutPageClient({ slug }: Props) {
               Pay with cryptocurrency
             </h2>
             {!data.cryptoPaymentMethods.length ? (
-              <p className="mt-3 text-sm text-white/60">
-                This seller has not enabled any crypto payment methods yet.
-                Contact them to arrange payment.
-              </p>
+              <div className="mt-3 space-y-4">
+                <p className="text-sm text-white/60">
+                  {isDemo
+                    ? "Demo sellers do not have live crypto wallets. The crypto checkout layout is available for review — no payment is taken."
+                    : "This seller has not enabled any crypto payment methods yet. Contact them to arrange payment."}
+                </p>
+                {isDemo && !demoPreviewDone ? (
+                  <PrimaryButton
+                    type="button"
+                    showArrow={false}
+                    disabled={busy}
+                    onClick={() => void createPendingCheckout()}
+                    className="rounded-lg"
+                  >
+                    {busy ? "Creating…" : "Preview crypto checkout"}
+                  </PrimaryButton>
+                ) : null}
+                {demoPreviewDone ? (
+                  <p className="text-sm text-white/55">
+                    Demo preview recorded. No live crypto order was created.
+                  </p>
+                ) : null}
+              </div>
             ) : (
               <>
                 <div className="mt-4 space-y-2">

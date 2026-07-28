@@ -52,6 +52,7 @@ export type SessionUser = Pick<
   | "email"
   | "emailVerified"
   | "identityVerified"
+  | "identityVerificationStatus"
   | "isAdmin"
   | "name"
   | "username"
@@ -74,6 +75,7 @@ const userSelect = {
   email: true,
   emailVerified: true,
   identityVerified: true,
+  identityVerificationStatus: true,
   isAdmin: true,
   name: true,
   username: true,
@@ -178,6 +180,9 @@ export function toPublicAccount(user: SessionUser) {
     email: user.email,
     emailVerified: user.emailVerified,
     identityVerified: user.identityVerified,
+    identityVerificationStatus:
+      user.identityVerificationStatus ||
+      (user.identityVerified ? "VERIFIED" : "UNVERIFIED"),
     name: user.name,
     username: user.username,
     slug: user.slug,

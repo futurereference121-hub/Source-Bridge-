@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# private identity verification docs (local/dev)
+/private/
+
 # vercel
 .vercel
 

@@ -10,11 +10,18 @@ type ListingGalleryProps = {
 
 export function ListingGallery({ images, name }: ListingGalleryProps) {
   const [active, setActive] = useState(0);
-  const current = images[active] ?? images[0];
+  const gallery = images.length ? images.slice(0, 6) : images;
+  const current = gallery[active] ?? gallery[0];
+
+  if (!current) {
+    return (
+      <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-navy-mid" />
+    );
+  }
 
   return (
     <div className="space-y-3">
-      <div className="relative aspect-[4/5] overflow-hidden bg-stone">
+      <div className="relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-navy-mid">
         <Image
           src={current}
           alt={name}
@@ -24,19 +31,21 @@ export function ListingGallery({ images, name }: ListingGalleryProps) {
           className="object-cover"
         />
       </div>
-      {images.length > 1 ? (
-        <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-          {images.map((src, index) => (
+      {gallery.length > 1 ? (
+        <div className="grid grid-cols-5 gap-2 sm:grid-cols-6">
+          {gallery.map((src, index) => (
             <button
               key={src + index}
               type="button"
               onClick={() => setActive(index)}
-              className={`relative aspect-square overflow-hidden bg-stone outline-none ring-offset-2 transition ${
-                active === index ? "ring-2 ring-accent" : "opacity-70 hover:opacity-100"
+              className={`relative aspect-square overflow-hidden rounded-lg bg-navy-mid outline-none transition ${
+                active === index
+                  ? "ring-2 ring-electric ring-offset-2 ring-offset-app-navy"
+                  : "opacity-70 hover:opacity-100"
               }`}
-              aria-label={`View image ${index + 1}`}
+              aria-label={`View image ${index + 1}${index === 0 ? " (cover)" : ""}`}
             >
-              <Image src={src} alt="" fill sizes="120px" className="object-cover" />
+              <Image src={src} alt="" fill sizes="96px" className="object-cover" />
             </button>
           ))}
         </div>

@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
         intent,
         emailVerified: false,
         identityVerified: false,
+        identityVerificationStatus: "UNVERIFIED",
         photo: "",
         cover: "",
         bio: "",
