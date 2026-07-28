@@ -196,122 +196,112 @@ export async function POST(req: NextRequest) {
     await assertDailyLimit(user.id, "message");
     const now = new Date();
 
-    const result = await prisma.$transaction(async (tx) => {
-      const sourcingRequest = await tx.sourcingRequest.create({
-        data: {
-          fromUserId: user.id,
-          toUserId,
-          listingId: listingId ?? null,
-          opportunityId: opportunityId ?? null,
-          message,
-          neededFrom: neededFrom || "",
-          budget: budget || "",
-          deadline: deadline || "",
-          referenceImages: JSON.stringify(referenceImages),
-          clientRequestId: clientRequestId || "",
-          status: "open",
-        },
-      });
-
-      const conversation = await tx.conversation.create({
-        data: {
-          subject: title,
-          contextType,
-          listingId: listingId ?? null,
-          opportunityId: opportunityId ?? null,
-          sourcingRequestId: sourcingRequest.id,
-          lastMessageAt: now,
-          participants: {
-            create: [
-              { userId: user.id, lastReadAt: now },
-              { userId: toUserId },
-            ],
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const sourcingRequest = await tx.sourcingRequest.create({
+          data: {
+            fromUserId: user.id,
+            toUserId,
+            listingId: listingId ?? null,
+            opportunityId: opportunityId ?? null,
+            message,
+            neededFrom: neededFrom || "",
+            budget: budget || "",
+            deadline: deadline || "",
+            referenceImages: JSON.stringify(referenceImages),
+            clientRequestId: clientRequestId || "",
+            status: "open",
           },
-        },
-      });
-
-      const firstMessage = await tx.message.create({
-        data: {
-          conversationId: conversation.id,
-          senderId: user.id,
-          body: message,
-          messageType: "SOURCING_REQUEST",
-          createdAt: now,
-          attachments:
-            referenceImages.length > 0
-              ? {
-                  create: referenceImages.map((url) => ({
-                    url,
-                    pathname: "",
-                    mimeType: "image/*",
-                    sizeBytes: 0,
-                  })),
-                }
-              : undefined,
-        },
-      });
-
-      // Stamp attachment order via pathname field lightly
-      if (referenceImages.length) {
-        const atts = await tx.messageAttachment.findMany({
-          where: { messageId: firstMessage.id },
-          orderBy: { createdAt: "asc" },
         });
-        await Promise.all(
-          atts.map((att, i) =>
-            tx.messageAttachment.update({
-              where: { id: att.id },
-              data: { pathname: `order:${i}` },
-            }),
-          ),
-        );
-      }
 
-      const transaction = await tx.transaction.create({
-        data: {
-          status: "REQUESTED",
-          buyerId: user.id,
-          sellerId: toUserId,
-          conversationId: conversation.id,
-          sourcingRequestId: sourcingRequest.id,
-          listingId: listingId ?? null,
-          opportunityId: opportunityId ?? null,
-          title,
-          notes: message,
-        },
-      });
-
-      const fullConversation = await tx.conversation.findUniqueOrThrow({
-        where: { id: conversation.id },
-        include: {
-          participants: {
-            include: { user: { select: participantUserSelect } },
-          },
-          messages: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            include: { attachments: true },
-          },
-          sourcingRequest: true,
-          listing: {
-            select: {
-              id: true,
-              name: true,
-              images: true,
-              price: true,
-              currency: true,
-              slug: true,
+        const conversation = await tx.conversation.create({
+          data: {
+            subject: title,
+            contextType,
+            listingId: listingId ?? null,
+            opportunityId: opportunityId ?? null,
+            sourcingRequestId: sourcingRequest.id,
+            lastMessageAt: now,
+            participants: {
+              create: [
+                { userId: user.id, lastReadAt: now },
+                { userId: toUserId },
+              ],
             },
           },
-        },
-      });
+        });
 
-      return {
-        sourcingRequest,
-        conversation: fullConversation,
-        message: firstMessage,
-        transaction,
-      };
+        const firstMessage = await tx.message.create({
+          data: {
+            conversationId: conversation.id,
+            senderId: user.id,
+            body: message,
+            messageType: "SOURCING_REQUEST",
+            clientMessageId: clientRequestId
+              ? `${clientRequestId}:first`
+              : "",
+            createdAt: now,
+            attachments:
+              referenceImages.length > 0
+                ? {
+                    create: referenceImages.map((url, i) => ({
+                      url,
+                      pathname: `order:${i}`,
+                      mimeType: "image/*",
+                      sizeBytes: 0,
+                    })),
+                  }
+                : undefined,
+          },
+        });
+
+        const transaction = await tx.transaction.create({
+          data: {
+            status: "REQUESTED",
+            buyerId: user.id,
+            sellerId: toUserId,
+            conversationId: conversation.id,
+            sourcingRequestId: sourcingRequest.id,
+            listingId: listingId ?? null,
+            opportunityId: opportunityId ?? null,
+            title,
+            notes: message,
+          },
+        });
+
+        return {
+          sourcingRequest,
+          conversationId: conversation.id,
+          message: firstMessage,
+          transaction,
+        };
+      },
+      { timeout: 20_000 },
+    );
+
+    const fullConversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: result.conversationId },
+      include: {
+        participants: {
+          include: { user: { select: participantUserSelect } },
+        },
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          include: { attachments: true },
+        },
+        sourcingRequest: true,
+        listing: {
+          select: {
+            id: true,
+            name: true,
+            images: true,
+            price: true,
+            currency: true,
+            slug: true,
+          },
+        },
+      },
     });
 
     await recordDailyAction(user.id, "sourcing", now);
@@ -326,7 +316,7 @@ export async function POST(req: NextRequest) {
           `Hi ${recipient.name},`,
           "",
           `@${user.username || "A member"} sent you a sourcing request on Source Bridge.`,
-          `Open your inbox: ${appUrl()}/inbox/${result.conversation.id}`,
+          `Open your inbox: ${appUrl()}/inbox/${fullConversation.id}`,
           "",
           "This email does not include the private message contents.",
         ].join("\n"),
@@ -338,7 +328,7 @@ export async function POST(req: NextRequest) {
         ok: true,
         existing: false,
         sourcingRequest: mapSourcingRequest(result.sourcingRequest),
-        conversation: mapConversation(result.conversation, user.id),
+        conversation: mapConversation(fullConversation, user.id),
         message: {
           id: result.message.id,
           conversationId: result.message.conversationId,

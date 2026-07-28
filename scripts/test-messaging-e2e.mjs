@@ -9,7 +9,11 @@
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const base = (process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
+const base = (
+  process.env.MESSAGING_E2E_URL ||
+  process.env.APP_URL ||
+  "http://localhost:3000"
+).replace(/\/$/, "");
 
 const A_EMAIL = "messenger-a@sourcebridge.test";
 const B_EMAIL = "messenger-b@sourcebridge.test";
@@ -67,9 +71,17 @@ async function signIn(email) {
     body: JSON.stringify({ email }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`sign-in ${email}: ${data.error || res.status}`);
+  if (!res.ok) {
+    throw new Error(
+      `sign-in ${email}: ${JSON.stringify(data)} (${res.status})`,
+    );
+  }
   const cookie = parseSetCookie(res);
-  if (!cookie) throw new Error(`sign-in ${email}: no session cookie`);
+  if (!cookie) {
+    throw new Error(
+      `sign-in ${email}: no session cookie (status ${res.status})`,
+    );
+  }
   return { cookie, account: data.account };
 }
 
@@ -113,9 +125,14 @@ try {
       referenceImages: [],
     }),
   });
+  if (!create1.res.ok || !create1.data.conversation?.id) {
+    throw new Error(
+      `A creates sourcing request failed: ${create1.res.status} ${JSON.stringify(create1.data)}`,
+    );
+  }
   assert(
     "A creates sourcing request",
-    create1.res.ok && Boolean(create1.data.conversation?.id),
+    true,
   );
   const conversationId = create1.data.conversation.id;
 
