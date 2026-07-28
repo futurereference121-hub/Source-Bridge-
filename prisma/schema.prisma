@@ -9,39 +9,39 @@ datasource db {
 
 /// Real accounts. Seed/prototype members stay in src/data/members.ts.
 model User {
-  id                   String    @id @default(cuid())
-  email                String    @unique
+  id                         String    @id @default(cuid())
+  email                      String    @unique
   /// Email ownership confirmed via token. NEVER grants Verified badge.
-  emailVerified        Boolean   @default(false)
+  emailVerified              Boolean   @default(false)
   /// Identity verification only — set by admin/passport review later. Users cannot self-set.
-  identityVerified     Boolean   @default(false)
+  identityVerified           Boolean   @default(false)
   /// UNVERIFIED | PENDING | VERIFIED | REJECTED — badge only when VERIFIED
-  identityVerificationStatus String @default("UNVERIFIED")
-  isAdmin              Boolean   @default(false)
+  identityVerificationStatus String    @default("UNVERIFIED")
+  isAdmin                    Boolean   @default(false)
   /// USER | ADMIN. Keep isAdmin synchronized for legacy callers.
-  role                 String    @default("USER")
-  passwordHash         String?
-  mustChangePassword   Boolean   @default(false)
-  passwordChangedAt    DateTime?
+  role                       String    @default("USER")
+  passwordHash               String?
+  mustChangePassword         Boolean   @default(false)
+  passwordChangedAt          DateTime?
   /// Signup / display name (required at join).
-  name                 String
+  name                       String
   /// Unique URL-safe handle without @. Null until onboarding.
-  username             String?   @unique
-  slug                 String?   @unique
-  photo                String    @default("")
-  cover                String    @default("")
-  bio                  String    @default("")
+  username                   String?   @unique
+  slug                       String?   @unique
+  photo                      String    @default("")
+  cover                      String    @default("")
+  bio                        String    @default("")
   /// ≤160 chars. Blank for new users. Hidden on public UI when empty.
-  publicDisplayMessage String    @default("")
-  city                 String    @default("")
-  country              String    @default("")
-  memberType           String    @default("")
-  intent               String    @default("both")
+  publicDisplayMessage       String    @default("")
+  city                       String    @default("")
+  country                    String    @default("")
+  memberType                 String    @default("")
+  intent                     String    @default("both")
   /// JSON string[] of category names from global list.
-  specialties          String    @default("[]")
-  onboardingComplete   Boolean   @default(false)
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  specialties                String    @default("[]")
+  onboardingComplete         Boolean   @default(false)
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
 
   sessions             Session[]
   emailTokens          EmailVerificationToken[]
@@ -50,19 +50,19 @@ model User {
   statuses             StatusUpdate[]
   opportunities        Opportunity[]
   listings             StockListing[]
-  reviewsReceived      Review[]                  @relation("Reviewee")
-  reviewsWritten       Review[]                  @relation("Reviewer")
-  following            Follow[]                  @relation("Follower")
+  reviewsReceived      Review[]                      @relation("Reviewee")
+  reviewsWritten       Review[]                      @relation("Reviewer")
+  following            Follow[]                      @relation("Follower")
   rateLimitEvents      RateLimitEvent[]
   identityRequests     IdentityVerificationRequest[]
   verificationReviews  IdentityVerificationRequest[] @relation("VerificationReviewer")
   verificationAudits   VerificationAuditEvent[]
   conversationParts    ConversationParticipant[]
-  messagesSent         Message[]                 @relation("MessageSender")
-  sourcingSent         SourcingRequest[]         @relation("SourcingFrom")
-  sourcingReceived     SourcingRequest[]         @relation("SourcingTo")
-  transactionsAsBuyer  Transaction[]             @relation("TxnBuyer")
-  transactionsAsSeller Transaction[]             @relation("TxnSeller")
+  messagesSent         Message[]                     @relation("MessageSender")
+  sourcingSent         SourcingRequest[]             @relation("SourcingFrom")
+  sourcingReceived     SourcingRequest[]             @relation("SourcingTo")
+  transactionsAsBuyer  Transaction[]                 @relation("TxnBuyer")
+  transactionsAsSeller Transaction[]                 @relation("TxnSeller")
   blockedConversations ConversationBlock[]
   paymentMethods       SellerPaymentMethod[]
 }
@@ -106,17 +106,17 @@ model NetworkLocation {
 }
 
 model Trip {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  city       String
-  country    String
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city      String
+  country   String
   /// ISO date YYYY-MM-DD
-  arrival    String
+  arrival   String
   /// ISO date YYYY-MM-DD
-  departure  String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  departure String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
 }
@@ -135,65 +135,65 @@ model StatusUpdate {
 
 /// Multiple opportunities allowed. Closed/expired are not active. Max 3 new/day.
 model Opportunity {
-  id          String    @id @default(cuid())
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title       String
-  description String
-  city        String
-  country     String
-  category    String
-  expiresAt   DateTime?
-  closedAt    DateTime?
-  postedAt    DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  conversations Conversation[]
+  id               String            @id @default(cuid())
+  userId           String
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title            String
+  description      String
+  city             String
+  country          String
+  category         String
+  expiresAt        DateTime?
+  closedAt         DateTime?
+  postedAt         DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  conversations    Conversation[]
   sourcingRequests SourcingRequest[]
-  transactions Transaction[]
+  transactions     Transaction[]
 
   @@index([userId, postedAt])
 }
 
 model StockListing {
-  id                String   @id @default(cuid())
+  id                String            @id @default(cuid())
   userId            String
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   name              String
-  slug              String   @unique
-  description       String   @default("")
+  slug              String            @unique
+  description       String            @default("")
   /// Product family — "clothing" today; other kinds can add attribute sets later.
-  productKind       String   @default("clothing")
+  productKind       String            @default("clothing")
   category          String
-  subcategory       String   @default("")
+  subcategory       String            @default("")
   /// Ordered image URLs (JSON string[]). First image is the cover.
-  images            String   @default("[]")
+  images            String            @default("[]")
   /// Normalized ordered image records; images remains the denormalized cache.
   listingImages     ListingImage[]
   /// Legacy free-text quantity (non-clothing / fallback). Prefer sizes for clothing.
-  quantity          String   @default("")
+  quantity          String            @default("")
   /// Clothing sizes JSON string[] — S, M, L, XL, XXL, Multiple sizes available
-  sizes             String   @default("[]")
-  material          String   @default("")
-  brand             String   @default("")
-  condition         String   @default("")
-  colour            String   @default("")
-  pattern           String   @default("")
-  fit               String   @default("")
-  gender            String   @default("")
-  availability      String   @default("available")
+  sizes             String            @default("[]")
+  material          String            @default("")
+  brand             String            @default("")
+  condition         String            @default("")
+  colour            String            @default("")
+  pattern           String            @default("")
+  fit               String            @default("")
+  gender            String            @default("")
+  availability      String            @default("available")
   /// Marketplace lifecycle: AVAILABLE | RESERVED | SOLD | ARCHIVED
-  saleStatus        String   @default("AVAILABLE")
+  saleStatus        String            @default("AVAILABLE")
   /// Legacy single location string — prefer shipFromCity/Country.
-  location          String   @default("")
-  shipFromCity      String   @default("")
-  shipFromCountry   String   @default("")
-  shippingAvailable Boolean  @default(false)
+  location          String            @default("")
+  shipFromCity      String            @default("")
+  shipFromCountry   String            @default("")
+  shippingAvailable Boolean           @default(false)
   price             Float?
-  currency          String   @default("USD")
+  currency          String            @default("USD")
   /// Extensible attribute bag for future product kinds (JSON object).
-  attributes        String   @default("{}")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  attributes        String            @default("{}")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
   conversations     Conversation[]
   sourcingRequests  SourcingRequest[]
   transactions      Transaction[]
@@ -275,60 +275,60 @@ model RateLimitEvent {
 
 /// Passport / identity review — documents are private; badge only when VERIFIED.
 model IdentityVerificationRequest {
-  id              String                  @id @default(cuid())
-  userId          String
-  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                   String                   @id @default(cuid())
+  userId               String
+  user                 User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Request statuses: DRAFT | PENDING | VERIFIED | REJECTED
-  status          String                  @default("DRAFT")
-  documentType    String                  @default("")
+  status               String                   @default("DRAFT")
+  documentType         String                   @default("")
   /// passport | national_id | driving_licence
-  notes           String                  @default("")
-  rejectionReason String                  @default("")
-  reviewerId      String?
-  reviewedByAdminId String?
-  reviewedByAdmin User? @relation("VerificationReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
-  reviewedAt      DateTime?
-  approvedAt      DateTime?
-  rejectedAt      DateTime?
-  submittedAt     DateTime?
-  documentDeletedAt DateTime?
-  adminEmailStatus String @default("none")
-  applicantEmailStatus String @default("none")
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-  documents       VerificationDocument[]
-  auditEvents     VerificationAuditEvent[]
+  notes                String                   @default("")
+  rejectionReason      String                   @default("")
+  reviewerId           String?
+  reviewedByAdminId    String?
+  reviewedByAdmin      User?                    @relation("VerificationReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  reviewedAt           DateTime?
+  approvedAt           DateTime?
+  rejectedAt           DateTime?
+  submittedAt          DateTime?
+  documentDeletedAt    DateTime?
+  adminEmailStatus     String                   @default("none")
+  applicantEmailStatus String                   @default("none")
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  documents            VerificationDocument[]
+  auditEvents          VerificationAuditEvent[]
 
   @@index([userId, status])
   @@index([status, createdAt])
 }
 
 model VerificationDocument {
-  id          String                       @id @default(cuid())
-  requestId   String
-  request     IdentityVerificationRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  id        String                      @id @default(cuid())
+  requestId String
+  request   IdentityVerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   /// front | back | selfie
-  kind        String
+  kind      String
   /// Private Blob URL or pathname — never expose publicly
-  url         String
-  pathname    String                       @default("")
-  mimeType    String                       @default("")
-  sizeBytes   Int                          @default(0)
-  deletedAt   DateTime?
-  createdAt   DateTime                     @default(now())
+  url       String
+  pathname  String                      @default("")
+  mimeType  String                      @default("")
+  sizeBytes Int                         @default(0)
+  deletedAt DateTime?
+  createdAt DateTime                    @default(now())
 
   @@index([requestId])
 }
 
 model VerificationAuditEvent {
-  id          String                       @id @default(cuid())
+  id          String                      @id @default(cuid())
   requestId   String
-  request     IdentityVerificationRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  request     IdentityVerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   actorUserId String?
-  actorUser   User?                        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUser   User?                       @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
   action      String
-  meta        String                       @default("{}")
-  createdAt   DateTime                     @default(now())
+  meta        String                      @default("{}")
+  createdAt   DateTime                    @default(now())
 
   @@index([requestId])
   @@index([createdAt])
@@ -337,25 +337,25 @@ model VerificationAuditEvent {
 
 /// Internal messaging thread between Source Bridge users.
 model Conversation {
-  id               String                    @id @default(cuid())
-  subject          String                    @default("")
+  id                String                    @id @default(cuid())
+  subject           String                    @default("")
   /// listing | opportunity | sourcing | direct | trip | system
-  contextType      String                    @default("direct")
-  listingId        String?
-  listing          StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
-  opportunityId    String?
-  opportunity      Opportunity?              @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  tripId           String?
-  sourcingRequestId String?                  @unique
-  sourcingRequest  SourcingRequest?          @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
-  closedAt         DateTime?
-  createdAt        DateTime                  @default(now())
-  updatedAt        DateTime                  @updatedAt
-  lastMessageAt    DateTime?
-  participants     ConversationParticipant[]
-  messages         Message[]
-  blocks           ConversationBlock[]
-  transactions     Transaction[]
+  contextType       String                    @default("direct")
+  listingId         String?
+  listing           StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId     String?
+  opportunity       Opportunity?              @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  tripId            String?
+  sourcingRequestId String?                   @unique
+  sourcingRequest   SourcingRequest?          @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  closedAt          DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  lastMessageAt     DateTime?
+  participants      ConversationParticipant[]
+  messages          Message[]
+  blocks            ConversationBlock[]
+  transactions      Transaction[]
 
   @@index([updatedAt])
   @@index([listingId])
@@ -378,20 +378,24 @@ model ConversationParticipant {
 }
 
 model Message {
-  id             String              @id @default(cuid())
-  conversationId String
-  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  senderId       String?
-  sender         User?               @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
-  body           String              @default("")
-  messageType    String              @default("USER")
+  id              String              @id @default(cuid())
+  conversationId  String
+  conversation    Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId        String?
+  sender          User?               @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+  body            String              @default("")
+  messageType     String              @default("USER")
   systemEventType String              @default("")
-  replyAllowed   Boolean             @default(true)
-  createdAt      DateTime            @default(now())
-  attachments    MessageAttachment[]
+  replyAllowed    Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  editedAt        DateTime?
+  /// Client idempotency key for send retries
+  clientMessageId String              @default("")
+  attachments     MessageAttachment[]
 
   @@index([conversationId, createdAt])
   @@index([senderId])
+  @@index([conversationId, clientMessageId])
 }
 
 model MessageAttachment {
@@ -419,71 +423,81 @@ model ConversationBlock {
 }
 
 model SourcingRequest {
-  id             String        @id @default(cuid())
-  fromUserId     String
-  fromUser       User          @relation("SourcingFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
-  toUserId       String
-  toUser         User          @relation("SourcingTo", fields: [toUserId], references: [id], onDelete: Cascade)
-  listingId      String?
-  listing        StockListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
-  opportunityId  String?
-  opportunity    Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  message        String
-  status         String        @default("open")
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  conversation   Conversation?
-  transactions   Transaction[]
+  id              String        @id @default(cuid())
+  fromUserId      String
+  fromUser        User          @relation("SourcingFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUserId        String
+  toUser          User          @relation("SourcingTo", fields: [toUserId], references: [id], onDelete: Cascade)
+  listingId       String?
+  listing         StockListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId   String?
+  opportunity     Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  /// Primary description — what the sender is looking for
+  message         String
+  neededFrom      String        @default("")
+  budget          String        @default("")
+  /// ISO date YYYY-MM-DD or empty
+  deadline        String        @default("")
+  /// Ordered reference image URLs (JSON string[])
+  referenceImages String        @default("[]")
+  /// Client-supplied idempotency key to prevent duplicate submits
+  clientRequestId String        @default("")
+  status          String        @default("open")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  conversation    Conversation?
+  transactions    Transaction[]
 
   @@index([fromUserId, toUserId])
   @@index([toUserId, createdAt])
   @@index([listingId])
   @@index([opportunityId])
+  @@index([fromUserId, clientRequestId])
 }
 
 /// Lifecycle ready for future escrow — no payment processing yet.
 model Transaction {
-  id                     String          @id @default(cuid())
+  id                      String               @id @default(cuid())
   /// REQUESTED | ACCEPTED | IN_PROGRESS | COMPLETED | CANCELLED | DISPUTED
-  status                 String          @default("REQUESTED")
-  buyerId                String
-  buyer                  User            @relation("TxnBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
-  sellerId               String
-  seller                 User            @relation("TxnSeller", fields: [sellerId], references: [id], onDelete: Cascade)
-  conversationId         String?
-  conversation           Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  sourcingRequestId      String?
-  sourcingRequest        SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
-  listingId              String?
-  listing                StockListing?   @relation(fields: [listingId], references: [id], onDelete: SetNull)
-  opportunityId          String?
-  opportunity            Opportunity?    @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  title                  String          @default("")
-  notes                  String          @default("")
-  amount                 Float?
-  currency               String          @default("USD")
+  status                  String               @default("REQUESTED")
+  buyerId                 String
+  buyer                   User                 @relation("TxnBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId                String
+  seller                  User                 @relation("TxnSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  conversationId          String?
+  conversation            Conversation?        @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  sourcingRequestId       String?
+  sourcingRequest         SourcingRequest?     @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  listingId               String?
+  listing                 StockListing?        @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId           String?
+  opportunity             Opportunity?         @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  title                   String               @default("")
+  notes                   String               @default("")
+  amount                  Float?
+  currency                String               @default("USD")
   /// card | crypto | contact | other
-  paymentMethod          String          @default("")
+  paymentMethod           String               @default("")
   /// unpaid | pending | awaiting_confirmation | paid | refunded | failed | cancelled
-  paymentStatus          String          @default("unpaid")
-  selectedSize           String          @default("")
-  stripeCheckoutSessionId String         @default("")
-  stripePaymentIntentId  String          @default("")
-  cryptoNetwork          String          @default("")
-  cryptoWalletAddress    String          @default("")
-  cryptoTransactionHash  String          @default("")
-  buyerConfirmed         Boolean         @default(false)
-  sellerConfirmed        Boolean         @default(false)
+  paymentStatus           String               @default("unpaid")
+  selectedSize            String               @default("")
+  stripeCheckoutSessionId String               @default("")
+  stripePaymentIntentId   String               @default("")
+  cryptoNetwork           String               @default("")
+  cryptoWalletAddress     String               @default("")
+  cryptoTransactionHash   String               @default("")
+  buyerConfirmed          Boolean              @default(false)
+  sellerConfirmed         Boolean              @default(false)
   /// none | held | released | refunded | disputed — future escrow
-  escrowStatus           String          @default("none")
-  platformFeeAmount      Float?
-  sellerPayoutStatus     String          @default("none")
-  paymentMethodId        String?
-  paymentMethodRef       SellerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  completedAt            DateTime?
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
-  reviews                Review[]
+  escrowStatus            String               @default("none")
+  platformFeeAmount       Float?
+  sellerPayoutStatus      String               @default("none")
+  paymentMethodId         String?
+  paymentMethodRef        SellerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  completedAt             DateTime?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  reviews                 Review[]
 
   @@index([buyerId, status])
   @@index([sellerId, status])
@@ -495,22 +509,22 @@ model Transaction {
 
 /// Flexible seller payment configuration (crypto wallets, future methods).
 model SellerPaymentMethod {
-  id             String   @id @default(cuid())
-  userId         String
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// crypto | card_placeholder | other
-  kind           String
+  kind         String
   /// e.g. Bitcoin, Ethereum, USDT, USDC, or custom network name
-  networkName    String   @default("")
+  networkName  String        @default("")
   /// Wallet address or payment identifier — never private keys
-  address        String   @default("")
-  qrImageUrl     String   @default("")
-  instructions   String   @default("")
-  enabled        Boolean  @default(true)
-  sortOrder      Int      @default(0)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  transactions   Transaction[]
+  address      String        @default("")
+  qrImageUrl   String        @default("")
+  instructions String        @default("")
+  enabled      Boolean       @default(true)
+  sortOrder    Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
 
   @@index([userId, enabled])
   @@index([userId, kind])

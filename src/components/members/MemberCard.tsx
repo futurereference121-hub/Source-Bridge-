@@ -1,11 +1,13 @@
 "use client";
 
+import { useState } from "react";
+import type { Member } from "@/lib/types";
 import Image from "next/image";
 import Link from "next/link";
-import type { Member } from "@/lib/types";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberPhoto } from "@/lib/placeholders";
 
 type MemberCardProps = {
@@ -23,19 +25,41 @@ function displayMessage(member: Member): string {
   return raw.trim();
 }
 
+function isRealMessagingTarget(member: Member): boolean {
+  if (member.isPrototype) return false;
+  if (member.isRealAccount === false) return false;
+  // Seed IDs look like m-niran-chai; real Prisma ids are cuid-like.
+  if (member.id.startsWith("m-")) return false;
+  return true;
+}
+
 export function MemberCard({ member }: MemberCardProps) {
-  const { requireAuth, openPlaceholder } = useAppUi();
+  const { account, requireAuth, showToast } = useAppUi();
   const verified = isIdentityVerified(member);
   const message = displayMessage(member);
   const networkPreview = member.network.slice(0, 3);
   const photo = memberPhoto(member.photo);
+  const isOwner = Boolean(account && account.id === member.id);
+  const canMessage = isRealMessagingTarget(member);
+  const [composerOpen, setComposerOpen] = useState(false);
 
   function sendRequest() {
-    if (!requireAuth("send a sourcing request")) return;
-    openPlaceholder(
-      "Sourcing request",
-      `Your request to @${member.username} will open here. Prototype placeholder — messaging connects later.`,
-    );
+    if (isOwner) return;
+    if (!canMessage) {
+      showToast(
+        "Demo catalogue profiles cannot receive messages. Open a real member profile to send a sourcing request.",
+      );
+      return;
+    }
+    if (
+      !requireAuth(
+        "send a sourcing request",
+        `/members/${member.slug}?compose=1`,
+      )
+    ) {
+      return;
+    }
+    setComposerOpen(true);
   }
 
   return (
@@ -95,14 +119,24 @@ export function MemberCard({ member }: MemberCardProps) {
       ) : null}
 
       <div className="mt-auto pt-5">
-        <PrimaryButton
-          type="button"
-          className="btn-glow-primary w-full rounded-lg"
-          showArrow={false}
-          onClick={sendRequest}
-        >
-          Send Sourcing Request
-        </PrimaryButton>
+        {isOwner ? (
+          <PrimaryButton
+            href="/profile"
+            className="w-full rounded-lg"
+            showArrow={false}
+          >
+            Manage Profile
+          </PrimaryButton>
+        ) : (
+          <PrimaryButton
+            type="button"
+            className="btn-glow-primary w-full rounded-lg"
+            showArrow={false}
+            onClick={sendRequest}
+          >
+            Send Sourcing Request
+          </PrimaryButton>
+        )}
         <Link
           href={`/members/${member.slug}`}
           className="mt-3 block rounded-lg border border-white/15 py-2.5 text-center text-xs font-medium uppercase tracking-[0.14em] text-white/75 transition-colors hover:border-electric/40 hover:text-white"
@@ -110,6 +144,21 @@ export function MemberCard({ member }: MemberCardProps) {
           Explore Network
         </Link>
       </div>
+
+      {canMessage && !isOwner ? (
+        <SourcingRequestComposer
+          open={composerOpen}
+          onClose={() => setComposerOpen(false)}
+          recipient={{
+            id: member.id,
+            username: member.username,
+            fullName: member.fullName,
+            photo: member.photo,
+            locationLabel: member.location.label,
+            isRealAccount: true,
+          }}
+        />
+      ) : null}
     </article>
   );
 }

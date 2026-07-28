@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { Member } from "@/lib/types";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberCover, memberPhoto } from "@/lib/placeholders";
 
 type ProfileHeaderProps = {
@@ -19,49 +20,51 @@ function editHref(slug: string, edit: string) {
   return `/members/${slug}?edit=${edit}`;
 }
 
+function canReceiveMessages(member: Member): boolean {
+  if (member.isPrototype) return false;
+  if (member.isRealAccount === false) return false;
+  if (member.id.startsWith("m-")) return false;
+  return true;
+}
+
 export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { follows, followMember, requireAuth, showToast } = useAppUi();
   const following = follows.includes(member.id);
-  const [requestBusy, setRequestBusy] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const messagingOk = canReceiveMessages(member);
 
-  async function sendRequest() {
-    if (!requireAuth("send a sourcing request")) return;
-    const message = window.prompt(
-      `Message for @${member.username}`,
-      "Hi — I'd like to send a sourcing request.",
+  useEffect(() => {
+    if (isOwner || !messagingOk) return;
+    if (searchParams.get("compose") !== "1") return;
+    setComposerOpen(true);
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("compose");
+    const qs = next.toString();
+    router.replace(
+      qs ? `/members/${member.slug}?${qs}` : `/members/${member.slug}`,
+      { scroll: false },
     );
-    if (message === null) return;
-    const trimmed = message.trim();
-    if (!trimmed) {
-      showToast("Message required");
+  }, [isOwner, messagingOk, member.slug, router, searchParams]);
+
+  function sendRequest() {
+    if (isOwner) return;
+    if (!messagingOk) {
+      showToast(
+        "Demo catalogue profiles cannot receive messages. Choose a real member account.",
+      );
       return;
     }
-
-    setRequestBusy(true);
-    try {
-      const res = await fetch("/api/sourcing-requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          toUserId: member.id,
-          message: trimmed,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Could not send request");
-      const conversationId = data.conversation?.id as string | undefined;
-      showToast(
-        data.existing ? "Opening existing conversation" : "Sourcing request sent",
-      );
-      router.push(
-        conversationId ? `/messages?c=${conversationId}` : "/messages",
-      );
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Could not send request");
-    } finally {
-      setRequestBusy(false);
+    if (
+      !requireAuth(
+        "send a sourcing request",
+        `/members/${member.slug}?compose=1`,
+      )
+    ) {
+      return;
     }
+    setComposerOpen(true);
   }
 
   return (
@@ -110,11 +113,23 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
               </p>
             ) : null}
             <div className="mt-3 flex gap-5 text-sm">
-              <Link href={`/members/${member.slug}/followers`} className="text-white/55 hover:text-white">
-                <span className="font-semibold text-white">{member.followerCount ?? 0}</span> followers
+              <Link
+                href={`/members/${member.slug}/followers`}
+                className="text-white/55 hover:text-white"
+              >
+                <span className="font-semibold text-white">
+                  {member.followerCount ?? 0}
+                </span>{" "}
+                followers
               </Link>
-              <Link href={`/members/${member.slug}/following`} className="text-white/55 hover:text-white">
-                <span className="font-semibold text-white">{member.followingCount ?? 0}</span> following
+              <Link
+                href={`/members/${member.slug}/following`}
+                className="text-white/55 hover:text-white"
+              >
+                <span className="font-semibold text-white">
+                  {member.followingCount ?? 0}
+                </span>{" "}
+                following
               </Link>
             </div>
           </div>
@@ -146,10 +161,9 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
                 type="button"
                 className="btn-glow-primary rounded-lg"
                 showArrow={false}
-                disabled={requestBusy}
-                onClick={() => void sendRequest()}
+                onClick={sendRequest}
               >
-                {requestBusy ? "Sending…" : "Send Sourcing Request"}
+                Send Sourcing Request
               </PrimaryButton>
             </>
           )}
@@ -171,7 +185,21 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
           .
         </div>
       ) : null}
+
+      {!isOwner && messagingOk ? (
+        <SourcingRequestComposer
+          open={composerOpen}
+          onClose={() => setComposerOpen(false)}
+          recipient={{
+            id: member.id,
+            username: member.username,
+            fullName: member.fullName,
+            photo: member.photo,
+            locationLabel: member.location.label,
+            isRealAccount: true,
+          }}
+        />
+      ) : null}
     </div>
   );
 }
-

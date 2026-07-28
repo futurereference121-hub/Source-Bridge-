@@ -37,6 +37,6 @@ export const STATUS_TTL_MS = 24 * 60 * 60 * 1000;
 export const PUBLIC_DISPLAY_MESSAGE_MAX = 160;
 export const STATUS_TEXT_MAX = 160;
 export const MESSAGE_BODY_MAX = 5000;
-export const MESSAGE_ATTACHMENTS_MAX = 5;
+export const MESSAGE_ATTACHMENTS_MAX = 3;
 export const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days

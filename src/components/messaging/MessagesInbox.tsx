@@ -56,10 +56,31 @@ type Conversation = {
   id: string;
   subject: string;
   contextType: string;
+  typeLabel?: string;
   lastMessageAt: string | null;
   lastMessage: Message | null;
   unread: boolean;
   participants: Participant[];
+  sourcingRequest?: {
+    id: string;
+    message: string;
+    neededFrom: string;
+    budget: string;
+    deadline: string;
+    referenceImages: string[];
+  } | null;
+  listing?: {
+    id: string;
+    name: string;
+    cover: string;
+    price: number | null;
+    currency: string;
+    slug: string;
+  } | null;
+};
+
+type MessagesInboxProps = {
+  initialConversationId?: string | null;
 };
 
 function otherParticipant(
@@ -118,10 +139,12 @@ function previewText(message: Message | null) {
   return "No messages yet";
 }
 
-export function MessagesInbox() {
+export function MessagesInbox({
+  initialConversationId = null,
+}: MessagesInboxProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const queryId = searchParams.get("c");
+  const queryId = searchParams.get("c") || initialConversationId;
   const { account, showToast } = useAppUi();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -131,11 +154,11 @@ export function MessagesInbox() {
 
   const [activeId, setActiveId] = useState<string | null>(queryId);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [activeConversation, setActiveConversation] =
+    useState<Conversation | null>(null);
   const [messagesCursor, setMessagesCursor] = useState<string | null>(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [activeConversation, setActiveConversation] =
-    useState<Conversation | null>(null);
 
   const [draft, setDraft] = useState("");
   const [pendingUrls, setPendingUrls] = useState<string[]>([]);
@@ -151,13 +174,10 @@ export function MessagesInbox() {
   const selectConversation = useCallback(
     (id: string | null) => {
       setActiveId(id);
-      const params = new URLSearchParams(searchParams.toString());
-      if (id) params.set("c", id);
-      else params.delete("c");
-      const qs = params.toString();
-      router.replace(qs ? `/messages?${qs}` : "/messages", { scroll: false });
+      if (id) router.replace(`/inbox/${id}`, { scroll: false });
+      else router.replace("/inbox", { scroll: false });
     },
-    [router, searchParams],
+    [router],
   );
 
   const loadConversations = useCallback(
@@ -312,7 +332,7 @@ export function MessagesInbox() {
         kind: "stock",
         userId: account.id,
       });
-      setPendingUrls((prev) => [...prev, result.url].slice(0, 5));
+      setPendingUrls((prev) => [...prev, result.url].slice(0, 3));
       URL.revokeObjectURL(result.previewUrl);
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Upload failed");
@@ -323,14 +343,11 @@ export function MessagesInbox() {
   }
 
   async function sendMessage() {
-    if (!activeId || sending) return;
+    if (!activeId || sending || uploading) return;
     const text = draft.trim();
     if (!text && pendingUrls.length === 0) return;
-    if (!text) {
-      showToast("Add a short message with your image");
-      return;
-    }
 
+    const clientMessageId = `msg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     setSending(true);
     shouldScrollRef.current = true;
     try {
@@ -339,7 +356,8 @@ export function MessagesInbox() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
-          attachmentUrls: pendingUrls,
+          attachmentUrls: pendingUrls.slice(0, 3),
+          clientMessageId,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -468,6 +486,9 @@ export function MessagesInbox() {
                               {formatTime(c.lastMessageAt)}
                             </span>
                           </div>
+                          <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-electric/80">
+                            {c.typeLabel || c.contextType}
+                          </p>
                           <p
                             className={`mt-0.5 truncate text-xs ${
                               c.unread ? "text-white/70" : "text-white/40"
@@ -576,6 +597,81 @@ export function MessagesInbox() {
                   </div>
                 ) : (
                   <ul className="space-y-3">
+                    {activeConversation?.sourcingRequest ? (
+                      <li className="rounded-xl border border-electric/30 bg-electric/10 px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-electric">
+                          Sourcing request
+                        </p>
+                        {activeConversation.listing ? (
+                          <p className="mt-2 text-xs text-white/60">
+                            Listing: {activeConversation.listing.name}
+                          </p>
+                        ) : null}
+                        <dl className="mt-3 space-y-2 text-sm">
+                          <div>
+                            <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
+                              Looking for
+                            </dt>
+                            <dd className="mt-1 whitespace-pre-wrap text-white/85">
+                              {activeConversation.sourcingRequest.message}
+                            </dd>
+                          </div>
+                          {activeConversation.sourcingRequest.neededFrom ? (
+                            <div>
+                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
+                                Needed from
+                              </dt>
+                              <dd className="mt-1 text-white/80">
+                                {activeConversation.sourcingRequest.neededFrom}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {activeConversation.sourcingRequest.budget ? (
+                            <div>
+                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
+                                Budget
+                              </dt>
+                              <dd className="mt-1 text-white/80">
+                                {activeConversation.sourcingRequest.budget}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {activeConversation.sourcingRequest.deadline ? (
+                            <div>
+                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
+                                Deadline
+                              </dt>
+                              <dd className="mt-1 text-white/80">
+                                {activeConversation.sourcingRequest.deadline}
+                              </dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                        {activeConversation.sourcingRequest.referenceImages
+                          ?.length ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {activeConversation.sourcingRequest.referenceImages.map(
+                              (url) => (
+                                <a
+                                  key={url}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="relative h-16 w-16 overflow-hidden rounded-lg border border-white/15"
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={url}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                  />
+                                </a>
+                              ),
+                            )}
+                          </div>
+                        ) : null}
+                      </li>
+                    ) : null}
                     {messages.map((m) => {
                       const isSystem = m.messageType === "SYSTEM" || !m.senderId;
                       const mine = !isSystem && m.senderId === myId;

@@ -1,10 +1,11 @@
 import { z } from "zod";
 import {
-  MESSAGE_ATTACHMENTS_MAX,
   MESSAGE_BODY_MAX,
   PUBLIC_DISPLAY_MESSAGE_MAX,
   STATUS_TEXT_MAX,
 } from "@/lib/limits";
+
+const MESSAGE_IMAGES_MAX = 3;
 
 export const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_]{1,28}[a-z0-9])?$/i;
 
@@ -226,19 +227,6 @@ export const createConversationSchema = z
     message: "Provide listingId or opportunityId, not both",
   });
 
-export const sendMessageSchema = z.object({
-  text: z
-    .string()
-    .trim()
-    .min(1, "Message required")
-    .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`),
-  attachmentUrls: z
-    .array(z.string().trim().url())
-    .max(MESSAGE_ATTACHMENTS_MAX, `Max ${MESSAGE_ATTACHMENTS_MAX} attachments`)
-    .optional()
-    .default([]),
-});
-
 export const sourcingRequestSchema = z
   .object({
     toUserId: z.string().trim().min(1, "toUserId required"),
@@ -247,12 +235,54 @@ export const sourcingRequestSchema = z
       .trim()
       .min(1, "Message required")
       .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`),
+    neededFrom: z.string().trim().max(200).optional().default(""),
+    budget: z.string().trim().max(80).optional().default(""),
+    deadline: z
+      .string()
+      .trim()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+      .optional()
+      .or(z.literal(""))
+      .default(""),
+    referenceImages: z
+      .array(z.string().trim().min(1))
+      .max(MESSAGE_IMAGES_MAX, `Max ${MESSAGE_IMAGES_MAX} reference images`)
+      .optional()
+      .default([]),
+    clientRequestId: z.string().trim().min(8).max(80).optional(),
     listingId: z.string().trim().min(1).optional().nullable(),
     opportunityId: z.string().trim().min(1).optional().nullable(),
   })
   .refine((v) => !(v.listingId && v.opportunityId), {
     message: "Provide listingId or opportunityId, not both",
-  });
+  })
+  .refine(
+    (v) => {
+      if (!v.deadline) return true;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const d = new Date(`${v.deadline}T00:00:00`);
+      return !Number.isNaN(d.getTime()) && d.getTime() >= today.getTime();
+    },
+    { message: "Deadline cannot be in the past", path: ["deadline"] },
+  );
+
+export const sendMessageSchema = z.object({
+  text: z
+    .string()
+    .trim()
+    .max(MESSAGE_BODY_MAX, `Max ${MESSAGE_BODY_MAX} characters`)
+    .optional()
+    .default(""),
+  attachmentUrls: z
+    .array(z.string().trim().min(1))
+    .max(MESSAGE_IMAGES_MAX, `Max ${MESSAGE_IMAGES_MAX} attachments`)
+    .optional()
+    .default([]),
+  clientMessageId: z.string().trim().min(8).max(80).optional(),
+}).refine((v) => Boolean(v.text?.trim()) || (v.attachmentUrls?.length ?? 0) > 0, {
+  message: "Message or image required",
+});
 
 export const transactionStatusSchema = z.enum([
   "REQUESTED",

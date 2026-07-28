@@ -17,6 +17,7 @@ import { getListingsForMember } from "@/data/products";
 import { isStatusActive } from "@/lib/member-status";
 import { getLocationSuggestions } from "@/data/location-suggestions";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
 
 type MemberProfileViewProps = {
   member: Member;
@@ -252,6 +253,22 @@ function PublicProfilePanels({
                     >
                       Edit
                     </OwnerLink>
+                  ) : !member.isPrototype && !member.id.startsWith("m-") ? (
+                    <div className="mt-4">
+                      <ContactSellerButton
+                        toUserId={member.id}
+                        toUsername={member.username}
+                        toName={member.fullName}
+                        toPhoto={member.photo}
+                        toLocation={member.location.label}
+                        opportunityId={opportunity.id}
+                        opportunityTitle={
+                          opportunity.title || opportunity.summary
+                        }
+                        label="Enquire about opportunity"
+                        variant="outline"
+                      />
+                    </div>
                   ) : null}
                 </div>
               ))}
@@ -455,7 +472,7 @@ function MessagesTab() {
         </p>
       ) : null}
       <Link
-        href="/messages"
+        href="/inbox"
         className="mt-5 inline-flex h-11 items-center rounded-lg bg-electric px-5 text-xs font-medium uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
       >
         Open inbox

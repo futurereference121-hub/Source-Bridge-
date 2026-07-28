@@ -14,6 +14,12 @@ type Props = {
   sellerId: string;
   listingId: string;
   listingName: string;
+  sellerUsername?: string;
+  sellerName?: string;
+  sellerPhoto?: string;
+  sellerLocation?: string;
+  listingCover?: string;
+  listingPriceLabel?: string;
   isDemo?: boolean;
 };
 
@@ -25,11 +31,17 @@ export function CheckoutOptionsModal({
   sellerId,
   listingId,
   listingName,
+  sellerUsername,
+  sellerName,
+  sellerPhoto,
+  sellerLocation,
+  listingCover,
+  listingPriceLabel,
   isDemo = false,
 }: Props) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const { openPlaceholder, requireAuth } = useAppUi();
+  const { requireAuth, showToast } = useAppUi();
 
   useEffect(() => {
     const el = dialogRef.current;
@@ -48,9 +60,8 @@ export function CheckoutOptionsModal({
   function onDemoContact() {
     if (!requireAuth("contact this member")) return;
     onClose();
-    openPlaceholder(
-      "Demo listing",
-      "Contact Seller works on real member listings. This demo listing still opens the full Buy → checkout interface so you can review Card and Crypto flows.",
+    showToast(
+      "Demo catalogue listings cannot open live messaging. Use Contact Seller on real listings.",
     );
   }
 
@@ -112,8 +123,14 @@ export function CheckoutOptionsModal({
             ) : (
               <ContactSellerButton
                 toUserId={sellerId}
+                toUsername={sellerUsername || "member"}
+                toName={sellerName || ""}
+                toPhoto={sellerPhoto || ""}
+                toLocation={sellerLocation || ""}
                 listingId={listingId}
                 listingName={listingName}
+                listingCover={listingCover}
+                listingPriceLabel={listingPriceLabel}
                 label="Contact Seller"
               />
             )}

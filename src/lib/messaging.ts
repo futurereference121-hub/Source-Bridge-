@@ -101,7 +101,7 @@ export async function requireParticipant(conversationId: string, userId: string)
     },
   });
   if (!part || part.leftAt) {
-    throwHttp("Not a participant of this conversation", 403);
+    throwHttp("Conversation not found", 404);
   }
   return part;
 }
@@ -368,6 +368,59 @@ export function mapMessage(m: {
   };
 }
 
+export function mapSourcingRequestDetails(row: {
+  id: string;
+  message: string;
+  neededFrom?: string | null;
+  budget?: string | null;
+  deadline?: string | null;
+  referenceImages?: string | null;
+  status: string;
+  listingId: string | null;
+  opportunityId: string | null;
+  createdAt: Date;
+} | null | undefined) {
+  if (!row) return null;
+  let images: string[] = [];
+  try {
+    const parsed = JSON.parse(row.referenceImages || "[]") as unknown;
+    if (Array.isArray(parsed)) {
+      images = parsed.filter((x): x is string => typeof x === "string");
+    }
+  } catch {
+    images = [];
+  }
+  return {
+    id: row.id,
+    message: row.message,
+    neededFrom: row.neededFrom || "",
+    budget: row.budget || "",
+    deadline: row.deadline || "",
+    referenceImages: images,
+    status: row.status,
+    listingId: row.listingId,
+    opportunityId: row.opportunityId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function conversationTypeLabel(contextType: string): string {
+  switch (contextType) {
+    case "sourcing":
+      return "Sourcing Request";
+    case "listing":
+      return "Listing Enquiry";
+    case "opportunity":
+      return "Opportunity Enquiry";
+    case "system":
+      return "Official";
+    case "direct":
+      return "General Message";
+    default:
+      return "Message";
+  }
+}
+
 export function mapConversation(
   c: {
     id: string;
@@ -392,6 +445,7 @@ export function mapConversation(
       senderId: string | null;
       body: string;
       createdAt: Date;
+      messageType?: string;
       attachments?: {
         id: string;
         url: string;
@@ -400,6 +454,26 @@ export function mapConversation(
         sizeBytes: number;
       }[];
     }[];
+    sourcingRequest?: {
+      id: string;
+      message: string;
+      neededFrom?: string | null;
+      budget?: string | null;
+      deadline?: string | null;
+      referenceImages?: string | null;
+      status: string;
+      listingId: string | null;
+      opportunityId: string | null;
+      createdAt: Date;
+    } | null;
+    listing?: {
+      id: string;
+      name: string;
+      images: string;
+      price: number | null;
+      currency: string;
+      slug: string;
+    } | null;
   },
   viewerId?: string,
 ) {
@@ -413,10 +487,25 @@ export function mapConversation(
         new Date(lastMessage.createdAt).getTime() > myPart.lastReadAt.getTime()
       : false;
 
+  let listingCover = "";
+  let listingImages: string[] = [];
+  if (c.listing?.images) {
+    try {
+      const parsed = JSON.parse(c.listing.images) as unknown;
+      if (Array.isArray(parsed)) {
+        listingImages = parsed.filter((x): x is string => typeof x === "string");
+        listingCover = listingImages[0] || "";
+      }
+    } catch {
+      listingCover = "";
+    }
+  }
+
   return {
     id: c.id,
     subject: c.subject,
     contextType: c.contextType,
+    typeLabel: conversationTypeLabel(c.contextType),
     listingId: c.listingId,
     opportunityId: c.opportunityId,
     sourcingRequestId: c.sourcingRequestId,
@@ -426,6 +515,17 @@ export function mapConversation(
     lastMessageAt: c.lastMessageAt?.toISOString() ?? null,
     lastMessage,
     unread,
+    sourcingRequest: mapSourcingRequestDetails(c.sourcingRequest),
+    listing: c.listing
+      ? {
+          id: c.listing.id,
+          name: c.listing.name,
+          cover: listingCover,
+          price: c.listing.price,
+          currency: c.listing.currency,
+          slug: c.listing.slug,
+        }
+      : null,
     participants: (c.participants ?? []).map((p) => ({
       userId: p.userId,
       lastReadAt: p.lastReadAt?.toISOString() ?? null,

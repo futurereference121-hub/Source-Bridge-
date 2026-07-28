@@ -41,7 +41,7 @@ type AppUiContextValue = {
   prompt: PromptState;
   showToast: (message: string) => void;
   closePrompt: () => void;
-  requireAuth: (actionLabel?: string) => boolean;
+  requireAuth: (actionLabel?: string, nextPath?: string) => boolean;
   followMember: (memberId: string, name: string) => Promise<void> | void;
   saveProfile: (memberId: string, name: string) => void;
   saveCurrentSearch: (label: string) => void;
@@ -150,14 +150,19 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   const closePrompt = useCallback(() => setPrompt(null), []);
 
-  const requireAuth = useCallback((actionLabel = "continue") => {
+  const requireAuth = useCallback((actionLabel = "continue", nextPath?: string) => {
     if (account) return true;
+    const next =
+      nextPath ||
+      (typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : "/explore");
     setPrompt({
       kind: "auth",
       title: "Join to continue",
       message: `Sign in or join Source Bridge to ${actionLabel}.`,
-      confirmLabel: "Join",
-      href: "/join",
+      confirmLabel: "Sign in",
+      href: `/sign-in?next=${encodeURIComponent(next)}`,
     });
     return false;
   }, [account]);

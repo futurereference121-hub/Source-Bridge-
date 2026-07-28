@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut } from "lucide-react";
 import { useAppUi } from "@/components/providers/AppProviders";
 import type { AccountSession } from "@/lib/types";
+import { useInboxUnread } from "@/hooks/useInboxUnread";
 
 /**
  * Smart destination for a logged-in account's "home".
@@ -38,6 +39,7 @@ export function AccountMenu({
   variant?: "home" | "internal";
 }) {
   const { account, signOut } = useAppUi();
+  const { unreadCount } = useInboxUnread();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -61,6 +63,7 @@ export function AccountMenu({
 
   const links: MenuLink[] = [
     { label: "My Profile", href: accountHomePath(account) },
+    { label: "Inbox", href: "/inbox" },
     { label: "Manage Profile", href: "/profile" },
     { label: "Followers", href: "/profile/followers" },
     { label: "Following", href: "/profile/following" },
@@ -112,9 +115,14 @@ export function AccountMenu({
                 href={link.href}
                 role="menuitem"
                 onClick={() => setOpen(false)}
-                className="block rounded-lg px-3 py-2 text-sm text-white/75 transition-colors hover:bg-white/[0.06] hover:text-white"
+                className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-white/75 transition-colors hover:bg-white/[0.06] hover:text-white"
               >
-                {link.label}
+                <span>{link.label}</span>
+                {link.href === "/inbox" && unreadCount > 0 ? (
+                  <span className="rounded-full bg-electric px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                ) : null}
               </Link>
             ))}
           </nav>
@@ -149,9 +157,11 @@ export function AccountMenuMobileLinks({
   onNavigate?: () => void;
 }) {
   const { account, signOut } = useAppUi();
+  const { unreadCount } = useInboxUnread();
 
   const links: MenuLink[] = [
     { label: "My Profile", href: accountHomePath(account) },
+    { label: "Inbox", href: "/inbox" },
     { label: "Manage Profile", href: "/profile" },
     { label: "Followers", href: "/profile/followers" },
     { label: "Following", href: "/profile/following" },
@@ -165,9 +175,14 @@ export function AccountMenuMobileLinks({
           key={link.label}
           href={link.href}
           onClick={onNavigate}
-          className="py-3 text-sm font-medium uppercase tracking-[0.14em] text-white/80"
+          className="flex items-center justify-between py-3 text-sm font-medium uppercase tracking-[0.14em] text-white/80"
         >
-          {link.label}
+          <span>{link.label}</span>
+          {link.href === "/inbox" && unreadCount > 0 ? (
+            <span className="rounded-full bg-electric px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-white">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          ) : null}
         </Link>
       ))}
       <button

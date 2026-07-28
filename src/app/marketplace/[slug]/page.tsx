@@ -151,6 +151,10 @@ export default async function ListingDetailPage({
                   sellerId={member.id}
                   isOwner={isOwner}
                   memberSlug={member.slug}
+                  sellerUsername={member.username}
+                  sellerName={member.fullName}
+                  sellerPhoto={member.photo}
+                  sellerLocation={member.location.label}
                   isDemo={isDemo}
                 />
               </div>

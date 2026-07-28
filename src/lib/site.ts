@@ -38,7 +38,7 @@ export const mobileNavItems: NavItem[] = [
   { label: "Home", href: "/" },
   { label: "Explore", href: "/explore" },
   { label: "Requests", href: "/requests" },
-  { label: "Messages", href: "/messages" },
+  { label: "Inbox", href: "/inbox" },
   { label: "Profile", href: "/profile" },
 ];
 

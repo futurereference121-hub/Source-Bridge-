@@ -8,12 +8,17 @@ import { Button } from "@/components/ui/Button";
 import { CheckoutOptionsModal } from "@/components/marketplace/CheckoutOptionsModal";
 import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { formatPrice } from "@/lib/listings-service";
 
 type Props = {
   listing: Listing;
   sellerId: string;
   isOwner: boolean;
   memberSlug?: string;
+  sellerUsername?: string;
+  sellerName?: string;
+  sellerPhoto?: string;
+  sellerLocation?: string;
   /** Seed/prototype listings still show Buy + Contact for buyers. */
   isDemo?: boolean;
 };
@@ -36,10 +41,14 @@ export function ListingPurchasePanel({
   sellerId,
   isOwner,
   memberSlug,
+  sellerUsername,
+  sellerName,
+  sellerPhoto,
+  sellerLocation,
   isDemo = false,
 }: Props) {
   const router = useRouter();
-  const { account, requireAuth, showToast, openPlaceholder } = useAppUi();
+  const { account, requireAuth, showToast } = useAppUi();
   const [selectedSize, setSelectedSize] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -94,9 +103,8 @@ export function ListingPurchasePanel({
 
   function onDemoContact() {
     if (!requireAuth("contact this member")) return;
-    openPlaceholder(
-      "Demo listing",
-      "This is a Source Bridge demo listing. Contact Seller works the same way on real member listings — messaging opens from Buy → Contact Seller or the Contact Seller button.",
+    showToast(
+      "Demo catalogue listings cannot open live messaging. Contact Seller works on real member listings.",
     );
   }
 
@@ -197,8 +205,15 @@ export function ListingPurchasePanel({
         ) : (
           <ContactSellerButton
             toUserId={sellerId}
+            toUsername={sellerUsername || memberSlug || "member"}
+            toName={sellerName || ""}
+            toPhoto={sellerPhoto || ""}
+            toLocation={sellerLocation || ""}
             listingId={listing.id}
             listingName={listing.name}
+            listingCover={listing.images?.[0]}
+            listingPriceLabel={formatPrice(listing.price, listing.currency)}
+            label="Contact Seller"
           />
         )}
       </div>
@@ -211,6 +226,12 @@ export function ListingPurchasePanel({
         sellerId={sellerId}
         listingId={listing.id}
         listingName={listing.name}
+        sellerUsername={sellerUsername || memberSlug || "member"}
+        sellerName={sellerName || ""}
+        sellerPhoto={sellerPhoto || ""}
+        sellerLocation={sellerLocation || ""}
+        listingCover={listing.images?.[0]}
+        listingPriceLabel={formatPrice(listing.price, listing.currency)}
         isDemo={isDemo || !listing.isDbListing}
       />
     </div>

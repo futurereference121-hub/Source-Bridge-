@@ -34,6 +34,17 @@ export async function GET(_req: Request, { params }: Params) {
             sender: { select: participantUserSelect },
           },
         },
+        sourcingRequest: true,
+        listing: {
+          select: {
+            id: true,
+            name: true,
+            images: true,
+            price: true,
+            currency: true,
+            slug: true,
+          },
+        },
       },
     });
 

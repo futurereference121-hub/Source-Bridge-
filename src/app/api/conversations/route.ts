@@ -38,6 +38,17 @@ export async function GET(req: NextRequest) {
           take: 1,
           include: { attachments: true },
         },
+        sourcingRequest: true,
+        listing: {
+          select: {
+            id: true,
+            name: true,
+            images: true,
+            price: true,
+            currency: true,
+            slug: true,
+          },
+        },
       },
     });
 

@@ -14,6 +14,10 @@
     "db:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
     "create-admin": "node --env-file=.env scripts/create-admin.mjs",
+    "create-messaging-test-users": "node --env-file=.env scripts/create-messaging-test-users.mjs",
+    "test:messaging": "node scripts/test-messaging-validation.mjs",
+    "test:messaging:integration": "node --env-file=.env scripts/test-messaging-integration.mjs",
+    "test:messaging:e2e": "node --env-file=.env scripts/test-messaging-e2e.mjs",
     "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs"
   },
   "dependencies": {

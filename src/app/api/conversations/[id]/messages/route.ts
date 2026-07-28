@@ -87,6 +87,24 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     await assertDailyLimit(user.id, "message");
     const now = new Date();
+    const clientMessageId = parsed.data.clientMessageId || "";
+
+    if (clientMessageId) {
+      const existing = await prisma.message.findFirst({
+        where: { conversationId: id, clientMessageId, senderId: user.id },
+        include: {
+          attachments: true,
+          sender: { select: participantUserSelect },
+        },
+      });
+      if (existing) {
+        return Response.json({
+          ok: true,
+          existing: true,
+          message: mapMessage(existing),
+        });
+      }
+    }
 
     const message = await prisma.$transaction(async (tx) => {
       const msg = await tx.message.create({
@@ -94,6 +112,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           conversationId: id,
           senderId: user.id,
           body: parsed.data.text,
+          clientMessageId,
           createdAt: now,
           attachments:
             parsed.data.attachmentUrls.length > 0
