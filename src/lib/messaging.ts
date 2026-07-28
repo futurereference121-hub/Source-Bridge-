@@ -331,11 +331,14 @@ function safePathname(url: string): string {
 export function mapMessage(m: {
   id: string;
   conversationId: string;
-  senderId: string;
+  senderId: string | null;
   body: string;
   createdAt: Date;
+  messageType?: string;
+  systemEventType?: string;
+  replyAllowed?: boolean;
   attachments?: { id: string; url: string; pathname: string; mimeType: string; sizeBytes: number }[];
-  sender?: ParticipantUser;
+  sender?: ParticipantUser | null;
 }) {
   return {
     id: m.id,
@@ -343,6 +346,9 @@ export function mapMessage(m: {
     senderId: m.senderId,
     body: m.body,
     createdAt: m.createdAt.toISOString(),
+    messageType: m.messageType || "USER",
+    systemEventType: m.systemEventType || "",
+    replyAllowed: m.replyAllowed !== false,
     attachments: (m.attachments ?? []).map((a) => ({
       id: a.id,
       url: a.url,
@@ -383,7 +389,7 @@ export function mapConversation(
     messages?: {
       id: string;
       conversationId: string;
-      senderId: string;
+      senderId: string | null;
       body: string;
       createdAt: Date;
       attachments?: {

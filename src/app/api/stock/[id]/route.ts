@@ -6,6 +6,7 @@ import { CLOTHING_CATEGORIES } from "@/lib/clothing";
 import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 import { deleteStoredImageForUser } from "@/lib/storage";
+import { syncListingImages } from "@/lib/listing-images";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -50,7 +51,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const shipLabel =
       shipCity && shipCountry ? `${shipCity}, ${shipCountry}` : existing.location;
 
-    const row = await prisma.stockListing.update({
+    await prisma.stockListing.update({
       where: { id },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
@@ -98,8 +99,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         ...(data.currency !== undefined ? { currency: data.currency } : {}),
       },
     });
+    if (data.images !== undefined) await syncListingImages(id, data.images);
+    const hydrated = await prisma.stockListing.findUniqueOrThrow({
+      where: { id },
+      include: { listingImages: { orderBy: { sortOrder: "asc" } } },
+    });
 
-    return Response.json({ ok: true, listing: dbStockToListing(row) });
+    return Response.json({ ok: true, listing: dbStockToListing(hydrated) });
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
@@ -112,7 +118,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
   try {
     const user = await requireSessionUser();
     const { id } = await ctx.params;
-    const existing = await prisma.stockListing.findUnique({ where: { id } });
+    const existing = await prisma.stockListing.findUnique({ where: { id }, include: { listingImages: true } });
     if (!existing || existing.userId !== user.id) {
       return jsonError("Stock item not found", 404);
     }
@@ -129,7 +135,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
 
     await prisma.stockListing.delete({ where: { id } });
 
-    for (const url of imageUrls) {
+    for (const url of [...new Set([...imageUrls, ...existing.listingImages.map((image) => image.url)])]) {
       try {
         await deleteStoredImageForUser(url, user.id);
       } catch (err) {

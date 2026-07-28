@@ -12,7 +12,9 @@
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "create-admin": "node --env-file=.env scripts/create-admin.mjs",
+    "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

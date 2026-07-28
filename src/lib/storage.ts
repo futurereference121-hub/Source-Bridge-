@@ -72,6 +72,13 @@ export function validateImageFile(file: {
   return null;
 }
 
+export function detectImageMimeType(bytes: Buffer): "image/jpeg" | "image/png" | "image/webp" | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
 function isUploadFolder(value: string): value is UploadFolder {
   return ["avatars", "covers", "stock", "misc", "verification"].includes(value);
 }
@@ -123,7 +130,10 @@ async function saveToBlob(
   pathname: string,
   access: "public" | "private" = "public",
 ): Promise<StorageResult> {
-  if (!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN) {
+  const token = access === "private"
+    ? process.env.BLOB_PRIVATE_READ_WRITE_TOKEN
+    : process.env.BLOB_READ_WRITE_TOKEN;
+  if (!process.env.BLOB_STORE_ID && !token) {
     return {
       ok: false,
       error: "Vercel Blob is not configured",
@@ -133,8 +143,8 @@ async function saveToBlob(
     access,
     contentType,
     addRandomSuffix: false,
-    ...(process.env.BLOB_READ_WRITE_TOKEN
-      ? { token: process.env.BLOB_READ_WRITE_TOKEN }
+    ...(token
+      ? { token }
       : {}),
   });
   return {
@@ -192,6 +202,9 @@ export async function storeImageForUser(
   const provider = getProvider();
 
   if (provider === "vercel-blob") {
+    if (access === "private" && !process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
+      return { ok: false, error: "Private Blob storage is not configured. Set BLOB_PRIVATE_READ_WRITE_TOKEN." };
+    }
     return saveToBlob(buffer, contentType, pathname, access);
   }
 
@@ -203,6 +216,55 @@ export async function storeImageForUser(
     return saveLocalPrivate(buffer, contentType, pathname);
   }
   return saveLocalDev(buffer, contentType, pathname);
+}
+
+/** Stores a verification image only in private Blob storage or local private/. */
+export async function storePrivateVerificationImage(file: File | Blob, userId: string): Promise<StorageResult> {
+  const validationError = validateImageFile({ type: file.type, size: file.size });
+  if (validationError) return { ok: false, error: validationError };
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detected = detectImageMimeType(buffer);
+  if (!detected) {
+    return {
+      ok: false,
+      error: "The uploaded file is not a valid JPEG, PNG, or WebP image.",
+    };
+  }
+  const pathname = `verification/${userId}/${Date.now()}-${randomBytes(8).toString("hex")}.${extensionFor(detected)}`;
+
+  // Prefer dedicated private Blob store. Never write ID documents to the public store.
+  if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
+    return saveToBlob(buffer, detected, pathname, "private");
+  }
+
+  // Local/dev (or non-Vercel) fallback: opaque private:// paths under /private.
+  // On Vercel serverless FS is ephemeral — require a private Blob store there.
+  if (process.env.VERCEL) {
+    return {
+      ok: false,
+      error:
+        "Private verification storage is not configured. Create a Private Vercel Blob store and set BLOB_PRIVATE_READ_WRITE_TOKEN.",
+    };
+  }
+
+  return saveLocalPrivate(buffer, detected, pathname);
+}
+
+/** Reads a private local reference or a private Blob using the private token. */
+export async function readPrivateStoredBytes(urlOrPath: string): Promise<Buffer | null> {
+  if (urlOrPath.startsWith("private://")) {
+    const path = await import("path");
+    const { readFile } = await import("fs/promises");
+    try { return await readFile(path.join(process.cwd(), "private", urlOrPath.slice("private://".length))); } catch { return null; }
+  }
+  if (!process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) return null;
+  try {
+    const response = await fetch(urlOrPath, {
+      headers: { Authorization: `Bearer ${process.env.BLOB_PRIVATE_READ_WRITE_TOKEN}` },
+      cache: "no-store",
+    });
+    return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
+  } catch { return null; }
 }
 
 async function saveLocalPrivate(

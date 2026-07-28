@@ -141,6 +141,52 @@ export async function sendVerificationEmail(opts: {
   });
 }
 
+export async function sendVerificationAdminAlert(opts: {
+  requestId: string;
+  applicantUsername: string;
+  documentType: string;
+  submittedAt: string;
+}): Promise<SendEmailResult> {
+  const to = process.env.VERIFICATION_ADMIN_EMAIL;
+  if (!to) {
+    return {
+      ok: false,
+      provider: getProvider(),
+      error: "VERIFICATION_ADMIN_EMAIL is not configured",
+    };
+  }
+  const appUrl = getAppUrl();
+  const reviewUrl = `${appUrl}/admin/verifications/${encodeURIComponent(opts.requestId)}`;
+  return sendEmail({
+    to,
+    subject: "New identity verification request pending",
+    text: [
+      "A new identity verification request is pending review.",
+      `Applicant username: ${opts.applicantUsername}`,
+      `Request ID: ${opts.requestId}`,
+      `Submitted: ${opts.submittedAt}`,
+      `Document type: ${opts.documentType}`,
+      `Review securely: ${reviewUrl}`,
+      "",
+      "Do not open document links from email — review only inside the admin dashboard.",
+      "Documents are not attached.",
+    ].join("\n"),
+  });
+}
+
+export async function sendVerificationApplicantNotice(opts: {
+  to: string;
+  approved: boolean;
+  rejectionReason?: string;
+}): Promise<SendEmailResult> {
+  const outcome = opts.approved ? "approved" : "not approved";
+  return sendEmail({
+    to: opts.to,
+    subject: "Your Source Bridge identity verification update",
+    text: `Your identity verification request was ${outcome}.${opts.rejectionReason ? `\n\nReason: ${opts.rejectionReason}` : ""}\n\nOpen Source Bridge settings for details.`,
+  });
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

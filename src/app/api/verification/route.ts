@@ -6,12 +6,11 @@ import {
   getLatestVerificationRequest,
   isDocumentType,
   mapRequestForOwner,
-  syncUserVerificationStatus,
 } from "@/lib/verification";
 
 /**
  * GET — current identity verification status + latest request (no private URLs).
- * POST — start / resubmit a verification request (status stays PENDING until admin review).
+ * POST — starts or updates a DRAFT. Submission is a separate explicit action.
  */
 export async function GET() {
   try {
@@ -71,7 +70,7 @@ export async function POST(req: NextRequest) {
     }
 
     const pending = await prisma.identityVerificationRequest.findFirst({
-      where: { userId: user.id, status: "PENDING" },
+      where: { userId: user.id, status: "DRAFT" },
       include: {
         documents: {
           select: {
@@ -102,7 +101,7 @@ export async function POST(req: NextRequest) {
           },
         },
       });
-      await syncUserVerificationStatus(user.id, "PENDING");
+      await prisma.verificationAuditEvent.create({ data: { requestId: updated.id, actorUserId: user.id, action: "draft_updated" } });
       const refreshed = await getSessionUser();
       return Response.json({
         ok: true,
@@ -114,7 +113,7 @@ export async function POST(req: NextRequest) {
     const created = await prisma.identityVerificationRequest.create({
       data: {
         userId: user.id,
-        status: "PENDING",
+        status: "DRAFT",
         documentType,
         notes,
       },
@@ -131,7 +130,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await syncUserVerificationStatus(user.id, "PENDING");
+    await prisma.verificationAuditEvent.create({ data: { requestId: created.id, actorUserId: user.id, action: "draft_created" } });
     const refreshed = await getSessionUser();
 
     return Response.json({

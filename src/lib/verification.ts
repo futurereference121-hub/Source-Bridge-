@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import type { SessionUser } from "@/lib/auth";
+import { isAdminUser, type SessionUser } from "@/lib/auth";
 
 export const VERIFICATION_STATUSES = [
   "UNVERIFIED",
@@ -116,7 +116,7 @@ export async function syncUserVerificationStatus(
 }
 
 export function assertCanReview(user: SessionUser) {
-  if (!user.isAdmin) {
+  if (!isAdminUser(user)) {
     const err = new Error("Admin only");
     (err as Error & { status: number }).status = 403;
     throw err;

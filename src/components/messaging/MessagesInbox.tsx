@@ -42,9 +42,12 @@ type Attachment = {
 type Message = {
   id: string;
   conversationId: string;
-  senderId: string;
+  senderId: string | null;
   body: string;
   createdAt: string;
+  messageType?: string;
+  systemEventType?: string;
+  replyAllowed?: boolean;
   attachments: Attachment[];
   sender?: ParticipantUser;
 };
@@ -63,8 +66,19 @@ function otherParticipant(
   conversation: Conversation,
   myId: string,
 ): ParticipantUser | null {
+  if (conversation.contextType === "system") return null;
   const part = conversation.participants.find((p) => p.userId !== myId);
   return part?.user ?? null;
+}
+
+function conversationTitle(
+  conversation: Conversation,
+  myId: string,
+): string {
+  if (conversation.contextType === "system") {
+    return conversation.subject || "Source Bridge";
+  }
+  return displayName(otherParticipant(conversation, myId));
 }
 
 function displayName(user: ParticipantUser | null, fallback = "Member") {
@@ -442,7 +456,7 @@ export function MessagesInbox() {
                                   : "text-white/85"
                               }`}
                             >
-                              {displayName(other)}
+                              {conversationTitle(c, myId)}
                             </span>
                             {c.unread ? (
                               <span
@@ -514,9 +528,15 @@ export function MessagesInbox() {
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-white">
-                    {displayName(activeOther)}
+                    {activeConversation && account
+                      ? conversationTitle(activeConversation, account.id)
+                      : displayName(activeOther)}
                   </p>
-                  {activeConversation?.subject?.trim() ? (
+                  {activeConversation?.contextType === "system" ? (
+                    <p className="truncate text-xs uppercase tracking-[0.12em] text-electric">
+                      Official notification
+                    </p>
+                  ) : activeConversation?.subject?.trim() ? (
                     <p className="truncate text-xs text-white/40">
                       {activeConversation.subject}
                     </p>
@@ -557,7 +577,8 @@ export function MessagesInbox() {
                 ) : (
                   <ul className="space-y-3">
                     {messages.map((m) => {
-                      const mine = m.senderId === myId;
+                      const isSystem = m.messageType === "SYSTEM" || !m.senderId;
+                      const mine = !isSystem && m.senderId === myId;
                       return (
                         <li
                           key={m.id}
@@ -565,12 +586,18 @@ export function MessagesInbox() {
                         >
                           <div
                             className={`max-w-[85%] rounded-xl px-3.5 py-2.5 sm:max-w-[70%] ${
-                              mine
-                                ? "bg-electric/25 text-white"
-                                : "bg-white/[0.06] text-white/90"
+                              isSystem
+                                ? "w-full border border-electric/25 bg-electric/10 text-white/90"
+                                : mine
+                                  ? "bg-electric/25 text-white"
+                                  : "bg-white/[0.06] text-white/90"
                             }`}
                           >
-                            {!mine ? (
+                            {isSystem ? (
+                              <p className="mb-1 text-[11px] uppercase tracking-[0.12em] text-electric">
+                                Source Bridge official
+                              </p>
+                            ) : !mine ? (
                               <p className="mb-1 text-[11px] text-white/45">
                                 {displayName(m.sender ?? null)}
                               </p>
@@ -622,6 +649,13 @@ export function MessagesInbox() {
                 <div ref={threadEndRef} />
               </div>
 
+              {activeConversation?.contextType === "system" ||
+              messages.some((m) => m.replyAllowed === false) ? (
+                <div className="border-t border-white/10 px-4 py-4 text-sm text-white/50">
+                  This is an official Source Bridge notification. Replies are
+                  disabled.
+                </div>
+              ) : (
               <form
                 onSubmit={onSubmit}
                 className="border-t border-white/10 px-3 py-3 sm:px-4"
@@ -702,6 +736,7 @@ export function MessagesInbox() {
                   </button>
                 </div>
               </form>
+              )}
             </>
           )}
         </section>

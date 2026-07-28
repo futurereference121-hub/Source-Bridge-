@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getSessionUser, toPublicAccount } from "@/lib/auth";
+import { getSessionUser, isAdminUser, toPublicAccount } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
 import {
@@ -153,7 +153,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
       },
     });
     if (!request) return jsonError("Request not found", 404);
-    if (request.userId !== user.id && !user.isAdmin) {
+    if (request.userId !== user.id && !isAdminUser(user)) {
       return jsonError("Not found", 404);
     }
 

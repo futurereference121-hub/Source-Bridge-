@@ -2,14 +2,14 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import {
   deleteStoredImageForUser,
-  storeImageForUser,
+  storePrivateVerificationImage,
   validateImageFile,
 } from "@/lib/storage";
 import { jsonError } from "@/lib/validation";
+import { assertDailyLimit, recordDailyAction } from "@/lib/rate-limit";
 import {
   isDocumentKind,
   mapRequestForOwner,
-  syncUserVerificationStatus,
 } from "@/lib/verification";
 
 /**
@@ -24,6 +24,7 @@ export async function POST(req: Request) {
     if (user.identityVerified) {
       return jsonError("Your identity is already verified", 400);
     }
+    await assertDailyLimit(user.id, "verification_upload");
 
     const form = await req.formData();
     const file = form.get("file");
@@ -48,10 +49,10 @@ export async function POST(req: Request) {
 
     let request = requestId
       ? await prisma.identityVerificationRequest.findFirst({
-          where: { id: requestId, userId: user.id },
+          where: { id: requestId, userId: user.id, status: "DRAFT" },
         })
       : await prisma.identityVerificationRequest.findFirst({
-          where: { userId: user.id, status: "PENDING" },
+          where: { userId: user.id, status: "DRAFT" },
           orderBy: { createdAt: "desc" },
         });
 
@@ -59,35 +60,13 @@ export async function POST(req: Request) {
       request = await prisma.identityVerificationRequest.create({
         data: {
           userId: user.id,
-          status: "PENDING",
+          status: "DRAFT",
           documentType: "",
         },
       });
     }
 
-    if (request.status === "VERIFIED") {
-      return jsonError("This request is already verified", 400);
-    }
-
-    // Re-open rejected requests when new documents are uploaded.
-    if (request.status === "REJECTED") {
-      request = await prisma.identityVerificationRequest.update({
-        where: { id: request.id },
-        data: {
-          status: "PENDING",
-          rejectionReason: "",
-          rejectedAt: null,
-          reviewedAt: null,
-          reviewerId: null,
-        },
-      });
-    }
-
-    const stored = await storeImageForUser(file, {
-      userId: user.id,
-      folder: "verification",
-      access: "private",
-    });
+    const stored = await storePrivateVerificationImage(file, user.id);
     if (!stored.ok) return jsonError(stored.error, 400);
 
     const existingDoc = await prisma.verificationDocument.findFirst({
@@ -111,7 +90,10 @@ export async function POST(req: Request) {
       },
     });
 
-    await syncUserVerificationStatus(user.id, "PENDING");
+    await prisma.verificationAuditEvent.create({
+      data: { requestId: request.id, actorUserId: user.id, action: "document_uploaded", meta: JSON.stringify({ kind }) },
+    });
+    await recordDailyAction(user.id, "verification_upload");
 
     const fresh = await prisma.identityVerificationRequest.findUnique({
       where: { id: request.id },
@@ -134,6 +116,7 @@ export async function POST(req: Request) {
       request: fresh ? mapRequestForOwner(fresh) : null,
     });
   } catch (err) {
+    if ((err as { status?: number }).status === 429) return jsonError(err instanceof Error ? err.message : "Upload limit reached", 429);
     console.error("[verification:documents]", err);
     return jsonError("Document upload failed", 500);
   }

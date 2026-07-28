@@ -104,6 +104,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
   const { account, showToast } = useAppUi();
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
+  const [imagesUploading, setImagesUploading] = useState(false);
   const [loading, setLoading] = useState(Boolean(listingId));
 
   useEffect(() => {
@@ -118,7 +119,9 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
         if (row && !cancelled) setForm(fromListing(row));
       } catch (err) {
         if (!cancelled) {
-          showToast(err instanceof Error ? err.message : "Failed to load listing");
+          showToast(
+            err instanceof Error ? err.message : "Failed to load listing",
+          );
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -140,8 +143,16 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (imagesUploading) {
+      showToast("Wait for image uploads to finish before saving");
+      return;
+    }
     if (!form.images.length) {
       showToast("Add at least one image");
+      return;
+    }
+    if (form.images.some((url) => url.startsWith("blob:"))) {
+      showToast("Images are still uploading — wait for permanent URLs");
       return;
     }
     if (!form.sizes.length) {
@@ -215,7 +226,9 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <input
               className={editorInputClass}
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, name: e.target.value }))
+              }
               placeholder="Optional product name"
             />
           </EditorField>
@@ -223,7 +236,9 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <select
               className={editorInputClass}
               value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, category: e.target.value }))
+              }
               required
             >
               <option value="">Select category</option>
@@ -239,7 +254,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               className={editorInputClass}
               value={form.subcategory}
               onChange={(e) =>
-                setForm({ ...form, subcategory: e.target.value })
+                setForm((f) => ({ ...f, subcategory: e.target.value }))
               }
             />
           </EditorField>
@@ -247,21 +262,27 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <input
               className={editorInputClass}
               value={form.material}
-              onChange={(e) => setForm({ ...form, material: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, material: e.target.value }))
+              }
             />
           </EditorField>
           <EditorField label="Brand">
             <input
               className={editorInputClass}
               value={form.brand}
-              onChange={(e) => setForm({ ...form, brand: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, brand: e.target.value }))
+              }
             />
           </EditorField>
           <EditorField label="Condition">
             <select
               className={editorInputClass}
               value={form.condition}
-              onChange={(e) => setForm({ ...form, condition: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, condition: e.target.value }))
+              }
             >
               <option value="">Select condition</option>
               {CLOTHING_CONDITIONS.map((c) => (
@@ -275,21 +296,27 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <input
               className={editorInputClass}
               value={form.colour}
-              onChange={(e) => setForm({ ...form, colour: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, colour: e.target.value }))
+              }
             />
           </EditorField>
           <EditorField label="Pattern">
             <input
               className={editorInputClass}
               value={form.pattern}
-              onChange={(e) => setForm({ ...form, pattern: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, pattern: e.target.value }))
+              }
             />
           </EditorField>
           <EditorField label="Fit">
             <select
               className={editorInputClass}
               value={form.fit}
-              onChange={(e) => setForm({ ...form, fit: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, fit: e.target.value }))
+              }
             >
               <option value="">Select fit</option>
               {CLOTHING_FITS.map((c) => (
@@ -303,7 +330,9 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <select
               className={editorInputClass}
               value={form.gender}
-              onChange={(e) => setForm({ ...form, gender: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, gender: e.target.value }))
+              }
             >
               <option value="">Select gender</option>
               {CLOTHING_GENDERS.map((c) => (
@@ -348,7 +377,9 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               step="0.01"
               className={editorInputClass}
               value={form.price}
-              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, price: e.target.value }))
+              }
               required
             />
           </EditorField>
@@ -357,10 +388,10 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               className={editorInputClass}
               value={form.availability}
               onChange={(e) =>
-                setForm({
-                  ...form,
+                setForm((f) => ({
+                  ...f,
                   availability: e.target.value as ListingAvailability,
-                })
+                }))
               }
               required
             >
@@ -375,10 +406,10 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               className={editorInputClass}
               value={form.saleStatus}
               onChange={(e) =>
-                setForm({
-                  ...form,
+                setForm((f) => ({
+                  ...f,
                   saleStatus: e.target.value as ListingForm["saleStatus"],
-                })
+                }))
               }
               required
             >
@@ -393,7 +424,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               className={editorInputClass}
               value={form.shipFromCity}
               onChange={(e) =>
-                setForm({ ...form, shipFromCity: e.target.value })
+                setForm((f) => ({ ...f, shipFromCity: e.target.value }))
               }
               required
             />
@@ -403,7 +434,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               className={editorInputClass}
               value={form.shipFromCountry}
               onChange={(e) =>
-                setForm({ ...form, shipFromCountry: e.target.value })
+                setForm((f) => ({ ...f, shipFromCountry: e.target.value }))
               }
               required
             />
@@ -414,7 +445,10 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               type="checkbox"
               checked={form.shippingAvailable}
               onChange={(e) =>
-                setForm({ ...form, shippingAvailable: e.target.checked })
+                setForm((f) => ({
+                  ...f,
+                  shippingAvailable: e.target.checked,
+                }))
               }
               className="h-4 w-4 rounded border-white/30 bg-transparent"
             />
@@ -427,7 +461,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 className={`${editorInputClass} min-h-28 py-3`}
                 value={form.description}
                 onChange={(e) =>
-                  setForm({ ...form, description: e.target.value })
+                  setForm((f) => ({ ...f, description: e.target.value }))
                 }
                 required
                 maxLength={4000}
@@ -440,15 +474,23 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             <ListingImageManager
               userId={account.id}
               images={form.images}
-              onChange={(images) => setForm({ ...form, images })}
+              onChange={(images) =>
+                setForm((f) => ({ ...f, images }))
+              }
+              onUploadingChange={setImagesUploading}
               showToast={showToast}
               maxImages={6}
               disabled={busy}
             />
+            {imagesUploading ? (
+              <p className="mt-2 text-xs text-amber-200/90">
+                Images are still uploading — save is disabled until they finish.
+              </p>
+            ) : null}
           </div>
 
           <div className="sm:col-span-2">
-            <EditorSubmit busy={busy}>
+            <EditorSubmit busy={busy || imagesUploading}>
               {listingId ? "Save listing" : "Create listing"}
             </EditorSubmit>
           </div>

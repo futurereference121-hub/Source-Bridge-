@@ -1,6 +1,6 @@
 import { ensureCategoriesSeeded } from "@/lib/categories-db";
 import { prisma } from "@/lib/db";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 
 export async function GET() {
@@ -15,7 +15,7 @@ export async function GET() {
 export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) return jsonError("Sign in required", 401);
-  if (!user.isAdmin) return jsonError("Admin only", 403);
+  if (!isAdminUser(user)) return jsonError("Admin only", 403);
   const body = await req.json();
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) return jsonError("name required", 400);

@@ -42,7 +42,10 @@ export async function getListingBySlugAsync(
   if (seed) return seed;
 
   try {
-    const row = await prisma.stockListing.findUnique({ where: { slug } });
+    const row = await prisma.stockListing.findUnique({
+      where: { slug },
+      include: { listingImages: { orderBy: { sortOrder: "asc" } } },
+    });
     if (!row) {
       // Soft fallback: older slugs may have trailing cuid fragments after rename attempts.
       const fuzzy = await prisma.stockListing.findFirst({
@@ -52,6 +55,7 @@ export async function getListingBySlugAsync(
             { id: slug },
           ],
         },
+        include: { listingImages: { orderBy: { sortOrder: "asc" } } },
       });
       if (!fuzzy) return null;
       return dbStockToListing(fuzzy);
@@ -185,6 +189,7 @@ export async function getRelatedListingsAsync(
       },
       orderBy: { createdAt: "desc" },
       take: limit,
+      include: { listingImages: { orderBy: { sortOrder: "asc" } } },
     });
     return rows.map(dbStockToListing);
   } catch {
@@ -205,6 +210,7 @@ export async function listPublicListingsPage(opts?: {
     },
     orderBy: { createdAt: "desc" },
     take: limit + 1,
+    include: { listingImages: { orderBy: { sortOrder: "asc" } } },
     ...(opts?.cursor
       ? { cursor: { id: opts.cursor }, skip: 1 }
       : {}),

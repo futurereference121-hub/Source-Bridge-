@@ -94,11 +94,11 @@ export default function IdentityVerificationPage() {
         prev
           ? {
               ...prev,
-              status: "PENDING",
+              status: json.request?.status || "DRAFT",
               request: json.request,
             }
           : {
-              status: "PENDING",
+              status: json.request?.status || "DRAFT",
               identityVerified: false,
               request: json.request,
             },
@@ -134,7 +134,7 @@ export default function IdentityVerificationPage() {
         }
         requestId = createJson.request?.id as string;
         setData({
-          status: "PENDING",
+          status: createJson.request?.status || "DRAFT",
           identityVerified: false,
           request: createJson.request,
         });
@@ -152,7 +152,7 @@ export default function IdentityVerificationPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Upload failed");
       setData({
-        status: "PENDING",
+        status: json.request?.status || "DRAFT",
         identityVerified: false,
         request: json.request,
       });
@@ -166,6 +166,27 @@ export default function IdentityVerificationPage() {
       showToast(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(null);
+    }
+  }
+
+  async function submitRequest() {
+    if (!data?.request?.id) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/verification/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: data.request.id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not submit request");
+      await load();
+      await refreshAccount();
+      showToast("Verification request submitted for review");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not submit request");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -298,10 +319,18 @@ export default function IdentityVerificationPage() {
 
               <div className="mt-5 space-y-4">
                 <UploadSlot
-                  label="Front of document"
+                  label={
+                    documentType === "passport"
+                      ? "Passport identity page"
+                      : "Front of document"
+                  }
                   kind="front"
                   done={uploadedKinds.has("front")}
+                  documentId={
+                    data?.request?.documents.find((d) => d.kind === "front")?.id
+                  }
                   busy={uploading === "front"}
+                  locked={pending || data?.request?.status === "PENDING"}
                   onFile={(f) => void uploadKind("front", f)}
                 />
                 {needsBack ? (
@@ -309,7 +338,12 @@ export default function IdentityVerificationPage() {
                     label="Back of document"
                     kind="back"
                     done={uploadedKinds.has("back")}
+                    documentId={
+                      data?.request?.documents.find((d) => d.kind === "back")
+                        ?.id
+                    }
                     busy={uploading === "back"}
+                    locked={pending || data?.request?.status === "PENDING"}
                     onFile={(f) => void uploadKind("back", f)}
                   />
                 ) : null}
@@ -317,18 +351,41 @@ export default function IdentityVerificationPage() {
                   label="Selfie holding document"
                   kind="selfie"
                   done={uploadedKinds.has("selfie")}
+                  documentId={
+                    data?.request?.documents.find((d) => d.kind === "selfie")
+                      ?.id
+                  }
                   busy={uploading === "selfie"}
+                  locked={pending || data?.request?.status === "PENDING"}
+                  capture="user"
                   onFile={(f) => void uploadKind("selfie", f)}
                 />
               </div>
 
-              <p className="mt-5 text-sm text-white/60">
-                {canSubmit
-                  ? pending
-                    ? "Documents received. Status stays PENDING until an admin approves — your badge will not appear yet."
-                    : "Documents ready. Submit or wait for review."
-                  : "Upload the required images to complete your request."}
-              </p>
+              {data?.request?.status === "PENDING" || pending ? (
+                <p className="mt-5 text-sm text-amber-200/90">
+                  Verification pending. Documents are locked until review
+                  completes. Your Verified badge will not appear until an
+                  administrator approves your request.
+                </p>
+              ) : (
+                <p className="mt-5 text-sm text-white/60">
+                  {canSubmit
+                    ? "All required images uploaded. Submit for review when ready."
+                    : "Upload every required image before submitting."}
+                </p>
+              )}
+              {canSubmit && data?.request?.status === "DRAFT" ? (
+                <PrimaryButton
+                  type="button"
+                  showArrow={false}
+                  disabled={busy}
+                  onClick={() => void submitRequest()}
+                  className="mt-4 rounded-lg"
+                >
+                  {busy ? "Submitting…" : "Submit for review"}
+                </PrimaryButton>
+              ) : null}
             </section>
           </>
         )}
@@ -341,36 +398,74 @@ function UploadSlot({
   label,
   kind,
   done,
+  documentId,
   busy,
+  locked,
+  capture,
   onFile,
 }: {
   label: string;
   kind: DocKind;
   done: boolean;
+  documentId?: string;
   busy: boolean;
+  locked?: boolean;
+  capture?: "user" | "environment";
   onFile: (file: File | null) => void;
 }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const displaySrc =
+    preview ||
+    (done && documentId
+      ? `/api/verification/documents/${documentId}/file`
+      : null);
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/10 px-4 py-3">
-      <div>
-        <p className="text-sm text-white">{label}</p>
-        <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/40">
-          {done ? "Uploaded (private)" : "Required"}
-        </p>
+    <div className="rounded-lg border border-white/10 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-white">{label}</p>
+          <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/40">
+            {busy ? "Uploading…" : done ? "Uploaded (private)" : "Required"}
+          </p>
+        </div>
+        {!locked ? (
+          <label className="inline-flex cursor-pointer items-center rounded-lg border border-white/20 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 hover:border-electric/40">
+            {busy ? "Uploading…" : done ? "Replace" : "Upload"}
+            <input
+              type="file"
+              accept={IMAGE_ACCEPT_ATTR}
+              capture={capture}
+              className="hidden"
+              disabled={busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null;
+                if (file) {
+                  if (preview) URL.revokeObjectURL(preview);
+                  setPreview(URL.createObjectURL(file));
+                }
+                onFile(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        ) : (
+          <span className="text-[10px] uppercase tracking-[0.12em] text-white/35">
+            Locked
+          </span>
+        )}
       </div>
-      <label className="inline-flex cursor-pointer items-center rounded-lg border border-white/20 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 hover:border-electric/40">
-        {busy ? "Uploading…" : done ? "Replace" : "Upload"}
-        <input
-          type="file"
-          accept={IMAGE_ACCEPT_ATTR}
-          className="hidden"
-          disabled={busy}
-          onChange={(e) => {
-            onFile(e.target.files?.[0] || null);
-            e.target.value = "";
-          }}
-        />
-      </label>
+      {displaySrc ? (
+        <div className="relative mt-3 aspect-[4/3] overflow-hidden rounded-lg bg-black/30">
+          {/* Local preview or authenticated stream — never a permanent storage URL. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={displaySrc}
+            alt=""
+            className="h-full w-full object-contain"
+          />
+        </div>
+      ) : null}
       <span className="sr-only">{kind}</span>
     </div>
   );

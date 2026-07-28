@@ -15,6 +15,7 @@ import type {
   Review as DbReview,
   StatusUpdate as DbStatus,
   StockListing as DbStock,
+  ListingImage,
   Trip as DbTrip,
   User,
 } from "@prisma/client";
@@ -200,8 +201,12 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
   };
 }
 
-export function dbStockToListing(row: DbStock): Listing {
-  const images = parseJsonArray(row.images);
+export function dbStockToListing(row: DbStock & { listingImages?: ListingImage[] }): Listing {
+  const normalizedImages = row.listingImages
+    ?.slice()
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((image) => image.url);
+  const images = normalizedImages?.length ? normalizedImages : parseJsonArray(row.images);
   const sizes = parseJsonArray(
     "sizes" in row && typeof row.sizes === "string" ? row.sizes : "[]",
   );

@@ -7,6 +7,7 @@ import { CLOTHING_CATEGORIES } from "@/lib/clothing";
 import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 import { buildListingSlug } from "@/lib/listings-service";
+import { syncListingImages } from "@/lib/listing-images";
 
 type StockInput = z.infer<typeof stockSchema>;
 
@@ -62,6 +63,7 @@ export async function GET() {
     const rows = await prisma.stockListing.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
+      include: { listingImages: { orderBy: { sortOrder: "asc" } } },
     });
     return Response.json({ listings: rows.map(dbStockToListing) });
   } catch (err) {
@@ -109,8 +111,13 @@ export async function POST(req: NextRequest) {
     const row = await prisma.stockListing.create({
       data: stockCreateData(user.id, parsed.data, slug),
     });
+    await syncListingImages(row.id, parsed.data.images);
+    const hydrated = await prisma.stockListing.findUniqueOrThrow({
+      where: { id: row.id },
+      include: { listingImages: { orderBy: { sortOrder: "asc" } } },
+    });
 
-    return Response.json({ ok: true, listing: dbStockToListing(row) });
+    return Response.json({ ok: true, listing: dbStockToListing(hydrated) });
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);

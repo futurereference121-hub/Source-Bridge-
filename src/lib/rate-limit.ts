@@ -7,13 +7,14 @@ import {
   DAILY_STATUS_LIMIT,
 } from "@/lib/limits";
 
-export type RateLimitAction = "status" | "opportunity" | "message" | "sourcing";
+export type RateLimitAction = "status" | "opportunity" | "message" | "sourcing" | "verification_upload";
 
 const LIMITS: Record<RateLimitAction, number> = {
   status: DAILY_STATUS_LIMIT,
   opportunity: DAILY_OPPORTUNITY_LIMIT,
   message: DAILY_MESSAGE_LIMIT,
   sourcing: DAILY_SOURCING_LIMIT,
+  verification_upload: 10,
 };
 
 export type RateLimitCheck = {

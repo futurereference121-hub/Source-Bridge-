@@ -18,6 +18,11 @@ model User {
   /// UNVERIFIED | PENDING | VERIFIED | REJECTED — badge only when VERIFIED
   identityVerificationStatus String @default("UNVERIFIED")
   isAdmin              Boolean   @default(false)
+  /// USER | ADMIN. Keep isAdmin synchronized for legacy callers.
+  role                 String    @default("USER")
+  passwordHash         String?
+  mustChangePassword   Boolean   @default(false)
+  passwordChangedAt    DateTime?
   /// Signup / display name (required at join).
   name                 String
   /// Unique URL-safe handle without @. Null until onboarding.
@@ -50,6 +55,8 @@ model User {
   following            Follow[]                  @relation("Follower")
   rateLimitEvents      RateLimitEvent[]
   identityRequests     IdentityVerificationRequest[]
+  verificationReviews  IdentityVerificationRequest[] @relation("VerificationReviewer")
+  verificationAudits   VerificationAuditEvent[]
   conversationParts    ConversationParticipant[]
   messagesSent         Message[]                 @relation("MessageSender")
   sourcingSent         SourcingRequest[]         @relation("SourcingFrom")
@@ -160,6 +167,8 @@ model StockListing {
   subcategory       String   @default("")
   /// Ordered image URLs (JSON string[]). First image is the cover.
   images            String   @default("[]")
+  /// Normalized ordered image records; images remains the denormalized cache.
+  listingImages     ListingImage[]
   /// Legacy free-text quantity (non-clothing / fallback). Prefer sizes for clothing.
   quantity          String   @default("")
   /// Clothing sizes JSON string[] — S, M, L, XL, XXL, Multiple sizes available
@@ -194,6 +203,19 @@ model StockListing {
   @@index([productKind, category])
   @@index([saleStatus])
   @@index([userId, saleStatus])
+}
+
+model ListingImage {
+  id        String       @id @default(cuid())
+  listingId String
+  listing   StockListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String
+  sortOrder Int          @default(0)
+  isCover   Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  @@unique([listingId, url])
+  @@index([listingId, sortOrder])
 }
 
 model Review {
@@ -256,19 +278,26 @@ model IdentityVerificationRequest {
   id              String                  @id @default(cuid())
   userId          String
   user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// UNVERIFIED is account default; request statuses: PENDING | VERIFIED | REJECTED
-  status          String                  @default("PENDING")
+  /// Request statuses: DRAFT | PENDING | VERIFIED | REJECTED
+  status          String                  @default("DRAFT")
   documentType    String                  @default("")
   /// passport | national_id | driving_licence
   notes           String                  @default("")
   rejectionReason String                  @default("")
   reviewerId      String?
+  reviewedByAdminId String?
+  reviewedByAdmin User? @relation("VerificationReviewer", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
   reviewedAt      DateTime?
   approvedAt      DateTime?
   rejectedAt      DateTime?
+  submittedAt     DateTime?
+  documentDeletedAt DateTime?
+  adminEmailStatus String @default("none")
+  applicantEmailStatus String @default("none")
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
   documents       VerificationDocument[]
+  auditEvents     VerificationAuditEvent[]
 
   @@index([userId, status])
   @@index([status, createdAt])
@@ -285,16 +314,32 @@ model VerificationDocument {
   pathname    String                       @default("")
   mimeType    String                       @default("")
   sizeBytes   Int                          @default(0)
+  deletedAt   DateTime?
   createdAt   DateTime                     @default(now())
 
   @@index([requestId])
+}
+
+model VerificationAuditEvent {
+  id          String                       @id @default(cuid())
+  requestId   String
+  request     IdentityVerificationRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actorUserId String?
+  actorUser   User?                        @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action      String
+  meta        String                       @default("{}")
+  createdAt   DateTime                     @default(now())
+
+  @@index([requestId])
+  @@index([createdAt])
+  @@index([action])
 }
 
 /// Internal messaging thread between Source Bridge users.
 model Conversation {
   id               String                    @id @default(cuid())
   subject          String                    @default("")
-  /// listing | opportunity | sourcing | direct | trip
+  /// listing | opportunity | sourcing | direct | trip | system
   contextType      String                    @default("direct")
   listingId        String?
   listing          StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
@@ -336,9 +381,12 @@ model Message {
   id             String              @id @default(cuid())
   conversationId String
   conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  senderId       String
-  sender         User                @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  senderId       String?
+  sender         User?               @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
   body           String              @default("")
+  messageType    String              @default("USER")
+  systemEventType String              @default("")
+  replyAllowed   Boolean             @default(true)
   createdAt      DateTime            @default(now())
   attachments    MessageAttachment[]
 

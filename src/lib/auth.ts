@@ -54,6 +54,8 @@ export type SessionUser = Pick<
   | "identityVerified"
   | "identityVerificationStatus"
   | "isAdmin"
+  | "role"
+  | "mustChangePassword"
   | "name"
   | "username"
   | "slug"
@@ -77,6 +79,8 @@ const userSelect = {
   identityVerified: true,
   identityVerificationStatus: true,
   isAdmin: true,
+  role: true,
+  mustChangePassword: true,
   name: true,
   username: true,
   slug: true,
@@ -167,8 +171,23 @@ export async function requireSessionUser(): Promise<SessionUser> {
   return user;
 }
 
+export function isAdminUser(user: Pick<SessionUser, "role" | "isAdmin">): boolean {
+  return user.role === "ADMIN" || user.isAdmin;
+}
+
+export async function requireAdmin(): Promise<SessionUser> {
+  const user = await requireSessionUser();
+  if (!isAdminUser(user)) {
+    const err = new Error("Admin only");
+    (err as Error & { status: number }).status = 403;
+    throw err;
+  }
+  return user;
+}
+
 /** Smart post-auth destination. */
 export function nextRouteForUser(user: SessionUser): string {
+  if (user.mustChangePassword) return "/admin/change-password";
   if (!user.emailVerified) return "/check-email";
   if (!user.onboardingComplete) return "/onboarding";
   return "/explore";
@@ -183,6 +202,9 @@ export function toPublicAccount(user: SessionUser) {
     identityVerificationStatus:
       user.identityVerificationStatus ||
       (user.identityVerified ? "VERIFIED" : "UNVERIFIED"),
+    role: user.role,
+    isAdmin: isAdminUser(user),
+    mustChangePassword: user.mustChangePassword,
     name: user.name,
     username: user.username,
     slug: user.slug,
