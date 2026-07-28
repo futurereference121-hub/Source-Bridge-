@@ -44,6 +44,7 @@ type ListingForm = {
   price: string;
   description: string;
   availability: ListingAvailability;
+  saleStatus: "AVAILABLE" | "RESERVED" | "SOLD" | "ARCHIVED";
   images: string[];
 };
 
@@ -65,10 +66,16 @@ const blank: ListingForm = {
   price: "",
   description: "",
   availability: "available",
+  saleStatus: "AVAILABLE",
   images: [],
 };
 
 function fromListing(item: Listing): ListingForm {
+  const sale = (item.saleStatus || "AVAILABLE").toUpperCase();
+  const saleStatus =
+    sale === "RESERVED" || sale === "SOLD" || sale === "ARCHIVED"
+      ? sale
+      : "AVAILABLE";
   return {
     name: item.name || "",
     category: item.category || "",
@@ -87,6 +94,7 @@ function fromListing(item: Listing): ListingForm {
     price: item.price != null ? String(item.price) : "",
     description: item.description || "",
     availability: item.availability || "available",
+    saleStatus,
     images: (item.images || []).filter((x) => !x.includes("/placeholders/")),
   };
 }
@@ -167,6 +175,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
         price,
         description: form.description.trim(),
         availability: form.availability,
+        saleStatus: form.saleStatus,
         images: form.images,
       };
       if (listingId) {
@@ -359,6 +368,24 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               <option value="limited">Limited</option>
               <option value="made_to_order">Made to order</option>
               <option value="to_source">Available to source</option>
+            </select>
+          </EditorField>
+          <EditorField label="Sale status">
+            <select
+              className={editorInputClass}
+              value={form.saleStatus}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  saleStatus: e.target.value as ListingForm["saleStatus"],
+                })
+              }
+              required
+            >
+              <option value="AVAILABLE">Available</option>
+              <option value="RESERVED">Reserved</option>
+              <option value="SOLD">Sold</option>
+              <option value="ARCHIVED">Archived</option>
             </select>
           </EditorField>
           <EditorField label="Shipped from (city)">

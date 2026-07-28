@@ -109,7 +109,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       const data = (await res.json()) as { account: AccountSession | null };
       setAccount(data.account);
       if (data.account) {
-        await loadFollows();
+        void loadFollows();
       } else {
         setFollows([]);
       }
@@ -125,13 +125,28 @@ export function AppProviders({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       setSavedProfiles(getSavedProfiles());
-      await refreshAccount();
-      if (!cancelled) setAuthReady(true);
+      try {
+        const res = await fetch("/api/auth/me");
+        const data = (await res.json()) as { account: AccountSession | null };
+        if (cancelled) return;
+        setAccount(data.account);
+        setAuthReady(true);
+        if (data.account) {
+          void loadFollows();
+        } else {
+          setFollows([]);
+        }
+      } catch {
+        if (cancelled) return;
+        setAccount(null);
+        setFollows([]);
+        setAuthReady(true);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [refreshAccount]);
+  }, [loadFollows]);
 
   const closePrompt = useCallback(() => setPrompt(null), []);
 

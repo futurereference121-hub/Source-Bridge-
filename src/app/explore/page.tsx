@@ -13,10 +13,8 @@ export const metadata: Metadata = {
 };
 
 export default async function ExplorePage() {
-  const [members, feed] = await Promise.all([
-    getAllMembers(),
-    buildMergedLiveFeed(8),
-  ]);
+  const members = await getAllMembers();
+  const feed = await buildMergedLiveFeed(8, members);
 
   return (
     <Suspense

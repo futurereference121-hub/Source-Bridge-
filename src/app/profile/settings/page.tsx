@@ -7,6 +7,7 @@ import { CheckCircle2, Mail, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { PaymentMethodsEditor } from "@/components/profile/editors/PaymentMethodsEditor";
 
 export default function AccountSettingsPage() {
   const router = useRouter();
@@ -97,6 +98,13 @@ export default function AccountSettingsPage() {
               detail="The Verified badge reflects identity verification only. It is reviewed and granted by Source Bridge — it cannot be self-verified or enabled from settings."
             />
           </div>
+        </section>
+
+        <section
+          id="payment-methods"
+          className="panel-navy mt-6 scroll-mt-28 rounded-xl px-5 py-6 sm:px-6"
+        >
+          <PaymentMethodsEditor />
         </section>
 
         <section className="panel-navy mt-6 rounded-xl px-5 py-6 sm:px-6">

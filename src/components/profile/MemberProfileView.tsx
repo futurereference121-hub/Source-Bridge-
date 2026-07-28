@@ -180,7 +180,7 @@ function PublicProfilePanels({
           )}
           {isOwner ? (
             <OwnerLink href={`/members/${member.slug}?edit=travel`}>
-              Manage Trips
+              Add / Edit
             </OwnerLink>
           ) : null}
         </ProfilePanel>
@@ -197,7 +197,7 @@ function PublicProfilePanels({
           )}
           {isOwner ? (
             <OwnerLink href={`/members/${member.slug}?edit=status`}>
-              Edit Status
+              Edit
             </OwnerLink>
           ) : null}
         </ProfilePanel>
@@ -250,7 +250,7 @@ function PublicProfilePanels({
                     <OwnerLink
                       href={`/members/${member.slug}?edit=opportunity&id=${opportunity.id}`}
                     >
-                      Edit Opportunity
+                      Edit
                     </OwnerLink>
                   ) : null}
                 </div>
@@ -261,7 +261,7 @@ function PublicProfilePanels({
           )}
           {isOwner ? (
             <OwnerLink href={`/members/${member.slug}?edit=opportunity`}>
-              Add Opportunity
+              Add / Edit
             </OwnerLink>
           ) : null}
         </ProfilePanel>
@@ -293,7 +293,7 @@ function PublicProfilePanels({
         )}
         {isOwner ? (
           <OwnerLink href={`/members/${member.slug}?edit=listing`}>
-            Manage stock
+            Add Listing / Manage
           </OwnerLink>
         ) : null}
       </ProfilePanel>
@@ -488,6 +488,17 @@ function SettingsTab() {
           </Link>
           <p className="mt-1 text-xs text-white/40">
             Email, security, and sign-out.
+          </p>
+        </li>
+        <li>
+          <Link
+            href="/profile/settings#payment-methods"
+            className="text-electric hover:text-electric-hover"
+          >
+            Payment methods
+          </Link>
+          <p className="mt-1 text-xs text-white/40">
+            Crypto wallets buyers can use at checkout.
           </p>
         </li>
       </ul>

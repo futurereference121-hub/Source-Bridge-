@@ -8,13 +8,14 @@ import {
   getMemberForListingAsync,
   getRelatedListingsAsync,
 } from "@/lib/listings-service";
+import { getSessionUser } from "@/lib/auth";
 import { ListingGallery } from "@/components/marketplace/ListingGallery";
 import { ListingCard } from "@/components/marketplace/ListingCard";
 import { MemberCardCompact } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { Button } from "@/components/ui/Button";
-import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
+import { ListingPurchasePanel } from "@/components/marketplace/ListingPurchasePanel";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -37,15 +38,20 @@ export default async function ListingDetailPage({ params }: PageProps) {
   const listing = await getListingBySlugAsync(slug);
   if (!listing) notFound();
 
-  const [member, related] = await Promise.all([
+  const [member, related, session] = await Promise.all([
     getMemberForListingAsync(listing),
     getRelatedListingsAsync(listing, 4),
+    getSessionUser(),
   ]);
 
   const shippedFrom =
     listing.shipFromCity && listing.shipFromCountry
       ? `${listing.shipFromCity}, ${listing.shipFromCountry}`
       : listing.currentLocation || listing.country || null;
+
+  const isOwner = Boolean(
+    session && listing.isDbListing && session.id === listing.memberId,
+  );
 
   return (
     <div className="bg-app-navy pt-28 pb-20 text-white sm:pt-32 sm:pb-28">
@@ -73,6 +79,9 @@ export default async function ListingDetailPage({ params }: PageProps) {
             </p>
             <p className="mt-2 text-sm text-white/55">
               {availabilityLabel(listing.availability)}
+              {listing.saleStatus && listing.saleStatus !== "AVAILABLE"
+                ? ` · ${listing.saleStatus.charAt(0)}${listing.saleStatus.slice(1).toLowerCase()}`
+                : ""}
             </p>
             {shippedFrom ? (
               <p className="mt-2 text-sm text-white/70">
@@ -130,14 +139,15 @@ export default async function ListingDetailPage({ params }: PageProps) {
                   <Button href={`/members/${member.slug}`} variant="outline">
                     View profile
                   </Button>
-                  {listing.isDbListing ? (
-                    <ContactSellerButton
-                      toUserId={member.id}
-                      listingId={listing.id}
-                      listingName={listing.name}
-                    />
-                  ) : null}
                 </div>
+                {listing.isDbListing ? (
+                  <ListingPurchasePanel
+                    listing={listing}
+                    sellerId={member.id}
+                    isOwner={isOwner}
+                    memberSlug={member.slug}
+                  />
+                ) : null}
               </div>
             ) : null}
           </div>

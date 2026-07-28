@@ -140,7 +140,8 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
     (a, b) => b.postedAt.getTime() - a.postedAt.getTime(),
   )[0];
 
-  const listingIds = (user.listings ?? []).map((l) => l.id);
+  const listingRows = user.listings;
+  const listingIds = (listingRows ?? []).map((l) => l.id);
   const followerCount = user.followerCount ?? 0;
   const followingCount = user.followingCount ?? 0;
 
@@ -187,6 +188,7 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
     availability: "available_now",
     availabilityLabel: "Available now",
     listingIds,
+    ...(listingRows ? { listings: listingRows.map(dbStockToListing) } : {}),
     reviews: mapReviews(user.reviewsReceived),
     recentActivity: [],
     languages: [],
@@ -267,6 +269,10 @@ export function dbStockToListing(row: DbStock): Listing {
     currentLocation: locationLabel,
     shippingAvailable,
     availability: row.availability as ListingAvailability,
+    saleStatus:
+      "saleStatus" in row && typeof row.saleStatus === "string"
+        ? row.saleStatus
+        : "AVAILABLE",
     tags: [],
     featured: false,
     quantity: row.quantity,

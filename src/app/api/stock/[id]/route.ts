@@ -5,6 +5,7 @@ import { jsonError, stockSchema } from "@/lib/validation";
 import { CLOTHING_CATEGORIES } from "@/lib/clothing";
 import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
+import { deleteStoredImageForUser } from "@/lib/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -80,6 +81,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         ...(data.availability !== undefined
           ? { availability: data.availability }
           : {}),
+        ...(data.saleStatus !== undefined
+          ? { saleStatus: data.saleStatus }
+          : {}),
         ...(data.shipFromCity !== undefined
           ? { shipFromCity: data.shipFromCity }
           : {}),
@@ -112,7 +116,27 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     if (!existing || existing.userId !== user.id) {
       return jsonError("Stock item not found", 404);
     }
+
+    let imageUrls: string[] = [];
+    try {
+      const parsed = JSON.parse(existing.images || "[]") as unknown;
+      if (Array.isArray(parsed)) {
+        imageUrls = parsed.filter((x): x is string => typeof x === "string");
+      }
+    } catch {
+      imageUrls = [];
+    }
+
     await prisma.stockListing.delete({ where: { id } });
+
+    for (const url of imageUrls) {
+      try {
+        await deleteStoredImageForUser(url, user.id);
+      } catch (err) {
+        console.error("[stock:delete:blob]", url, err);
+      }
+    }
+
     return Response.json({ ok: true });
   } catch (err) {
     const status = (err as { status?: number }).status;

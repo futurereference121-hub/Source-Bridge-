@@ -5,8 +5,25 @@ import type { Member } from "@/lib/types";
 import { buildLiveFeed } from "@/lib/feed";
 import type { FeedItem } from "@/lib/types";
 import { isStatusActive } from "@/lib/member-status";
+import { memberPhoto } from "@/lib/placeholders";
 
+const onboardedUserWhere = {
+  emailVerified: true,
+  onboardingComplete: true,
+  username: { not: null },
+  slug: { not: null },
+} as const;
+
+/** Directory / explore cards — no listings or reviews. */
 const userInclude = {
+  networkLocations: { orderBy: { sortOrder: "asc" as const } },
+  trips: { orderBy: { arrival: "asc" as const } },
+  statuses: { orderBy: { postedAt: "desc" as const }, take: 1 },
+  opportunities: { orderBy: { postedAt: "desc" as const }, take: 3 },
+};
+
+/** Profile pages — listings, reviews, fuller status/opportunity history. */
+const userIncludeFull = {
   networkLocations: { orderBy: { sortOrder: "asc" as const } },
   trips: { orderBy: { arrival: "asc" as const } },
   statuses: { orderBy: { postedAt: "desc" as const }, take: 5 },
@@ -27,45 +44,56 @@ function withSeedDefaults(m: Member): Member {
   };
 }
 
+async function attachFollowCounts(
+  users: { id: string }[],
+): Promise<Map<string, { followers: number; following: number }>> {
+  const ids = users.map((u) => u.id);
+  if (!ids.length) return new Map();
+  const [followerGroups, followingGroups] = await Promise.all([
+    prisma.follow.groupBy({
+      by: ["followingId"],
+      where: { followingId: { in: ids }, followingIsSeed: false },
+      _count: { _all: true },
+    }),
+    prisma.follow.groupBy({
+      by: ["followerId"],
+      where: { followerId: { in: ids } },
+      _count: { _all: true },
+    }),
+  ]);
+  const followersMap = new Map(
+    followerGroups.map((g) => [g.followingId, g._count._all]),
+  );
+  const followingMap = new Map(
+    followingGroups.map((g) => [g.followerId, g._count._all]),
+  );
+  const out = new Map<string, { followers: number; following: number }>();
+  for (const id of ids) {
+    out.set(id, {
+      followers: followersMap.get(id) ?? 0,
+      following: followingMap.get(id) ?? 0,
+    });
+  }
+  return out;
+}
+
 async function loadDbMembers(): Promise<Member[]> {
   try {
     const users = await prisma.user.findMany({
-      where: {
-        emailVerified: true,
-        onboardingComplete: true,
-        username: { not: null },
-        slug: { not: null },
-      },
+      where: onboardedUserWhere,
       include: userInclude,
     });
-    const ids = users.map((u) => u.id);
-    const [followerGroups, followingGroups] = await Promise.all([
-      prisma.follow.groupBy({
-        by: ["followingId"],
-        where: { followingId: { in: ids }, followingIsSeed: false },
-        _count: { _all: true },
-      }),
-      prisma.follow.groupBy({
-        by: ["followerId"],
-        where: { followerId: { in: ids } },
-        _count: { _all: true },
-      }),
-    ]);
-    const followersMap = new Map(
-      followerGroups.map((g) => [g.followingId, g._count._all]),
-    );
-    const followingMap = new Map(
-      followingGroups.map((g) => [g.followerId, g._count._all]),
-    );
+    const counts = await attachFollowCounts(users);
 
     return users
-      .map((u) =>
-        dbUserToMember({
+      .map((u) => {
+        const c = counts.get(u.id);
+        return dbUserToMember({
           ...(u as DbUserBundle),
-          followerCount: followersMap.get(u.id) ?? 0,
-          followingCount: followingMap.get(u.id) ?? 0,
-        }),
-      )
+          followerCount: c?.followers ?? 0,
+          followingCount: c?.following ?? 0,
+        });
+      })
       .filter((m): m is Member => Boolean(m));
   } catch (err) {
     console.error("[members] DB load failed", err);
@@ -85,6 +113,22 @@ export async function getAllMembers(): Promise<Member[]> {
   return [...seed, ...extras];
 }
 
+async function memberFromFullUser(
+  user: DbUserBundle,
+): Promise<Member | null> {
+  const [followers, following] = await Promise.all([
+    prisma.follow.count({
+      where: { followingId: user.id, followingIsSeed: false },
+    }),
+    prisma.follow.count({ where: { followerId: user.id } }),
+  ]);
+  return dbUserToMember({
+    ...user,
+    followerCount: followers,
+    followingCount: following,
+  });
+}
+
 export async function getMemberBySlugAsync(slug: string): Promise<Member | null> {
   const seed = getSeedBySlug(slug);
   if (seed) return withSeedDefaults(seed);
@@ -94,25 +138,12 @@ export async function getMemberBySlugAsync(slug: string): Promise<Member | null>
       where: {
         OR: [{ slug }, { username: slug }],
         // Incomplete onboarding profiles are never public.
-        onboardingComplete: true,
-        emailVerified: true,
-        username: { not: null },
-        slug: { not: null },
+        ...onboardedUserWhere,
       },
-      include: userInclude,
+      include: userIncludeFull,
     });
     if (!user) return null;
-    const [followers, following] = await Promise.all([
-      prisma.follow.count({
-        where: { followingId: user.id, followingIsSeed: false },
-      }),
-      prisma.follow.count({ where: { followerId: user.id } }),
-    ]);
-    return dbUserToMember({
-      ...(user as DbUserBundle),
-      followerCount: followers,
-      followingCount: following,
-    });
+    return memberFromFullUser(user as DbUserBundle);
   } catch (err) {
     console.error("[members] slug lookup failed", err);
     return null;
@@ -126,25 +157,12 @@ export async function getMemberByIdAsync(id: string): Promise<Member | null> {
     const user = await prisma.user.findFirst({
       where: {
         id,
-        onboardingComplete: true,
-        emailVerified: true,
-        username: { not: null },
-        slug: { not: null },
+        ...onboardedUserWhere,
       },
-      include: userInclude,
+      include: userIncludeFull,
     });
     if (!user) return null;
-    const [followers, following] = await Promise.all([
-      prisma.follow.count({
-        where: { followingId: user.id, followingIsSeed: false },
-      }),
-      prisma.follow.count({ where: { followerId: user.id } }),
-    ]);
-    return dbUserToMember({
-      ...(user as DbUserBundle),
-      followerCount: followers,
-      followingCount: following,
-    });
+    return memberFromFullUser(user as DbUserBundle);
   } catch {
     return null;
   }
@@ -164,7 +182,7 @@ export async function getMemberByUsernameAsync(
         emailVerified: true,
         slug: { not: null },
       },
-      include: userInclude,
+      include: userIncludeFull,
     });
     if (!user) return null;
     return dbUserToMember(user as DbUserBundle);
@@ -191,13 +209,10 @@ export async function isUsernameAvailable(
   return !existing;
 }
 
-export async function buildMergedLiveFeed(limit = 40): Promise<FeedItem[]> {
-  const all = await getAllMembers();
-  const fromSeed = buildLiveFeed(all.filter((m) => m.isPrototype));
-
-  // Real accounts: expand all active opportunities + status
+function feedFromMembers(members: Member[], limit: number): FeedItem[] {
+  const fromSeed = buildLiveFeed(members.filter((m) => m.isPrototype));
   const fromDb: FeedItem[] = [];
-  for (const m of all.filter((m) => m.isRealAccount)) {
+  for (const m of members.filter((m) => m.isRealAccount)) {
     if (isStatusActive(m.status) && m.status) {
       fromDb.push({
         id: `status-${m.id}-${m.status.postedAt}`,
@@ -229,10 +244,109 @@ export async function buildMergedLiveFeed(limit = 40): Promise<FeedItem[]> {
       });
     }
   }
-
   return [...fromSeed, ...fromDb]
     .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
     .slice(0, limit);
+}
+
+async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
+  const now = new Date();
+  const userSelect = {
+    id: true,
+    slug: true,
+    username: true,
+    name: true,
+    photo: true,
+  } as const;
+
+  try {
+    const [statuses, opportunities] = await Promise.all([
+      prisma.statusUpdate.findMany({
+        where: {
+          expiresAt: { gt: now },
+          user: onboardedUserWhere,
+        },
+        orderBy: { postedAt: "desc" },
+        take: limit,
+        select: {
+          text: true,
+          postedAt: true,
+          expiresAt: true,
+          user: { select: userSelect },
+        },
+      }),
+      prisma.opportunity.findMany({
+        where: {
+          closedAt: null,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          user: onboardedUserWhere,
+        },
+        orderBy: { postedAt: "desc" },
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          postedAt: true,
+          expiresAt: true,
+          user: { select: userSelect },
+        },
+      }),
+    ]);
+
+    const fromDb: FeedItem[] = [];
+    for (const s of statuses) {
+      const u = s.user;
+      if (!u.slug || !u.username) continue;
+      fromDb.push({
+        id: `status-${u.id}-${s.postedAt.toISOString()}`,
+        kind: "status",
+        memberId: u.id,
+        memberSlug: u.slug,
+        username: u.username,
+        fullName: u.name,
+        photo: memberPhoto(u.photo),
+        text: s.text,
+        postedAt: s.postedAt.toISOString(),
+        expiresAt: s.expiresAt.toISOString(),
+      });
+    }
+    for (const o of opportunities) {
+      const u = o.user;
+      if (!u.slug || !u.username) continue;
+      fromDb.push({
+        id: `opp-${o.id}`,
+        kind: "opportunity",
+        memberId: u.id,
+        memberSlug: u.slug,
+        username: u.username,
+        fullName: u.name,
+        photo: memberPhoto(u.photo),
+        text: o.title,
+        postedAt: o.postedAt.toISOString(),
+        expiresAt: o.expiresAt?.toISOString() ?? undefined,
+      });
+    }
+
+    const fromSeed = buildLiveFeed(seedMembers.map(withSeedDefaults));
+    return [...fromSeed, ...fromDb]
+      .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
+      .slice(0, limit);
+  } catch (err) {
+    console.error("[members] feed query failed", err);
+    return buildLiveFeed(seedMembers.map(withSeedDefaults)).slice(0, limit);
+  }
+}
+
+/**
+ * Live activity feed. Pass `members` when already loaded (e.g. Explore)
+ * to avoid a second directory fetch; otherwise queries statuses/opportunities directly.
+ */
+export async function buildMergedLiveFeed(
+  limit = 40,
+  members?: Member[],
+): Promise<FeedItem[]> {
+  if (members) return feedFromMembers(members, limit);
+  return feedFromDbQueries(limit);
 }
 
 /** Public-safe user profile payload (no email). */

@@ -94,6 +94,10 @@ export const stockSchema = z.object({
   availability: z
     .enum(["available", "limited", "made_to_order", "to_source"])
     .default("available"),
+  saleStatus: z
+    .enum(["AVAILABLE", "RESERVED", "SOLD", "ARCHIVED"])
+    .optional()
+    .default("AVAILABLE"),
   location: z.string().trim().max(120).optional().default(""),
   shipFromCity: z.string().trim().min(1, "Shipped from city required").max(80),
   shipFromCountry: z
@@ -106,6 +110,74 @@ export const stockSchema = z.object({
   currency: z.string().trim().max(8).optional().default("USD"),
   images: z.array(z.string().trim().min(1)).min(1, "Add at least one image").max(12),
 });
+
+export const saleStatusSchema = z.enum([
+  "AVAILABLE",
+  "RESERVED",
+  "SOLD",
+  "ARCHIVED",
+]);
+
+export const checkoutPaymentMethodSchema = z.enum(["card", "crypto", "contact"]);
+
+export const createCheckoutSchema = z.object({
+  listingId: z.string().trim().min(1, "listingId required"),
+  paymentMethod: checkoutPaymentMethodSchema,
+  selectedSize: z.string().trim().max(40).optional(),
+  paymentMethodId: z.string().trim().min(1).optional(),
+  cryptoTransactionHash: z.string().trim().max(200).optional(),
+});
+
+export const patchCheckoutSchema = z.object({
+  cryptoTransactionHash: z.string().trim().min(1).max(200).optional(),
+  buyerConfirmed: z.boolean().optional(),
+  sellerConfirmed: z.boolean().optional(),
+});
+
+const PRIVATE_KEY_LIKE = /private\s*key|seed/i;
+
+export const createPaymentMethodSchema = z
+  .object({
+    kind: z.literal("crypto"),
+    networkName: z.string().trim().min(1, "Network name required").max(80),
+    address: z
+      .string()
+      .trim()
+      .min(10, "Address must be at least 10 characters")
+      .max(128, "Address must be at most 128 characters"),
+    qrImageUrl: z.string().trim().max(2000).optional().default(""),
+    instructions: z.string().trim().max(2000).optional().default(""),
+    enabled: z.boolean().optional().default(true),
+  })
+  .superRefine((data, ctx) => {
+    if (PRIVATE_KEY_LIKE.test(data.address) || PRIVATE_KEY_LIKE.test(data.instructions || "")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Do not enter private keys or seed phrases",
+        path: ["address"],
+      });
+    }
+  });
+
+export const patchPaymentMethodSchema = z
+  .object({
+    networkName: z.string().trim().min(1).max(80).optional(),
+    address: z.string().trim().min(10).max(128).optional(),
+    qrImageUrl: z.string().trim().max(2000).optional(),
+    instructions: z.string().trim().max(2000).optional(),
+    enabled: z.boolean().optional(),
+    sortOrder: z.number().int().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const check = `${data.address || ""} ${data.instructions || ""}`;
+    if (PRIVATE_KEY_LIKE.test(check)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Do not enter private keys or seed phrases",
+        path: ["address"],
+      });
+    }
+  });
 
 export const onboardingIdentitySchema = z.object({
   username: usernameSchema,

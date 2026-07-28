@@ -141,6 +141,8 @@ export interface Listing {
   shippingAvailable: boolean;
   supplier?: SupplierInfo;
   availability: ListingAvailability;
+  /** Marketplace lifecycle: AVAILABLE | RESERVED | SOLD | ARCHIVED */
+  saleStatus?: string;
   tags: string[];
   featured: boolean;
   specs?: Record<string, string>;
@@ -250,6 +252,8 @@ export interface Member {
   availability: Availability;
   availabilityLabel: string;
   listingIds: string[];
+  /** Hydrated stock when loaded with full profile include. */
+  listings?: Listing[];
   reviews: Review[];
   recentActivity: ActivityItemData[];
   languages: string[];

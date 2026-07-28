@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { FeedItem, Member } from "@/lib/types";
@@ -27,27 +27,6 @@ export function ExploreClient({
   const searchParams = useSearchParams();
   const initialQ = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(initialQ);
-  const [feed, setFeed] = useState<FeedItem[]>(initialFeed);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadFeed() {
-      try {
-        const res = await fetch(`/api/feed?limit=${FEED_PREVIEW_LIMIT}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as { items?: FeedItem[] };
-        if (!cancelled && Array.isArray(data.items)) {
-          setFeed(data.items);
-        }
-      } catch {
-        /* keep server feed */
-      }
-    }
-    void loadFeed();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const results = useMemo(
     () => searchMembers(query, initialMembers),
@@ -93,7 +72,7 @@ export function ExploreClient({
               </Link>
             </div>
             <div className="mt-3">
-              <LiveFeed items={feed.slice(0, FEED_PREVIEW_LIMIT)} />
+              <LiveFeed items={initialFeed.slice(0, FEED_PREVIEW_LIMIT)} />
             </div>
           </div>
         </section>

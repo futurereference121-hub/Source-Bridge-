@@ -5,9 +5,12 @@ import {
   availabilityLabel,
   formatPrice,
 } from "@/data/products";
-import { getMemberForListing as getSeedMemberForListing } from "@/data/members";
+import {
+  getMemberById,
+  getMemberForListing as getSeedMemberForListing,
+} from "@/data/members";
 import { dbStockToListing } from "@/lib/member-map";
-import { getMemberByIdAsync } from "@/lib/members-service";
+import { memberCover, memberPhoto } from "@/lib/placeholders";
 import type { Listing, Member } from "@/lib/types";
 import type { StockListing as DbStock } from "@prisma/client";
 
@@ -60,10 +63,108 @@ export async function getListingBySlugAsync(
   }
 }
 
+/**
+ * Lightweight seller card for listing detail — no listings/reviews/network.
+ */
+export async function getSellerCardForListing(
+  memberId: string,
+): Promise<Member | null> {
+  const seed = getMemberById(memberId);
+  if (seed) {
+    return {
+      ...seed,
+      publicDisplayMessage: seed.publicDisplayMessage ?? seed.howICanHelp ?? "",
+      emailVerified: seed.emailVerified ?? true,
+      identityVerified:
+        seed.identityVerified ?? seed.verification.identityVerified,
+    };
+  }
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: {
+        id: memberId,
+        onboardingComplete: true,
+        emailVerified: true,
+        username: { not: null },
+        slug: { not: null },
+      },
+      select: {
+        id: true,
+        slug: true,
+        username: true,
+        name: true,
+        photo: true,
+        city: true,
+        country: true,
+        identityVerified: true,
+        onboardingComplete: true,
+        createdAt: true,
+      },
+    });
+    if (!user?.username || !user.slug || !user.onboardingComplete) return null;
+
+    const city = user.city || "";
+    const country = user.country || "";
+    return {
+      id: user.id,
+      slug: user.slug,
+      username: user.username,
+      fullName: user.name,
+      photo: memberPhoto(user.photo),
+      cover: memberCover(),
+      location: {
+        city,
+        country,
+        label: city && country ? `${city}, ${country}` : city || country || "",
+        cityCode: city ? city.toLowerCase() : undefined,
+      },
+      howICanHelp: "",
+      publicDisplayMessage: "",
+      bio: "",
+      memberType: "local",
+      verification: {
+        identityVerified: user.identityVerified,
+        badges: user.identityVerified
+          ? [{ kind: "verified_identity", label: "Verified" }]
+          : [],
+      },
+      emailVerified: true,
+      identityVerified: user.identityVerified,
+      bridgeScore: 0,
+      rating: 0,
+      completedRequests: 0,
+      services: [],
+      network: [],
+      trips: [],
+      status: null,
+      opportunity: null,
+      opportunities: [],
+      connectedCountries: [],
+      upcomingJourney: null,
+      journeys: [],
+      availability: "available_now",
+      availabilityLabel: "Available now",
+      listingIds: [],
+      reviews: [],
+      recentActivity: [],
+      languages: [],
+      joinedAt: user.createdAt.toISOString().slice(0, 10),
+      isPrototype: false,
+      isRealAccount: true,
+      followerCount: 0,
+      followingCount: 0,
+    };
+  } catch (err) {
+    console.error("[listings] seller card lookup failed", err);
+    return null;
+  }
+}
+
 export async function getMemberForListingAsync(
   listing: Listing,
 ): Promise<Member | null> {
-  const real = await getMemberByIdAsync(listing.memberId);
+  const real = await getSellerCardForListing(listing.memberId);
   if (real) return real;
   return getSeedMemberForListing(listing) ?? null;
 }

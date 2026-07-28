@@ -55,6 +55,7 @@ model User {
   transactionsAsBuyer  Transaction[]             @relation("TxnBuyer")
   transactionsAsSeller Transaction[]             @relation("TxnSeller")
   blockedConversations ConversationBlock[]
+  paymentMethods       SellerPaymentMethod[]
 }
 
 model Session {
@@ -169,6 +170,8 @@ model StockListing {
   fit               String   @default("")
   gender            String   @default("")
   availability      String   @default("available")
+  /// Marketplace lifecycle: AVAILABLE | RESERVED | SOLD | ARCHIVED
+  saleStatus        String   @default("AVAILABLE")
   /// Legacy single location string — prefer shipFromCity/Country.
   location          String   @default("")
   shipFromCity      String   @default("")
@@ -187,6 +190,8 @@ model StockListing {
   @@index([userId])
   @@index([slug])
   @@index([productKind, category])
+  @@index([saleStatus])
+  @@index([userId, saleStatus])
 }
 
 model Review {
@@ -362,32 +367,75 @@ model SourcingRequest {
 
 /// Lifecycle ready for future escrow — no payment processing yet.
 model Transaction {
-  id                String          @id @default(cuid())
+  id                     String          @id @default(cuid())
   /// REQUESTED | ACCEPTED | IN_PROGRESS | COMPLETED | CANCELLED | DISPUTED
-  status            String          @default("REQUESTED")
-  buyerId           String
-  buyer             User            @relation("TxnBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
-  sellerId          String
-  seller            User            @relation("TxnSeller", fields: [sellerId], references: [id], onDelete: Cascade)
-  conversationId    String?
-  conversation      Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  sourcingRequestId String?
-  sourcingRequest   SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
-  listingId         String?
-  listing           StockListing?   @relation(fields: [listingId], references: [id], onDelete: SetNull)
-  opportunityId     String?
-  opportunity       Opportunity?    @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
-  title             String          @default("")
-  notes             String          @default("")
-  amount            Float?
-  currency          String          @default("USD")
-  completedAt       DateTime?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  reviews           Review[]
+  status                 String          @default("REQUESTED")
+  buyerId                String
+  buyer                  User            @relation("TxnBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerId               String
+  seller                 User            @relation("TxnSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  conversationId         String?
+  conversation           Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  sourcingRequestId      String?
+  sourcingRequest        SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  listingId              String?
+  listing                StockListing?   @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  opportunityId          String?
+  opportunity            Opportunity?    @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  title                  String          @default("")
+  notes                  String          @default("")
+  amount                 Float?
+  currency               String          @default("USD")
+  /// card | crypto | contact | other
+  paymentMethod          String          @default("")
+  /// unpaid | pending | awaiting_confirmation | paid | refunded | failed | cancelled
+  paymentStatus          String          @default("unpaid")
+  selectedSize           String          @default("")
+  stripeCheckoutSessionId String         @default("")
+  stripePaymentIntentId  String          @default("")
+  cryptoNetwork          String          @default("")
+  cryptoWalletAddress    String          @default("")
+  cryptoTransactionHash  String          @default("")
+  buyerConfirmed         Boolean         @default(false)
+  sellerConfirmed        Boolean         @default(false)
+  /// none | held | released | refunded | disputed — future escrow
+  escrowStatus           String          @default("none")
+  platformFeeAmount      Float?
+  sellerPayoutStatus     String          @default("none")
+  paymentMethodId        String?
+  paymentMethodRef       SellerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  completedAt            DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  reviews                Review[]
 
   @@index([buyerId, status])
   @@index([sellerId, status])
   @@index([conversationId])
   @@index([status, completedAt])
+  @@index([paymentStatus])
+  @@index([listingId, paymentStatus])
+}
+
+/// Flexible seller payment configuration (crypto wallets, future methods).
+model SellerPaymentMethod {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// crypto | card_placeholder | other
+  kind           String
+  /// e.g. Bitcoin, Ethereum, USDT, USDC, or custom network name
+  networkName    String   @default("")
+  /// Wallet address or payment identifier — never private keys
+  address        String   @default("")
+  qrImageUrl     String   @default("")
+  instructions   String   @default("")
+  enabled        Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  transactions   Transaction[]
+
+  @@index([userId, enabled])
+  @@index([userId, kind])
 }

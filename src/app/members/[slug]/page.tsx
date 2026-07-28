@@ -3,8 +3,6 @@ import { notFound } from "next/navigation";
 import { MemberProfileView } from "@/components/profile/MemberProfileView";
 import { getMemberBySlugAsync } from "@/lib/members-service";
 import { getSessionUser } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-import { dbStockToListing } from "@/lib/member-map";
 import { getListingsForMember } from "@/data/products";
 
 type PageProps = {
@@ -36,12 +34,7 @@ export default async function MemberProfilePage({ params }: PageProps) {
         session.username.toLowerCase() === member.username.toLowerCase(),
     );
   const listings = member.isRealAccount
-    ? (
-        await prisma.stockListing.findMany({
-          where: { userId: member.id },
-          orderBy: { createdAt: "desc" },
-        })
-      ).map(dbStockToListing)
+    ? (member.listings ?? [])
     : getListingsForMember(member);
 
   return (

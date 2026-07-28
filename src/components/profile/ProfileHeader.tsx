@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import type { Member } from "@/lib/types";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
@@ -122,29 +122,13 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
         <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
           {isOwner ? (
-            <>
-              <PrimaryButton
-                href={editHref(member.slug, "profile")}
-                showArrow={false}
-                className="rounded-lg"
-              >
-                Edit Profile
-              </PrimaryButton>
-              <OwnerAction href={editHref(member.slug, "status")}>
-                Update Status
-              </OwnerAction>
-              <OwnerAction href={editHref(member.slug, "opportunity")}>
-                Post Opportunity
-              </OwnerAction>
-              <OwnerAction href={editHref(member.slug, "travel")}>
-                Edit Upcoming Travel
-              </OwnerAction>
-              <OwnerAction href={editHref(member.slug, "listing")}>
-                Manage Listings
-              </OwnerAction>
-              <OwnerAction href="/messages">Messages</OwnerAction>
-              <OwnerAction href="/profile/settings">Account Settings</OwnerAction>
-            </>
+            <PrimaryButton
+              href={editHref(member.slug, "profile")}
+              showArrow={false}
+              className="rounded-lg"
+            >
+              Edit Profile
+            </PrimaryButton>
           ) : (
             <>
               <button
@@ -191,19 +175,3 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
   );
 }
 
-function OwnerAction({
-  href,
-  children,
-}: {
-  href: string;
-  children: ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className="inline-flex h-11 items-center rounded-lg border border-white/25 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white/85 hover:border-white/50 hover:bg-white/5 sm:px-5"
-    >
-      {children}
-    </Link>
-  );
-}

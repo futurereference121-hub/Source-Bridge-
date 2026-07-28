@@ -31,6 +31,7 @@ function stockCreateData(userId: string, data: StockInput, slug: string) {
     fit: data.fit || "",
     gender: data.gender || "",
     availability: data.availability,
+    saleStatus: data.saleStatus || "AVAILABLE",
     location: data.location || shipLabel,
     shipFromCity: data.shipFromCity,
     shipFromCountry: data.shipFromCountry,
