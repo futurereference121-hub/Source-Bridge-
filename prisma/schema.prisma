@@ -221,6 +221,8 @@ model Opportunity {
   city             String
   country          String
   category         String
+  /// Optional window start (user-facing "Start Date").
+  startsAt         DateTime?
   expiresAt        DateTime?
   closedAt         DateTime?
   postedAt         DateTime          @default(now())

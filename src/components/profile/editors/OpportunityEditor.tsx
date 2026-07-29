@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { useAppUi } from "@/components/providers/AppProviders";
 import {
   EditorField,
@@ -12,26 +11,23 @@ import {
   jsonBody,
 } from "@/components/profile/editors/EditorShell";
 
-type CategoryRow = { id: string; name: string };
-
 type OpportunityEditorProps = {
   onClose: () => void;
   opportunityId?: string | null;
   defaults?: {
-    title?: string;
     description?: string;
     city?: string;
     country?: string;
-    category?: string;
   };
+  /** Called after a successful create so the parent can refresh Live Activity. */
+  onPublished?: () => void;
 };
 
 const blank = {
-  title: "",
   description: "",
   city: "",
   country: "",
-  category: "",
+  startsAt: "",
   expiresAt: "",
 };
 
@@ -39,42 +35,38 @@ export function OpportunityEditor({
   onClose,
   opportunityId,
   defaults,
+  onPublished,
 }: OpportunityEditorProps) {
-  const router = useRouter();
   const { showToast } = useAppUi();
   const [form, setForm] = useState({
     ...blank,
-    title: defaults?.title || "",
     description: defaults?.description || "",
     city: defaults?.city || "",
     country: defaults?.country || "",
-    category: defaults?.category || "",
   });
-  const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(opportunityId));
 
   useEffect(() => {
     let cancelled = false;
+    if (!opportunityId) {
+      setLoading(false);
+      return;
+    }
     (async () => {
       try {
-        const catData = await apiJson("/api/categories");
-        if (!cancelled) setCategories(catData.categories || []);
-        if (opportunityId) {
-          const data = await apiJson("/api/opportunities");
-          const row = (data.opportunities || []).find(
-            (o: { id: string }) => o.id === opportunityId,
-          );
-          if (row && !cancelled) {
-            setForm({
-              title: row.title || "",
-              description: row.description || "",
-              city: row.city || "",
-              country: row.country || "",
-              category: row.category || "",
-              expiresAt: row.expiresAt?.slice(0, 10) || "",
-            });
-          }
+        const data = await apiJson("/api/opportunities");
+        const row = (data.opportunities || []).find(
+          (o: { id: string }) => o.id === opportunityId,
+        );
+        if (row && !cancelled) {
+          setForm({
+            description: row.description || "",
+            city: row.city || "",
+            country: row.country || "",
+            startsAt: row.startsAt?.slice(0, 10) || "",
+            expiresAt: row.expiresAt?.slice(0, 10) || "",
+          });
         }
       } catch (err) {
         if (!cancelled) {
@@ -91,14 +83,16 @@ export function OpportunityEditor({
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     try {
       const payload = {
-        title: form.title.trim(),
         description: form.description.trim(),
         city: form.city.trim(),
         country: form.country.trim(),
-        category: form.category,
+        startsAt: form.startsAt
+          ? new Date(`${form.startsAt}T00:00:00`).toISOString()
+          : null,
         expiresAt: form.expiresAt
           ? new Date(`${form.expiresAt}T23:59:59`).toISOString()
           : null,
@@ -108,14 +102,16 @@ export function OpportunityEditor({
           `/api/opportunities/${opportunityId}`,
           jsonBody("PATCH", payload),
         );
+        showToast("Opportunity updated");
       } else {
         await apiJson("/api/opportunities", jsonBody("POST", payload));
+        showToast("Opportunity published successfully.");
+        onPublished?.();
       }
-      showToast("Opportunity saved");
+      // Close immediately after confirmed success — no extra delay.
       onClose();
-      router.refresh();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Could not save");
+    } catch {
+      showToast("Opportunity could not be published. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -131,32 +127,8 @@ export function OpportunityEditor({
         <p className="text-sm text-white/45">Loading…</p>
       ) : (
         <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-2">
-          <EditorField label="Title">
-            <input
-              className={editorInputClass}
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              required
-              maxLength={120}
-            />
-          </EditorField>
-          <EditorField label="Category">
-            <select
-              className={editorInputClass}
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              required
-            >
-              <option value="">Select category</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </EditorField>
           <div className="sm:col-span-2">
-            <EditorField label="Description">
+            <EditorField label="Opportunity Description">
               <textarea
                 className={`${editorInputClass} min-h-28 py-3`}
                 value={form.description}
@@ -165,6 +137,7 @@ export function OpportunityEditor({
                 }
                 required
                 maxLength={2000}
+                placeholder="What are you looking for or offering?"
               />
             </EditorField>
           </div>
@@ -184,7 +157,15 @@ export function OpportunityEditor({
               required
             />
           </EditorField>
-          <EditorField label="Optional expiry">
+          <EditorField label="Start Date (optional)">
+            <input
+              type="date"
+              className={editorInputClass}
+              value={form.startsAt}
+              onChange={(e) => setForm({ ...form, startsAt: e.target.value })}
+            />
+          </EditorField>
+          <EditorField label="End Date (optional)">
             <input
               type="date"
               className={editorInputClass}
@@ -192,9 +173,13 @@ export function OpportunityEditor({
               onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
             />
           </EditorField>
-          <div className="flex items-end">
+          <div className="sm:col-span-2 flex items-end">
             <EditorSubmit busy={busy}>
-              {opportunityId ? "Save changes" : "Post opportunity"}
+              {busy
+                ? "Publishing…"
+                : opportunityId
+                  ? "Save changes"
+                  : "Publish opportunity"}
             </EditorSubmit>
           </div>
         </form>

@@ -87,10 +87,8 @@ export function MemberCard({ member }: MemberCardProps) {
             >
               @{member.username}
             </Link>
-            <span className="flex h-6 w-[5.5rem] shrink-0 items-center justify-end">
-              {verified ? (
-                <VerificationBadge verified variant="dark" />
-              ) : null}
+            <span className="flex h-6 shrink-0 items-center justify-end">
+              {verified ? <VerificationBadge verified size="sm" /> : null}
             </span>
           </div>
           <p className="mt-0.5 text-sm text-white/55">{member.fullName}</p>

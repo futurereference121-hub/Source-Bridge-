@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { Listing, Member } from "@/lib/types";
 import { getMemberById, getMemberForListing } from "@/data/members";
 import { availabilityLabel, formatPrice } from "@/data/products";
-import { BadgeCheck } from "lucide-react";
+import { VerificationBadge } from "@/components/trust/VerificationBadge";
 
 type ListingCardProps = {
   listing: Listing;
@@ -59,11 +59,7 @@ export function ListingCard({
               <p className="flex flex-wrap items-center gap-1.5 text-sm text-ink">
                 <span className="truncate">@{member.username}</span>
                 {member.verification.identityVerified ? (
-                  <BadgeCheck
-                    size={14}
-                    className="shrink-0 text-accent"
-                    strokeWidth={1.5}
-                  />
+                  <VerificationBadge verified variant="tick" size="sm" />
                 ) : null}
               </p>
               <p className="truncate text-xs text-muted">

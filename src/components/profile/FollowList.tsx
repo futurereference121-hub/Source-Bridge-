@@ -7,6 +7,7 @@ import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { memberPhoto } from "@/lib/placeholders";
+import { VerificationBadge } from "@/components/trust/VerificationBadge";
 
 type FollowCard = {
   id: string;
@@ -68,7 +69,12 @@ export function FollowList({
           <article key={item.id} className="panel-navy flex items-center gap-4 rounded-xl p-4">
             <Image src={memberPhoto(item.photo)} alt="" width={56} height={56} className="h-14 w-14 rounded-xl object-cover" />
             <Link href={`/members/${item.slug}`} className="min-w-0 flex-1">
-              <p className="truncate font-medium text-white">@{item.username}</p>
+              <p className="flex items-center gap-1.5 truncate font-medium text-white">
+                <span className="truncate">@{item.username}</span>
+                {item.identityVerified ? (
+                  <VerificationBadge verified variant="tick" size="sm" />
+                ) : null}
+              </p>
               <p className="truncate text-sm text-white/45">{item.location || "Location not added"}</p>
             </Link>
             {account?.id !== item.id ? (

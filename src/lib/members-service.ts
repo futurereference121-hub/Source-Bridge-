@@ -246,13 +246,17 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
         username: m.username,
         fullName: m.fullName,
         photo: m.photo,
-        text: o.title || o.summary,
+        text: o.description || o.title || o.summary,
+        city: o.city,
+        country: o.country,
         postedAt: o.postedAt,
+        startsAt: o.startsAt ?? undefined,
         expiresAt: o.expiresAt ?? undefined,
       });
     }
   }
-  return [...fromSeed, ...fromDb]
+  // Prefer real DB activity so newly published opportunities appear immediately.
+  return [...fromDb, ...fromSeed]
     .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
     .slice(0, limit);
 }
@@ -294,7 +298,11 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
         select: {
           id: true,
           title: true,
+          description: true,
+          city: true,
+          country: true,
           postedAt: true,
+          startsAt: true,
           expiresAt: true,
           user: { select: userSelect },
         },
@@ -329,16 +337,21 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
         username: u.username,
         fullName: u.name,
         photo: memberPhoto(u.photo),
-        text: o.title,
+        text: o.description || o.title,
+        city: o.city,
+        country: o.country,
         postedAt: o.postedAt.toISOString(),
+        startsAt: o.startsAt?.toISOString() ?? undefined,
         expiresAt: o.expiresAt?.toISOString() ?? undefined,
       });
     }
 
+    // Prefer real DB activity over seed prototypes so new opportunities surface immediately.
     const fromSeed = buildLiveFeed(seedMembers.map(withSeedDefaults));
-    return [...fromSeed, ...fromDb]
-      .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
-      .slice(0, limit);
+    const merged = [...fromDb, ...fromSeed].sort(
+      (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
+    );
+    return merged.slice(0, limit);
   } catch (err) {
     console.error("[members] feed query failed", err);
     return buildLiveFeed(seedMembers.map(withSeedDefaults)).slice(0, limit);

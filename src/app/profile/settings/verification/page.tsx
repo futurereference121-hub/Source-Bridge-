@@ -221,8 +221,12 @@ export default function IdentityVerificationPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Could not submit request");
       await refreshAccount();
-      // Redirect to profile with a flag so the profile page shows a success toast.
-      router.replace("/profile?verification=submitted");
+      const slug = account?.slug || account?.username;
+      if (slug) {
+        router.replace(`/members/${slug}?verification=submitted`);
+      } else {
+        router.replace("/profile?verification=submitted");
+      }
     } catch (err) {
       showToast(
         err instanceof Error

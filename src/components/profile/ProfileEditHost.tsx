@@ -66,11 +66,9 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
         defaults={
           opp
             ? {
-                title: opp.title || opp.summary,
                 description: opp.description,
                 city: opp.city,
                 country: opp.country,
-                category: opp.category || opp.categories[0],
               }
             : {
                 city: member.location.city,

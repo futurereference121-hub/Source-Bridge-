@@ -90,7 +90,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     const id = Date.now();
     setToast({ id, message });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 5500);
   }, []);
 
   const loadFollows = useCallback(async () => {

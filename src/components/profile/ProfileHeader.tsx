@@ -99,9 +99,9 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
               <h1 className="min-w-0 truncate font-display text-3xl text-white sm:text-4xl">
                 @{member.username}
               </h1>
-              <span className="flex h-7 w-[6.5rem] shrink-0 items-center justify-end">
+              <span className="flex h-7 shrink-0 items-center justify-end">
                 {member.verification.identityVerified ? (
-                  <VerificationBadge verified size="md" variant="dark" />
+                  <VerificationBadge verified size="md" />
                 ) : null}
               </span>
             </div>

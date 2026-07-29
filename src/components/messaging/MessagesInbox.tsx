@@ -166,6 +166,7 @@ export function MessagesInbox({
   const [uploading, setUploading] = useState(false);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const threadScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldScrollRef = useRef(true);
 
@@ -242,8 +243,11 @@ export function MessagesInbox({
     async function openThread() {
       setThreadLoading(true);
       try {
-        // GET conversation marks the thread read on the server
-        const res = await fetch(`/api/conversations/${activeId}`);
+        // Fetch conversation metadata and messages in parallel for faster open.
+        const [res, page] = await Promise.all([
+          fetch(`/api/conversations/${activeId}`),
+          fetch(`/api/conversations/${activeId}/messages?limit=30`),
+        ]);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || "Failed to open conversation");
@@ -257,11 +261,7 @@ export function MessagesInbox({
           ),
         );
 
-        const page = await fetch(
-          `/api/conversations/${activeId}/messages?limit=30`,
-        );
         if (!page.ok) {
-          // Fall back to messages from conversation payload
           const fallback = (data.messages as Message[]) ?? [];
           setMessages(fallback);
           setMessagesCursor(null);
@@ -296,7 +296,11 @@ export function MessagesInbox({
 
   useEffect(() => {
     if (!shouldScrollRef.current) return;
-    threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (threadLoading) return;
+    const container = threadScrollRef.current;
+    if (!container) return;
+    // Scroll only the message pane — never the browser window.
+    container.scrollTop = container.scrollHeight;
   }, [messages, threadLoading]);
 
   async function loadOlderMessages() {
@@ -572,7 +576,10 @@ export function MessagesInbox({
                 </button>
               </header>
 
-              <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4">
+              <div
+                ref={threadScrollRef}
+                className="flex flex-1 flex-col overflow-y-auto px-4 py-4"
+              >
                 {messagesCursor ? (
                   <button
                     type="button"

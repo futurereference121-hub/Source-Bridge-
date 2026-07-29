@@ -6,6 +6,9 @@ import {
   isAllowedAttachmentUrl,
   mapConversation,
   participantUserSelect,
+  findOpenConversationBetweenUsers,
+  ensureParticipant,
+  markRead,
 } from "@/lib/messaging";
 import { sendEmail } from "@/lib/email";
 import { jsonError, sourcingRequestSchema } from "@/lib/validation";
@@ -204,6 +207,10 @@ export async function POST(req: NextRequest) {
     await assertDailyLimit(user.id, "message");
     const now = new Date();
 
+    // Prefer an existing 1:1 conversation between these two users so every
+    // sourcing request lands in the same shared thread.
+    const existingPair = await findOpenConversationBetweenUsers(user.id, toUserId);
+
     const result = await prisma.$transaction(
       async (tx) => {
         const sourcingRequest = await tx.sourcingRequest.create({
@@ -222,26 +229,47 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        const conversation = await tx.conversation.create({
-          data: {
-            subject: title,
-            contextType,
-            listingId: listingId ?? null,
-            opportunityId: opportunityId ?? null,
-            sourcingRequestId: sourcingRequest.id,
-            lastMessageAt: now,
-            participants: {
-              create: [
-                { userId: user.id, lastReadAt: now },
-                { userId: toUserId },
-              ],
+        let conversationId: string;
+        if (existingPair) {
+          conversationId = existingPair.id;
+          await ensureParticipant(conversationId, user.id, tx);
+          await ensureParticipant(conversationId, toUserId, tx);
+          await tx.conversation.update({
+            where: { id: conversationId },
+            data: {
+              lastMessageAt: now,
+              updatedAt: now,
+              // Keep the latest request context on the conversation for inbox cards.
+              sourcingRequestId: sourcingRequest.id,
+              listingId: listingId ?? existingPair.listingId,
+              opportunityId: opportunityId ?? existingPair.opportunityId,
+              contextType,
+              subject: title,
             },
-          },
-        });
+          });
+        } else {
+          const conversation = await tx.conversation.create({
+            data: {
+              subject: title,
+              contextType,
+              listingId: listingId ?? null,
+              opportunityId: opportunityId ?? null,
+              sourcingRequestId: sourcingRequest.id,
+              lastMessageAt: now,
+              participants: {
+                create: [
+                  { userId: user.id, lastReadAt: now },
+                  { userId: toUserId },
+                ],
+              },
+            },
+          });
+          conversationId = conversation.id;
+        }
 
         const firstMessage = await tx.message.create({
           data: {
-            conversationId: conversation.id,
+            conversationId,
             senderId: user.id,
             body: message,
             messageType: "SOURCING_REQUEST",
@@ -263,12 +291,14 @@ export async function POST(req: NextRequest) {
           },
         });
 
+        await markRead(conversationId, user.id, tx);
+
         const transaction = await tx.transaction.create({
           data: {
             status: "REQUESTED",
             buyerId: user.id,
             sellerId: toUserId,
-            conversationId: conversation.id,
+            conversationId,
             sourcingRequestId: sourcingRequest.id,
             listingId: listingId ?? null,
             opportunityId: opportunityId ?? null,
@@ -279,7 +309,7 @@ export async function POST(req: NextRequest) {
 
         return {
           sourcingRequest,
-          conversationId: conversation.id,
+          conversationId,
           message: firstMessage,
           transaction,
         };

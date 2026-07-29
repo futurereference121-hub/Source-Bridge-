@@ -88,6 +88,7 @@ function mapOpportunity(o: DbOpportunity): Opportunity {
     city: o.city,
     country: o.country,
     postedAt: o.postedAt.toISOString(),
+    startsAt: o.startsAt?.toISOString() ?? null,
     expiresAt: o.expiresAt?.toISOString() ?? null,
     closedAt: o.closedAt?.toISOString() ?? null,
   };
@@ -174,6 +175,7 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
     },
     emailVerified: user.emailVerified,
     identityVerified: user.identityVerified,
+    identityVerificationStatus: user.identityVerificationStatus || "UNVERIFIED",
     bridgeScore: 0,
     rating: 0,
     completedRequests: 0,

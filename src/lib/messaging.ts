@@ -144,22 +144,42 @@ export async function assertNotBlocked(conversationId: string) {
   }
 }
 
+/**
+ * Find any open 1:1 conversation between two users, regardless of context
+ * type or listing/opportunity reference. All communication between the same
+ * pair lives in a single shared thread.
+ */
+export async function findOpenConversationBetweenUsers(
+  fromUserId: string,
+  toUserId: string,
+) {
+  return findExistingDirectConversation({ fromUserId, toUserId });
+}
+
 async function findExistingDirectConversation(opts: {
   fromUserId: string;
   toUserId: string;
-  contextType: string;
+  contextType?: string;
   listingId?: string | null;
   opportunityId?: string | null;
 }) {
   return prisma.conversation.findFirst({
     where: {
-      contextType: opts.contextType,
       closedAt: null,
-      listingId: opts.listingId ?? null,
-      opportunityId: opts.opportunityId ?? null,
+      // Exclude system-only threads (single participant notifications).
+      contextType: { not: "system" },
       AND: [
         { participants: { some: { userId: opts.fromUserId, leftAt: null } } },
         { participants: { some: { userId: opts.toUserId, leftAt: null } } },
+        // Exactly two active participants — a true 1:1 thread.
+        {
+          participants: {
+            none: {
+              leftAt: null,
+              userId: { notIn: [opts.fromUserId, opts.toUserId] },
+            },
+          },
+        },
       ],
     },
     orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],

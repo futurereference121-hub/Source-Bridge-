@@ -118,11 +118,14 @@ export const statusSchema = z.object({
 });
 
 export const opportunitySchema = z.object({
-  title: z.string().trim().min(1, "Title required").max(120),
+  /** Optional — auto-generated from description/location when omitted. */
+  title: z.string().trim().max(120).optional().default(""),
   description: z.string().trim().min(1, "Description required").max(2000),
   city: z.string().trim().min(1, "City required").max(80),
   country: z.string().trim().min(1, "Country required").max(80),
-  category: z.string().trim().min(1, "Category required").max(80),
+  /** Optional — defaults to General when omitted. */
+  category: z.string().trim().max(80).optional().default(""),
+  startsAt: z.string().datetime().optional().nullable(),
   expiresAt: z.string().datetime().optional().nullable(),
 });
 

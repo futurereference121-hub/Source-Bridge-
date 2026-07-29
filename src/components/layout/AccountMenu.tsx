@@ -6,6 +6,7 @@ import { ChevronDown, LogOut } from "lucide-react";
 import { useAppUi } from "@/components/providers/AppProviders";
 import type { AccountSession } from "@/lib/types";
 import { useInboxUnread } from "@/hooks/useInboxUnread";
+import { VerificationBadge } from "@/components/trust/VerificationBadge";
 
 /**
  * Smart destination for a logged-in account's "home".
@@ -62,6 +63,10 @@ export function AccountMenu({
   }, [open]);
 
   const isAdmin = Boolean(account?.role === "ADMIN" || account?.isAdmin);
+  const isVerified = Boolean(
+    account?.identityVerified ||
+      account?.identityVerificationStatus === "VERIFIED",
+  );
   const links: MenuLink[] = isAdmin
     ? [
         { label: "Verification Applicants", href: "/admin/verifications" },
@@ -90,8 +95,9 @@ export function AccountMenu({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="max-w-[9rem] truncate normal-case tracking-normal">
-          {displayLabel(account)}
+        <span className="inline-flex max-w-[10rem] items-center gap-1 truncate normal-case tracking-normal">
+          <span className="truncate">{displayLabel(account)}</span>
+          {isVerified ? <VerificationBadge verified variant="tick" size="sm" /> : null}
         </span>
         <ChevronDown
           size={15}

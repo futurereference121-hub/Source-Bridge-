@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { jsonError, opportunitySchema } from "@/lib/validation";
-import { listCategoryNames } from "@/lib/categories-db";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,25 +29,24 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
     const data = parsed.data;
-    if (data.category) {
-      const allowed = await listCategoryNames();
-      if (
-        !allowed.some((c) => c.toLowerCase() === data.category!.toLowerCase())
-      ) {
-        return jsonError("Select a category from the list", 400);
-      }
-    }
 
     const row = await prisma.opportunity.update({
       where: { id },
       data: {
-        ...(data.title !== undefined ? { title: data.title } : {}),
+        ...(data.title !== undefined && data.title.trim()
+          ? { title: data.title.trim() }
+          : {}),
         ...(data.description !== undefined
           ? { description: data.description }
           : {}),
         ...(data.city !== undefined ? { city: data.city } : {}),
         ...(data.country !== undefined ? { country: data.country } : {}),
-        ...(data.category !== undefined ? { category: data.category } : {}),
+        ...(data.category !== undefined && data.category.trim()
+          ? { category: data.category.trim() }
+          : {}),
+        ...(data.startsAt !== undefined
+          ? { startsAt: data.startsAt ? new Date(data.startsAt) : null }
+          : {}),
         ...(data.expiresAt !== undefined
           ? {
               expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,

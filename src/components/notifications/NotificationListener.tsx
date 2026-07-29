@@ -16,7 +16,7 @@ import {
  * sound whenever a genuinely new notification arrives (never on refresh).
  */
 export function NotificationListener() {
-  const { account, signedIn } = useAppUi();
+  const { account, signedIn, refreshAccount } = useAppUi();
   useNotifications();
 
   useEffect(() => {
@@ -34,12 +34,21 @@ export function NotificationListener() {
   useEffect(
     () =>
       subscribeToNewNotifications((items) => {
+        let shouldRefreshAccount = false;
         for (const item of items) {
           const kind = soundKindForNotificationType(item.type);
           if (kind) playNotificationSound(kind);
+          // Verification approve/reject updates identityVerified — refresh session.
+          if (
+            item.type === "SYSTEM" &&
+            /verif/i.test(`${item.title} ${item.body} ${item.href}`)
+          ) {
+            shouldRefreshAccount = true;
+          }
         }
+        if (shouldRefreshAccount) void refreshAccount();
       }),
-    [],
+    [refreshAccount],
   );
 
   return null;

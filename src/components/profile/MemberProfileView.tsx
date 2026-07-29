@@ -68,19 +68,40 @@ function MemberProfileViewInner({
   useEffect(() => {
     if (!isOwner) return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get("welcome") !== "1") return;
-    showToast("Your Source Bridge profile is ready.");
+    const verification = params.get("verification");
+    const welcome = params.get("welcome");
+    if (!verification && welcome !== "1") return;
+
+    if (verification === "submitted") {
+      showToast(
+        "Verification documents submitted successfully. Review may take up to 48 hours.",
+      );
+    } else if (welcome === "1") {
+      showToast("Your Source Bridge profile is ready.");
+    }
+
     const next = new URLSearchParams(params);
     next.delete("welcome");
+    next.delete("verification");
     const qs = next.toString();
     router.replace(qs ? `/members/${member.slug}?${qs}` : `/members/${member.slug}`, {
       scroll: false,
     });
   }, [isOwner, member.slug, router, showToast]);
 
+  const verificationPending =
+    isOwner &&
+    !member.verification?.identityVerified &&
+    member.identityVerificationStatus === "PENDING";
+
   return (
     <div className="bg-app-navy pb-28 text-white md:pb-24">
       <Container>
+        {verificationPending ? (
+          <div className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+            Identity verification is pending review (usually within 48 hours).
+          </div>
+        ) : null}
         <ProfileHeader member={member} isOwner={isOwner} />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active={activeTab} />
 

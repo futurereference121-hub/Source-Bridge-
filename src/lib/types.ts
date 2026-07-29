@@ -88,6 +88,7 @@ export interface Opportunity {
   cityCode?: string;
   countryCode?: string;
   postedAt: string;
+  startsAt?: string | null;
   expiresAt?: string | null;
   closedAt?: string | null;
 }
@@ -193,7 +194,12 @@ export interface FeedItem {
   fullName: string;
   photo: string;
   text: string;
+  /** City for opportunity posts */
+  city?: string;
+  /** Country for opportunity posts */
+  country?: string;
   postedAt: string;
+  startsAt?: string;
   expiresAt?: string;
 }
 
@@ -254,6 +260,8 @@ export interface Member {
   /** Explicit mirrors — Verified badge uses identityVerified ONLY. */
   emailVerified?: boolean;
   identityVerified?: boolean;
+  /** UNVERIFIED | PENDING | VERIFIED | REJECTED */
+  identityVerificationStatus?: string;
   /** Internal / seed only — never render Bridge Score in UI. */
   bridgeScore: number;
   rating: number;

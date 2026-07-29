@@ -4,6 +4,7 @@ import { sendVerificationApplicantNotice } from "@/lib/email";
 import { createNotification } from "@/lib/notifications";
 import { sendVerificationResultMessage } from "@/lib/system-messages";
 import { jsonError } from "@/lib/validation";
+import { revalidatePath } from "next/cache";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,7 +17,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const rejectionReason = typeof body.rejectionReason === "string" ? body.rejectionReason.trim().slice(0, 2000) : "";
     if (!action) return jsonError("action must be approve or reject", 400);
     if (action === "reject" && !rejectionReason) return jsonError("rejectionReason is required", 400);
-    const request = await prisma.identityVerificationRequest.findUnique({ where: { id }, include: { user: { select: { email: true } } } });
+    const request = await prisma.identityVerificationRequest.findUnique({
+      where: { id },
+      include: { user: { select: { email: true, slug: true, username: true } } },
+    });
     if (!request) return jsonError("Request not found", 404);
     if (request.status !== "PENDING") return jsonError("Only pending requests can be reviewed", 409);
     const now = new Date();
@@ -46,7 +50,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // In-app notification — fires regardless of email preference.
     await createNotification({
       userId: request.userId,
-      type: approved ? "STATUS" : "STATUS",
+      type: "SYSTEM",
       title: approved
         ? "Your identity has been verified"
         : "Identity verification update",
@@ -62,6 +66,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const result = await sendVerificationApplicantNotice({ to: request.user.email, approved, rejectionReason });
       await prisma.identityVerificationRequest.update({ where: { id }, data: { applicantEmailStatus: result.ok ? "sent" : "failed" } });
     }
+
+    // Revalidate public surfaces so the gold badge (or pending state) updates immediately.
+    if (request.user.slug) {
+      revalidatePath(`/members/${request.user.slug}`);
+    }
+    revalidatePath("/explore");
+    revalidatePath("/api/members");
+    revalidatePath("/api/auth/me");
+
     return Response.json({ ok: true, status: approved ? "VERIFIED" : "REJECTED" });
   } catch (error) {
     console.error("[admin:verification-review]", error);

@@ -5,6 +5,8 @@ import { createCheckoutSchema, jsonError } from "@/lib/validation";
 import {
   mapConversation,
   participantUserSelect,
+  findOpenConversationBetweenUsers,
+  ensureParticipant,
 } from "@/lib/messaging";
 
 const partySelect = {
@@ -234,6 +236,10 @@ export async function POST(req: NextRequest) {
           user.id,
         );
       } else {
+        const existingPair = await findOpenConversationBetweenUsers(
+          user.id,
+          listing.userId,
+        );
         const created = await prisma.$transaction(async (tx) => {
           const sr = await tx.sourcingRequest.create({
             data: {
@@ -244,6 +250,38 @@ export async function POST(req: NextRequest) {
               status: "open",
             },
           });
+          if (existingPair) {
+            await ensureParticipant(existingPair.id, user.id, tx);
+            await ensureParticipant(existingPair.id, listing.userId, tx);
+            const conversation = await tx.conversation.update({
+              where: { id: existingPair.id },
+              data: {
+                lastMessageAt: new Date(),
+                updatedAt: new Date(),
+                sourcingRequestId: sr.id,
+                listingId: listing.id,
+                contextType: "listing",
+                subject: `Sourcing: ${listing.name}`,
+                messages: {
+                  create: {
+                    senderId: user.id,
+                    body: message,
+                  },
+                },
+              },
+              include: {
+                participants: {
+                  include: { user: { select: participantUserSelect } },
+                },
+                messages: {
+                  orderBy: { createdAt: "desc" },
+                  take: 1,
+                  include: { attachments: true },
+                },
+              },
+            });
+            return { sr, conversation };
+          }
           const conversation = await tx.conversation.create({
             data: {
               subject: `Sourcing: ${listing.name}`,

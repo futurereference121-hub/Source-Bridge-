@@ -15,7 +15,7 @@ import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 type Limit = { used: number; remaining: number; limit: number };
 type OpportunityRow = {
   id: string; title: string; description: string; city: string; country: string;
-  category: string; expiresAt?: string | null; active: boolean;
+  category: string; startsAt?: string | null; expiresAt?: string | null; active: boolean;
 };
 type NetworkRow = { id: string; city: string; country: string; sortOrder: number };
 type TripRow = { id: string; city: string; country: string; arrival: string; departure: string };
@@ -29,7 +29,7 @@ const blankProfile: ProfileForm = {
   name: "", bio: "", city: "", country: "", publicDisplayMessage: "", photo: "", cover: "",
 };
 const blankOpportunity = {
-  title: "", description: "", city: "", country: "", category: "", expiresAt: "",
+  description: "", city: "", country: "", startsAt: "", expiresAt: "",
 };
 const blankPlace = { city: "", country: "" };
 const blankTrip = { city: "", country: "", arrival: "", departure: "" };
@@ -157,22 +157,27 @@ function ProfileDashboardInner() {
     e.preventDefault();
     await run("opportunity", async () => {
       const payload = {
-        ...oppForm,
+        description: oppForm.description,
+        city: oppForm.city,
+        country: oppForm.country,
+        startsAt: oppForm.startsAt ? new Date(`${oppForm.startsAt}T00:00:00`).toISOString() : null,
         expiresAt: oppForm.expiresAt ? new Date(`${oppForm.expiresAt}T23:59:59`).toISOString() : null,
       };
       if (editingOpp) await api(`/api/opportunities/${editingOpp}`, json("PATCH", payload));
       else await api("/api/opportunities", json("POST", payload));
       const data = await api("/api/opportunities");
       setOpportunities(data.opportunities || []); setOpportunityLimit(data.limit);
-      setOppForm(blankOpportunity); setEditingOpp(null); showToast("Opportunity saved");
+      setOppForm(blankOpportunity); setEditingOpp(null);
+      showToast(editingOpp ? "Opportunity updated" : "Opportunity published successfully.");
     });
   }
 
   function editOpportunity(o: OpportunityRow) {
     setEditingOpp(o.id);
     setOppForm({
-      title: o.title, description: o.description, city: o.city, country: o.country,
-      category: o.category, expiresAt: o.expiresAt?.slice(0, 10) || "",
+      description: o.description, city: o.city, country: o.country,
+      startsAt: (o as OpportunityRow & { startsAt?: string | null }).startsAt?.slice(0, 10) || "",
+      expiresAt: o.expiresAt?.slice(0, 10) || "",
     });
   }
 
@@ -343,7 +348,7 @@ function ProfileDashboardInner() {
           <p className="text-sm text-white/45">{opportunityLimit ? `${opportunityLimit.remaining} of ${opportunityLimit.limit} new posts remaining today.` : "Maximum 3 new posts per day."}</p>
           <div className="mt-4 space-y-3">
             {opportunities.filter((o) => o.active).map((o) => (
-              <ManageRow key={o.id} title={o.title} detail={`${o.city}, ${o.country} · ${o.category}`}>
+              <ManageRow key={o.id} title={o.description?.slice(0, 80) || o.title} detail={`${o.city}, ${o.country}`}>
                 <MiniButton onClick={() => editOpportunity(o)}>Edit</MiniButton>
                 <MiniButton onClick={() => void closeOpportunity(o.id)}>Close</MiniButton>
               </ManageRow>
@@ -351,13 +356,12 @@ function ProfileDashboardInner() {
             {!opportunities.some((o) => o.active) ? <Empty>No opportunity submitted.</Empty> : null}
           </div>
           <form onSubmit={saveOpportunity} className="mt-6 grid gap-3 sm:grid-cols-2">
-            <input className={inputClass} placeholder="Title" value={oppForm.title} onChange={(e) => setOppForm({ ...oppForm, title: e.target.value })} required />
-            <CategorySelect categories={categories} value={oppForm.category} onChange={(category) => setOppForm({ ...oppForm, category })} />
-            <textarea className={`${inputClass} min-h-24 py-3 sm:col-span-2`} placeholder="Description" value={oppForm.description} onChange={(e) => setOppForm({ ...oppForm, description: e.target.value })} required />
+            <textarea className={`${inputClass} min-h-24 py-3 sm:col-span-2`} placeholder="Opportunity description" value={oppForm.description} onChange={(e) => setOppForm({ ...oppForm, description: e.target.value })} required />
             <input className={inputClass} placeholder="City" value={oppForm.city} onChange={(e) => setOppForm({ ...oppForm, city: e.target.value })} required />
             <input className={inputClass} placeholder="Country" value={oppForm.country} onChange={(e) => setOppForm({ ...oppForm, country: e.target.value })} required />
-            <Field label="Optional expiry"><input type="date" className={inputClass} value={oppForm.expiresAt} onChange={(e) => setOppForm({ ...oppForm, expiresAt: e.target.value })} /></Field>
-            <div className="flex items-end gap-2"><SubmitButton busy={busy === "opportunity"}>{editingOpp ? "Save changes" : "Create opportunity"}</SubmitButton>{editingOpp ? <MiniButton onClick={() => { setEditingOpp(null); setOppForm(blankOpportunity); }}>Cancel</MiniButton> : null}</div>
+            <Field label="Start date (optional)"><input type="date" className={inputClass} value={oppForm.startsAt} onChange={(e) => setOppForm({ ...oppForm, startsAt: e.target.value })} /></Field>
+            <Field label="End date (optional)"><input type="date" className={inputClass} value={oppForm.expiresAt} onChange={(e) => setOppForm({ ...oppForm, expiresAt: e.target.value })} /></Field>
+            <div className="flex items-end gap-2 sm:col-span-2"><SubmitButton busy={busy === "opportunity"}>{editingOpp ? "Save changes" : busy === "opportunity" ? "Publishing…" : "Publish opportunity"}</SubmitButton>{editingOpp ? <MiniButton onClick={() => { setEditingOpp(null); setOppForm(blankOpportunity); }}>Cancel</MiniButton> : null}</div>
           </form>
         </Panel>
 

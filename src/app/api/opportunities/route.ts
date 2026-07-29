@@ -3,8 +3,17 @@ import { prisma } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { assertDailyLimit, checkDailyLimit, recordDailyAction } from "@/lib/rate-limit";
 import { jsonError, opportunitySchema } from "@/lib/validation";
-import { listCategoryNames } from "@/lib/categories-db";
 import { notifyFollowersOfPost } from "@/lib/notifications";
+import { revalidatePath } from "next/cache";
+
+function autoTitle(description: string, city: string, country: string): string {
+  const clipped = description.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (clipped.length >= 12) {
+    return clipped.length < description.trim().length ? `${clipped}…` : clipped;
+  }
+  const place = [city, country].filter(Boolean).join(", ");
+  return place ? `Opportunity in ${place}` : "Opportunity";
+}
 
 function mapOpp(o: {
   id: string;
@@ -13,6 +22,7 @@ function mapOpp(o: {
   city: string;
   country: string;
   category: string;
+  startsAt: Date | null;
   postedAt: Date;
   expiresAt: Date | null;
   closedAt: Date | null;
@@ -28,6 +38,7 @@ function mapOpp(o: {
     country: o.country,
     category: o.category,
     categories: [o.category],
+    startsAt: o.startsAt?.toISOString() ?? null,
     postedAt: o.postedAt.toISOString(),
     expiresAt: o.expiresAt?.toISOString() ?? null,
     closedAt: o.closedAt?.toISOString() ?? null,
@@ -71,24 +82,21 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid opportunity", 400);
     }
 
-    const allowed = await listCategoryNames();
-    if (
-      !allowed.some(
-        (c) => c.toLowerCase() === parsed.data.category.toLowerCase(),
-      )
-    ) {
-      return jsonError("Select a category from the list", 400);
-    }
+    const title =
+      parsed.data.title?.trim() ||
+      autoTitle(parsed.data.description, parsed.data.city, parsed.data.country);
+    const category = parsed.data.category?.trim() || "General";
 
     await assertDailyLimit(user.id, "opportunity");
     const row = await prisma.opportunity.create({
       data: {
         userId: user.id,
-        title: parsed.data.title,
+        title,
         description: parsed.data.description,
         city: parsed.data.city,
         country: parsed.data.country,
-        category: parsed.data.category,
+        category,
+        startsAt: parsed.data.startsAt ? new Date(parsed.data.startsAt) : null,
         expiresAt: parsed.data.expiresAt
           ? new Date(parsed.data.expiresAt)
           : null,
@@ -101,10 +109,15 @@ export async function POST(req: NextRequest) {
         authorId: user.id,
         authorName: user.username ? `@${user.username}` : user.name,
         kind: "OPPORTUNITY",
-        text: row.title,
+        text: row.description || row.title,
         href: `/members/${user.slug}`,
       });
     }
+
+    // Revalidate Live Activity / Explore so the new opportunity appears immediately.
+    revalidatePath("/activity");
+    revalidatePath("/explore");
+    revalidatePath("/api/feed");
 
     return Response.json({ ok: true, opportunity: mapOpp(row), limit });
   } catch (err) {

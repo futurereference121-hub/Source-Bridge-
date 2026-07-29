@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { CircleDot, Sparkles } from "lucide-react";
+import { CircleDot, MapPin, Sparkles } from "lucide-react";
 import type { FeedItem } from "@/lib/types";
 import { memberPhoto } from "@/lib/placeholders";
 import { formatRelativeTime } from "@/lib/format";
@@ -31,10 +31,28 @@ export function LiveFeed({ items }: LiveFeedProps) {
   );
 }
 
+function formatOptionalDate(iso?: string): string | null {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return null;
+  }
+}
+
 function FeedRow({ item }: { item: FeedItem }) {
   const relative = formatRelativeTime(item.postedAt);
   const photo = memberPhoto(item.photo);
   const isOpportunity = item.kind === "opportunity";
+  const place = [item.city, item.country].filter(Boolean).join(", ");
+  const start = formatOptionalDate(item.startsAt);
+  const end = formatOptionalDate(item.expiresAt);
+  const dateRange =
+    start && end ? `${start} – ${end}` : start || end || null;
 
   const kindStyles = isOpportunity
     ? {
@@ -94,6 +112,17 @@ function FeedRow({ item }: { item: FeedItem }) {
         <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-white/65">
           {item.text}
         </p>
+        {isOpportunity && (place || dateRange) ? (
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-white/40">
+            {place ? (
+              <span className="inline-flex items-center gap-1">
+                <MapPin size={11} strokeWidth={1.75} />
+                {place}
+              </span>
+            ) : null}
+            {dateRange ? <span>{dateRange}</span> : null}
+          </p>
+        ) : null}
       </div>
     </Link>
   );
