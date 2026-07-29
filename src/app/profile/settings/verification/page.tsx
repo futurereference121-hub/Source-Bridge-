@@ -22,7 +22,7 @@ type VerificationPayload = {
     rejectionReason: string;
     documents: Array<{ id: string; kind: string; uploaded: boolean }>;
   } | null;
-  /** False when private document storage isn't configured (e.g. missing BLOB_PRIVATE_READ_WRITE_TOKEN on Vercel). */
+  /** False when private document storage isn't configured (e.g. missing PRIVATE_BLOB_READ_WRITE_TOKEN on Vercel). */
   storageAvailable?: boolean;
 };
 
@@ -297,9 +297,14 @@ export default function IdentityVerificationPage() {
                 storage isn&apos;t configured for this environment. Create a{" "}
                 <strong>Private</strong> Vercel Blob store and set the{" "}
                 <code className="rounded bg-black/25 px-1 py-0.5 text-[13px]">
-                  BLOB_PRIVATE_READ_WRITE_TOKEN
+                  PRIVATE_BLOB_READ_WRITE_TOKEN
                 </code>{" "}
-                environment variable on this project, then redeploy.
+                (and{" "}
+                <code className="rounded bg-black/25 px-1 py-0.5 text-[13px]">
+                  PRIVATE_BLOB_STORE_ID
+                </code>{" "}
+                when Vercel provides it) environment variable on this project,
+                then redeploy.
               </p>
               <p className="mt-2 text-xs text-amber-100/70">
                 You&apos;re seeing this detailed message because your account

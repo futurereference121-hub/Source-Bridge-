@@ -11,9 +11,16 @@ export { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "@/lib/storage-constants";
  * Image storage — Vercel Blob in production, with optional local fallback for
  * offline/dev when Blob credentials are unavailable.
  *
- * Env:
+ * Public store env:
  *   BLOB_STORE_ID + VERCEL_OIDC_TOKEN (auto on connected Vercel project)
- *   BLOB_READ_WRITE_TOKEN (optional static token; still used outside Vercel)
+ *   BLOB_READ_WRITE_TOKEN (optional static token)
+ *
+ * Private store env (identity documents — prefer Vercel’s PRIVATE_BLOB_* names):
+ *   PRIVATE_BLOB_READ_WRITE_TOKEN
+ *   PRIVATE_BLOB_STORE_ID
+ *   PRIVATE_BLOB_WEBHOOK_PUBLIC_KEY (unused by this app; reserved by Vercel)
+ * Legacy alias still accepted: BLOB_PRIVATE_READ_WRITE_TOKEN
+ *
  *   STORAGE_PROVIDER=vercel-blob|local
  */
 
@@ -47,6 +54,36 @@ function getProvider(): "vercel-blob" | "local" {
   return process.env.BLOB_STORE_ID || process.env.BLOB_READ_WRITE_TOKEN
     ? "vercel-blob"
     : "local";
+}
+
+/** Public listing/profile Blob token. */
+function getPublicBlobToken(): string | undefined {
+  return process.env.BLOB_READ_WRITE_TOKEN || undefined;
+}
+
+/**
+ * Private Blob store token. Prefer Vercel’s connected private-store names;
+ * fall back to the older BLOB_PRIVATE_* alias if present.
+ */
+function getPrivateBlobToken(): string | undefined {
+  return (
+    process.env.PRIVATE_BLOB_READ_WRITE_TOKEN ||
+    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN ||
+    undefined
+  );
+}
+
+function getPrivateBlobStoreId(): string | undefined {
+  return (
+    process.env.PRIVATE_BLOB_STORE_ID ||
+    process.env.BLOB_PRIVATE_STORE_ID ||
+    undefined
+  );
+}
+
+/** True when a private Blob store is usable for identity documents. */
+export function isPrivateBlobConfigured(): boolean {
+  return Boolean(getPrivateBlobToken() || getPrivateBlobStoreId());
 }
 
 export function extensionFor(type: string): string {
@@ -136,10 +173,13 @@ async function saveToBlob(
   pathname: string,
   access: "public" | "private" = "public",
 ): Promise<StorageResult> {
-  const token = access === "private"
-    ? process.env.BLOB_PRIVATE_READ_WRITE_TOKEN
-    : process.env.BLOB_READ_WRITE_TOKEN;
-  if (!process.env.BLOB_STORE_ID && !token) {
+  const token =
+    access === "private" ? getPrivateBlobToken() : getPublicBlobToken();
+  const storeConfigured =
+    access === "private"
+      ? Boolean(getPrivateBlobStoreId() || token)
+      : Boolean(process.env.BLOB_STORE_ID || token);
+  if (!storeConfigured) {
     return {
       ok: false,
       error: "Vercel Blob is not configured",
@@ -208,8 +248,14 @@ export async function storeImageForUser(
   const provider = getProvider();
 
   if (provider === "vercel-blob") {
-    if (access === "private" && !process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
-      return { ok: false, error: "Private Blob storage is not configured. Set BLOB_PRIVATE_READ_WRITE_TOKEN." };
+    if (access === "private" && !isPrivateBlobConfigured()) {
+      return {
+        ok: false,
+        error:
+          "Private Blob storage is not configured. Set PRIVATE_BLOB_READ_WRITE_TOKEN.",
+        clientError:
+          "Identity verification is temporarily unavailable. Please try again later.",
+      };
     }
     return saveToBlob(buffer, contentType, pathname, access);
   }
@@ -239,7 +285,7 @@ export async function storePrivateVerificationImage(file: File | Blob, userId: s
   const pathname = `verification/${userId}/${Date.now()}-${randomBytes(8).toString("hex")}.${extensionFor(detected)}`;
 
   // Prefer dedicated private Blob store. Never write ID documents to the public store.
-  if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
+  if (isPrivateBlobConfigured()) {
     return saveToBlob(buffer, detected, pathname, "private");
   }
 
@@ -247,7 +293,7 @@ export async function storePrivateVerificationImage(file: File | Blob, userId: s
   // On Vercel serverless FS is ephemeral — require a private Blob store there.
   if (process.env.VERCEL) {
     const detail =
-      "Private verification storage is not configured. Create a Private Vercel Blob store and set BLOB_PRIVATE_READ_WRITE_TOKEN.";
+      "Private verification storage is not configured. Create a Private Vercel Blob store and set PRIVATE_BLOB_READ_WRITE_TOKEN (and PRIVATE_BLOB_STORE_ID when provided by Vercel).";
     console.error(`[storage] storePrivateVerificationImage: ${detail}`);
     return {
       ok: false,
@@ -267,10 +313,11 @@ export async function readPrivateStoredBytes(urlOrPath: string): Promise<Buffer 
     const { readFile } = await import("fs/promises");
     try { return await readFile(path.join(process.cwd(), "private", urlOrPath.slice("private://".length))); } catch { return null; }
   }
-  if (!process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) return null;
+  const privateToken = getPrivateBlobToken();
+  if (!privateToken) return null;
   try {
     const response = await fetch(urlOrPath, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_PRIVATE_READ_WRITE_TOKEN}` },
+      headers: { Authorization: `Bearer ${privateToken}` },
       cache: "no-store",
     });
     return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
@@ -332,9 +379,11 @@ export async function deleteStoredImageForUser(
       const { pathname } = new URL(urlOrPath);
       const clean = pathname.replace(/^\//, "");
       if (!pathnameBelongsToUser(clean, userId)) return true;
-      const delOptions = process.env.BLOB_READ_WRITE_TOKEN
-        ? { token: process.env.BLOB_READ_WRITE_TOKEN }
-        : undefined;
+      const isVerification = clean.startsWith(`verification/${userId}/`);
+      const token = isVerification
+        ? getPrivateBlobToken()
+        : getPublicBlobToken();
+      const delOptions = token ? { token } : undefined;
       await del(urlOrPath, delOptions);
       return true;
     } catch {

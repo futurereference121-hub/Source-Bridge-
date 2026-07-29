@@ -17,10 +17,17 @@ try {
     for (const document of request.documents) {
       if (document.url.startsWith("private://")) {
         await unlink(path.join(process.cwd(), "private", document.url.slice("private://".length))).catch(() => {});
-      } else if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) {
-        await del(document.url, { token: process.env.BLOB_PRIVATE_READ_WRITE_TOKEN });
       } else {
-        throw new Error(`Cannot delete private Blob document ${document.id}: BLOB_PRIVATE_READ_WRITE_TOKEN is required.`);
+        const privateToken =
+          process.env.PRIVATE_BLOB_READ_WRITE_TOKEN ||
+          process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
+        if (privateToken) {
+          await del(document.url, { token: privateToken });
+        } else {
+          throw new Error(
+            `Cannot delete private Blob document ${document.id}: PRIVATE_BLOB_READ_WRITE_TOKEN is required.`,
+          );
+        }
       }
       await prisma.verificationDocument.update({ where: { id: document.id }, data: { deletedAt: new Date() } });
       removed++;

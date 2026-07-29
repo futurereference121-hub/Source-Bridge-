@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getSessionUser, toPublicAccount } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { isPrivateBlobConfigured } from "@/lib/storage";
 import { jsonError } from "@/lib/validation";
 import {
   getLatestVerificationRequest,
@@ -29,8 +30,7 @@ export async function GET() {
     // Private document storage requires a dedicated Private Vercel Blob store
     // in production; local/dev environments fall back to the filesystem.
     const storageAvailable =
-      Boolean(process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) ||
-      !process.env.VERCEL;
+      isPrivateBlobConfigured() || !process.env.VERCEL;
 
     return Response.json({
       ok: true,
