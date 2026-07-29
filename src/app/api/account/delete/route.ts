@@ -67,14 +67,22 @@ async function handleDelete(req: NextRequest) {
     clearIpAttempts(attemptKey);
 
     await deleteOwnAccount(user.id);
-    await destroySession();
+    try {
+      await destroySession();
+    } catch (err) {
+      console.error("[account:delete] session clear failed after deletion", err);
+    }
 
     return Response.json({ ok: true });
   } catch (error) {
     const status = (error as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
     console.error("[account:delete]", error);
-    return jsonError("Could not delete account", 500);
+    const detail =
+      process.env.NODE_ENV !== "production" && error instanceof Error
+        ? error.message
+        : "Could not delete account";
+    return jsonError(detail, 500);
   }
 }
 

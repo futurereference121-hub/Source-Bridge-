@@ -1,6 +1,5 @@
 import { createHash } from "crypto";
 import { prisma } from "@/lib/db";
-import { invalidateAllSessions } from "@/lib/auth";
 import { deleteStoredImageForUser } from "@/lib/storage";
 
 /** Anonymized name used everywhere a deleted account still needs a display value. */
@@ -38,20 +37,30 @@ function parseJsonArray(raw: string | null | undefined): string[] {
 export async function deleteOwnAccount(
   userId: string,
 ): Promise<{ ok: true; storageCleanupOk: boolean }> {
-  const [verificationDocs, listings, userRow] = await Promise.all([
-    prisma.verificationDocument.findMany({
-      where: { request: { userId }, deletedAt: null },
-      select: { url: true },
-    }),
-    prisma.stockListing.findMany({
-      where: { userId },
-      select: { images: true, listingImages: { select: { url: true } } },
-    }),
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { photo: true, cover: true },
-    }),
-  ]);
+  let verificationDocs: { url: string }[] = [];
+  let listings: {
+    images: string;
+    listingImages: { url: string }[];
+  }[] = [];
+  let userRow: { photo: string; cover: string } | null = null;
+  try {
+    [verificationDocs, listings, userRow] = await Promise.all([
+      prisma.verificationDocument.findMany({
+        where: { request: { userId }, deletedAt: null },
+        select: { url: true },
+      }),
+      prisma.stockListing.findMany({
+        where: { userId },
+        select: { images: true, listingImages: { select: { url: true } } },
+      }),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { photo: true, cover: true },
+      }),
+    ]);
+  } catch (err) {
+    console.error("[account-deletion] asset inventory failed", err);
+  }
 
   const assetUrls = Array.from(
     new Set(
@@ -67,64 +76,79 @@ export async function deleteOwnAccount(
     ),
   );
 
-  await invalidateAllSessions(userId);
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.statusUpdate.deleteMany({ where: { userId } });
+      await tx.opportunity.deleteMany({ where: { userId } });
+      await tx.stockListing.deleteMany({ where: { userId } });
+      await tx.sellerPaymentMethod.deleteMany({ where: { userId } });
+      await tx.follow.deleteMany({ where: { followerId: userId } });
+      await tx.follow.deleteMany({
+        where: { followingId: userId, followingIsSeed: false },
+      });
+      await tx.emailVerificationToken.deleteMany({ where: { userId } });
+      await tx.passwordResetToken.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.rateLimitEvent.deleteMany({ where: { userId } });
+      await tx.identityVerificationRequest.deleteMany({ where: { userId } });
+      await tx.networkLocation.deleteMany({ where: { userId } });
+      await tx.trip.deleteMany({ where: { userId } });
+      await tx.session.deleteMany({ where: { userId } });
 
-  await prisma.$transaction(async (tx) => {
-    await tx.statusUpdate.deleteMany({ where: { userId } });
-    await tx.opportunity.deleteMany({ where: { userId } });
-    await tx.stockListing.deleteMany({ where: { userId } });
-    await tx.sellerPaymentMethod.deleteMany({ where: { userId } });
-    await tx.follow.deleteMany({ where: { followerId: userId } });
-    await tx.follow.deleteMany({
-      where: { followingId: userId, followingIsSeed: false },
-    });
-    await tx.emailVerificationToken.deleteMany({ where: { userId } });
-    await tx.passwordResetToken.deleteMany({ where: { userId } });
-    await tx.notification.deleteMany({ where: { userId } });
-    await tx.rateLimitEvent.deleteMany({ where: { userId } });
-    await tx.identityVerificationRequest.deleteMany({ where: { userId } });
-    await tx.networkLocation.deleteMany({ where: { userId } });
-    await tx.trip.deleteMany({ where: { userId } });
-
-    await tx.user.update({
-      where: { id: userId },
-      data: {
-        name: DELETED_USER_NAME,
-        username: null,
-        slug: null,
-        email: anonymizedEmail(userId),
-        photo: "",
-        cover: "",
-        bio: "",
-        publicDisplayMessage: "",
-        city: "",
-        country: "",
-        memberType: "",
-        specialties: "[]",
-        passwordHash: null,
-        mustChangePassword: false,
-        emailVerified: false,
-        onboardingComplete: false,
-        isDiscoverable: false,
-        deletedAt: new Date(),
-      },
-    });
-  });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          name: DELETED_USER_NAME,
+          username: null,
+          slug: null,
+          email: anonymizedEmail(userId),
+          photo: "",
+          cover: "",
+          bio: "",
+          publicDisplayMessage: "",
+          city: "",
+          country: "",
+          memberType: "",
+          specialties: "[]",
+          passwordHash: null,
+          mustChangePassword: false,
+          emailVerified: false,
+          onboardingComplete: false,
+          isDiscoverable: false,
+          deletedAt: new Date(),
+        },
+      });
+    },
+    { timeout: 20_000 },
+  );
 
   let storageCleanupOk = true;
   for (const url of assetUrls) {
-    const success = await deleteStoredImageForUser(url, userId);
-    if (!success) {
+    try {
+      const success = await deleteStoredImageForUser(url, userId);
+      if (!success) {
+        storageCleanupOk = false;
+        await prisma.storageCleanupJob
+          .create({
+            data: {
+              urlOrPath: url,
+              kind: "blob",
+              lastError: "delete_failed_during_account_deletion",
+            },
+          })
+          .catch(() => null);
+      }
+    } catch {
       storageCleanupOk = false;
       await prisma.storageCleanupJob
         .create({
           data: {
-            urlOrPath: url,
+            urlOrPath: "[redacted]",
             kind: "blob",
-            lastError: "delete_failed_during_account_deletion",
+            lastError: "delete_threw_during_account_deletion",
           },
         })
-        .catch((err) => console.error("[account-deletion] queue cleanup job failed", err));
+        .catch(() => null);
     }
   }
 
