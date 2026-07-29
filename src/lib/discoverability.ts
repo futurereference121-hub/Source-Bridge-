@@ -2,8 +2,12 @@ import type { Prisma } from "@prisma/client";
 
 /**
  * Baseline filter for every public-facing member lookup (directory, search,
- * feeds, profile pages). Excludes admins, test fixtures, soft-deleted
- * accounts, and anyone who opted out of discovery.
+ * feeds, profile pages).
+ *
+ * Eligible when the account is active, discoverable, has a username/slug,
+ * finished email verification + onboarding, and is not admin/test/deleted.
+ * Photo, bio, location, verification badge, status, and opportunities are
+ * intentionally NOT required.
  */
 export const publicMemberWhere = {
   emailVerified: true,

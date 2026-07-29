@@ -67,10 +67,6 @@ export function LocationStep({ initial, onContinue, showToast }: Props) {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!city.trim() || !country.trim()) {
-      showToast("Current city and country are required");
-      return;
-    }
     setSubmitting(true);
     try {
       await onContinue({
@@ -98,18 +94,18 @@ export function LocationStep({ initial, onContinue, showToast }: Props) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-xs uppercase tracking-[0.14em] text-white/45">
-          Current city
+          Current city{" "}
+          <span className="normal-case tracking-normal">(optional)</span>
           <input
-            required
             value={city}
             onChange={(e) => setCity(e.target.value)}
             className="input-navy mt-1.5 h-11 w-full rounded-lg px-4 text-sm"
           />
         </label>
         <label className="block text-xs uppercase tracking-[0.14em] text-white/45">
-          Current country
+          Current country{" "}
+          <span className="normal-case tracking-normal">(optional)</span>
           <input
-            required
             value={country}
             onChange={(e) => setCountry(e.target.value)}
             className="input-navy mt-1.5 h-11 w-full rounded-lg px-4 text-sm"

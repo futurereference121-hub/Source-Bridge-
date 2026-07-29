@@ -13,6 +13,7 @@ import { assertDailyLimit } from "@/lib/rate-limit";
 import { calendarDayKey, STATUS_TTL_MS } from "@/lib/limits";
 import { listCategoryNames } from "@/lib/categories-db";
 import { pathnameBelongsToUser } from "@/lib/storage";
+import { revalidatePublicMemberSurfaces } from "@/lib/revalidate-public";
 
 function isAllowedProfileImageUrl(url: string, userId: string): boolean {
   if (!url || !url.trim()) return true;
@@ -70,7 +71,12 @@ export async function POST(req: NextRequest) {
           bio: data.bio || "",
           photo: data.photo || "",
           cover: data.cover || "",
+          isDiscoverable: true,
         },
+      });
+      revalidatePublicMemberSurfaces({
+        slug: updated.slug,
+        username: updated.username,
       });
       return Response.json({ ok: true, step: "identity", userId: updated.id });
     }
@@ -148,9 +154,6 @@ export async function POST(req: NextRequest) {
       if (!current.username || !current.slug) {
         return jsonError("Complete identity step first", 400);
       }
-      if (!current.city || !current.country) {
-        return jsonError("Complete location step first", 400);
-      }
 
       const statusText = data.statusText?.trim() || "";
       if (data.opportunity) {
@@ -176,11 +179,6 @@ export async function POST(req: NextRequest) {
             status: 400,
           });
         }
-        if (!fresh.city || !fresh.country) {
-          throw Object.assign(new Error("Complete location step first"), {
-            status: 400,
-          });
-        }
 
         await tx.user.update({
           where: { id: user.id },
@@ -188,6 +186,7 @@ export async function POST(req: NextRequest) {
             specialties: JSON.stringify(data.specialties),
             publicDisplayMessage: data.publicDisplayMessage || "",
             onboardingComplete: true,
+            isDiscoverable: true,
           },
         });
 
@@ -229,6 +228,11 @@ export async function POST(req: NextRequest) {
         return { slug: fresh.slug, alreadyComplete: false as const };
       });
 
+      revalidatePublicMemberSurfaces({
+        slug: completed.slug,
+        username: current.username,
+      });
+
       return Response.json({
         ok: true,
         step: "help",
@@ -245,8 +249,13 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : "Onboarding failed";
     if (status === 401) return jsonError("Sign in required", 401);
     if (status === 429) return jsonError(message, 429);
-    console.error("[onboarding]", err);
-    return jsonError(message, status >= 400 && status < 600 ? status : 500);
+    console.error("[onboarding]", err instanceof Error ? err.message : err);
+    return jsonError(
+      status >= 400 && status < 500
+        ? message
+        : "Profile couldn't be saved. Please try again.",
+      status >= 400 && status < 600 ? status : 500,
+    );
   }
 }
 

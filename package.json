@@ -22,7 +22,9 @@
     "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs",
     "cleanup-test-accounts": "node --env-file=.env scripts/cleanup-test-accounts.mjs",
     "cleanup-deleted-orphans": "node --env-file=.env scripts/cleanup-deleted-account-orphans.mjs",
+    "repair-profiles": "node --env-file=.env scripts/repair-profiles.mjs",
     "test:account-deletion": "node --env-file=.env scripts/test-account-deletion.mjs",
+    "test:signup-explore": "node --env-file=.env scripts/test-signup-explore.mjs",
     "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs"
   },
   "dependencies": {

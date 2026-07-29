@@ -5,6 +5,7 @@ import { jsonError, publicDisplayMessageSchema } from "@/lib/validation";
 import { z } from "zod";
 import { getMemberByIdAsync, toPublicMemberJson } from "@/lib/members-service";
 import { pathnameBelongsToUser } from "@/lib/storage";
+import { revalidatePublicMemberSurfaces } from "@/lib/revalidate-public";
 
 function isAllowedProfileImageUrl(url: string, userId: string): boolean {
   if (!url || !url.trim()) return true;
@@ -21,7 +22,6 @@ function isAllowedProfileImageUrl(url: string, userId: string): boolean {
   } catch {
     return false;
   }
-  // Local/dev uploads namespaced by user
   const cleaned = value.replace(/^\//, "");
   if (cleaned.startsWith("uploads/")) {
     return pathnameBelongsToUser(cleaned.slice("uploads/".length), userId);
@@ -101,11 +101,15 @@ export async function PATCH(req: NextRequest) {
           : {}),
       },
     });
+    revalidatePublicMemberSurfaces({
+      slug: updated.slug,
+      username: updated.username,
+    });
     return Response.json({ ok: true, account: toPublicAccount(updated) });
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
-    console.error("[profile]", err);
-    return jsonError("Update failed", 500);
+    console.error("[profile]", err instanceof Error ? err.message : err);
+    return jsonError("Profile couldn't be saved. Please try again.", 500);
   }
 }

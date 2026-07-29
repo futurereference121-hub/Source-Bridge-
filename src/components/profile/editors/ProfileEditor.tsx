@@ -43,6 +43,7 @@ export function ProfileEditor({ onClose }: ProfileEditorProps) {
   const { account, showToast, refreshAccount } = useAppUi();
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -132,6 +133,7 @@ export function ProfileEditor({ onClose }: ProfileEditorProps) {
               userId={account.id}
               showToast={showToast}
               disabled={busy}
+              onBusyChange={setUploading}
               onUploaded={(url) => onImageUploaded("photo", url)}
             />
             <ImageUploadField
@@ -143,6 +145,7 @@ export function ProfileEditor({ onClose }: ProfileEditorProps) {
               userId={account.id}
               showToast={showToast}
               disabled={busy}
+              onBusyChange={setUploading}
               onUploaded={(url) => onImageUploaded("cover", url)}
             />
           </div>
@@ -191,7 +194,9 @@ export function ProfileEditor({ onClose }: ProfileEditorProps) {
               onChange={(e) => setForm({ ...form, bio: e.target.value })}
             />
           </EditorField>
-          <EditorSubmit busy={busy}>Save profile</EditorSubmit>
+          <EditorSubmit busy={busy || uploading}>
+            {uploading ? "Uploading photo…" : "Save profile"}
+          </EditorSubmit>
         </form>
       )}
     </EditorShell>

@@ -10,7 +10,7 @@ import {
   type ProfileUploadProgress,
   type UploadFolder,
 } from "@/lib/client-image-upload";
-import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
+import { IMAGE_ACCEPT_ATTR, IMAGE_FORMAT_HINT } from "@/lib/storage-constants";
 
 type Props = {
   label: string;
@@ -22,6 +22,8 @@ type Props = {
   onUploaded: (url: string) => void | Promise<void>;
   showToast: (message: string) => void;
   disabled?: boolean;
+  /** Notifies parent when an upload is in flight so Save can be disabled. */
+  onBusyChange?: (busy: boolean) => void;
 };
 
 export function ImageUploadField({
@@ -34,6 +36,7 @@ export function ImageUploadField({
   onUploaded,
   showToast,
   disabled,
+  onBusyChange,
 }: Props) {
   const [preview, setPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProfileUploadProgress | null>(null);
@@ -46,6 +49,11 @@ export function ImageUploadField({
       if (previewRef.current) URL.revokeObjectURL(previewRef.current);
     };
   }, []);
+
+  function setBusyState(next: boolean) {
+    setBusy(next);
+    onBusyChange?.(next);
+  }
 
   function setPreviewUrl(url: string | null) {
     if (previewRef.current) URL.revokeObjectURL(previewRef.current);
@@ -67,7 +75,7 @@ export function ImageUploadField({
     setCropSource(null);
     const local = createLocalPreview(file);
     setPreviewUrl(local);
-    setBusy(true);
+    setBusyState(true);
     setProgress({ percent: 0, stage: "validating" });
 
     try {
@@ -85,10 +93,10 @@ export function ImageUploadField({
       setProgress({ percent: 100, stage: "done" });
     } catch (e) {
       setPreviewUrl(null);
-      showToast(e instanceof Error ? e.message : "Upload failed");
+      showToast(e instanceof Error ? e.message : "Upload failed. Please try again.");
       setProgress(null);
     } finally {
-      setBusy(false);
+      setBusyState(false);
       window.setTimeout(() => setProgress(null), 800);
     }
   }
@@ -165,9 +173,7 @@ export function ImageUploadField({
         </label>
       </div>
       {!busy && progress === null ? (
-        <p className="mt-1.5 text-[11px] text-white/35">
-          JPG, PNG, or WebP · max 5 MB
-        </p>
+        <p className="mt-1.5 text-[11px] text-white/35">{IMAGE_FORMAT_HINT}</p>
       ) : null}
 
       {cropSource ? (

@@ -105,12 +105,17 @@ export function validateImageFile(file: {
   size: number;
 }): string | null {
   const type = file.type === "image/jpg" ? "image/jpeg" : file.type;
-  if (!ALLOWED_IMAGE_TYPES.has(type) && !ALLOWED_IMAGE_TYPES.has(file.type)) {
+  // Empty MIME is allowed — storeImageForUser sniffs magic bytes.
+  if (
+    type &&
+    !ALLOWED_IMAGE_TYPES.has(type) &&
+    !ALLOWED_IMAGE_TYPES.has(file.type)
+  ) {
     return "Unsupported image type. Use JPG, JPEG, PNG, or WebP.";
   }
   if (file.size <= 0) return "Empty file.";
   if (file.size > MAX_IMAGE_BYTES) {
-    return "Image must be 5 MB or smaller.";
+    return "Image too large. Please choose a smaller photo.";
   }
   return null;
 }
@@ -235,16 +240,46 @@ export async function storeImageForUser(
     access?: "public" | "private";
   },
 ): Promise<StorageResult> {
-  const contentType = file.type || "application/octet-stream";
   const size = file.size;
-  const validationError = validateImageFile({ type: contentType, size });
-  if (validationError) return { ok: false, error: validationError };
+  const declaredType = file.type || "";
+  const softValidation = validateImageFile({
+    type: declaredType || "image/jpeg",
+    size,
+  });
+  // Allow empty MIME through so we can sniff; still reject oversized files early.
+  if (size <= 0) return { ok: false, error: "Empty file.", clientError: "Empty file." };
+  if (size > MAX_IMAGE_BYTES) {
+    return {
+      ok: false,
+      error: softValidation || "Image too large",
+      clientError: "Image too large. Please choose a smaller photo.",
+    };
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const detected = detectImageMimeType(buffer);
+  const contentType =
+    detected ||
+    (declaredType === "image/jpg" ? "image/jpeg" : declaredType) ||
+    "";
+
+  if (!contentType || !ALLOWED_IMAGE_TYPES.has(contentType)) {
+    console.error("[storage] unsupported image bytes", {
+      declaredType: declaredType || "(empty)",
+      size,
+      detected: detected || null,
+    });
+    return {
+      ok: false,
+      error: "Unsupported image type",
+      clientError: "Unsupported image type. Use JPG, JPEG, PNG, or WebP.",
+    };
+  }
 
   const folder = opts.folder || "misc";
   const access =
     opts.access || (folder === "verification" ? "private" : "public");
   const pathname = blobPathForUser(opts.userId, folder, contentType);
-  const buffer = Buffer.from(await file.arrayBuffer());
   const provider = getProvider();
 
   if (provider === "vercel-blob") {
@@ -257,7 +292,22 @@ export async function storeImageForUser(
           "Identity verification is temporarily unavailable. Please try again later.",
       };
     }
-    return saveToBlob(buffer, contentType, pathname, access);
+    try {
+      return await saveToBlob(buffer, contentType, pathname, access);
+    } catch (err) {
+      console.error("[storage] blob put failed", {
+        folder,
+        userId: opts.userId,
+        size,
+        contentType,
+        message: err instanceof Error ? err.message : "unknown",
+      });
+      return {
+        ok: false,
+        error: "Blob upload failed",
+        clientError: "Upload failed. Please try again.",
+      };
+    }
   }
 
   console.warn(

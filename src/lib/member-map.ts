@@ -160,7 +160,7 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
       label:
         user.city && user.country
           ? `${user.city}, ${user.country}`
-          : user.city || user.country || "",
+          : user.city || user.country || "Anywhere",
       cityCode: user.city ? user.city.toLowerCase() : undefined,
     },
     howICanHelp: user.publicDisplayMessage || "",

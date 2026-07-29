@@ -253,8 +253,8 @@ export const onboardingIdentitySchema = z.object({
 });
 
 export const onboardingLocationSchema = z.object({
-  city: z.string().trim().min(1).max(80),
-  country: z.string().trim().min(1).max(80),
+  city: z.string().trim().max(80).optional().default(""),
+  country: z.string().trim().max(80).optional().default(""),
   network: z.array(networkLocationSchema).max(30).optional().default([]),
   trips: z.array(tripSchema).max(20).optional().default([]),
 });

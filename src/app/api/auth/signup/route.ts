@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     const normalizedUsername = normalizeUsername(username);
 
     const usernameTaken = await prisma.user.findFirst({
-      where: { username: normalizedUsername },
+      where: { username: normalizedUsername, deletedAt: null },
       select: { id: true },
     });
     if (usernameTaken) {
@@ -30,11 +30,17 @@ export async function POST(req: NextRequest) {
     }
 
     const passwordHash = await hashPassword(password);
+    const raw = createRawToken();
+    const expiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
+    const tokenHash = hashToken(raw);
 
     const existing = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
     if (existing) {
+      if (existing.deletedAt) {
+        return jsonError("Could not create account", 500);
+      }
       if (existing.emailVerified) {
         return jsonError("An account with this email already exists. Sign in instead.", 409);
       }
@@ -43,27 +49,34 @@ export async function POST(req: NextRequest) {
         return jsonError("An account with this email already exists. Sign in instead.", 409);
       }
 
-      // Unverified, passwordless placeholder — finish setting it up and resend.
-      const raw = createRawToken();
-      const expiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
-      const updated = await prisma.user.update({
-        where: { id: existing.id },
-        data: {
-          name,
-          username: normalizedUsername,
-          slug: normalizedUsername,
-          passwordHash,
-          intent,
-        },
+      // Unverified, passwordless placeholder — finish setup atomically.
+      const updated = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.update({
+          where: { id: existing.id },
+          data: {
+            name,
+            username: normalizedUsername,
+            slug: normalizedUsername,
+            passwordHash,
+            intent,
+            emailVerified: false,
+            onboardingComplete: false,
+            isDiscoverable: true,
+            isTestAccount: false,
+            deletedAt: null,
+          },
+        });
+        await tx.emailVerificationToken.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            email: normalizedEmail,
+            expiresAt,
+          },
+        });
+        return user;
       });
-      await prisma.emailVerificationToken.create({
-        data: {
-          userId: updated.id,
-          tokenHash: hashToken(raw),
-          email: normalizedEmail,
-          expiresAt,
-        },
-      });
+
       const sent = await sendVerificationEmail({
         to: normalizedEmail,
         name: updated.name,
@@ -79,39 +92,40 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const user = await prisma.user.create({
-      data: {
-        email: normalizedEmail,
-        name,
-        username: normalizedUsername,
-        slug: normalizedUsername,
-        passwordHash,
-        intent,
-        emailVerified: false,
-        identityVerified: false,
-        identityVerificationStatus: "UNVERIFIED",
-        photo: "",
-        cover: "",
-        bio: "",
-        publicDisplayMessage: "",
-        city: "",
-        country: "",
-        specialties: "[]",
-        onboardingComplete: false,
-        isDiscoverable: true,
-        isTestAccount: false,
-      },
-    });
-
-    const raw = createRawToken();
-    const expiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
-    await prisma.emailVerificationToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: hashToken(raw),
-        email: normalizedEmail,
-        expiresAt,
-      },
+    // Atomic create: User + verification token succeed together or not at all.
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          name,
+          username: normalizedUsername,
+          slug: normalizedUsername,
+          passwordHash,
+          intent,
+          emailVerified: false,
+          identityVerified: false,
+          identityVerificationStatus: "UNVERIFIED",
+          photo: "",
+          cover: "",
+          bio: "",
+          publicDisplayMessage: "",
+          city: "",
+          country: "",
+          specialties: "[]",
+          onboardingComplete: false,
+          isDiscoverable: true,
+          isTestAccount: false,
+        },
+      });
+      await tx.emailVerificationToken.create({
+        data: {
+          userId: created.id,
+          tokenHash,
+          email: normalizedEmail,
+          expiresAt,
+        },
+      });
+      return created;
     });
 
     const sent = await sendVerificationEmail({
@@ -132,7 +146,7 @@ export async function POST(req: NextRequest) {
     if ((err as { code?: string })?.code === "P2002") {
       return jsonError("That email or username is already in use", 409);
     }
-    console.error("[signup]", err);
-    return jsonError("Could not create account", 500);
+    console.error("[signup]", err instanceof Error ? err.message : err);
+    return jsonError("Could not create account. Please try again.", 500);
   }
 }

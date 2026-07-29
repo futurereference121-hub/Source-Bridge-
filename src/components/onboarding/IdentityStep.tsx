@@ -35,6 +35,7 @@ export function IdentityStep({
   >("idle");
   const [availabilityMsg, setAvailabilityMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     const u = username.trim().toLowerCase().replace(/^@/, "");
@@ -160,6 +161,7 @@ export function IdentityStep({
           onUploaded={(url) => setPhoto(url)}
           showToast={showToast}
           disabled={submitting}
+          onBusyChange={setUploading}
         />
         <ImageUploadField
           label="Cover (optional)"
@@ -171,6 +173,7 @@ export function IdentityStep({
           onUploaded={(url) => setCover(url)}
           showToast={showToast}
           disabled={submitting}
+          onBusyChange={setUploading}
         />
       </div>
 
@@ -191,10 +194,17 @@ export function IdentityStep({
         type="submit"
         showArrow={false}
         disabled={
-          submitting || availability === "taken" || availability === "invalid"
+          submitting ||
+          uploading ||
+          availability === "taken" ||
+          availability === "invalid"
         }
       >
-        {submitting ? "Saving…" : "Continue"}
+        {uploading
+          ? "Uploading photo…"
+          : submitting
+            ? "Saving…"
+            : "Continue"}
       </PrimaryButton>
     </form>
   );

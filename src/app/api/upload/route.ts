@@ -3,9 +3,11 @@ import {
   deleteStoredImageForUser,
   normalizeUploadFolder,
   storeImageForUser,
-  validateImageFile,
 } from "@/lib/storage";
 import { jsonError } from "@/lib/validation";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
  * Profile / stock image uploads.
@@ -35,17 +37,20 @@ export async function POST(req: Request) {
       return jsonError("file is required", 400);
     }
 
-    const validationError = validateImageFile({
-      type: file.type,
-      size: file.size,
-    });
-    if (validationError) return jsonError(validationError, 400);
-
     const result = await storeImageForUser(file, {
       userId: user.id,
       folder,
     });
-    if (!result.ok) return jsonError(result.clientError || result.error, 400);
+    if (!result.ok) {
+      console.error("[upload] store failed", {
+        userId: user.id,
+        folder,
+        size: file.size,
+        type: file.type || "(empty)",
+        error: result.error,
+      });
+      return jsonError(result.clientError || result.error, 400);
+    }
 
     if (replaceUrl && replaceUrl !== result.image.url) {
       await deleteStoredImageForUser(replaceUrl, user.id);
@@ -57,7 +62,7 @@ export async function POST(req: Request) {
       pathname: result.image.pathname,
     });
   } catch (err) {
-    console.error("[upload]", err);
-    return jsonError("Upload failed", 500);
+    console.error("[upload]", err instanceof Error ? err.message : err);
+    return jsonError("Upload failed. Please try again.", 500);
   }
 }
