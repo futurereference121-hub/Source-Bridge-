@@ -22,9 +22,13 @@
     "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs",
     "cleanup-test-accounts": "node --env-file=.env scripts/cleanup-test-accounts.mjs",
     "cleanup-deleted-orphans": "node --env-file=.env scripts/cleanup-deleted-account-orphans.mjs",
+    "cleanup-production-tests": "node --env-file=.env scripts/cleanup-production-tests.mjs",
     "repair-profiles": "node --env-file=.env scripts/repair-profiles.mjs",
+    "audit-production-integrity": "node --env-file=.env scripts/audit-production-integrity.mjs",
     "test:account-deletion": "node --env-file=.env scripts/test-account-deletion.mjs",
     "test:signup-explore": "node --env-file=.env scripts/test-signup-explore.mjs",
+    "test:production-stability": "node --env-file=.env scripts/test-production-stability.mjs",
+    "test:verification-inbox": "node --env-file=.env scripts/test-verification-inbox.mjs",
     "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs"
   },
   "dependencies": {

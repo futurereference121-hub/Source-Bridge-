@@ -108,9 +108,24 @@ async function loadDbMembers(): Promise<Member[]> {
   }
 }
 
-/** Merged directory: seed prototypes + real onboarded accounts. */
+/**
+ * Whether prototype seed members from `src/data/members.ts` appear in public
+ * Explore / search / profile routes. Off by default so production only shows
+ * real accounts. Set SHOW_SEED_MEMBERS=1 for local demos.
+ */
+export function showSeedMembersInPublicDirectory(): boolean {
+  return (
+    process.env.SHOW_SEED_MEMBERS === "1" ||
+    process.env.SHOW_SEED_MEMBERS === "true"
+  );
+}
+
+/** Merged directory: real onboarded accounts (+ optional local seed prototypes). */
 export async function getAllMembers(): Promise<Member[]> {
   const db = await loadDbMembers();
+  if (!showSeedMembersInPublicDirectory()) {
+    return db;
+  }
   const seed = seedMembers.map(withSeedDefaults);
   const seedIds = new Set(seed.map((m) => m.id));
   const seedUsernames = new Set(seed.map((m) => m.username.toLowerCase()));
@@ -137,8 +152,10 @@ async function memberFromFullUser(
 }
 
 export async function getMemberBySlugAsync(slug: string): Promise<Member | null> {
-  const seed = getSeedBySlug(slug);
-  if (seed) return withSeedDefaults(seed);
+  if (showSeedMembersInPublicDirectory()) {
+    const seed = getSeedBySlug(slug);
+    if (seed) return withSeedDefaults(seed);
+  }
 
   try {
     const user = await prisma.user.findFirst({
@@ -160,8 +177,10 @@ export async function getMemberBySlugAsync(slug: string): Promise<Member | null>
 
 /** Self-service only — see selfViewableWhere. Do not use for public lookups. */
 export async function getMemberByIdAsync(id: string): Promise<Member | null> {
-  const seed = seedMembers.find((m) => m.id === id);
-  if (seed) return withSeedDefaults(seed);
+  if (showSeedMembersInPublicDirectory()) {
+    const seed = seedMembers.find((m) => m.id === id);
+    if (seed) return withSeedDefaults(seed);
+  }
   try {
     const user = await prisma.user.findFirst({
       where: {
@@ -181,8 +200,10 @@ export async function getMemberByUsernameAsync(
   username: string,
 ): Promise<Member | null> {
   const handle = username.replace(/^@/, "").toLowerCase();
-  const seed = seedMembers.find((m) => m.username.toLowerCase() === handle);
-  if (seed) return withSeedDefaults(seed);
+  if (showSeedMembersInPublicDirectory()) {
+    const seed = seedMembers.find((m) => m.username.toLowerCase() === handle);
+    if (seed) return withSeedDefaults(seed);
+  }
   try {
     const user = await prisma.user.findFirst({
       where: {

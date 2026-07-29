@@ -47,24 +47,49 @@ export async function PATCH(req: Request, ctx: Ctx) {
         data: { requestId: id, actorUserId: admin.id, action: approved ? "approved" : "rejected", meta: JSON.stringify({ rejectionReason: approved ? undefined : rejectionReason }) },
       });
     });
-    // In-app notification — fires regardless of email preference.
-    await createNotification({
-      userId: request.userId,
-      type: "SYSTEM",
-      title: approved
-        ? "Your identity has been verified"
-        : "Identity verification update",
-      body: approved
-        ? "Your Verified badge is now active on your profile."
-        : rejectionReason
-          ? `Declined: ${rejectionReason}`
-          : "Your verification request was declined. You may resubmit.",
-      href: "/profile/settings/verification",
-    });
-    await sendVerificationResultMessage({ userId: request.userId, approved, rejectionReason, requestId: id });
+    // In-app notification + official inbox message — isolated so a delivery
+    // failure never rolls back the already-committed approval/rejection.
+    try {
+      await createNotification({
+        userId: request.userId,
+        type: "SYSTEM",
+        title: approved
+          ? "Identity Verification Approved"
+          : "Identity verification update",
+        body: approved
+          ? "Your profile now displays the Verified Identity badge."
+          : rejectionReason
+            ? `Declined: ${rejectionReason}`
+            : "Your verification request was declined. You may resubmit.",
+        href: approved ? "/inbox" : "/profile/settings/verification",
+      });
+    } catch (err) {
+      console.error("[admin:verification-review] notification failed", err);
+    }
+    try {
+      await sendVerificationResultMessage({
+        userId: request.userId,
+        approved,
+        rejectionReason,
+        requestId: id,
+      });
+    } catch (err) {
+      console.error("[admin:verification-review] inbox message failed", err);
+    }
     if (body.notifyApplicant !== false) {
-      const result = await sendVerificationApplicantNotice({ to: request.user.email, approved, rejectionReason });
-      await prisma.identityVerificationRequest.update({ where: { id }, data: { applicantEmailStatus: result.ok ? "sent" : "failed" } });
+      try {
+        const result = await sendVerificationApplicantNotice({
+          to: request.user.email,
+          approved,
+          rejectionReason,
+        });
+        await prisma.identityVerificationRequest.update({
+          where: { id },
+          data: { applicantEmailStatus: result.ok ? "sent" : "failed" },
+        });
+      } catch (err) {
+        console.error("[admin:verification-review] email failed", err);
+      }
     }
 
     // Revalidate public surfaces so the gold badge (or pending state) updates immediately.

@@ -111,12 +111,17 @@ export async function getUnreadCount(userId: string): Promise<number> {
   });
   if (participations.length === 0) return 0;
 
+  // Include SYSTEM messages (senderId is null) — Prisma `not: userId` skips nulls.
   return prisma.message.count({
     where: {
       OR: participations.map((p) => ({
         conversationId: p.conversationId,
-        senderId: { not: userId },
-        ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
+        AND: [
+          {
+            OR: [{ senderId: null }, { senderId: { not: userId } }],
+          },
+          ...(p.lastReadAt ? [{ createdAt: { gt: p.lastReadAt } }] : []),
+        ],
       })),
     },
   });
