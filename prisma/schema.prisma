@@ -22,6 +22,8 @@ model User {
   role                       String    @default("USER")
   passwordHash               String?
   mustChangePassword         Boolean   @default(false)
+  /// True once the adminsource account has created its first password. Never reset.
+  adminPasswordCreated       Boolean   @default(false)
   passwordChangedAt          DateTime?
   /// Signup / display name (required at join).
   name                       String

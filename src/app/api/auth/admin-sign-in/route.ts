@@ -34,21 +34,43 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
     const password = typeof body.password === "string" ? body.password : "";
-    if (!username || !password) {
+    if (!username) {
       failedAttempt(ip);
       return jsonError("Invalid credentials", 401);
     }
+
     const user = await prisma.user.findFirst({ where: { username } });
+
+    // Only the one designated admin account may use this endpoint.
+    if (!user || user.role !== "ADMIN") {
+      failedAttempt(ip);
+      return jsonError("Invalid credentials", 401);
+    }
+
+    // First-time setup: no password has ever been created for this account.
+    // We only allow this when no password is submitted (the sign-in form sent
+    // just the username), keeping the redirect invisible to non-admins.
+    if (!user.adminPasswordCreated && !user.passwordHash) {
+      // Respond with a special code that the client uses to redirect.
+      // No session is created yet.
+      return Response.json({ ok: false, code: "NEED_FIRST_PASSWORD", next: "/admin/create-password" }, { status: 200 });
+    }
+
+    // Normal authentication path.
+    if (!password) {
+      failedAttempt(ip);
+      return jsonError("Invalid credentials", 401);
+    }
+
     const valid =
-      user?.role === "ADMIN" &&
       Boolean(user.passwordHash) &&
       (await verifyPassword(password, user.passwordHash!));
-    if (!user || !valid) {
+    if (!valid) {
       failedAttempt(ip);
       return jsonError("Invalid credentials", 401);
     }
+
     attempts.delete(ip);
-    // Legacy isAdmin is kept aligned whenever an administrator signs in.
     if (!user.isAdmin) await prisma.user.update({ where: { id: user.id }, data: { isAdmin: true } });
     await createSession(user.id);
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
