@@ -86,6 +86,23 @@ export async function POST(req: NextRequest, { params }: Params) {
       }
     }
 
+    const peers = await prisma.conversationParticipant.findMany({
+      where: { conversationId: id, userId: { not: user.id } },
+      select: {
+        leftAt: true,
+        user: { select: { deletedAt: true, name: true } },
+      },
+    });
+    const peerUnavailable = peers.some(
+      (p) =>
+        Boolean(p.leftAt) ||
+        Boolean(p.user.deletedAt) ||
+        p.user.name === "Deleted user",
+    );
+    if (peerUnavailable) {
+      return jsonError("This account is no longer available", 403);
+    }
+
     await assertDailyLimit(user.id, "message");
     const now = new Date();
     const clientMessageId = parsed.data.clientMessageId || "";

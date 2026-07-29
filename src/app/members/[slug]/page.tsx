@@ -5,6 +5,9 @@ import { getMemberBySlugAsync } from "@/lib/members-service";
 import { getSessionUser } from "@/lib/auth";
 import { getListingsForMember } from "@/data/products";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type PageProps = {
   params: Promise<{ slug: string }>;
 };

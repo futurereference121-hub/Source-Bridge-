@@ -12,7 +12,9 @@ export function ActivityClient() {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch("/api/feed?limit=50");
+        const res = await fetch("/api/feed?limit=50", {
+          cache: "no-store",
+        });
         if (!res.ok) throw new Error("Failed to load feed");
         const data = (await res.json()) as { items?: FeedItem[] };
         if (!cancelled) {

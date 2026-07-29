@@ -225,9 +225,11 @@ export async function findOrCreateDirectConversation(
 
   const recipient = await prisma.user.findUnique({
     where: { id: toUserId },
-    select: { id: true },
+    select: { id: true, deletedAt: true, name: true },
   });
-  if (!recipient) throwHttp("Recipient not found", 404);
+  if (!recipient || isDeletedParticipant(recipient)) {
+    throwHttp("This account is no longer available", 404);
+  }
 
   if (listingId) {
     const listing = await prisma.stockListing.findUnique({

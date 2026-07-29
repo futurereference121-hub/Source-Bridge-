@@ -758,6 +758,19 @@ export function MessagesInbox({
                   This is an official Source Bridge notification. Replies are
                   disabled.
                 </div>
+              ) : account?.id &&
+                (() => {
+                  const other = otherParticipant(activeConversation!, account.id);
+                  return (
+                    Boolean(other) &&
+                    other!.name === "Deleted user" &&
+                    !other!.username &&
+                    !other!.slug
+                  );
+                })() ? (
+                <div className="border-t border-white/10 px-4 py-4 text-sm text-white/50">
+                  This account is no longer available. Messaging is disabled.
+                </div>
               ) : (
               <form
                 onSubmit={onSubmit}

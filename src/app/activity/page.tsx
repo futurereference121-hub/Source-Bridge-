@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { ActivityClient } from "./ActivityClient";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: "Live Activity",
   description: "Recent member status updates and opportunities on Source Bridge.",

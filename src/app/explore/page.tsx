@@ -6,6 +6,9 @@ import {
   getAllMembers,
 } from "@/lib/members-service";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: "Explore",
   description:

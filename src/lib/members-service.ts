@@ -2,7 +2,6 @@ import { prisma } from "@/lib/db";
 import { members as seedMembers, getMemberBySlug as getSeedBySlug } from "@/data/members";
 import { dbUserToMember, type DbUserBundle } from "@/lib/member-map";
 import type { Member } from "@/lib/types";
-import { buildLiveFeed } from "@/lib/feed";
 import type { FeedItem } from "@/lib/types";
 import { isStatusActive } from "@/lib/member-status";
 import { memberPhoto } from "@/lib/placeholders";
@@ -218,9 +217,16 @@ export async function isUsernameAvailable(
 }
 
 function feedFromMembers(members: Member[], limit: number): FeedItem[] {
-  const fromSeed = buildLiveFeed(members.filter((m) => m.isPrototype));
+  // Live Activity must only show real, active accounts — never seed prototypes
+  // and never soft-deleted / anonymized users.
   const fromDb: FeedItem[] = [];
-  for (const m of members.filter((m) => m.isRealAccount)) {
+  for (const m of members.filter(
+    (m) =>
+      m.isRealAccount &&
+      !m.isPrototype &&
+      Boolean(m.username) &&
+      Boolean(m.slug),
+  )) {
     if (isStatusActive(m.status) && m.status) {
       fromDb.push({
         id: `status-${m.id}-${m.status.postedAt}`,
@@ -255,8 +261,7 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
       });
     }
   }
-  // Prefer real DB activity so newly published opportunities appear immediately.
-  return [...fromDb, ...fromSeed]
+  return fromDb
     .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
     .slice(0, limit);
 }
@@ -346,15 +351,13 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
       });
     }
 
-    // Prefer real DB activity over seed prototypes so new opportunities surface immediately.
-    const fromSeed = buildLiveFeed(seedMembers.map(withSeedDefaults));
-    const merged = [...fromDb, ...fromSeed].sort(
-      (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
-    );
-    return merged.slice(0, limit);
+    // Real DB activity only — seed prototypes must never appear in Live Activity.
+    return fromDb
+      .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
+      .slice(0, limit);
   } catch (err) {
     console.error("[members] feed query failed", err);
-    return buildLiveFeed(seedMembers.map(withSeedDefaults)).slice(0, limit);
+    return [];
   }
 }
 

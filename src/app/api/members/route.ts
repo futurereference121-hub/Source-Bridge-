@@ -5,11 +5,18 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { products } from "@/data/products";
 import { dbStockToListing } from "@/lib/member-map";
+import { publicMemberWhere } from "@/lib/discoverability";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") || "";
   const all = await getAllMembers();
-  const dbListings = await prisma.stockListing.findMany();
+  const dbListings = await prisma.stockListing.findMany({
+    where: { user: publicMemberWhere },
+    include: { listingImages: { orderBy: { sortOrder: "asc" } } },
+  });
   const listings = [...products, ...dbListings.map(dbStockToListing)];
   const results = searchMembers(q, all, listings);
 
@@ -23,8 +30,15 @@ export async function GET(req: NextRequest) {
     followingIds = follows.map((f) => f.followingId);
   }
 
-  return Response.json({
-    members: results.map(toPublicMemberJson),
-    followingIds,
-  });
+  return Response.json(
+    {
+      members: results.map(toPublicMemberJson),
+      followingIds,
+    },
+    {
+      headers: {
+        "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+      },
+    },
+  );
 }

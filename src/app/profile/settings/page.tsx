@@ -506,7 +506,6 @@ function PasswordSection({
 }
 
 function DeleteAccountSection({ hasPassword }: { hasPassword: boolean }) {
-  const router = useRouter();
   const { refreshAccount } = useAppUi();
   const [open, setOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -535,13 +534,26 @@ function DeleteAccountSection({ hasPassword }: { hasPassword: boolean }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password, confirmText }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        ok?: boolean;
+        accountClosed?: boolean;
+      };
+      // Only treat full success when the API confirms DB + file cleanup finished.
+      if (!res.ok || !data.ok) {
+        if (data.accountClosed) {
+          // Session is already destroyed; leave settings without claiming success.
+          await refreshAccount();
+          window.location.assign("/");
+          return;
+        }
         setError(data.error || "Could not delete account");
         return;
       }
       await refreshAccount();
-      router.push("/?deleted=1");
+      // Full navigation clears any stale client caches.
+      window.location.assign("/?deleted=1");
+      return;
     } catch {
       setError("Could not delete account");
     } finally {
@@ -559,10 +571,9 @@ function DeleteAccountSection({ hasPassword }: { hasPassword: boolean }) {
         <div className="min-w-0">
           <p className="text-sm text-white">This action is permanent.</p>
           <p className="mt-1 text-xs leading-relaxed text-white/50">
-            Deleting your account removes your listings, statuses, opportunities,
-            saved payment methods, and identity documents. Messages you sent will
-            show as &ldquo;Deleted user&rdquo; to other members. This cannot be
-            undone.
+            Deleting your account permanently removes your public profile,
+            statuses, opportunities and uploaded verification documents. This
+            action cannot be undone.
           </p>
         </div>
       </div>
@@ -588,9 +599,9 @@ function DeleteAccountSection({ hasPassword }: { hasPassword: boolean }) {
               Delete your account?
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-white/60">
-              This permanently deletes your profile, listings, statuses,
-              opportunities, payment methods, and identity documents. It cannot
-              be undone.
+              Deleting your account permanently removes your public profile,
+              statuses, opportunities and uploaded verification documents. This
+              action cannot be undone.
             </p>
 
             <form className="mt-5 space-y-4" onSubmit={submit}>

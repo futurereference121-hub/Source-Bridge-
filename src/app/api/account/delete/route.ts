@@ -66,14 +66,28 @@ async function handleDelete(req: NextRequest) {
     }
     clearIpAttempts(attemptKey);
 
-    await deleteOwnAccount(user.id);
+    const result = await deleteOwnAccount(user.id);
     try {
       await destroySession();
     } catch (err) {
       console.error("[account:delete] session clear failed after deletion", err);
     }
 
-    return Response.json({ ok: true });
+    if (!result.storageCleanupOk) {
+      // Account row is already anonymized; do not claim full success while
+      // private files may still exist. Client must not treat this as success.
+      return Response.json(
+        {
+          ok: false,
+          accountClosed: true,
+          error:
+            "Account was closed, but some uploaded files could not be removed. Support has been notified via the cleanup queue.",
+        },
+        { status: 500 },
+      );
+    }
+
+    return Response.json({ ok: true, accountClosed: true });
   } catch (error) {
     const status = (error as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
