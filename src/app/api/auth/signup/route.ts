@@ -4,7 +4,8 @@ import { createSession, toPublicAccount } from "@/lib/auth";
 import { createRawToken, hashToken } from "@/lib/storage";
 import { sendVerificationEmail } from "@/lib/email";
 import { VERIFY_TOKEN_TTL_MS } from "@/lib/limits";
-import { jsonError, signupSchema } from "@/lib/validation";
+import { hashPassword } from "@/lib/password";
+import { jsonError, normalizeUsername, signupSchema } from "@/lib/validation";
 import { ensureCategoriesSeeded } from "@/lib/categories-db";
 
 export async function POST(req: NextRequest) {
@@ -16,8 +17,19 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
-    const { name, email, intent } = parsed.data;
+    const { name, email, username, password, intent } = parsed.data;
     const normalizedEmail = email.toLowerCase();
+    const normalizedUsername = normalizeUsername(username);
+
+    const usernameTaken = await prisma.user.findFirst({
+      where: { username: normalizedUsername },
+      select: { id: true },
+    });
+    if (usernameTaken) {
+      return jsonError("That username is already taken", 409);
+    }
+
+    const passwordHash = await hashPassword(password);
 
     const existing = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -26,12 +38,27 @@ export async function POST(req: NextRequest) {
       if (existing.emailVerified) {
         return jsonError("An account with this email already exists. Sign in instead.", 409);
       }
-      // Unverified — refresh token and resend
+      if (existing.passwordHash) {
+        // Unverified account already has a password set — do not silently overwrite it.
+        return jsonError("An account with this email already exists. Sign in instead.", 409);
+      }
+
+      // Unverified, passwordless placeholder — finish setting it up and resend.
       const raw = createRawToken();
       const expiresAt = new Date(Date.now() + VERIFY_TOKEN_TTL_MS);
+      const updated = await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name,
+          username: normalizedUsername,
+          slug: normalizedUsername,
+          passwordHash,
+          intent,
+        },
+      });
       await prisma.emailVerificationToken.create({
         data: {
-          userId: existing.id,
+          userId: updated.id,
           tokenHash: hashToken(raw),
           email: normalizedEmail,
           expiresAt,
@@ -39,17 +66,14 @@ export async function POST(req: NextRequest) {
       });
       const sent = await sendVerificationEmail({
         to: normalizedEmail,
-        name: existing.name,
+        name: updated.name,
         token: raw,
       });
-      await createSession(existing.id);
+      await createSession(updated.id);
       return Response.json({
         ok: true,
         resent: true,
-        account: toPublicAccount({
-          ...existing,
-          emailVerified: false,
-        }),
+        account: toPublicAccount(updated),
         previewUrl: sent.previewUrl ?? null,
         next: "/check-email",
       });
@@ -59,6 +83,9 @@ export async function POST(req: NextRequest) {
       data: {
         email: normalizedEmail,
         name,
+        username: normalizedUsername,
+        slug: normalizedUsername,
+        passwordHash,
         intent,
         emailVerified: false,
         identityVerified: false,
@@ -71,6 +98,8 @@ export async function POST(req: NextRequest) {
         country: "",
         specialties: "[]",
         onboardingComplete: false,
+        isDiscoverable: true,
+        isTestAccount: false,
       },
     });
 
@@ -100,6 +129,9 @@ export async function POST(req: NextRequest) {
       next: "/check-email",
     });
   } catch (err) {
+    if ((err as { code?: string })?.code === "P2002") {
+      return jsonError("That email or username is already in use", 409);
+    }
     console.error("[signup]", err);
     return jsonError("Could not create account", 500);
   }

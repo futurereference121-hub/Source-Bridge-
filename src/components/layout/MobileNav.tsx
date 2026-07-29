@@ -13,6 +13,7 @@ import { mobileNavItems } from "@/lib/site";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { accountHomePath } from "@/components/layout/AccountMenu";
 import { useInboxUnread } from "@/hooks/useInboxUnread";
+import { useNotifications } from "@/hooks/useNotifications";
 
 const ICONS = {
   "/": Home,
@@ -27,6 +28,7 @@ export function MobileNav() {
   const pathname = usePathname();
   const { signedIn, account } = useAppUi();
   const { unreadCount } = useInboxUnread();
+  const { unreadCount: unreadNotifications } = useNotifications();
 
   return (
     <nav
@@ -44,8 +46,10 @@ export function MobileNav() {
             item.href === "/profile" && signedIn
               ? accountHomePath(account)
               : item.href;
-          const showBadge =
+          const showInboxBadge =
             signedIn && item.href === "/inbox" && unreadCount > 0;
+          const showNotificationDot =
+            signedIn && item.href === "/profile" && unreadNotifications > 0;
           return (
             <li key={item.href} className="flex-1">
               <Link
@@ -56,10 +60,13 @@ export function MobileNav() {
               >
                 <span className="relative">
                   <Icon size={20} strokeWidth={active ? 1.75 : 1.5} />
-                  {showBadge ? (
+                  {showInboxBadge ? (
                     <span className="absolute -right-2 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-electric px-1 text-[9px] font-semibold text-white">
                       {unreadCount > 9 ? "9+" : unreadCount}
                     </span>
+                  ) : null}
+                  {showNotificationDot ? (
+                    <span className="absolute -right-1 -top-0.5 h-2 w-2 rounded-full bg-amber-400 ring-2 ring-navy" />
                   ) : null}
                 </span>
                 {item.label}

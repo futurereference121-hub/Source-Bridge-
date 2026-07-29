@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ListingImageManager } from "@/components/media/ListingImageManager";
 import { useAppUi } from "@/components/providers/AppProviders";
@@ -107,6 +107,13 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
   const [imagesUploading, setImagesUploading] = useState(false);
   const [loading, setLoading] = useState(Boolean(listingId));
 
+  // showToast's identity changes on every toast (it recreates its timer
+  // callback), so it must not be a dependency here — otherwise this effect
+  // reruns on every toast and reloads the listing from the server, wiping
+  // any images the user has uploaded but not yet saved.
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
   useEffect(() => {
     if (!listingId) return;
     let cancelled = false;
@@ -119,7 +126,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
         if (row && !cancelled) setForm(fromListing(row));
       } catch (err) {
         if (!cancelled) {
-          showToast(
+          showToastRef.current(
             err instanceof Error ? err.message : "Failed to load listing",
           );
         }
@@ -130,7 +137,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
     return () => {
       cancelled = true;
     };
-  }, [listingId, showToast]);
+  }, [listingId]);
 
   function toggleSize(size: string) {
     setForm((f) => ({

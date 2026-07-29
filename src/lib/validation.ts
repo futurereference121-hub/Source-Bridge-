@@ -4,6 +4,7 @@ import {
   PUBLIC_DISPLAY_MESSAGE_MAX,
   STATUS_TEXT_MAX,
 } from "@/lib/limits";
+import { validatePasswordStrength } from "@/lib/password-strength";
 
 const MESSAGE_IMAGES_MAX = 3;
 
@@ -23,26 +24,86 @@ export function slugFromUsername(username: string): string {
   return normalizeUsername(username);
 }
 
-export const signupSchema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(80),
-  email: z.string().trim().email("Valid email required").max(200),
-  intent: z.enum(["buyer", "provider", "both"]).default("both"),
-});
-
-export const signInSchema = z.object({
-  email: z.string().trim().email("Valid email required").max(200),
-});
-
-export const changeEmailSchema = z.object({
-  email: z.string().trim().email("Valid email required").max(200),
-});
-
 export const usernameSchema = z
   .string()
   .trim()
   .transform(normalizeUsername)
   .refine((u) => u.length >= 3 && u.length <= 30, "Username must be 3–30 characters")
   .refine(isValidUsername, "Use letters, numbers, underscores; URL-safe");
+
+const passwordFieldSchema = z.string().superRefine((value, ctx) => {
+  const error = validatePasswordStrength(value);
+  if (error) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: error });
+  }
+});
+
+export const signupSchema = z
+  .object({
+    name: z.string().trim().min(1, "Name is required").max(80),
+    email: z.string().trim().email("Valid email required").max(200),
+    username: usernameSchema,
+    password: passwordFieldSchema,
+    confirmPassword: z.string(),
+    intent: z.enum(["buyer", "provider", "both"]).default("both"),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export const signInSchema = z
+  .object({
+    identifier: z.string().trim().max(200).optional(),
+    email: z.string().trim().max(200).optional(),
+    username: z.string().trim().max(200).optional(),
+    password: z.string().min(1, "Password required"),
+  })
+  .refine((data) => Boolean((data.identifier || data.email || data.username || "").trim()), {
+    message: "Email or username required",
+    path: ["identifier"],
+  })
+  .transform((data) => ({
+    identifier: (data.identifier || data.email || data.username || "").trim(),
+    password: data.password,
+  }));
+
+export const changeEmailSchema = z.object({
+  email: z.string().trim().email("Valid email required").max(200),
+});
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().optional().default(""),
+    password: passwordFieldSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export const setPasswordSchema = z
+  .object({
+    token: z.string().trim().min(1, "Missing token"),
+    password: passwordFieldSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export const requestSetPasswordSchema = z.object({
+  email: z.string().trim().email("Valid email required").max(200),
+});
+
+export const deleteAccountSchema = z.object({
+  password: z.string().optional().default(""),
+  confirmText: z
+    .string()
+    .refine((v) => v === "DELETE", 'Type "DELETE" to confirm'),
+});
 
 export const publicDisplayMessageSchema = z
   .string()
@@ -318,6 +379,22 @@ export const createReviewSchema = z.object({
   rating: z.number().int().min(1, "Rating must be 1–5").max(5, "Rating must be 1–5"),
   text: z.string().trim().min(1, "Review text required").max(2000),
 });
+
+export const notificationVolumeSchema = z.enum(["low", "medium", "high"]);
+
+export const notificationPreferencesSchema = z.object({
+  notificationSoundsEnabled: z.boolean().optional(),
+  notificationVolume: notificationVolumeSchema.optional(),
+});
+
+export const notificationReadSchema = z
+  .object({
+    ids: z.array(z.string().trim().min(1)).max(200).optional(),
+    all: z.boolean().optional(),
+  })
+  .refine((v) => v.all === true || (v.ids && v.ids.length > 0), {
+    message: "ids or all required",
+  });
 
 export function jsonError(message: string, status = 400, extra?: Record<string, unknown>) {
   return Response.json({ error: message, ...extra }, { status });

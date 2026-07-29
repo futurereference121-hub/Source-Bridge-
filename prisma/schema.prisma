@@ -40,11 +40,22 @@ model User {
   /// JSON string[] of category names from global list.
   specialties                String    @default("[]")
   onboardingComplete         Boolean   @default(false)
+  /// When false, excluded from Explore/search/feeds (admins, private accounts).
+  isDiscoverable             Boolean   @default(true)
+  /// Automated/test fixtures — excluded from public discovery.
+  isTestAccount              Boolean   @default(false)
+  /// Soft-delete marker; public surfaces exclude deleted users.
+  deletedAt                  DateTime?
+  /// Notification sound preferences
+  notificationSoundsEnabled  Boolean   @default(true)
+  /// low | medium | high
+  notificationVolume         String    @default("medium")
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
 
   sessions             Session[]
   emailTokens          EmailVerificationToken[]
+  passwordTokens       PasswordResetToken[]
   networkLocations     NetworkLocation[]
   trips                Trip[]
   statuses             StatusUpdate[]
@@ -65,6 +76,11 @@ model User {
   transactionsAsSeller Transaction[]                 @relation("TxnSeller")
   blockedConversations ConversationBlock[]
   paymentMethods       SellerPaymentMethod[]
+  notifications        Notification[]
+
+  @@index([isDiscoverable, deletedAt, isTestAccount])
+  @@index([role, isAdmin])
+  @@index([deletedAt])
 }
 
 model Session {
@@ -90,6 +106,66 @@ model EmailVerificationToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// One-time set/reset password tokens. Expire and single-use.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// In-app notification centre events (no private message bodies).
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// OPPORTUNITY | STATUS | MESSAGE | SOURCING_REQUEST | LISTING_ENQUIRY | OPPORTUNITY_ENQUIRY | SYSTEM
+  type      String
+  title     String    @default("")
+  body      String    @default("")
+  href      String    @default("")
+  actorId   String?
+  actorName String    @default("")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([userId, type, createdAt])
+}
+
+model AccountDeletionAudit {
+  id                 String   @id @default(cuid())
+  /// Anonymised former user id (no PII)
+  formerUserIdHash   String
+  deletedAt          DateTime @default(now())
+  storageCleanupOk   Boolean  @default(false)
+  storageCleanupNote String   @default("")
+  meta               String   @default("{}")
+
+  @@index([deletedAt])
+}
+
+/// Retry queue for failed Blob object deletions.
+model StorageCleanupJob {
+  id          String    @id @default(cuid())
+  urlOrPath   String
+  kind        String    @default("blob")
+  attempts    Int       @default(0)
+  lastError   String    @default("")
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([completedAt, createdAt])
 }
 
 model NetworkLocation {

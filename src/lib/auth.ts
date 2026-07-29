@@ -69,9 +69,14 @@ export type SessionUser = Pick<
   | "intent"
   | "specialties"
   | "onboardingComplete"
+  | "isDiscoverable"
+  | "isTestAccount"
+  | "notificationSoundsEnabled"
+  | "notificationVolume"
   | "createdAt"
->;
+> & { hasPassword: boolean };
 
+/** Internal select — includes passwordHash to derive hasPassword. Never expose the raw hash. */
 const userSelect = {
   id: true,
   email: true,
@@ -81,6 +86,7 @@ const userSelect = {
   isAdmin: true,
   role: true,
   mustChangePassword: true,
+  passwordHash: true,
   name: true,
   username: true,
   slug: true,
@@ -94,8 +100,24 @@ const userSelect = {
   intent: true,
   specialties: true,
   onboardingComplete: true,
+  isDiscoverable: true,
+  isTestAccount: true,
+  notificationSoundsEnabled: true,
+  notificationVolume: true,
+  deletedAt: true,
   createdAt: true,
 } as const;
+
+type RawSelectedUser = {
+  passwordHash: string | null;
+  deletedAt: Date | null;
+} & Omit<SessionUser, "hasPassword">;
+
+function toSessionUser(raw: RawSelectedUser): SessionUser {
+  const { passwordHash, deletedAt, ...rest } = raw;
+  void deletedAt;
+  return { ...rest, hasPassword: Boolean(passwordHash) };
+}
 
 function cookieSecure(): boolean {
   const appUrl = process.env.APP_URL || "";
@@ -158,7 +180,16 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     await prisma.session.delete({ where: { id: session.id } }).catch(() => null);
     return null;
   }
-  return session.user;
+  if (session.user.deletedAt) {
+    await destroySession();
+    return null;
+  }
+  return toSessionUser(session.user);
+}
+
+/** Revoke every active session for a user (e.g. after a password change). */
+export async function invalidateAllSessions(userId: string): Promise<void> {
+  await prisma.session.deleteMany({ where: { userId } });
 }
 
 export async function requireSessionUser(): Promise<SessionUser> {
@@ -185,15 +216,48 @@ export async function requireAdmin(): Promise<SessionUser> {
   return user;
 }
 
+type NextRouteInput = Pick<
+  User,
+  "mustChangePassword" | "emailVerified" | "onboardingComplete" | "role" | "isAdmin"
+>;
+
 /** Smart post-auth destination. */
-export function nextRouteForUser(user: SessionUser): string {
-  if (user.mustChangePassword) return "/admin/change-password";
+export function nextRouteForUser(user: NextRouteInput): string {
+  if (user.mustChangePassword) {
+    return isAdminUser(user) ? "/admin/change-password" : "/profile/settings#password";
+  }
   if (!user.emailVerified) return "/check-email";
   if (!user.onboardingComplete) return "/onboarding";
   return "/explore";
 }
 
-export function toPublicAccount(user: SessionUser) {
+/** Accepts either a SessionUser (hasPassword derived) or a full Prisma User row. */
+type PublicAccountInput = Pick<
+  User,
+  | "id"
+  | "email"
+  | "emailVerified"
+  | "identityVerified"
+  | "identityVerificationStatus"
+  | "role"
+  | "isAdmin"
+  | "mustChangePassword"
+  | "name"
+  | "username"
+  | "slug"
+  | "photo"
+  | "onboardingComplete"
+  | "intent"
+  | "isDiscoverable"
+  | "isTestAccount"
+  | "notificationSoundsEnabled"
+  | "notificationVolume"
+> &
+  ({ passwordHash: string | null } | { hasPassword: boolean });
+
+export function toPublicAccount(user: PublicAccountInput) {
+  const hasPassword =
+    "passwordHash" in user ? Boolean(user.passwordHash) : user.hasPassword;
   return {
     id: user.id,
     email: user.email,
@@ -205,11 +269,16 @@ export function toPublicAccount(user: SessionUser) {
     role: user.role,
     isAdmin: isAdminUser(user),
     mustChangePassword: user.mustChangePassword,
+    hasPassword,
     name: user.name,
     username: user.username,
     slug: user.slug,
     photo: user.photo,
     onboardingComplete: user.onboardingComplete,
     intent: user.intent,
+    isDiscoverable: user.isDiscoverable,
+    isTestAccount: user.isTestAccount,
+    notificationSoundsEnabled: user.notificationSoundsEnabled,
+    notificationVolume: user.notificationVolume,
   };
 }

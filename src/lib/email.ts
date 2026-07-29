@@ -29,6 +29,10 @@ export function buildVerifyUrl(token: string): string {
   return `${getAppUrl()}/verify-email?token=${encodeURIComponent(token)}`;
 }
 
+export function buildSetPasswordUrl(token: string): string {
+  return `${getAppUrl()}/set-password?token=${encodeURIComponent(token)}`;
+}
+
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const provider = getProvider();
 

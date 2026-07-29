@@ -32,7 +32,13 @@ export type StoredImage = {
 
 export type StorageResult =
   | { ok: true; image: StoredImage }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      /** Detailed error for logs/server-side diagnostics — may include setup instructions. */
+      error: string;
+      /** Safe message for the client response — never mentions env vars or infra setup. */
+      clientError?: string;
+    };
 
 function getProvider(): "vercel-blob" | "local" {
   const explicit = (process.env.STORAGE_PROVIDER || "").toLowerCase();
@@ -240,10 +246,14 @@ export async function storePrivateVerificationImage(file: File | Blob, userId: s
   // Local/dev (or non-Vercel) fallback: opaque private:// paths under /private.
   // On Vercel serverless FS is ephemeral — require a private Blob store there.
   if (process.env.VERCEL) {
+    const detail =
+      "Private verification storage is not configured. Create a Private Vercel Blob store and set BLOB_PRIVATE_READ_WRITE_TOKEN.";
+    console.error(`[storage] storePrivateVerificationImage: ${detail}`);
     return {
       ok: false,
-      error:
-        "Private verification storage is not configured. Create a Private Vercel Blob store and set BLOB_PRIVATE_READ_WRITE_TOKEN.",
+      error: detail,
+      clientError:
+        "Identity verification is temporarily unavailable. Please try again later.",
     };
   }
 
@@ -293,52 +303,56 @@ async function saveLocalPrivate(
 
 /**
  * Delete a previously stored image if it belongs to this user.
- * No-op for placeholders, external URLs, or other users' paths.
+ * No-op (returns true) for placeholders, external URLs, or other users'
+ * paths. Returns false only when an actual delete attempt for an owned
+ * asset threw — callers doing bulk/critical cleanup (e.g. account
+ * deletion) can queue a StorageCleanupJob retry on false.
  */
 export async function deleteStoredImageForUser(
   urlOrPath: string | null | undefined,
   userId: string,
-): Promise<void> {
-  if (!urlOrPath || !userId) return;
+): Promise<boolean> {
+  if (!urlOrPath || !userId) return true;
 
   if (urlOrPath.startsWith("private://")) {
     const pathname = urlOrPath.slice("private://".length);
-    if (!pathnameBelongsToUser(pathname, userId)) return;
+    if (!pathnameBelongsToUser(pathname, userId)) return true;
     try {
       const { unlink } = await import("fs/promises");
       const path = await import("path");
       await unlink(path.join(process.cwd(), "private", pathname));
+      return true;
     } catch {
-      // ignore
+      return false;
     }
-    return;
   }
 
   if (isOurBlobUrl(urlOrPath)) {
     try {
       const { pathname } = new URL(urlOrPath);
       const clean = pathname.replace(/^\//, "");
-      if (!pathnameBelongsToUser(clean, userId)) return;
+      if (!pathnameBelongsToUser(clean, userId)) return true;
       const delOptions = process.env.BLOB_READ_WRITE_TOKEN
         ? { token: process.env.BLOB_READ_WRITE_TOKEN }
         : undefined;
       await del(urlOrPath, delOptions);
+      return true;
     } catch {
-      // ignore delete failures
+      return false;
     }
-    return;
   }
 
   const cleaned = urlOrPath.replace(/^\//, "");
-  if (!cleaned.startsWith("uploads/")) return;
+  if (!cleaned.startsWith("uploads/")) return true;
   const withoutPrefix = cleaned.slice("uploads/".length);
-  if (!pathnameBelongsToUser(withoutPrefix, userId)) return;
+  if (!pathnameBelongsToUser(withoutPrefix, userId)) return true;
   try {
     const { unlink } = await import("fs/promises");
     const path = await import("path");
     await unlink(path.join(process.cwd(), "public", cleaned));
+    return true;
   } catch {
-    // ignore
+    return false;
   }
 }
 

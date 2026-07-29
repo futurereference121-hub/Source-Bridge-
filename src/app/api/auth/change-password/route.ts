@@ -1,28 +1,45 @@
-import { requireSessionUser } from "@/lib/auth";
+import { createSession, invalidateAllSessions, requireSessionUser, toPublicAccount } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { hashPassword, validatePasswordStrength, verifyPassword } from "@/lib/password";
-import { jsonError } from "@/lib/validation";
+import { hashPassword, verifyPassword } from "@/lib/password";
+import { changePasswordSchema, jsonError } from "@/lib/validation";
 
 export async function POST(req: Request) {
   try {
-    const user = await requireSessionUser();
+    const sessionUser = await requireSessionUser();
     const body = await req.json().catch(() => ({}));
-    const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
-    const password = typeof body.password === "string" ? body.password : "";
+    const parsed = changePasswordSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
+    }
+    const { currentPassword, password } = parsed.data;
+
     const userWithPassword = await prisma.user.findUnique({
-      where: { id: user.id },
+      where: { id: sessionUser.id },
       select: { passwordHash: true },
     });
-    if (!userWithPassword?.passwordHash || !(await verifyPassword(currentPassword, userWithPassword.passwordHash))) {
-      return jsonError("Current password is incorrect", 400);
+    if (!userWithPassword) return jsonError("Sign in required", 401);
+
+    if (userWithPassword.passwordHash) {
+      // Changing an existing password requires the current one.
+      if (!currentPassword || !(await verifyPassword(currentPassword, userWithPassword.passwordHash))) {
+        return jsonError("Current password is incorrect", 400);
+      }
+    } else if (!sessionUser.emailVerified) {
+      // Setting a password for the first time requires a verified email.
+      return jsonError("Verify your email before setting a password", 403);
     }
-    const error = validatePasswordStrength(password);
-    if (error) return jsonError(error, 400);
+
+    const passwordHash = await hashPassword(password);
+    await invalidateAllSessions(sessionUser.id);
     await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash: await hashPassword(password), mustChangePassword: false, passwordChangedAt: new Date() },
+      where: { id: sessionUser.id },
+      data: { passwordHash, mustChangePassword: false, passwordChangedAt: new Date() },
     });
-    return Response.json({ ok: true });
+
+    await createSession(sessionUser.id);
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: sessionUser.id } });
+
+    return Response.json({ ok: true, account: toPublicAccount(fresh) });
   } catch (error) {
     const status = (error as { status?: number }).status;
     return jsonError(status === 401 ? "Sign in required" : "Could not change password", status || 500);

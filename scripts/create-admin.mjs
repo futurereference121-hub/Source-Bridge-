@@ -15,12 +15,12 @@ try {
   } else if (existing) {
     await prisma.user.update({
       where: { id: existing.id },
-      data: { email, username, slug: username, role: "ADMIN", isAdmin: true, emailVerified: true, onboardingComplete: true, passwordHash, mustChangePassword: true },
+      data: { email, username, slug: username, role: "ADMIN", isAdmin: true, isDiscoverable: false, emailVerified: true, onboardingComplete: true, passwordHash, mustChangePassword: true },
     });
     console.log(`Temporary administrator password (shown once): ${temporaryPassword}`);
   } else {
     await prisma.user.create({
-      data: { email, username, slug: username, name: "Source Bridge Administrator", role: "ADMIN", isAdmin: true, emailVerified: true, onboardingComplete: true, passwordHash, mustChangePassword: true },
+      data: { email, username, slug: username, name: "Source Bridge Administrator", role: "ADMIN", isAdmin: true, isDiscoverable: false, emailVerified: true, onboardingComplete: true, passwordHash, mustChangePassword: true },
     });
     console.log(`Temporary administrator password (shown once): ${temporaryPassword}`);
   }

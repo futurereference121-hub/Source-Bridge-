@@ -250,12 +250,61 @@ body {
   box-shadow: 0 0 18px rgba(255, 255, 255, 0.22);
 }
 
+/* How It Works — ambient story motion */
+@keyframes hiw-pulse-dot {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  70%,
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.hiw-pulse-dot {
+  animation: hiw-pulse-dot 2.4s ease-out infinite;
+}
+
+@keyframes hiw-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.hiw-bob {
+  animation: hiw-bob 4.2s ease-in-out infinite;
+}
+
+@keyframes hiw-ring-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.hiw-ring-pulse {
+  animation: hiw-ring-pulse 1.8s ease-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-in,
   .globe-node-pulse,
   .globe-float,
-  .globe-drift {
+  .globe-drift,
+  .hiw-pulse-dot,
+  .hiw-bob,
+  .hiw-ring-pulse {
     animation: none;
   }
 }

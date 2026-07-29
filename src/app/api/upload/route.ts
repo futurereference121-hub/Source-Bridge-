@@ -45,7 +45,7 @@ export async function POST(req: Request) {
       userId: user.id,
       folder,
     });
-    if (!result.ok) return jsonError(result.error, 400);
+    if (!result.ok) return jsonError(result.clientError || result.error, 400);
 
     if (replaceUrl && replaceUrl !== result.image.url) {
       await deleteStoredImageForUser(replaceUrl, user.id);

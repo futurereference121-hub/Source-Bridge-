@@ -1,17 +1,13 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "crypto";
 import { promisify } from "util";
+import { validatePasswordStrength } from "@/lib/password-strength";
+
+export { validatePasswordStrength } from "@/lib/password-strength";
+export type { PasswordStrengthLevel } from "@/lib/password-strength";
+export { passwordStrengthLevel } from "@/lib/password-strength";
 
 const scrypt = promisify(scryptCallback);
 const KEY_LENGTH = 64;
-
-export function validatePasswordStrength(plain: string): string | null {
-  if (plain.length < 12) return "Password must be at least 12 characters.";
-  if (!/[a-z]/.test(plain)) return "Password must include a lowercase letter.";
-  if (!/[A-Z]/.test(plain)) return "Password must include an uppercase letter.";
-  if (!/\d/.test(plain)) return "Password must include a digit.";
-  if (!/[^A-Za-z0-9]/.test(plain)) return "Password must include a symbol.";
-  return null;
-}
 
 export async function hashPassword(plain: string): Promise<string> {
   const error = validatePasswordStrength(plain);
@@ -21,7 +17,17 @@ export async function hashPassword(plain: string): Promise<string> {
   return `${salt}:${derived.toString("hex")}`;
 }
 
-export async function verifyPassword(plain: string, stored: string): Promise<boolean> {
+/** Hash without strength check — for regenerating known-good admin temps only. */
+export async function hashPasswordUnchecked(plain: string): Promise<string> {
+  const salt = randomBytes(16).toString("hex");
+  const derived = (await scrypt(plain, salt, KEY_LENGTH)) as Buffer;
+  return `${salt}:${derived.toString("hex")}`;
+}
+
+export async function verifyPassword(
+  plain: string,
+  stored: string,
+): Promise<boolean> {
   const [salt, digest] = stored.split(":");
   if (!salt || !digest) return false;
   try {
@@ -34,6 +40,5 @@ export async function verifyPassword(plain: string, stored: string): Promise<boo
 }
 
 export function generateTemporaryPassword(): string {
-  // 20 random bytes provides substantial entropy; fixed class prefixes satisfy policy.
   return `A!a1${randomBytes(20).toString("base64url")}`;
 }

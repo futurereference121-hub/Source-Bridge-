@@ -26,6 +26,12 @@ export async function GET() {
     });
     const request = await getLatestVerificationRequest(user.id);
 
+    // Private document storage requires a dedicated Private Vercel Blob store
+    // in production; local/dev environments fall back to the filesystem.
+    const storageAvailable =
+      Boolean(process.env.BLOB_PRIVATE_READ_WRITE_TOKEN) ||
+      !process.env.VERCEL;
+
     return Response.json({
       ok: true,
       status:
@@ -33,6 +39,7 @@ export async function GET() {
         (dbUser?.identityVerified ? "VERIFIED" : "UNVERIFIED"),
       identityVerified: Boolean(dbUser?.identityVerified),
       request: request ? mapRequestForOwner(request) : null,
+      storageAvailable,
     });
   } catch (err) {
     console.error("[verification:GET]", err);

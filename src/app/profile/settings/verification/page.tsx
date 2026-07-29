@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
@@ -22,6 +22,8 @@ type VerificationPayload = {
     rejectionReason: string;
     documents: Array<{ id: string; kind: string; uploaded: boolean }>;
   } | null;
+  /** False when private document storage isn't configured (e.g. missing BLOB_PRIVATE_READ_WRITE_TOKEN on Vercel). */
+  storageAvailable?: boolean;
 };
 
 const DOC_TYPES: Array<{ value: DocType; label: string }> = [
@@ -40,6 +42,10 @@ export default function IdentityVerificationPage() {
   const [data, setData] = useState<VerificationPayload | null>(null);
   const [documentType, setDocumentType] = useState<DocType>("passport");
   const [notes, setNotes] = useState("");
+  const [uploadErrors, setUploadErrors] = useState<
+    Partial<Record<DocKind, string>>
+  >({});
+  const lastFilesRef = useRef<Partial<Record<DocKind, File>>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -116,9 +122,12 @@ export default function IdentityVerificationPage() {
     if (!file) return;
     const err = validateImageFileClient(file);
     if (err) {
+      setUploadErrors((prev) => ({ ...prev, [kind]: err }));
       showToast(err);
       return;
     }
+    lastFilesRef.current[kind] = file;
+    setUploadErrors((prev) => ({ ...prev, [kind]: undefined }));
     setUploading(kind);
     try {
       let requestId = data?.request?.id;
@@ -157,13 +166,44 @@ export default function IdentityVerificationPage() {
         request: json.request,
       });
       await refreshAccount();
+      setUploadErrors((prev) => ({ ...prev, [kind]: undefined }));
       showToast(
         kind === "selfie"
           ? "Selfie uploaded securely"
           : `${kind === "front" ? "Front" : "Back"} uploaded securely`,
       );
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "Upload failed");
+      const message = e instanceof Error ? e.message : "Upload failed";
+      setUploadErrors((prev) => ({ ...prev, [kind]: message }));
+      showToast(message);
+    } finally {
+      setUploading(null);
+    }
+  }
+
+  function retryUpload(kind: DocKind) {
+    const file = lastFilesRef.current[kind];
+    if (file) void uploadKind(kind, file);
+  }
+
+  async function removeDocument(kind: DocKind, documentId?: string) {
+    if (!documentId) return;
+    setUploading(kind);
+    try {
+      const res = await fetch(`/api/verification/documents/${documentId}`, {
+        method: "DELETE",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not remove document");
+      setData((prev) =>
+        prev
+          ? { ...prev, request: json.request || prev.request }
+          : prev,
+      );
+      setUploadErrors((prev) => ({ ...prev, [kind]: undefined }));
+      showToast("Document removed");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Could not remove document");
     } finally {
       setUploading(null);
     }
@@ -208,6 +248,8 @@ export default function IdentityVerificationPage() {
   const verified = Boolean(data?.identityVerified || account.identityVerified);
   const pending = status === "PENDING";
   const rejected = status === "REJECTED";
+  const isAdminViewer = account.role === "ADMIN" || Boolean(account.isAdmin);
+  const storageUnavailable = data?.storageAvailable === false;
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -244,6 +286,33 @@ export default function IdentityVerificationPage() {
               Back to settings
             </Link>
           </section>
+        ) : storageUnavailable ? (
+          isAdminViewer ? (
+            <section className="panel-navy mt-8 rounded-xl border border-amber-400/30 bg-amber-400/10 px-5 py-6 text-sm text-amber-100">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-200">
+                Storage not configured
+              </p>
+              <p className="mt-3 leading-relaxed">
+                Identity document uploads are disabled because private
+                storage isn&apos;t configured for this environment. Create a{" "}
+                <strong>Private</strong> Vercel Blob store and set the{" "}
+                <code className="rounded bg-black/25 px-1 py-0.5 text-[13px]">
+                  BLOB_PRIVATE_READ_WRITE_TOKEN
+                </code>{" "}
+                environment variable on this project, then redeploy.
+              </p>
+              <p className="mt-2 text-xs text-amber-100/70">
+                You&apos;re seeing this detailed message because your account
+                has admin access. Other users see a generic
+                &quot;temporarily unavailable&quot; notice instead.
+              </p>
+            </section>
+          ) : (
+            <section className="panel-navy mt-8 rounded-xl px-5 py-6 text-sm text-white/70">
+              Identity verification is temporarily unavailable. Please try
+              again later.
+            </section>
+          )
         ) : (
           <>
             {rejected && data?.request?.rejectionReason ? (
@@ -331,7 +400,16 @@ export default function IdentityVerificationPage() {
                   }
                   busy={uploading === "front"}
                   locked={pending || data?.request?.status === "PENDING"}
+                  error={uploadErrors.front}
                   onFile={(f) => void uploadKind("front", f)}
+                  onRetry={() => retryUpload("front")}
+                  onRemove={() =>
+                    void removeDocument(
+                      "front",
+                      data?.request?.documents.find((d) => d.kind === "front")
+                        ?.id,
+                    )
+                  }
                 />
                 {needsBack ? (
                   <UploadSlot
@@ -344,7 +422,16 @@ export default function IdentityVerificationPage() {
                     }
                     busy={uploading === "back"}
                     locked={pending || data?.request?.status === "PENDING"}
+                    error={uploadErrors.back}
                     onFile={(f) => void uploadKind("back", f)}
+                    onRetry={() => retryUpload("back")}
+                    onRemove={() =>
+                      void removeDocument(
+                        "back",
+                        data?.request?.documents.find((d) => d.kind === "back")
+                          ?.id,
+                      )
+                    }
                   />
                 ) : null}
                 <UploadSlot
@@ -358,7 +445,16 @@ export default function IdentityVerificationPage() {
                   busy={uploading === "selfie"}
                   locked={pending || data?.request?.status === "PENDING"}
                   capture="user"
+                  error={uploadErrors.selfie}
                   onFile={(f) => void uploadKind("selfie", f)}
+                  onRetry={() => retryUpload("selfie")}
+                  onRemove={() =>
+                    void removeDocument(
+                      "selfie",
+                      data?.request?.documents.find((d) => d.kind === "selfie")
+                        ?.id,
+                    )
+                  }
                 />
               </div>
 
@@ -402,7 +498,10 @@ function UploadSlot({
   busy,
   locked,
   capture,
+  error,
   onFile,
+  onRetry,
+  onRemove,
 }: {
   label: string;
   kind: DocKind;
@@ -411,7 +510,10 @@ function UploadSlot({
   busy: boolean;
   locked?: boolean;
   capture?: "user" | "environment";
+  error?: string | null;
   onFile: (file: File | null) => void;
+  onRetry?: () => void;
+  onRemove?: () => void;
 }) {
   const [preview, setPreview] = useState<string | null>(null);
   const displaySrc =
@@ -421,40 +523,97 @@ function UploadSlot({
       : null);
 
   return (
-    <div className="rounded-lg border border-white/10 px-4 py-3">
+    <div
+      aria-labelledby={`upload-slot-${kind}-label`}
+      className={`rounded-lg border px-4 py-3 transition-colors ${
+        error
+          ? "border-red-400/40 bg-red-400/[0.04]"
+          : done
+            ? "border-emerald-400/25 bg-emerald-400/[0.03]"
+            : "border-white/10"
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm text-white">{label}</p>
-          <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-white/40">
-            {busy ? "Uploading…" : done ? "Uploaded (private)" : "Required"}
+          <p id={`upload-slot-${kind}-label`} className="text-sm text-white">
+            {label}
+          </p>
+          <p
+            className={`mt-0.5 text-[10px] uppercase tracking-[0.12em] ${
+              error
+                ? "text-red-300"
+                : done
+                  ? "text-emerald-300/80"
+                  : "text-white/40"
+            }`}
+          >
+            {busy
+              ? "Uploading…"
+              : error
+                ? "Upload failed"
+                : done
+                  ? "Uploaded (private)"
+                  : "Required"}
           </p>
         </div>
         {!locked ? (
-          <label className="inline-flex cursor-pointer items-center rounded-lg border border-white/20 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 hover:border-electric/40">
-            {busy ? "Uploading…" : done ? "Replace" : "Upload"}
-            <input
-              type="file"
-              accept={IMAGE_ACCEPT_ATTR}
-              capture={capture}
-              className="hidden"
-              disabled={busy}
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null;
-                if (file) {
-                  if (preview) URL.revokeObjectURL(preview);
-                  setPreview(URL.createObjectURL(file));
-                }
-                onFile(file);
-                e.target.value = "";
-              }}
-            />
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            {error && onRetry ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={busy}
+                className="inline-flex items-center rounded-lg border border-red-400/40 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-red-200 hover:border-red-300 disabled:opacity-50"
+              >
+                Retry
+              </button>
+            ) : null}
+            <label className="inline-flex cursor-pointer items-center rounded-lg border border-white/20 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 hover:border-electric/40">
+              {busy ? "Uploading…" : done ? "Replace" : "Upload"}
+              <input
+                type="file"
+                accept={IMAGE_ACCEPT_ATTR}
+                capture={capture}
+                className="hidden"
+                disabled={busy}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  if (file) {
+                    if (preview) URL.revokeObjectURL(preview);
+                    setPreview(URL.createObjectURL(file));
+                  }
+                  onFile(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            {done && onRemove ? (
+              <button
+                type="button"
+                onClick={onRemove}
+                disabled={busy}
+                className="inline-flex items-center rounded-lg border border-white/15 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-white/60 hover:border-red-300/50 hover:text-red-200 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            ) : null}
+          </div>
         ) : (
           <span className="text-[10px] uppercase tracking-[0.12em] text-white/35">
             Locked
           </span>
         )}
       </div>
+      {busy ? (
+        <div
+          role="progressbar"
+          aria-label={`${label} uploading`}
+          className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/10"
+        >
+          <div className="h-full w-full animate-pulse rounded-full bg-electric/70" />
+        </div>
+      ) : null}
+      {error ? <p className="mt-2 text-xs text-red-300/90">{error}</p> : null}
       {displaySrc ? (
         <div className="relative mt-3 aspect-[4/3] overflow-hidden rounded-lg bg-black/30">
           {/* Local preview or authenticated stream — never a permanent storage URL. */}

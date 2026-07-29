@@ -4,6 +4,7 @@ import { requireSessionUser } from "@/lib/auth";
 import { assertDailyLimit, checkDailyLimit, recordDailyAction } from "@/lib/rate-limit";
 import { jsonError, opportunitySchema } from "@/lib/validation";
 import { listCategoryNames } from "@/lib/categories-db";
+import { notifyFollowersOfPost } from "@/lib/notifications";
 
 function mapOpp(o: {
   id: string;
@@ -94,6 +95,16 @@ export async function POST(req: NextRequest) {
       },
     });
     const limit = await recordDailyAction(user.id, "opportunity");
+
+    if (user.slug) {
+      await notifyFollowersOfPost({
+        authorId: user.id,
+        authorName: user.username ? `@${user.username}` : user.name,
+        kind: "OPPORTUNITY",
+        text: row.title,
+        href: `/members/${user.slug}`,
+      });
+    }
 
     return Response.json({ ok: true, opportunity: mapOpp(row), limit });
   } catch (err) {

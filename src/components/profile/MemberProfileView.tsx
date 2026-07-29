@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Star } from "lucide-react";
+import { CircleDot, Sparkles, Star } from "lucide-react";
 import type { Listing, Member } from "@/lib/types";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
 import {
@@ -188,7 +188,7 @@ function PublicProfilePanels({
       </div>
 
       <div className="grid gap-5 md:grid-cols-2 md:gap-6">
-        <ProfilePanel title="Status">
+        <ProfilePanel title="Status" accent="status">
           {statusActive && member.status ? (
             <p className="text-base leading-snug text-white/90">
               {member.status.text}
@@ -203,7 +203,7 @@ function PublicProfilePanels({
           ) : null}
         </ProfilePanel>
 
-        <ProfilePanel title="Submit Opportunity">
+        <ProfilePanel title="Submit Opportunity" accent="opportunity">
           {opportunities.length ? (
             <div className="space-y-5">
               {opportunities.map((opportunity) => (
@@ -359,20 +359,33 @@ function ActivityTab({ member }: { member: Member }) {
     <ProfilePanel title="Activity">
       {items.length ? (
         <ul className="space-y-3">
-          {items.map((item) => (
-            <li
-              key={item.id}
-              className="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3"
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric/80">
-                {item.kind}
-              </p>
-              <p className="mt-1 text-sm text-white/90">{item.title}</p>
-              {item.detail ? (
-                <p className="mt-1 text-xs text-white/40">{item.detail}</p>
-              ) : null}
-            </li>
-          ))}
+          {items.map((item) => {
+            const isOpportunity = item.kind === "Opportunity";
+            const Icon = isOpportunity ? Sparkles : CircleDot;
+            return (
+              <li
+                key={item.id}
+                className={`rounded-lg border px-4 py-3 ${
+                  isOpportunity
+                    ? "border-amber-400/25 bg-amber-400/[0.04]"
+                    : "border-sky-400/15 bg-white/[0.03]"
+                }`}
+              >
+                <p
+                  className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                    isOpportunity ? "text-amber-300" : "text-sky-300/85"
+                  }`}
+                >
+                  <Icon size={11} strokeWidth={2} />
+                  {item.kind}
+                </p>
+                <p className="mt-1 text-sm text-white/90">{item.title}</p>
+                {item.detail ? (
+                  <p className="mt-1 text-xs text-white/40">{item.detail}</p>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <EmptyCopy>No recent status or opportunities.</EmptyCopy>
@@ -518,21 +531,55 @@ function SettingsTab() {
             Crypto wallets buyers can use at checkout.
           </p>
         </li>
+        <li>
+          <Link
+            href="/profile/settings#notifications"
+            className="text-electric hover:text-electric-hover"
+          >
+            Notification sounds
+          </Link>
+          <p className="mt-1 text-xs text-white/40">
+            Toggle sounds and set the volume.
+          </p>
+        </li>
       </ul>
     </ProfilePanel>
   );
 }
 
+const PANEL_ACCENTS = {
+  status: {
+    section: "border border-sky-400/15",
+    icon: CircleDot,
+    iconClass: "text-sky-300/80",
+  },
+  opportunity: {
+    section:
+      "border border-amber-400/25 shadow-[0_0_0_1px_rgba(251,191,36,0.05),0_10px_28px_-16px_rgba(251,191,36,0.4)]",
+    icon: Sparkles,
+    iconClass: "text-amber-300",
+  },
+} as const;
+
 function ProfilePanel({
   title,
   children,
+  accent,
 }: {
   title: string;
   children: ReactNode;
+  accent?: keyof typeof PANEL_ACCENTS;
 }) {
+  const accentStyle = accent ? PANEL_ACCENTS[accent] : null;
+  const AccentIcon = accentStyle?.icon;
   return (
-    <section className="panel-navy rounded-xl px-5 py-5 sm:px-6 sm:py-6">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+    <section
+      className={`panel-navy rounded-xl px-5 py-5 sm:px-6 sm:py-6 ${accentStyle?.section ?? ""}`}
+    >
+      <h2 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+        {AccentIcon ? (
+          <AccentIcon size={13} strokeWidth={2} className={accentStyle?.iconClass} />
+        ) : null}
         {title}
       </h2>
       <div className="mt-3.5">{children}</div>

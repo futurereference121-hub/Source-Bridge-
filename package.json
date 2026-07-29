@@ -18,7 +18,10 @@
     "test:messaging": "node scripts/test-messaging-validation.mjs",
     "test:messaging:integration": "node --env-file=.env scripts/test-messaging-integration.mjs",
     "test:messaging:e2e": "node --env-file=.env scripts/test-messaging-e2e.mjs",
-    "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs"
+    "test:accounts:e2e": "node --env-file=.env scripts/test-accounts-e2e.mjs",
+    "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs",
+    "cleanup-test-accounts": "node --env-file=.env scripts/cleanup-test-accounts.mjs",
+    "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

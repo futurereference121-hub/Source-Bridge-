@@ -67,7 +67,7 @@ export async function POST(req: Request) {
     }
 
     const stored = await storePrivateVerificationImage(file, user.id);
-    if (!stored.ok) return jsonError(stored.error, 400);
+    if (!stored.ok) return jsonError(stored.clientError || stored.error, 400);
 
     const existingDoc = await prisma.verificationDocument.findFirst({
       where: { requestId: request.id, kind },

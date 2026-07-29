@@ -197,6 +197,29 @@ export interface FeedItem {
   expiresAt?: string;
 }
 
+/** In-app notification centre event types. */
+export type NotificationType =
+  | "OPPORTUNITY"
+  | "STATUS"
+  | "MESSAGE"
+  | "SOURCING_REQUEST"
+  | "LISTING_ENQUIRY"
+  | "OPPORTUNITY_ENQUIRY"
+  | "SYSTEM";
+
+/** Client-facing notification — never carries private message bodies. */
+export interface NotificationItem {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  href: string;
+  actorId: string | null;
+  actorName: string;
+  read: boolean;
+  createdAt: string;
+}
+
 /** Internal only — never render on the customer storefront. */
 export interface SupplierInfo {
   code: string;
@@ -306,12 +329,20 @@ export interface AccountSession {
   identityVerified: boolean;
   /** UNVERIFIED | PENDING | VERIFIED | REJECTED */
   identityVerificationStatus?: string;
+  role?: string;
+  isAdmin?: boolean;
+  mustChangePassword?: boolean;
+  hasPassword?: boolean;
   name: string;
   username: string | null;
   slug: string | null;
   photo: string;
   onboardingComplete: boolean;
   intent: string;
+  isDiscoverable?: boolean;
+  isTestAccount?: boolean;
+  notificationSoundsEnabled?: boolean;
+  notificationVolume?: string;
 }
 
 /** @deprecated Prefer Listing */

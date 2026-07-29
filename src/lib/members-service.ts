@@ -6,12 +6,20 @@ import { buildLiveFeed } from "@/lib/feed";
 import type { FeedItem } from "@/lib/types";
 import { isStatusActive } from "@/lib/member-status";
 import { memberPhoto } from "@/lib/placeholders";
+import { publicMemberWhere } from "@/lib/discoverability";
 
-const onboardedUserWhere = {
+/**
+ * Self-service lookup only (e.g. /api/profile fetching the signed-in user's
+ * own member record). Deliberately does NOT exclude admins/test accounts/
+ * non-discoverable users — owners can always see their own data. Never use
+ * this for a lookup keyed by anything other than the caller's own session id.
+ */
+const selfViewableWhere = {
   emailVerified: true,
   onboardingComplete: true,
   username: { not: null },
   slug: { not: null },
+  deletedAt: null,
 } as const;
 
 /** Directory / explore cards — no listings or reviews. */
@@ -80,7 +88,7 @@ async function attachFollowCounts(
 async function loadDbMembers(): Promise<Member[]> {
   try {
     const users = await prisma.user.findMany({
-      where: onboardedUserWhere,
+      where: publicMemberWhere,
       include: userInclude,
     });
     const counts = await attachFollowCounts(users);
@@ -137,8 +145,9 @@ export async function getMemberBySlugAsync(slug: string): Promise<Member | null>
     const user = await prisma.user.findFirst({
       where: {
         OR: [{ slug }, { username: slug }],
-        // Incomplete onboarding profiles are never public.
-        ...onboardedUserWhere,
+        // Public lookups never surface admins, test fixtures, deleted, or
+        // opted-out accounts — see src/lib/discoverability.ts.
+        ...publicMemberWhere,
       },
       include: userIncludeFull,
     });
@@ -150,6 +159,7 @@ export async function getMemberBySlugAsync(slug: string): Promise<Member | null>
   }
 }
 
+/** Self-service only — see selfViewableWhere. Do not use for public lookups. */
 export async function getMemberByIdAsync(id: string): Promise<Member | null> {
   const seed = seedMembers.find((m) => m.id === id);
   if (seed) return withSeedDefaults(seed);
@@ -157,7 +167,7 @@ export async function getMemberByIdAsync(id: string): Promise<Member | null> {
     const user = await prisma.user.findFirst({
       where: {
         id,
-        ...onboardedUserWhere,
+        ...selfViewableWhere,
       },
       include: userIncludeFull,
     });
@@ -177,10 +187,8 @@ export async function getMemberByUsernameAsync(
   try {
     const user = await prisma.user.findFirst({
       where: {
+        ...publicMemberWhere,
         username: handle,
-        onboardingComplete: true,
-        emailVerified: true,
-        slug: { not: null },
       },
       include: userIncludeFull,
     });
@@ -264,7 +272,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
       prisma.statusUpdate.findMany({
         where: {
           expiresAt: { gt: now },
-          user: onboardedUserWhere,
+          user: publicMemberWhere,
         },
         orderBy: { postedAt: "desc" },
         take: limit,
@@ -279,7 +287,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
         where: {
           closedAt: null,
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-          user: onboardedUserWhere,
+          user: publicMemberWhere,
         },
         orderBy: { postedAt: "desc" },
         take: limit,

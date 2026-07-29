@@ -72,3 +72,43 @@ export async function assertDailyLimit(
   }
   return check;
 }
+
+/**
+ * In-memory IP rate limiter for unauthenticated endpoints (sign-in, set-password
+ * requests). Resets on deploy — acceptable for basic brute-force slowdown.
+ */
+const ipAttempts = new Map<string, { count: number; resetAt: number }>();
+
+export function ipFromRequest(req: { headers: Headers }): string {
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return forwarded || req.headers.get("x-real-ip") || "unknown";
+}
+
+export function canAttemptIp(
+  key: string,
+  opts: { maxAttempts?: number } = {},
+): boolean {
+  const maxAttempts = opts.maxAttempts ?? 8;
+  const entry = ipAttempts.get(key);
+  if (!entry || entry.resetAt <= Date.now()) {
+    return true;
+  }
+  return entry.count < maxAttempts;
+}
+
+export function recordIpAttempt(
+  key: string,
+  opts: { windowMs?: number } = {},
+): void {
+  const windowMs = opts.windowMs ?? 15 * 60_000;
+  const current = ipAttempts.get(key);
+  if (!current || current.resetAt <= Date.now()) {
+    ipAttempts.set(key, { count: 1, resetAt: Date.now() + windowMs });
+  } else {
+    current.count += 1;
+  }
+}
+
+export function clearIpAttempts(key: string): void {
+  ipAttempts.delete(key);
+}

@@ -9,6 +9,7 @@ const participantUserSelect = {
   username: true,
   slug: true,
   photo: true,
+  deletedAt: true,
 } as const;
 
 export type ParticipantUser = {
@@ -17,7 +18,34 @@ export type ParticipantUser = {
   username: string | null;
   slug: string | null;
   photo: string;
+  deletedAt?: Date | null;
 };
+
+const DELETED_USER_DISPLAY_NAME = "Deleted user";
+
+function isDeletedParticipant(u: { deletedAt?: Date | null; name: string }): boolean {
+  return Boolean(u.deletedAt) || u.name === DELETED_USER_DISPLAY_NAME;
+}
+
+/** Renders a deleted/anonymized account as "Deleted user" with no photo or profile link. */
+function displayParticipant(u: ParticipantUser) {
+  if (isDeletedParticipant(u)) {
+    return {
+      id: u.id,
+      name: DELETED_USER_DISPLAY_NAME,
+      username: null,
+      slug: null,
+      photo: "",
+    };
+  }
+  return {
+    id: u.id,
+    name: u.name,
+    username: u.username,
+    slug: u.slug,
+    photo: u.photo,
+  };
+}
 
 export function isAllowedAttachmentUrl(url: string, userId: string): boolean {
   if (!url || !url.trim()) return false;
@@ -356,15 +384,7 @@ export function mapMessage(m: {
       mimeType: a.mimeType,
       sizeBytes: a.sizeBytes,
     })),
-    sender: m.sender
-      ? {
-          id: m.sender.id,
-          name: m.sender.name,
-          username: m.sender.username,
-          slug: m.sender.slug,
-          photo: m.sender.photo,
-        }
-      : undefined,
+    sender: m.sender ? displayParticipant(m.sender) : undefined,
   };
 }
 
@@ -530,15 +550,7 @@ export function mapConversation(
       userId: p.userId,
       lastReadAt: p.lastReadAt?.toISOString() ?? null,
       leftAt: p.leftAt?.toISOString() ?? null,
-      user: p.user
-        ? {
-            id: p.user.id,
-            name: p.user.name,
-            username: p.user.username,
-            slug: p.user.slug,
-            photo: p.user.photo,
-          }
-        : undefined,
+      user: p.user ? displayParticipant(p.user) : undefined,
     })),
   };
 }

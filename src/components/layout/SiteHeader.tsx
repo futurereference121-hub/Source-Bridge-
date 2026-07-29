@@ -11,6 +11,7 @@ import {
   AccountMenu,
   AccountMenuMobileLinks,
 } from "@/components/layout/AccountMenu";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 
 export function SiteHeader() {
   const pathname = usePathname();
@@ -46,7 +47,10 @@ export function SiteHeader() {
               How It Works
             </Link>
             {signedIn ? (
-              <AccountMenu variant="home" />
+              <div className="flex items-center gap-1">
+                <NotificationBell />
+                <AccountMenu variant="home" />
+              </div>
             ) : (
               <Link
                 href="/sign-in"
@@ -127,7 +131,12 @@ export function SiteHeader() {
               </Link>
             );
           })}
-          {signedIn ? <AccountMenu variant="internal" /> : null}
+          {signedIn ? (
+            <div className="flex items-center gap-1">
+              <NotificationBell />
+              <AccountMenu variant="internal" />
+            </div>
+          ) : null}
         </nav>
 
         <button

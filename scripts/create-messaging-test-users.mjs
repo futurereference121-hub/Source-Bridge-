@@ -34,6 +34,8 @@ async function ensureUser(input) {
         name: existing.name || input.name,
         city: existing.city || "Bangkok",
         country: existing.country || "Thailand",
+        isTestAccount: true,
+        isDiscoverable: false,
       },
     });
     return existing.id;
@@ -53,6 +55,8 @@ async function ensureUser(input) {
       country: "Thailand",
       intent: "both",
       specialties: "[]",
+      isTestAccount: true,
+      isDiscoverable: false,
     },
   });
   return created.id;
@@ -64,7 +68,7 @@ try {
     console.log(`OK ${u.username} <${u.email}> id=${id}`);
   }
   console.log(
-    "Sign in with these emails (no password). Use Explore → real members or each other's profiles to message.",
+    "Sign in with these emails (no password). Test accounts are marked isTestAccount/non-discoverable, so they won't appear in Explore. Note: sourcing-request API calls now reject non-discoverable recipients — use /api/conversations (direct message) between these accounts instead.",
   );
 } finally {
   await prisma.$disconnect();

@@ -3,6 +3,7 @@ import { HeroMission } from "@/components/home/HeroMission";
 import { HeroActions } from "@/components/home/HeroActions";
 import { GlobalConnectionVisual } from "@/components/home/GlobalConnectionVisual";
 import { EmailContactStrip } from "@/components/home/EmailContactStrip";
+import { DeletedAccountNotice } from "@/components/home/DeletedAccountNotice";
 import { siteConfig } from "@/lib/site";
 
 export const metadata: Metadata = {
@@ -13,6 +14,7 @@ export const metadata: Metadata = {
 export default function HomePage() {
   return (
     <div className="relative flex min-h-[100svh] flex-col bg-hero-navy">
+      <DeletedAccountNotice />
       <section className="relative isolate flex min-h-[100svh] flex-1 flex-col overflow-hidden">
         <GlobalConnectionVisual />
 

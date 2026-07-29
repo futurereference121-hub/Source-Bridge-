@@ -5,6 +5,7 @@ import { assertDailyLimit, checkDailyLimit, recordDailyAction } from "@/lib/rate
 import { STATUS_TTL_MS } from "@/lib/limits";
 import { jsonError, statusSchema } from "@/lib/validation";
 import { isStatusActive } from "@/lib/member-status";
+import { notifyFollowersOfPost } from "@/lib/notifications";
 
 export async function GET() {
   try {
@@ -57,6 +58,16 @@ export async function POST(req: NextRequest) {
       },
     });
     const limit = await recordDailyAction(user.id, "status", now);
+
+    if (user.slug) {
+      await notifyFollowersOfPost({
+        authorId: user.id,
+        authorName: user.username ? `@${user.username}` : user.name,
+        kind: "STATUS",
+        text: row.text,
+        href: `/members/${user.slug}`,
+      });
+    }
 
     return Response.json({
       ok: true,

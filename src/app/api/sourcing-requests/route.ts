@@ -9,6 +9,8 @@ import {
 } from "@/lib/messaging";
 import { sendEmail } from "@/lib/email";
 import { jsonError, sourcingRequestSchema } from "@/lib/validation";
+import { assertUserCanReceiveMessages } from "@/lib/discoverability";
+import { createNotification } from "@/lib/notifications";
 
 function appUrl() {
   return (process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
@@ -91,9 +93,15 @@ export async function POST(req: NextRequest) {
         username: true,
         emailVerified: true,
         onboardingComplete: true,
+        isAdmin: true,
+        role: true,
+        isTestAccount: true,
+        deletedAt: true,
+        isDiscoverable: true,
       },
     });
     if (!recipient) return jsonError("Recipient not found", 404);
+    assertUserCanReceiveMessages(recipient);
 
     for (const url of referenceImages) {
       if (url.startsWith("blob:")) {
@@ -306,6 +314,25 @@ export async function POST(req: NextRequest) {
 
     await recordDailyAction(user.id, "sourcing", now);
     await recordDailyAction(user.id, "message", now);
+
+    const notifyType =
+      contextType === "listing"
+        ? "LISTING_ENQUIRY"
+        : contextType === "opportunity"
+          ? "OPPORTUNITY_ENQUIRY"
+          : "SOURCING_REQUEST";
+    const actorName = user.username ? `@${user.username}` : user.name;
+    await createNotification({
+      userId: toUserId,
+      type: notifyType,
+      title:
+        contextType === "sourcing"
+          ? `${actorName} sent you a sourcing request`
+          : `${actorName} sent you an enquiry — ${title}`,
+      href: `/inbox/${fullConversation.id}`,
+      actorId: user.id,
+      actorName,
+    });
 
     // Best-effort email — never roll back the request
     if (recipient.email) {

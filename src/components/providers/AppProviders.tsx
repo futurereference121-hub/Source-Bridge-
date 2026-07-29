@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -16,6 +17,7 @@ import {
   toggleSavedProfile,
 } from "@/lib/prototype-store";
 import type { AccountIntent, AccountSession } from "@/lib/types";
+import { NotificationListener } from "@/components/notifications/NotificationListener";
 
 const VERIFY_PREVIEW_KEY = "sb_verify_preview";
 
@@ -48,9 +50,12 @@ type AppUiContextValue = {
   join: (data: {
     name: string;
     email: string;
+    username: string;
+    password: string;
+    confirmPassword: string;
     intent: AccountIntent;
   }) => Promise<void>;
-  signIn: (data: { email: string }) => Promise<void>;
+  signIn: (data: { identifier: string; password: string }) => Promise<void>;
   signOut: () => Promise<void>;
   refreshAccount: () => Promise<AccountSession | null>;
   openPlaceholder: (title: string, message: string) => void;
@@ -76,18 +81,17 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const [savedProfiles, setSavedProfiles] = useState<string[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
   const [prompt, setPrompt] = useState<PromptState>(null);
-  const [toastTimer, setToastTimer] = useState<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
-  const showToast = useCallback(
-    (message: string) => {
-      const id = Date.now();
-      setToast({ id, message });
-      if (toastTimer) window.clearTimeout(toastTimer);
-      const t = window.setTimeout(() => setToast(null), 2800);
-      setToastTimer(t);
-    },
-    [toastTimer],
-  );
+  // Kept dependency-free (via ref for the timer) so its identity is stable
+  // across renders — consumers can safely depend on it without effects
+  // re-running on every toast.
+  const showToast = useCallback((message: string) => {
+    const id = Date.now();
+    setToast({ id, message });
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
+  }, []);
 
   const loadFollows = useCallback(async () => {
     try {
@@ -215,7 +219,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
   );
 
   const join = useCallback(
-    async (data: { name: string; email: string; intent: AccountIntent }) => {
+    async (data: {
+      name: string;
+      email: string;
+      username: string;
+      password: string;
+      confirmPassword: string;
+      intent: AccountIntent;
+    }) => {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -241,14 +252,20 @@ export function AppProviders({ children }: { children: ReactNode }) {
   );
 
   const signIn = useCallback(
-    async (data: { email: string }) => {
+    async (data: { identifier: string; password: string }) => {
       const res = await fetch("/api/auth/sign-in", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: data.email }),
+        body: JSON.stringify(data),
       });
       if (!res.ok) {
-        showToast(await parseError(res));
+        const errorPayload = await res.json().catch(() => ({}) as { error?: string; code?: string });
+        if (errorPayload.code === "NEED_PASSWORD") {
+          showToast("Set a password to continue");
+          router.push(`/set-password?email=${encodeURIComponent(data.identifier)}`);
+          return;
+        }
+        showToast(errorPayload.error || "Something went wrong");
         return;
       }
       const payload = (await res.json()) as {
@@ -330,6 +347,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <AppUiContext.Provider value={value}>
       {children}
+      <NotificationListener />
       {toast ? (
         <div
           role="status"

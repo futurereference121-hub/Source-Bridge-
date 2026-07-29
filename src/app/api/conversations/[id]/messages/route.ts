@@ -12,6 +12,7 @@ import {
   safePathname,
 } from "@/lib/messaging";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
+import { createNotifications } from "@/lib/notifications";
 
 const DEFAULT_LIMIT = 30;
 const MAX_LIMIT = 100;
@@ -138,6 +139,24 @@ export async function POST(req: NextRequest, { params }: Params) {
     });
 
     const limit = await recordDailyAction(user.id, "message", now);
+
+    if (message.senderId && message.messageType !== "SYSTEM") {
+      const others = await prisma.conversationParticipant.findMany({
+        where: { conversationId: id, userId: { not: user.id }, leftAt: null },
+        select: { userId: true },
+      });
+      const actorName = user.username ? `@${user.username}` : user.name;
+      await createNotifications(
+        others.map((p) => ({
+          userId: p.userId,
+          type: "MESSAGE" as const,
+          title: `New message from ${actorName}`,
+          href: `/inbox/${id}`,
+          actorId: user.id,
+          actorName,
+        })),
+      );
+    }
 
     return Response.json(
       {
