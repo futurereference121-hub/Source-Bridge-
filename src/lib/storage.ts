@@ -308,20 +308,41 @@ export async function storePrivateVerificationImage(file: File | Blob, userId: s
 
 /** Reads a private local reference or a private Blob using the private token. */
 export async function readPrivateStoredBytes(urlOrPath: string): Promise<Buffer | null> {
+  if (!urlOrPath) return null;
+
   if (urlOrPath.startsWith("private://")) {
     const path = await import("path");
     const { readFile } = await import("fs/promises");
-    try { return await readFile(path.join(process.cwd(), "private", urlOrPath.slice("private://".length))); } catch { return null; }
+    try {
+      return await readFile(path.join(process.cwd(), "private", urlOrPath.slice("private://".length)));
+    } catch (err) {
+      console.error("[storage] readPrivateStoredBytes local read failed:", err);
+      return null;
+    }
   }
+
+  // Vercel private Blob URL — requires Authorization: Bearer <private-token>
   const privateToken = getPrivateBlobToken();
-  if (!privateToken) return null;
+  if (!privateToken) {
+    console.error("[storage] readPrivateStoredBytes: PRIVATE_BLOB_READ_WRITE_TOKEN is not set — cannot read private Blob documents");
+    return null;
+  }
   try {
     const response = await fetch(urlOrPath, {
       headers: { Authorization: `Bearer ${privateToken}` },
       cache: "no-store",
+      // 15-second timeout so a slow/hung Blob request doesn't block the admin UI
+      signal: AbortSignal.timeout(15_000),
     });
-    return response.ok ? Buffer.from(await response.arrayBuffer()) : null;
-  } catch { return null; }
+    if (!response.ok) {
+      console.error("[storage] readPrivateStoredBytes: Blob fetch returned", response.status, "for URL prefix", urlOrPath.slice(0, 60));
+      return null;
+    }
+    return Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    console.error("[storage] readPrivateStoredBytes: fetch error:", err);
+    return null;
+  }
 }
 
 async function saveLocalPrivate(

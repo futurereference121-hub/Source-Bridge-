@@ -18,13 +18,18 @@ export async function GET(_req: Request, ctx: Ctx) {
       return jsonError("Document not found", 404);
     }
     const bytes = await readPrivateStoredBytes(document.url);
-    if (!bytes) return jsonError("Document is unavailable", 404);
+    if (!bytes) {
+      console.error("[verification:document-file] Could not read bytes for document", document.id, "url prefix:", document.url?.slice(0, 60));
+      return jsonError("Document is unavailable", 404);
+    }
+    const contentType = document.mimeType || "application/octet-stream";
     return new Response(new Uint8Array(bytes), {
       headers: {
-        "Content-Type": document.mimeType || "application/octet-stream",
+        "Content-Type": contentType,
         "Content-Length": String(bytes.length),
-        "Cache-Control": "private, max-age=60",
+        "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "inline",
       },
     });
   } catch (error) {

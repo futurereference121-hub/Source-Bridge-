@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { sendVerificationApplicantNotice } from "@/lib/email";
+import { createNotification } from "@/lib/notifications";
 import { sendVerificationResultMessage } from "@/lib/system-messages";
 import { jsonError } from "@/lib/validation";
 
@@ -41,6 +42,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
       await tx.verificationAuditEvent.create({
         data: { requestId: id, actorUserId: admin.id, action: approved ? "approved" : "rejected", meta: JSON.stringify({ rejectionReason: approved ? undefined : rejectionReason }) },
       });
+    });
+    // In-app notification — fires regardless of email preference.
+    await createNotification({
+      userId: request.userId,
+      type: approved ? "STATUS" : "STATUS",
+      title: approved
+        ? "Your identity has been verified"
+        : "Identity verification update",
+      body: approved
+        ? "Your Verified badge is now active on your profile."
+        : rejectionReason
+          ? `Declined: ${rejectionReason}`
+          : "Your verification request was declined. You may resubmit.",
+      href: "/profile/settings/verification",
     });
     await sendVerificationResultMessage({ userId: request.userId, approved, rejectionReason, requestId: id });
     if (body.notifyApplicant !== false) {

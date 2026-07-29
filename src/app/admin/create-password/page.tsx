@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { validatePasswordStrength, passwordStrengthLevel } from "@/lib/password-strength";
+import { useAppUi } from "@/components/providers/AppProviders";
 
 const REQUIREMENTS = [
   { label: "At least 10 characters", test: (p: string) => p.length >= 10 },
@@ -19,6 +20,7 @@ const LEVEL_STYLES: Record<string, string> = {
 
 export default function AdminCreatePasswordPage() {
   const router = useRouter();
+  const { refreshAccount } = useAppUi();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -57,7 +59,8 @@ export default function AdminCreatePasswordPage() {
         setError(json.error || "Could not set password");
         return;
       }
-      // Password set — session created — go directly to admin.
+      // Password set — session created — sync AppProviders then navigate.
+      await refreshAccount();
       router.replace("/admin");
     } catch {
       setError("Something went wrong. Please try again.");

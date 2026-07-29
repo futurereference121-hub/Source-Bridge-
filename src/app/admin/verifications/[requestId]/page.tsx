@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import ReviewActions from "./review-actions";
+import DocFrame from "./doc-frame";
 
 type Props = { params: Promise<{ requestId: string }> };
 
@@ -157,17 +158,3 @@ export default async function VerificationReviewPage({ params }: Props) {
   );
 }
 
-function DocFrame({ label, src }: { label: string; src: string }) {
-  return (
-    <figure className="rounded-xl border border-white/10 bg-white/5 p-3">
-      {/* Authenticated streaming endpoint — no permanent storage URL in markup. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        className="aspect-[4/3] w-full rounded-lg bg-black/20 object-contain"
-        src={src}
-        alt={label}
-      />
-      <figcaption className="mt-2 text-sm text-white/60">{label}</figcaption>
-    </figure>
-  );
-}

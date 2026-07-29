@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
     const { identifier, password } = parsed.data;
-    const isEmail = identifier.includes("@");
+    // A leading "@" always means a username handle, never an email address.
+    const hasLeadingAt = identifier.startsWith("@");
+    const isEmail = !hasLeadingAt && identifier.includes("@");
     const user = isEmail
       ? await prisma.user.findUnique({ where: { email: identifier.toLowerCase() } })
       : await prisma.user.findFirst({ where: { username: normalizeUsername(identifier) } });

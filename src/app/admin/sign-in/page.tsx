@@ -1,10 +1,13 @@
 "use client";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAppUi } from "@/components/providers/AppProviders";
 
 export default function AdminSignInPage() {
   const router = useRouter();
+  const { refreshAccount } = useAppUi();
   const [error, setError] = useState("");
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
@@ -26,8 +29,11 @@ export default function AdminSignInPage() {
       router.replace(json.next || "/admin/create-password");
       return;
     }
+    // Sync AppProviders so the public nav immediately reflects the admin session.
+    await refreshAccount();
     router.replace(json.next || "/admin");
   }
+
   return (
     <div className="mx-auto max-w-md">
       <h1 className="text-3xl font-semibold">Administrator sign in</h1>
