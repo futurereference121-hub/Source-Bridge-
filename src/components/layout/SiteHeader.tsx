@@ -15,7 +15,8 @@ import { NotificationBell } from "@/components/notifications/NotificationBell";
 
 export function SiteHeader() {
   const pathname = usePathname();
-  const { signedIn } = useAppUi();
+  const { signedIn, account } = useAppUi();
+  const isAdmin = Boolean(account?.role === "ADMIN" || account?.isAdmin);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -26,6 +27,8 @@ export function SiteHeader() {
 
   const desktopNav = (isHome ? homeNavItems : navItems).filter((item) => {
     if (isHome) return true;
+    // Admins see no public nav — only the account menu with admin links.
+    if (isAdmin && signedIn) return false;
     if (item.href === "/sign-in" && signedIn) return false;
     if (item.href === "/join" && signedIn) return false;
     return true;

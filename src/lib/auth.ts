@@ -130,6 +130,10 @@ export async function createSession(userId: string): Promise<string> {
   const rawToken = randomBytes(32).toString("hex");
   const tokenHash = hashValue(rawToken);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+
+  const userRow = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, isAdmin: true } });
+  const role = (userRow?.role === "ADMIN" || userRow?.isAdmin) ? "ADMIN" : "USER";
+
   await prisma.session.create({
     data: { userId, tokenHash, expiresAt },
   });
@@ -137,6 +141,15 @@ export async function createSession(userId: string): Promise<string> {
   const jar = await cookies();
   jar.set(COOKIE_NAME, encodeCookie(rawToken), {
     httpOnly: true,
+    secure: cookieSecure(),
+    sameSite: "lax",
+    path: "/",
+    expires: expiresAt,
+  });
+
+  // Non-sensitive role hint for middleware routing — not used for authorization decisions.
+  jar.set("sb_role", role, {
+    httpOnly: false,
     secure: cookieSecure(),
     sameSite: "lax",
     path: "/",
@@ -157,6 +170,13 @@ export async function destroySession(): Promise<void> {
   }
   jar.set(COOKIE_NAME, "", {
     httpOnly: true,
+    secure: cookieSecure(),
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  });
+  jar.set("sb_role", "", {
+    httpOnly: false,
     secure: cookieSecure(),
     sameSite: "lax",
     path: "/",
@@ -226,6 +246,8 @@ export function nextRouteForUser(user: NextRouteInput): string {
   if (user.mustChangePassword) {
     return isAdminUser(user) ? "/admin/change-password" : "/profile/settings#password";
   }
+  // Admins always land on the verification review queue — never the public site.
+  if (isAdminUser(user)) return "/admin/verifications";
   if (!user.emailVerified) return "/check-email";
   if (!user.onboardingComplete) return "/onboarding";
   return "/explore";

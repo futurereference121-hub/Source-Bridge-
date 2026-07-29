@@ -2,8 +2,8 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
@@ -45,8 +45,9 @@ async function api(url: string, init?: RequestInit) {
   return data;
 }
 
-export default function ProfileDashboardPage() {
+function ProfileDashboardInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { account, signedIn, authReady, showToast, signOut, refreshAccount } = useAppUi();
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState(blankProfile);
@@ -68,6 +69,19 @@ export default function ProfileDashboardPage() {
   const [editingStock, setEditingStock] = useState<string | null>(null);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [busy, setBusy] = useState("");
+
+  // Show a one-time toast after a successful verification submission redirect.
+  useEffect(() => {
+    if (!authReady || !signedIn) return;
+    const flag = searchParams.get("verification");
+    if (flag === "submitted") {
+      showToast("Verification documents submitted successfully.");
+      // Remove the param so the toast doesn't re-appear on refresh.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("verification");
+      router.replace(url.pathname + (url.search || ""), { scroll: false });
+    }
+  }, [authReady, signedIn, searchParams, showToast, router]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -425,6 +439,14 @@ export default function ProfileDashboardPage() {
         </Panel>
       </Container>
     </div>
+  );
+}
+
+export default function ProfileDashboardPage() {
+  return (
+    <Suspense fallback={<div className="bg-app-navy min-h-[100svh] pt-28 pb-20 text-white"><div className="mx-auto max-w-4xl px-4"><p className="text-white/50">Loading…</p></div></div>}>
+      <ProfileDashboardInner />
+    </Suspense>
   );
 }
 

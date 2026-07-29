@@ -220,11 +220,15 @@ export default function IdentityVerificationPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Could not submit request");
-      await load();
       await refreshAccount();
-      showToast("Verification request submitted for review");
+      // Redirect to profile with a flag so the profile page shows a success toast.
+      router.replace("/profile?verification=submitted");
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Could not submit request");
+      showToast(
+        err instanceof Error
+          ? err.message
+          : "Verification documents could not be submitted. Please try again.",
+      );
     } finally {
       setBusy(false);
     }

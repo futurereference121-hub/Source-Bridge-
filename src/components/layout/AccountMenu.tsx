@@ -61,14 +61,20 @@ export function AccountMenu({
     };
   }, [open]);
 
-  const links: MenuLink[] = [
-    { label: "My Profile", href: accountHomePath(account) },
-    { label: "Inbox", href: "/inbox" },
-    { label: "Manage Profile", href: "/profile" },
-    { label: "Followers", href: "/profile/followers" },
-    { label: "Following", href: "/profile/following" },
-    { label: "Account Settings", href: "/profile/settings" },
-  ];
+  const isAdmin = Boolean(account?.role === "ADMIN" || account?.isAdmin);
+  const links: MenuLink[] = isAdmin
+    ? [
+        { label: "Verification Applicants", href: "/admin/verifications" },
+        { label: "Change Password", href: "/admin/change-password" },
+      ]
+    : [
+        { label: "My Profile", href: accountHomePath(account) },
+        { label: "Inbox", href: "/inbox" },
+        { label: "Manage Profile", href: "/profile" },
+        { label: "Followers", href: "/profile/followers" },
+        { label: "Following", href: "/profile/following" },
+        { label: "Account Settings", href: "/profile/settings" },
+      ];
 
   const triggerClass =
     variant === "home"
@@ -159,14 +165,20 @@ export function AccountMenuMobileLinks({
   const { account, signOut } = useAppUi();
   const { unreadCount } = useInboxUnread();
 
-  const links: MenuLink[] = [
-    { label: "My Profile", href: accountHomePath(account) },
-    { label: "Inbox", href: "/inbox" },
-    { label: "Manage Profile", href: "/profile" },
-    { label: "Followers", href: "/profile/followers" },
-    { label: "Following", href: "/profile/following" },
-    { label: "Account Settings", href: "/profile/settings" },
-  ];
+  const isAdmin = Boolean(account?.role === "ADMIN" || account?.isAdmin);
+  const links: MenuLink[] = isAdmin
+    ? [
+        { label: "Verification Applicants", href: "/admin/verifications" },
+        { label: "Change Password", href: "/admin/change-password" },
+      ]
+    : [
+        { label: "My Profile", href: accountHomePath(account) },
+        { label: "Inbox", href: "/inbox" },
+        { label: "Manage Profile", href: "/profile" },
+        { label: "Followers", href: "/profile/followers" },
+        { label: "Following", href: "/profile/following" },
+        { label: "Account Settings", href: "/profile/settings" },
+      ];
 
   return (
     <>
