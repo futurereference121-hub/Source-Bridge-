@@ -59,9 +59,10 @@ export default function AdminCreatePasswordPage() {
         setError(json.error || "Could not set password");
         return;
       }
-      // Password set — session created — sync AppProviders then navigate.
+      // Password set — session created — sync AppProviders then do a full
+      // page navigation so sb_role cookie is read fresh by middleware.
       await refreshAccount();
-      router.replace("/admin");
+      window.location.replace("/admin/verifications");
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {

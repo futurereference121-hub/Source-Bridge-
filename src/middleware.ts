@@ -3,17 +3,14 @@ import { type NextRequest, NextResponse } from "next/server";
 /**
  * Edge middleware — runs before every matched request.
  *
- * Responsibility: route ADMIN users away from ordinary member pages and
- * redirect normal users away from admin-only pages.
- *
- * Authorization (proving who the user really is) happens server-side via
- * the httpOnly session cookie + DB lookup. This middleware uses only the
- * non-sensitive `sb_role` hint cookie for lightweight routing — it never
- * grants access based on that cookie alone.
+ * Uses the non-sensitive `sb_role` hint cookie (set by createSession, cleared
+ * by destroySession) to route requests before the server components run.
+ * Real authorization is always enforced server-side via the httpOnly session
+ * cookie + DB lookup — this middleware only handles routing, never access grants.
  */
 
-// Paths that are only for ordinary (non-admin) users.
-const USER_ONLY_PATHS = [
+// Paths only accessible to ordinary (non-admin) signed-in users.
+const USER_ONLY_PREFIXES = [
   "/explore",
   "/profile",
   "/inbox",
@@ -28,39 +25,42 @@ const USER_ONLY_PATHS = [
   "/check-email",
 ];
 
-// Paths that are only for admins.
-const ADMIN_ONLY_PATHS = ["/admin"];
-
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const role = request.cookies.get("sb_role")?.value ?? "";
   const isAdmin = role === "ADMIN";
 
-  // Admin visiting a user-only route → send to verification queue.
+  // ── Admin routing ────────────────────────────────────────────────────────
   if (isAdmin) {
-    const blocked = USER_ONLY_PATHS.some(
+    // Admin visiting a user-only route → verification queue.
+    const blockedForAdmin = USER_ONLY_PREFIXES.some(
       (p) => pathname === p || pathname.startsWith(p + "/"),
     );
-    if (blocked) {
+    if (blockedForAdmin) {
       return NextResponse.redirect(new URL("/admin/verifications", request.url));
     }
+
+    // Admin visiting /admin/sign-in while already authenticated → queue.
+    // (The client also handles this, but the middleware catches hard navigations.)
+    if (pathname === "/admin/sign-in") {
+      return NextResponse.redirect(new URL("/admin/verifications", request.url));
+    }
+
+    // Everything else under /admin is fine for an admin.
+    return NextResponse.next();
   }
 
-  // Non-admin (or unauthenticated) visiting admin-only routes.
-  // The server components themselves also verify role via DB — this is an
-  // extra layer to avoid flashing admin UI before the server check runs.
-  if (!isAdmin) {
-    const isAdminPath = ADMIN_ONLY_PATHS.some(
-      (p) => pathname === p || pathname.startsWith(p + "/"),
-    );
-    // Allow sign-in and create-password which are the entry points.
-    const isPublicAdminEntry =
-      pathname === "/admin/sign-in" ||
-      pathname === "/admin/create-password" ||
-      pathname.startsWith("/api/auth/admin");
-    if (isAdminPath && !isPublicAdminEntry) {
-      return NextResponse.redirect(new URL("/admin/sign-in", request.url));
-    }
+  // ── Non-admin routing ────────────────────────────────────────────────────
+  // Guard /admin/* pages — but allow the public entry points so users can
+  // reach the sign-in form and the password setup page.
+  const isAdminPath =
+    pathname === "/admin" || pathname.startsWith("/admin/");
+  const isPublicAdminEntry =
+    pathname === "/admin/sign-in" ||
+    pathname === "/admin/create-password";
+
+  if (isAdminPath && !isPublicAdminEntry) {
+    return NextResponse.redirect(new URL("/admin/sign-in", request.url));
   }
 
   return NextResponse.next();
@@ -69,11 +69,9 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Match all paths except:
-     * - _next/static, _next/image (Next.js assets)
-     * - favicon.ico, public files
-     * - API routes (auth is handled server-side there)
+     * Match all paths except Next.js internals and static assets.
+     * API routes are excluded — auth is enforced server-side there.
      */
-    "/((?!_next/static|_next/image|favicon\\.ico|uploads/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)$).*)",
+    "/((?!_next/static|_next/image|favicon\\.ico|api/|uploads/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)$).*)",
   ],
 };

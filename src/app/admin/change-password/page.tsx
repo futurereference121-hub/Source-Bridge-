@@ -1,10 +1,8 @@
 "use client";
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useAppUi } from "@/components/providers/AppProviders";
 
 export default function ChangePasswordPage() {
-  const router = useRouter();
   const { refreshAccount } = useAppUi();
   const [message, setMessage] = useState("");
 
@@ -28,7 +26,7 @@ export default function ChangePasswordPage() {
     }
     // Sync AppProviders so the public nav immediately reflects the refreshed session.
     await refreshAccount();
-    router.replace("/admin");
+    window.location.replace("/admin/verifications");
   }
 
   return (

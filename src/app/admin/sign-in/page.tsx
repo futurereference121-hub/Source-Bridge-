@@ -1,37 +1,72 @@
 "use client";
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, useEffect, useState } from "react";
 import { useAppUi } from "@/components/providers/AppProviders";
 
 export default function AdminSignInPage() {
-  const router = useRouter();
-  const { refreshAccount } = useAppUi();
+  const { account, authReady, refreshAccount } = useAppUi();
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // If already authenticated as admin, go straight to the verification queue.
+  useEffect(() => {
+    if (!authReady) return;
+    const isAdmin = account?.role === "ADMIN" || account?.isAdmin;
+    if (isAdmin) {
+      window.location.replace("/admin/verifications");
+    }
+  }, [authReady, account]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setSubmitting(true);
     const data = new FormData(event.currentTarget);
     const username = (data.get("username") as string | null)?.trim().toLowerCase() ?? "";
     const password = (data.get("password") as string | null) ?? "";
-    const response = await fetch("/api/auth/admin-sign-in", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setError("Invalid credentials");
-      return;
+    try {
+      const response = await fetch("/api/auth/admin-sign-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError("Invalid credentials");
+        return;
+      }
+      if (json.code === "NEED_FIRST_PASSWORD") {
+        window.location.replace(json.next || "/admin/create-password");
+        return;
+      }
+      // Sync AppProviders account state, then do a full navigation so the
+      // browser sends the freshly-set sb_role cookie on the next request —
+      // this eliminates any timing race between the Set-Cookie response header
+      // and the middleware reading the cookie on a client-side navigation.
+      await refreshAccount();
+      window.location.replace(json.next || "/admin/verifications");
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
     }
-    // First-time setup: no password has been created yet.
-    if (json.code === "NEED_FIRST_PASSWORD") {
-      router.replace(json.next || "/admin/create-password");
-      return;
-    }
-    // Sync AppProviders so the public nav immediately reflects the admin session.
-    await refreshAccount();
-    router.replace(json.next || "/admin");
+  }
+
+  // Don't flash the form while checking existing session.
+  if (!authReady) {
+    return (
+      <div className="mx-auto max-w-md">
+        <p className="text-white/50">Loading…</p>
+      </div>
+    );
+  }
+
+  // Already logged in as admin — redirect is firing in useEffect.
+  if (account?.role === "ADMIN" || account?.isAdmin) {
+    return (
+      <div className="mx-auto max-w-md">
+        <p className="text-white/50">Redirecting…</p>
+      </div>
+    );
   }
 
   return (
@@ -51,8 +86,11 @@ export default function AdminSignInPage() {
           placeholder="Password"
           className="w-full rounded-lg border border-white/15 bg-white/5 p-3"
         />
-        <button className="w-full rounded-lg bg-electric p-3 font-medium text-app-navy">
-          Sign in
+        <button
+          disabled={submitting}
+          className="w-full rounded-lg bg-electric p-3 font-medium text-app-navy disabled:opacity-50"
+        >
+          {submitting ? "Signing in…" : "Sign in"}
         </button>
         {error && <p className="text-sm text-red-300">{error}</p>}
       </form>
