@@ -35,7 +35,12 @@ const userIncludeFull = {
   trips: { orderBy: { arrival: "asc" as const } },
   statuses: { orderBy: { postedAt: "desc" as const }, take: 5 },
   opportunities: { orderBy: { postedAt: "desc" as const }, take: 20 },
-  listings: { orderBy: { createdAt: "desc" as const } },
+  listings: {
+    orderBy: { createdAt: "desc" as const },
+    include: {
+      listingImages: { orderBy: { sortOrder: "asc" as const } },
+    },
+  },
   reviewsReceived: { orderBy: { createdAt: "desc" as const }, take: 50 },
 };
 

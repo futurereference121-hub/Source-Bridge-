@@ -42,6 +42,16 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [pathname, router, searchParams]);
 
+  const openCreateListing = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("edit", "listing");
+    next.delete("id");
+    next.delete("listingId");
+    next.delete("opportunityId");
+    const qs = next.toString();
+    router.replace(`${pathname}?${qs}`, { scroll: false });
+  }, [pathname, router, searchParams]);
+
   if (!edit || !EDIT_KEYS.has(edit)) return null;
 
   if (edit === "status") {
@@ -88,7 +98,14 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
   }
 
   if (edit === "listing") {
-    return <ListingEditor onClose={close} listingId={entityId} />;
+    return (
+      <ListingEditor
+        key={entityId || "new-listing"}
+        onClose={close}
+        onReturnToCreate={openCreateListing}
+        listingId={entityId}
+      />
+    );
   }
 
   return null;

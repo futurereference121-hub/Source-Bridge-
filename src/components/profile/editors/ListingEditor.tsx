@@ -10,6 +10,8 @@ import {
   CLOTHING_FITS,
   CLOTHING_GENDERS,
   CLOTHING_SIZES,
+  PRODUCT_KINDS,
+  type ProductKind,
 } from "@/lib/clothing";
 import type { Listing, ListingAvailability } from "@/lib/types";
 import {
@@ -23,11 +25,14 @@ import {
 
 type ListingEditorProps = {
   onClose: () => void;
+  /** After save / cancel edit: stay in listing UI but switch to blank create mode. */
+  onReturnToCreate?: () => void;
   listingId?: string | null;
 };
 
 type ListingForm = {
   name: string;
+  productKind: ProductKind;
   category: string;
   subcategory: string;
   material: string;
@@ -50,6 +55,7 @@ type ListingForm = {
 
 const blank: ListingForm = {
   name: "",
+  productKind: "clothing",
   category: "",
   subcategory: "",
   material: "",
@@ -76,8 +82,11 @@ function fromListing(item: Listing): ListingForm {
     sale === "RESERVED" || sale === "SOLD" || sale === "ARCHIVED"
       ? sale
       : "AVAILABLE";
+  const kind =
+    item.productKind === "general" ? "general" : ("clothing" as ProductKind);
   return {
     name: item.name || "",
+    productKind: kind,
     category: item.category || "",
     subcategory: item.subcategory || "",
     material: item.material || "",
@@ -99,31 +108,62 @@ function fromListing(item: Listing): ListingForm {
   };
 }
 
-export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
+export function ListingEditor({
+  onClose,
+  onReturnToCreate,
+  listingId,
+}: ListingEditorProps) {
   const router = useRouter();
   const { account, showToast } = useAppUi();
   const [form, setForm] = useState(blank);
   const [busy, setBusy] = useState(false);
   const [imagesUploading, setImagesUploading] = useState(false);
   const [loading, setLoading] = useState(Boolean(listingId));
+  const [generalCategories, setGeneralCategories] = useState<string[]>([]);
+  const isEdit = Boolean(listingId);
 
-  // showToast's identity changes on every toast (it recreates its timer
-  // callback), so it must not be a dependency here — otherwise this effect
-  // reruns on every toast and reloads the listing from the server, wiping
-  // any images the user has uploaded but not yet saved.
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
 
   useEffect(() => {
-    if (!listingId) return;
     let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson("/api/categories");
+        const names = (data.categories || [])
+          .map((c: { name?: string }) => c.name)
+          .filter((n: unknown): n is string => typeof n === "string" && n.trim().length > 0);
+        if (!cancelled) setGeneralCategories(names);
+      } catch {
+        /* clothing editor still works without this list */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!listingId) {
+      setForm(blank);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
     (async () => {
       try {
         const data = await apiJson("/api/stock");
         const row = (data.listings || []).find(
           (l: Listing) => l.id === listingId,
         );
-        if (row && !cancelled) setForm(fromListing(row));
+        if (!cancelled) {
+          if (row) setForm(fromListing(row));
+          else {
+            showToastRef.current("Listing not found");
+            setForm(blank);
+          }
+        }
       } catch (err) {
         if (!cancelled) {
           showToastRef.current(
@@ -139,6 +179,27 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
     };
   }, [listingId]);
 
+  function resetToCreate() {
+    setForm(blank);
+    setImagesUploading(false);
+    setBusy(false);
+    setLoading(false);
+  }
+
+  function returnToCreateMode() {
+    resetToCreate();
+    if (onReturnToCreate) onReturnToCreate();
+    else onClose();
+  }
+
+  function cancelEdit() {
+    if (isEdit) returnToCreateMode();
+    else {
+      resetToCreate();
+      onClose();
+    }
+  }
+
   function toggleSize(size: string) {
     setForm((f) => ({
       ...f,
@@ -150,6 +211,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (busy || imagesUploading) return;
     if (imagesUploading) {
       showToast("Wait for image uploads to finish before saving");
       return;
@@ -162,8 +224,12 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
       showToast("Images are still uploading — wait for permanent URLs");
       return;
     }
-    if (!form.sizes.length) {
+    if (form.productKind === "clothing" && !form.sizes.length) {
       showToast("Select at least one size");
+      return;
+    }
+    if (!form.category.trim()) {
+      showToast("Select a category");
       return;
     }
     const price = Number(form.price);
@@ -176,7 +242,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
     try {
       const payload = {
         name: form.name.trim() || form.category,
-        productKind: "clothing" as const,
+        productKind: form.productKind,
         category: form.category,
         subcategory: form.subcategory.trim(),
         material: form.material.trim(),
@@ -186,7 +252,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
         pattern: form.pattern.trim(),
         fit: form.fit,
         gender: form.gender,
-        sizes: form.sizes,
+        sizes: form.productKind === "clothing" ? form.sizes : [],
         shippingAvailable: form.shippingAvailable,
         shipFromCity: form.shipFromCity.trim(),
         shipFromCountry: form.shipFromCountry.trim(),
@@ -194,16 +260,20 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
         description: form.description.trim(),
         availability: form.availability,
         saleStatus: form.saleStatus,
-        images: form.images,
+        images: form.images.slice(0, 12),
       };
       if (listingId) {
         await apiJson(`/api/stock/${listingId}`, jsonBody("PATCH", payload));
+        showToast("Product updated successfully.");
+        resetToCreate();
+        router.refresh();
+        returnToCreateMode();
       } else {
         await apiJson("/api/stock", jsonBody("POST", payload));
+        showToast("Product added successfully.");
+        resetToCreate();
+        router.refresh();
       }
-      showToast(listingId ? "Listing updated" : "Listing created");
-      onClose();
-      router.refresh();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Could not save listing");
     } finally {
@@ -219,16 +289,53 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
     );
   }
 
+  const title = isEdit
+    ? `Edit Listing: ${form.name || "Untitled"}`
+    : "Create New Listing";
+
+  const categoryOptions =
+    form.productKind === "clothing"
+      ? [...CLOTHING_CATEGORIES]
+      : generalCategories.length
+        ? generalCategories
+        : ["Jewellery", "Home & Living", "Collectibles", "Clothing"];
+
   return (
-    <EditorShell
-      title={listingId ? "Edit Listing" : "Post Listing"}
-      onClose={onClose}
-      wide
-    >
+    <EditorShell title={title} onClose={isEdit ? cancelEdit : onClose} wide>
       {loading ? (
         <p className="text-sm text-white/45">Loading…</p>
       ) : (
         <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-2">
+          <p className="sm:col-span-2 text-xs text-white/45">
+            {isEdit
+              ? "Update this listing, then Save Changes. Cancel Edit discards unsaved changes."
+              : "Fill in the fields below to add a new listing."}
+          </p>
+
+          <EditorField label="Product type">
+            <select
+              className={editorInputClass}
+              value={form.productKind}
+              onChange={(e) => {
+                const productKind = e.target.value as ProductKind;
+                setForm((f) => ({
+                  ...f,
+                  productKind,
+                  category: "",
+                  sizes: productKind === "clothing" ? f.sizes : [],
+                }));
+              }}
+              required
+              disabled={busy}
+            >
+              {PRODUCT_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {k === "clothing" ? "Clothing" : "General"}
+                </option>
+              ))}
+            </select>
+          </EditorField>
+
           <EditorField label="Name">
             <input
               className={editorInputClass}
@@ -237,6 +344,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 setForm((f) => ({ ...f, name: e.target.value }))
               }
               placeholder="Optional product name"
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Category">
@@ -247,13 +355,20 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 setForm((f) => ({ ...f, category: e.target.value }))
               }
               required
+              disabled={busy}
             >
               <option value="">Select category</option>
-              {CLOTHING_CATEGORIES.map((c) => (
+              {categoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
+              {form.category &&
+              !categoryOptions.some(
+                (c) => c.toLowerCase() === form.category.toLowerCase(),
+              ) ? (
+                <option value={form.category}>{form.category}</option>
+              ) : null}
             </select>
           </EditorField>
           <EditorField label="Subcategory">
@@ -263,6 +378,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, subcategory: e.target.value }))
               }
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Material">
@@ -272,6 +388,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, material: e.target.value }))
               }
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Brand">
@@ -281,6 +398,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, brand: e.target.value }))
               }
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Condition">
@@ -290,6 +408,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, condition: e.target.value }))
               }
+              disabled={busy}
             >
               <option value="">Select condition</option>
               {CLOTHING_CONDITIONS.map((c) => (
@@ -297,6 +416,12 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                   {c}
                 </option>
               ))}
+              {form.condition &&
+              !CLOTHING_CONDITIONS.includes(
+                form.condition as (typeof CLOTHING_CONDITIONS)[number],
+              ) ? (
+                <option value={form.condition}>{form.condition}</option>
+              ) : null}
             </select>
           </EditorField>
           <EditorField label="Colour">
@@ -306,6 +431,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, colour: e.target.value }))
               }
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Pattern">
@@ -315,69 +441,77 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               onChange={(e) =>
                 setForm((f) => ({ ...f, pattern: e.target.value }))
               }
+              disabled={busy}
             />
           </EditorField>
-          <EditorField label="Fit">
-            <select
-              className={editorInputClass}
-              value={form.fit}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, fit: e.target.value }))
-              }
-            >
-              <option value="">Select fit</option>
-              {CLOTHING_FITS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </EditorField>
-          <EditorField label="Gender">
-            <select
-              className={editorInputClass}
-              value={form.gender}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, gender: e.target.value }))
-              }
-            >
-              <option value="">Select gender</option>
-              {CLOTHING_GENDERS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </EditorField>
+          {form.productKind === "clothing" ? (
+            <>
+              <EditorField label="Fit">
+                <select
+                  className={editorInputClass}
+                  value={form.fit}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, fit: e.target.value }))
+                  }
+                  disabled={busy}
+                >
+                  <option value="">Select fit</option>
+                  {CLOTHING_FITS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </EditorField>
+              <EditorField label="Gender">
+                <select
+                  className={editorInputClass}
+                  value={form.gender}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, gender: e.target.value }))
+                  }
+                  disabled={busy}
+                >
+                  <option value="">Select gender</option>
+                  {CLOTHING_GENDERS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </EditorField>
 
-          <div className="sm:col-span-2">
-            <p className="mb-2 text-xs text-white/45">Sizes</p>
-            <div className="flex flex-wrap gap-2">
-              {CLOTHING_SIZES.map((size) => {
-                const checked = form.sizes.includes(size);
-                return (
-                  <label
-                    key={size}
-                    className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ${
-                      checked
-                        ? "border-electric/50 bg-electric/15 text-electric"
-                        : "border-white/15 text-white/70 hover:border-white/30"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      className="sr-only"
-                      checked={checked}
-                      onChange={() => toggleSize(size)}
-                    />
-                    {size}
-                  </label>
-                );
-              })}
-            </div>
-          </div>
+              <div className="sm:col-span-2">
+                <p className="mb-2 text-xs text-white/45">Sizes</p>
+                <div className="flex flex-wrap gap-2">
+                  {CLOTHING_SIZES.map((size) => {
+                    const checked = form.sizes.includes(size);
+                    return (
+                      <label
+                        key={size}
+                        className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors ${
+                          checked
+                            ? "border-electric/50 bg-electric/15 text-electric"
+                            : "border-white/15 text-white/70 hover:border-white/30"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={checked}
+                          onChange={() => toggleSize(size)}
+                          disabled={busy}
+                        />
+                        {size}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          ) : null}
 
-          <EditorField label="Price (USD)">
+          <EditorField label="Price">
             <input
               type="number"
               min="0"
@@ -388,6 +522,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 setForm((f) => ({ ...f, price: e.target.value }))
               }
               required
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Availability">
@@ -401,6 +536,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 }))
               }
               required
+              disabled={busy}
             >
               <option value="available">Available</option>
               <option value="limited">Limited</option>
@@ -419,6 +555,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 }))
               }
               required
+              disabled={busy}
             >
               <option value="AVAILABLE">Available</option>
               <option value="RESERVED">Reserved</option>
@@ -434,6 +571,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 setForm((f) => ({ ...f, shipFromCity: e.target.value }))
               }
               required
+              disabled={busy}
             />
           </EditorField>
           <EditorField label="Shipped from (country)">
@@ -444,6 +582,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 setForm((f) => ({ ...f, shipFromCountry: e.target.value }))
               }
               required
+              disabled={busy}
             />
           </EditorField>
 
@@ -458,6 +597,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 }))
               }
               className="h-4 w-4 rounded border-white/30 bg-transparent"
+              disabled={busy}
             />
             Shipping available
           </label>
@@ -472,6 +612,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
                 }
                 required
                 maxLength={4000}
+                disabled={busy}
               />
             </EditorField>
           </div>
@@ -486,7 +627,7 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
               }
               onUploadingChange={setImagesUploading}
               showToast={showToast}
-              maxImages={6}
+              maxImages={12}
               disabled={busy}
             />
             {imagesUploading ? (
@@ -496,10 +637,29 @@ export function ListingEditor({ onClose, listingId }: ListingEditorProps) {
             ) : null}
           </div>
 
-          <div className="sm:col-span-2">
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
             <EditorSubmit busy={busy || imagesUploading}>
-              {listingId ? "Save listing" : "Create listing"}
+              {isEdit ? "Save Changes" : "Add Product"}
             </EditorSubmit>
+            {isEdit ? (
+              <button
+                type="button"
+                onClick={cancelEdit}
+                disabled={busy}
+                className="inline-flex h-11 items-center justify-center rounded-lg border border-white/20 px-5 text-xs font-medium uppercase tracking-[0.12em] text-white/80 transition-colors hover:border-white/40 hover:text-white disabled:opacity-50"
+              >
+                Cancel Edit
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="inline-flex h-11 items-center justify-center rounded-lg border border-white/20 px-5 text-xs font-medium uppercase tracking-[0.12em] text-white/80 transition-colors hover:border-white/40 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </form>
       )}

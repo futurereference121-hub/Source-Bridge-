@@ -54,3 +54,8 @@ next-env.d.ts
 *.db-journal
 .env.vercel*
 .env*.local
+
+# One-time Wallapop migration export (images, JSON, browser session)
+/data/wallapop-export/
+/data/wallapop-edge-profile/
+/data/wallapop-edge-debug-profile/

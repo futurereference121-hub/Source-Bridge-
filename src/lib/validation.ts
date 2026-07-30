@@ -173,7 +173,7 @@ export const stockSchema = z.object({
   shippingAvailable: z.boolean().default(false),
   price: z.number().nonnegative("Price required"),
   currency: z.string().trim().max(8).optional().default("USD"),
-  images: z.array(z.string().trim().min(1)).min(1, "Add at least one image").max(6),
+  images: z.array(z.string().trim().min(1)).min(1, "Add at least one image").max(12),
 });
 
 export const saleStatusSchema = z.enum([

@@ -432,43 +432,107 @@ function ListingsTab({
   isOwner: boolean;
   slug: string;
 }) {
+  const router = useRouter();
+  const { showToast } = useAppUi();
+  const [items, setItems] = useState(listings);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setItems(listings);
+  }, [listings]);
+
+  async function removeListing(listing: Listing) {
+    if (deletingId) return;
+    const ok = window.confirm(
+      `Remove “${listing.name}”? This cannot be undone.`,
+    );
+    if (!ok) return;
+    setDeletingId(listing.id);
+    try {
+      const res = await fetch(`/api/stock/${listing.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string }).error || "Could not delete listing",
+        );
+      }
+      setItems((prev) => prev.filter((l) => l.id !== listing.id));
+      showToast("Product deleted successfully.");
+      router.refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
-    <ProfilePanel title="Listings">
-      {listings.length ? (
+    <ProfilePanel title="Existing Listings">
+      {items.length ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-          {listings.map((listing) => (
-            <div key={listing.id} className="group relative">
-              <Link
-                href={`/marketplace/${listing.slug}`}
-                className="relative block aspect-square overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10"
+          {items.map((listing) => {
+            const status = (listing.saleStatus || "AVAILABLE").toUpperCase();
+            return (
+              <article
+                key={listing.id}
+                className="relative z-0 rounded-lg bg-navy-mid/40 p-2 ring-1 ring-white/10"
               >
-                <Image
-                  src={listing.images[0]}
-                  alt={listing.name}
-                  fill
-                  sizes="200px"
-                  className="object-cover transition-transform duration-300 group-hover:scale-105"
-                />
-              </Link>
-              <p className="mt-2 truncate text-sm text-white/80">{listing.name}</p>
-              {isOwner ? (
                 <Link
-                  href={`/members/${slug}?edit=listing&id=${listing.id}`}
-                  className="mt-1 inline-flex text-[10px] uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+                  href={`/marketplace/${listing.slug}`}
+                  className="relative block aspect-square overflow-hidden rounded-md bg-navy-mid"
                 >
-                  Edit
+                  <Image
+                    src={listing.images[0]}
+                    alt={listing.name}
+                    fill
+                    sizes="200px"
+                    className="object-cover"
+                  />
                 </Link>
-              ) : null}
-            </div>
-          ))}
+                <p className="mt-2 truncate text-sm text-white/90">
+                  {listing.name}
+                </p>
+                <p className="truncate text-[11px] text-white/45">
+                  {listing.category}
+                  {listing.subcategory ? ` · ${listing.subcategory}` : ""}
+                </p>
+                <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-white/50">
+                  {status}
+                </p>
+                {isOwner ? (
+                  <div className="relative z-10 mt-2 flex flex-wrap gap-2">
+                    <Link
+                      href={`/members/${slug}?edit=listing&id=${listing.id}`}
+                      className="inline-flex min-h-8 items-center rounded-md border border-electric/40 bg-electric/10 px-2.5 text-[10px] uppercase tracking-[0.14em] text-electric hover:bg-electric/20"
+                    >
+                      Edit
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => removeListing(listing)}
+                      disabled={deletingId === listing.id}
+                      className="inline-flex min-h-8 items-center rounded-md border border-white/20 px-2.5 text-[10px] uppercase tracking-[0.14em] text-white/70 hover:border-red-400/50 hover:text-red-300 disabled:opacity-50"
+                    >
+                      {deletingId === listing.id ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
       ) : (
         <EmptyCopy>No stock listed yet.</EmptyCopy>
       )}
       {isOwner ? (
-        <OwnerLink href={`/members/${slug}?edit=listing`}>
-          Add listing
-        </OwnerLink>
+        <div className="mt-5 border-t border-white/10 pt-4">
+          <p className="mb-2 text-xs uppercase tracking-[0.14em] text-white/45">
+            Create New Listing
+          </p>
+          <OwnerLink href={`/members/${slug}?edit=listing`}>
+            Add listing
+          </OwnerLink>
+        </div>
       ) : null}
     </ProfilePanel>
   );

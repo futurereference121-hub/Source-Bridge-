@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Wallapop → Source Bridge Export (Temporary)",
+  "version": "1.0.2",
+  "description": "Temporary read-only export of your Wallapop published catalogue for a one-time Source Bridge migration. Not for store publication.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Wallapop Export",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["activeTab", "downloads", "scripting"],
+  "host_permissions": [
+    "https://es.wallapop.com/*",
+    "https://*.wallapop.com/*",
+    "https://*.wallapop.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://es.wallapop.com/*"],
+      "js": ["category-map.js", "content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

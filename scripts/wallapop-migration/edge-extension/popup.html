@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wallapop Export</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Wallapop → Source Bridge</h1>
+      <p class="sub">Temporary read-only catalogue export</p>
+      <p class="note">
+        Open your published catalogue first:<br />
+        <strong>es.wallapop.com/app/catalog/published</strong><br />
+        This extension never asks for passwords and never writes to Source Bridge.
+      </p>
+      <button id="scanBtn" type="button">Scan My Published Listings</button>
+      <div id="status">Ready.</div>
+      <p class="footer">
+        Files save to your Downloads folder under<br />
+        <code>wallapop-sb-export/</code>
+      </p>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

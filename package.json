@@ -29,6 +29,12 @@
     "test:signup-explore": "node --env-file=.env scripts/test-signup-explore.mjs",
     "test:production-stability": "node --env-file=.env scripts/test-production-stability.mjs",
     "test:verification-inbox": "node --env-file=.env scripts/test-verification-inbox.mjs",
+    "wallapop:export": "node --env-file=.env scripts/wallapop-migration/export.mjs",
+    "wallapop:ingest": "node scripts/wallapop-migration/ingest-extension-export.mjs",
+    "wallapop:edge-debug": "node scripts/wallapop-migration/launch-edge-debug.mjs",
+    "wallapop:import": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/import.mjs",
+    "wallapop:repair-imports": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/repair-imported-listings.mjs",
+    "wallapop:check-destination": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/_check-destination.mjs",
     "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs"
   },
   "dependencies": {
@@ -50,6 +56,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.5.21",
+    "playwright": "^1.62.0",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "typescript": "^5"
