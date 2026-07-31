@@ -11,6 +11,8 @@ import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberCover } from "@/lib/placeholders";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 type ProfileHeaderProps = {
   member: Member;
@@ -32,10 +34,15 @@ function canReceiveMessages(member: Member): boolean {
 export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { follows, followMember, requireAuth, showToast } = useAppUi();
+  const { follows, followMember, requireAuth, showToast, account } = useAppUi();
+  const stories = useStoriesOptional();
   const following = follows.includes(member.id);
   const [composerOpen, setComposerOpen] = useState(false);
   const messagingOk = canReceiveMessages(member);
+
+  useEffect(() => {
+    void stories?.refreshRings([member.id]);
+  }, [member.id, stories]);
 
   useEffect(() => {
     if (isOwner || !messagingOk) return;
@@ -86,7 +93,13 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
       <div className="relative -mt-14 flex flex-col gap-6 sm:-mt-16 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-          <div className="relative h-24 w-24 overflow-hidden rounded-xl border-[3px] border-[#020b1c] bg-navy-mid shadow-[0_0_32px_rgba(59,130,246,0.18)] sm:h-28 sm:w-28">
+          <StoryAvatar
+            userId={member.id}
+            isSelf={isOwner || account?.id === member.id}
+            profileHref={`/members/${member.slug}`}
+            size={112}
+            className="border-[3px] border-[#020b1c] shadow-[0_0_32px_rgba(59,130,246,0.18)] sm:!h-28 sm:!w-28"
+          >
             <SafeMemberImage
               src={member.photo}
               alt={member.fullName}
@@ -95,7 +108,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
               className="object-cover"
               priority
             />
-          </div>
+          </StoryAvatar>
           <div className="min-w-0">
             <div className="grid grid-cols-[1fr_auto] items-center gap-x-2">
               <h1 className="min-w-0 truncate font-display text-3xl text-white sm:text-4xl">

@@ -41,6 +41,8 @@
     "generate:showcase-avatars": "node scripts/generate-showcase-avatars.mjs",
     "audit:conversation-timeline": "node --env-file=.env.local --import=dotenv/config scripts/audit-conversation-timeline.mjs",
     "test:performance-messaging-cta": "node scripts/test-performance-messaging-cta.mjs",
+    "stories:expire": "node --env-file=.env.local --import=dotenv/config scripts/expire-stories.mjs",
+    "test:stories": "node scripts/test-stories.mjs",
     "test:listing-editor": "node scripts/test-listing-editor-stability.mjs",
     "test:conversation-pair": "node scripts/test-conversation-pair.mjs",
     "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs"

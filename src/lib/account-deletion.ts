@@ -47,11 +47,22 @@ export async function deleteOwnAccount(
     images: string;
     listingImages: { url: string }[];
   }[] = [];
-  let userRow: { photo: string; cover: string; slug: string | null; username: string | null } | null =
-    null;
+  let userRow: {
+    photo: string;
+    cover: string;
+    slug: string | null;
+    username: string | null;
+    profileVideoUrl: string;
+    profileVideoPosterUrl: string;
+  } | null = null;
+  let storyClips: Array<{
+    id: string;
+    videoUrl: string;
+    thumbnailUrl: string;
+  }> = [];
 
   try {
-    [verificationDocs, listings, userRow] = await Promise.all([
+    [verificationDocs, listings, userRow, storyClips] = await Promise.all([
       prisma.verificationDocument.findMany({
         where: { request: { userId }, deletedAt: null },
         select: { id: true, url: true },
@@ -66,7 +77,18 @@ export async function deleteOwnAccount(
       }),
       prisma.user.findUnique({
         where: { id: userId },
-        select: { photo: true, cover: true, slug: true, username: true },
+        select: {
+          photo: true,
+          cover: true,
+          slug: true,
+          username: true,
+          profileVideoUrl: true,
+          profileVideoPosterUrl: true,
+        },
+      }),
+      prisma.storyClip.findMany({
+        where: { userId, deletedAt: null },
+        select: { id: true, videoUrl: true, thumbnailUrl: true },
       }),
     ]);
   } catch (err) {
@@ -91,6 +113,10 @@ export async function deleteOwnAccount(
         ]),
         userRow?.photo || "",
         userRow?.cover || "",
+        userRow?.profileVideoUrl || "",
+        userRow?.profileVideoPosterUrl || "",
+        ...storyClips.map((c) => c.videoUrl),
+        ...storyClips.map((c) => c.thumbnailUrl),
       ].filter((url): url is string => Boolean(url)),
     ),
   );
@@ -197,6 +223,12 @@ export async function deleteOwnAccount(
       });
       await tx.conversationBlock.deleteMany({ where: { userId } });
 
+      await tx.storyClip.updateMany({
+        where: { userId, deletedAt: null },
+        data: { status: "DELETED", deletedAt: new Date() },
+      });
+      await tx.storyView.deleteMany({ where: { viewerUserId: userId } });
+
       // Soft-delete / anonymize — frees email + username for re-registration.
       await tx.user.update({
         where: { id: userId },
@@ -222,6 +254,15 @@ export async function deleteOwnAccount(
           onboardingComplete: false,
           isDiscoverable: false,
           isTestAccount: false,
+          profileVideoUrl: "",
+          profileVideoPosterUrl: "",
+          profileVideoPathname: "",
+          profileVideoPosterPathname: "",
+          profileVideoMime: "",
+          profileVideoDurationSec: null,
+          profileVideoSizeBytes: null,
+          profileVideoCaption: "",
+          profileVideoUpdatedAt: null,
           deletedAt: new Date(),
         },
       });

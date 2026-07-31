@@ -26,7 +26,12 @@ export { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "@/lib/storage-constants";
 
 export const PROFILE_IMAGE_FOLDERS = ["avatars", "covers"] as const;
 export type ProfileImageFolder = (typeof PROFILE_IMAGE_FOLDERS)[number];
-export type UploadFolder = ProfileImageFolder | "stock" | "misc" | "verification";
+export type UploadFolder =
+  | ProfileImageFolder
+  | "stock"
+  | "misc"
+  | "verification"
+  | "stories";
 
 export type StoredImage = {
   /** Absolute URL (Blob) or local path — private verification URLs must not be exposed publicly */
@@ -95,6 +100,12 @@ export function extensionFor(type: string): string {
       return "png";
     case "image/webp":
       return "webp";
+    case "video/mp4":
+      return "mp4";
+    case "video/webm":
+      return "webm";
+    case "video/quicktime":
+      return "mov";
     default:
       return "bin";
   }
@@ -128,7 +139,9 @@ export function detectImageMimeType(bytes: Buffer): "image/jpeg" | "image/png" |
 }
 
 function isUploadFolder(value: string): value is UploadFolder {
-  return ["avatars", "covers", "stock", "misc", "verification"].includes(value);
+  return ["avatars", "covers", "stock", "misc", "verification", "stories"].includes(
+    value,
+  );
 }
 
 export function normalizeUploadFolder(raw: unknown): UploadFolder {
@@ -158,7 +171,9 @@ export function pathnameBelongsToUser(
     clean.startsWith(`covers/${userId}/`) ||
     clean.startsWith(`stock/${userId}/`) ||
     clean.startsWith(`misc/${userId}/`) ||
-    clean.startsWith(`verification/${userId}/`)
+    clean.startsWith(`verification/${userId}/`) ||
+    clean.startsWith(`stories/${userId}/`) ||
+    clean.startsWith(`profile-video/${userId}/`)
   );
 }
 
@@ -318,6 +333,57 @@ export async function storeImageForUser(
     return saveLocalPrivate(buffer, contentType, pathname);
   }
   return saveLocalDev(buffer, contentType, pathname);
+}
+
+/**
+ * Public Story / short video upload. Uses the same Blob auth as images
+ * (BLOB_STORE_ID + OIDC or BLOB_READ_WRITE_TOKEN) — not token-only.
+ */
+export async function storeVideoForUser(
+  file: File | Blob,
+  opts: {
+    userId: string;
+    contentType: string;
+    filenameHint?: string;
+  },
+): Promise<StorageResult> {
+  const size = file.size;
+  if (size <= 0) {
+    return { ok: false, error: "Empty file.", clientError: "Empty file." };
+  }
+  const contentType = opts.contentType || file.type || "video/mp4";
+  const pathname = blobPathForUser(opts.userId, "stories", contentType);
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const provider = getProvider();
+
+  if (provider === "vercel-blob") {
+    try {
+      return await saveToBlob(buffer, contentType, pathname, "public");
+    } catch (err) {
+      console.error("[storage] story video put failed", {
+        userId: opts.userId,
+        size,
+        contentType,
+        message: err instanceof Error ? err.message : "unknown",
+      });
+      return {
+        ok: false,
+        error: "Blob upload failed",
+        clientError: "Upload failed. Please try again.",
+      };
+    }
+  }
+
+  console.warn("[storage] Story video using local filesystem fallback.");
+  return saveLocalDev(buffer, contentType, pathname);
+}
+
+/** Delete a Story video or thumbnail by URL or pathname. */
+export async function deleteStoredVideoForUser(
+  urlOrPath: string | null | undefined,
+  userId: string,
+): Promise<boolean> {
+  return deleteStoredImageForUser(urlOrPath, userId);
 }
 
 /** Stores a verification image only in private Blob storage or local private/. */

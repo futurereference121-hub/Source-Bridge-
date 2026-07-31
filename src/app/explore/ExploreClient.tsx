@@ -8,6 +8,7 @@ import { SearchBar } from "@/components/search/SearchBar";
 import { LiveFeed } from "@/components/explore/LiveFeed";
 import { MemberCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 const SEARCH_EXAMPLES =
   "Japan · Coffee from Colombia · Someone travelling to Bangkok · Watches in Switzerland";
@@ -33,6 +34,7 @@ export function ExploreClient({
   initialFeed,
 }: ExploreClientProps) {
   const searchParams = useSearchParams();
+  const stories = useStoriesOptional();
   const initialQ = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(initialQ);
   const [members, setMembers] = useState<Member[]>(initialMembers);
@@ -41,6 +43,11 @@ export function ExploreClient({
   const [error, setError] = useState<string | null>(null);
   const queryRef = useRef(query);
   queryRef.current = query;
+
+  useEffect(() => {
+    const ids = members.map((m) => m.id);
+    if (ids.length) void stories?.refreshRings(ids);
+  }, [members, stories]);
 
   const refreshDirectory = useCallback(async (q: string) => {
     setSearching(true);

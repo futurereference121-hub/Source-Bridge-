@@ -55,7 +55,7 @@ model User {
   notificationSoundsEnabled  Boolean   @default(true)
   /// low | medium | high
   notificationVolume         String    @default("medium")
-  /// One short public profile video (≤90s). Empty when none.
+  /// Deprecated permanent profile video — replaced by StoryClip. Kept for migration safety.
   profileVideoUrl            String    @default("")
   profileVideoPosterUrl      String    @default("")
   profileVideoPathname       String    @default("")
@@ -92,6 +92,9 @@ model User {
   blockedConversations ConversationBlock[]
   paymentMethods       SellerPaymentMethod[]
   notifications        Notification[]
+  storyClips           StoryClip[]
+  storyViews           StoryView[]                   @relation("StoryViewer")
+  storyReports         StoryReport[]                 @relation("StoryReporter")
 
   @@index([isDiscoverable, deletedAt, isTestAccount])
   @@index([isDemo])
@@ -625,4 +628,63 @@ model SellerPaymentMethod {
 
   @@index([userId, enabled])
   @@index([userId, kind])
+}
+
+/// Ephemeral location Story clip — expires 24h after upload. Replaces permanent profile video.
+model StoryClip {
+  id                   String        @id @default(cuid())
+  userId               String
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoUrl             String
+  blobPathname         String        @default("")
+  thumbnailUrl         String        @default("")
+  thumbnailBlobPathname String       @default("")
+  durationSeconds      Int
+  fileSizeBytes        Int           @default(0)
+  mimeType             String        @default("")
+  /// PROCESSING | ACTIVE | FAILED | EXPIRED | DELETED
+  status               String        @default("ACTIVE")
+  originalFilename     String        @default("")
+  createdAt            DateTime      @default(now())
+  expiresAt            DateTime
+  deletedAt            DateTime?
+  views                StoryView[]
+  reports              StoryReport[]
+
+  @@index([userId, status, expiresAt])
+  @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+}
+
+/// Unique authenticated view of a Story clip (owner views excluded from public count).
+model StoryView {
+  id                   String    @id @default(cuid())
+  storyClipId          String
+  storyClip            StoryClip @relation(fields: [storyClipId], references: [id], onDelete: Cascade)
+  viewerUserId         String?
+  viewer               User?     @relation("StoryViewer", fields: [viewerUserId], references: [id], onDelete: Cascade)
+  anonymousSessionHash String?
+  viewedAt             DateTime  @default(now())
+
+  @@unique([storyClipId, viewerUserId])
+  @@index([storyClipId, viewedAt])
+  @@index([viewerUserId, viewedAt])
+}
+
+model StoryReport {
+  id             String    @id @default(cuid())
+  storyClipId    String
+  storyClip      StoryClip @relation(fields: [storyClipId], references: [id], onDelete: Cascade)
+  reporterUserId String
+  reporter       User      @relation("StoryReporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reason         String
+  notes          String    @default("")
+  /// OPEN | REVIEWED | DISMISSED | ACTIONED
+  status         String    @default("OPEN")
+  createdAt      DateTime  @default(now())
+
+  @@unique([storyClipId, reporterUserId])
+  @@index([storyClipId, createdAt])
+  @@index([status, createdAt])
 }

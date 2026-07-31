@@ -5,12 +5,22 @@ import { CircleDot, MapPin, Sparkles } from "lucide-react";
 import type { FeedItem } from "@/lib/types";
 import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { formatRelativeTime } from "@/lib/format";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useEffect } from "react";
 
 type LiveFeedProps = {
   items: FeedItem[];
 };
 
 export function LiveFeed({ items }: LiveFeedProps) {
+  const stories = useStoriesOptional();
+
+  useEffect(() => {
+    const ids = [...new Set(items.map((i) => i.memberId).filter(Boolean))];
+    if (ids.length) void stories?.refreshRings(ids);
+  }, [items, stories]);
+
   if (!items.length) {
     return (
       <p className="px-1 py-2 text-sm leading-relaxed text-white/50">
@@ -75,14 +85,21 @@ function FeedRow({ item }: { item: FeedItem }) {
       href={`/members/${item.memberSlug}`}
       className={`flex items-start gap-3 rounded-xl px-3 py-3 transition-colors sm:gap-3.5 sm:px-3.5 sm:py-3.5 ${kindStyles.wrapper} ${isOpportunity ? "sm:-translate-y-px" : ""}`}
     >
-      <div className="relative mt-0.5 h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10">
-        <SafeMemberImage
-          src={item.photo}
-          alt=""
-          fill
-          sizes="36px"
-          className="object-cover"
-        />
+      <div className="relative mt-0.5 shrink-0">
+        <StoryAvatar
+          userId={item.memberId}
+          profileHref={`/members/${item.memberSlug}`}
+          size={36}
+          className="rounded-lg ring-1 ring-white/10"
+        >
+          <SafeMemberImage
+            src={item.photo}
+            alt=""
+            fill
+            sizes="36px"
+            className="object-cover"
+          />
+        </StoryAvatar>
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-3">

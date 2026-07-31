@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Member } from "@/lib/types";
 import Link from "next/link";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
@@ -9,6 +9,8 @@ import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberPhoto } from "@/lib/placeholders";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 type MemberCardProps = {
   member: Member;
@@ -36,6 +38,7 @@ function isRealMessagingTarget(member: Member): boolean {
 
 export function MemberCard({ member }: MemberCardProps) {
   const { account, requireAuth, showToast } = useAppUi();
+  const stories = useStoriesOptional();
   const verified = isIdentityVerified(member);
   const message = displayMessage(member);
   const networkPreview = member.network.slice(0, 3);
@@ -43,6 +46,10 @@ export function MemberCard({ member }: MemberCardProps) {
   const isOwner = Boolean(account && account.id === member.id);
   const canMessage = isRealMessagingTarget(member);
   const [composerOpen, setComposerOpen] = useState(false);
+
+  useEffect(() => {
+    void stories?.refreshRings([member.id]);
+  }, [member.id, stories]);
 
   function sendRequest() {
     if (isOwner) return;
@@ -66,9 +73,12 @@ export function MemberCard({ member }: MemberCardProps) {
   return (
     <article className="card-navy flex flex-col rounded-xl p-5 sm:p-6">
       <div className="flex items-start gap-4">
-        <Link
-          href={`/members/${member.slug}`}
-          className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-navy-mid ring-1 ring-white/10 sm:h-[72px] sm:w-[72px]"
+        <StoryAvatar
+          userId={member.id}
+          isSelf={isOwner}
+          profileHref={`/members/${member.slug}`}
+          size={72}
+          className="ring-1 ring-white/10"
         >
           <SafeMemberImage
             src={photo}
@@ -77,7 +87,7 @@ export function MemberCard({ member }: MemberCardProps) {
             sizes="72px"
             className="object-cover"
           />
-        </Link>
+        </StoryAvatar>
 
         <div className="min-w-0 flex-1">
           <div className="grid grid-cols-[1fr_auto] items-center gap-x-2">

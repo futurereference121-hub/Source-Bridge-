@@ -16,6 +16,8 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { memberPhoto } from "@/lib/placeholders";
 import { ReviewPrompt } from "@/components/messaging/ReviewPrompt";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 type ParticipantUser = {
   id: string;
@@ -160,6 +162,7 @@ export function MessagesInbox({
   const searchParams = useSearchParams();
   const queryId = searchParams.get("c") || initialConversationId;
   const { account, showToast } = useAppUi();
+  const stories = useStoriesOptional();
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [listCursor, setListCursor] = useState<string | null>(null);
@@ -248,6 +251,13 @@ export function MessagesInbox({
   useEffect(() => {
     void loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    const ids = conversations
+      .map((c) => otherParticipant(c, myId)?.id)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length) void stories?.refreshRings(ids);
+  }, [conversations, myId, stories]);
 
   useEffect(() => {
     setActiveId(queryId);
@@ -485,28 +495,51 @@ export function MessagesInbox({
                 {conversations.map((c) => {
                   const other = otherParticipant(c, myId);
                   const selected = c.id === activeId;
+                  const profileHref = other?.slug
+                    ? `/members/${other.slug}`
+                    : null;
                   return (
                     <li key={c.id}>
-                      <button
-                        type="button"
-                        onClick={() => selectConversation(c.id)}
-                        className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${
+                      <div
+                        className={`flex w-full items-start gap-3 px-4 py-3 ${
                           selected
                             ? "bg-electric/15"
                             : "hover:bg-white/[0.04]"
                         }`}
                       >
-                        <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-navy-mid">
-                          <Image
-                            src={memberPhoto(other?.photo)}
-                            alt=""
-                            fill
-                            sizes="40px"
-                            unoptimized
-                            className="object-cover"
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1">
+                        {other?.id ? (
+                          <StoryAvatar
+                            userId={other.id}
+                            profileHref={profileHref}
+                            size={40}
+                            className="rounded-lg ring-1 ring-white/10"
+                          >
+                            <Image
+                              src={memberPhoto(other.photo)}
+                              alt=""
+                              fill
+                              sizes="40px"
+                              unoptimized
+                              className="object-cover"
+                            />
+                          </StoryAvatar>
+                        ) : (
+                          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-navy-mid">
+                            <Image
+                              src={memberPhoto(other?.photo)}
+                              alt=""
+                              fill
+                              sizes="40px"
+                              unoptimized
+                              className="object-cover"
+                            />
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => selectConversation(c.id)}
+                          className="min-w-0 flex-1 text-left"
+                        >
                           <div className="flex items-center gap-2">
                             <span
                               className={`truncate text-sm ${
@@ -534,8 +567,8 @@ export function MessagesInbox({
                           >
                             {previewText(c.lastMessage)}
                           </p>
-                        </div>
-                      </button>
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -584,16 +617,36 @@ export function MessagesInbox({
                 >
                   Back
                 </button>
-                <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-navy-mid">
-                  <Image
-                    src={memberPhoto(activeOther?.photo)}
-                    alt=""
-                    fill
-                    sizes="36px"
-                    unoptimized
-                    className="object-cover"
-                  />
-                </div>
+                {activeOther?.id ? (
+                  <StoryAvatar
+                    userId={activeOther.id}
+                    profileHref={
+                      activeOther.slug ? `/members/${activeOther.slug}` : null
+                    }
+                    size={36}
+                    className="rounded-lg ring-1 ring-white/10"
+                  >
+                    <Image
+                      src={memberPhoto(activeOther.photo)}
+                      alt=""
+                      fill
+                      sizes="36px"
+                      unoptimized
+                      className="object-cover"
+                    />
+                  </StoryAvatar>
+                ) : (
+                  <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-navy-mid">
+                    <Image
+                      src={memberPhoto(activeOther?.photo)}
+                      alt=""
+                      fill
+                      sizes="36px"
+                      unoptimized
+                      className="object-cover"
+                    />
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-white">
                     {activeOther?.name ||

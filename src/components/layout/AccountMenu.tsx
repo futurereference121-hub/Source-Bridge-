@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut } from "lucide-react";
@@ -7,6 +8,9 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import type { AccountSession } from "@/lib/types";
 import { useInboxUnread } from "@/hooks/useInboxUnread";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { memberPhoto } from "@/lib/placeholders";
 
 /**
  * Smart destination for a logged-in account's "home".
@@ -40,9 +44,14 @@ export function AccountMenu({
   variant?: "home" | "internal";
 }) {
   const { account, signOut } = useAppUi();
+  const stories = useStoriesOptional();
   const { unreadCount } = useInboxUnread();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (account?.id) void stories?.refreshRings([account.id]);
+  }, [account?.id, stories]);
 
   useEffect(() => {
     if (!open) return;
@@ -87,7 +96,24 @@ export function AccountMenu({
       : "inline-flex h-10 items-center gap-1.5 rounded-lg px-2 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:text-white/80";
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative flex items-center gap-2" ref={ref}>
+      {account?.id && !isAdmin ? (
+        <StoryAvatar
+          userId={account.id}
+          isSelf
+          size={36}
+          className="rounded-lg ring-1 ring-white/15"
+        >
+          <Image
+            src={memberPhoto(account.photo)}
+            alt=""
+            fill
+            sizes="36px"
+            unoptimized
+            className="object-cover"
+          />
+        </StoryAvatar>
+      ) : null}
       <button
         type="button"
         className={triggerClass}

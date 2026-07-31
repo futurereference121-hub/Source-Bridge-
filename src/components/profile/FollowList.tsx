@@ -8,6 +8,8 @@ import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { memberPhoto } from "@/lib/placeholders";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
+import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 type FollowCard = {
   id: string;
@@ -29,6 +31,7 @@ export function FollowList({
   title: string;
 }) {
   const { account, signedIn, authReady, follows, followMember, requireAuth } = useAppUi();
+  const stories = useStoriesOptional();
   const [items, setItems] = useState<FollowCard[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -46,6 +49,11 @@ export function FollowList({
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
   }, [authReady, kind, signedIn, userId]);
+
+  useEffect(() => {
+    const ids = items.map((i) => i.id);
+    if (ids.length) void stories?.refreshRings(ids);
+  }, [items, stories]);
 
   if (!authReady || loading) {
     return <Shell title={title}><p className="text-white/45">Loading…</p></Shell>;
@@ -67,7 +75,21 @@ export function FollowList({
       <div className="space-y-3">
         {items.map((item) => (
           <article key={item.id} className="panel-navy flex items-center gap-4 rounded-xl p-4">
-            <Image src={memberPhoto(item.photo)} alt="" width={56} height={56} className="h-14 w-14 rounded-xl object-cover" />
+            <StoryAvatar
+              userId={item.id}
+              isSelf={account?.id === item.id}
+              profileHref={`/members/${item.slug}`}
+              size={56}
+              className="rounded-xl ring-1 ring-white/10"
+            >
+              <Image
+                src={memberPhoto(item.photo)}
+                alt=""
+                fill
+                sizes="56px"
+                className="object-cover"
+              />
+            </StoryAvatar>
             <Link href={`/members/${item.slug}`} className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 truncate font-medium text-white">
                 <span className="truncate">@{item.username}</span>
