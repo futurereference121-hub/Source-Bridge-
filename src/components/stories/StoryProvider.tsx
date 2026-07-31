@@ -116,7 +116,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         onClose={() => setCreateOpen(false)}
         onSuccess={() => {
           setCreateOpen(false);
-          showToast("Story added successfully.");
+          showToast("Story added.");
           if (account?.id) {
             void refreshRings([account.id]);
             setViewerUserId(account.id);

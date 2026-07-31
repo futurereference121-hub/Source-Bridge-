@@ -95,9 +95,13 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
           <StoryAvatar
             userId={member.id}
-            isSelf={isOwner || account?.id === member.id}
+            isSelf={
+              (isOwner || account?.id === member.id) &&
+              !(account?.role === "ADMIN" || account?.isAdmin)
+            }
             profileHref={`/members/${member.slug}`}
             size={112}
+            showAddLabel
             className="border-[3px] border-[#020b1c] shadow-[0_0_32px_rgba(59,130,246,0.18)] sm:!h-28 sm:!w-28"
           >
             <SafeMemberImage

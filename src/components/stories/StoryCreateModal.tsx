@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { X } from "lucide-react";
 import {
+  ALLOWED_STORY_VIDEO_TYPES,
+  MAX_ACTIVE_STORY_SECONDS,
   MAX_STORY_CLIP_BYTES,
   MAX_STORY_CLIP_SECONDS,
   STORY_FORMAT_HINT,
@@ -10,33 +18,120 @@ import {
   STORY_VIDEO_ACCEPT,
 } from "@/lib/story-constants";
 
+type Step = "choose" | "preview" | "uploading";
+
 type Props = {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
 };
 
+function formatBytes(n: number) {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatSeconds(n: number) {
+  const s = Math.round(n);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r}s`;
+}
+
+function mimeLabel(type: string) {
+  if (type.includes("mp4")) return "MP4";
+  if (type.includes("webm")) return "WebM";
+  if (type.includes("quicktime")) return "MOV";
+  return type || "Video";
+}
+
 export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const recordRef = useRef<HTMLInputElement>(null);
+  const chooseRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const previewUrlRef = useRef<string | null>(null);
+
+  const [step, setStep] = useState<Step>("choose");
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [duration, setDuration] = useState(0);
+  const [activeSeconds, setActiveSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
-  const [fileName, setFileName] = useState("");
+  const [captureHint, setCaptureHint] = useState("");
+
+  const revokePreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewUrl(null);
+  }, []);
+
+  const reset = useCallback(() => {
+    setStep("choose");
+    setFile(null);
+    setDuration(0);
+    setBusy(false);
+    setProgress(0);
+    setError("");
+    setCaptureHint("");
+    revokePreview();
+    if (recordRef.current) recordRef.current.value = "";
+    if (chooseRef.current) chooseRef.current.value = "";
+  }, [revokePreview]);
 
   useEffect(() => {
     if (!open) {
-      setBusy(false);
-      setProgress(0);
-      setError("");
-      setFileName("");
+      reset();
+      return;
     }
-  }, [open]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/stories");
+        if (!res.ok) return;
+        const data = (await res.json()) as { activeSeconds?: number };
+        if (!cancelled) setActiveSeconds(data.activeSeconds || 0);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, reset]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape" && !busy) {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    const prev = document.activeElement as HTMLElement | null;
+    queueMicrotask(() => {
+      dialogRef.current
+        ?.querySelector<HTMLElement>("button, [href], input, [tabindex]")
+        ?.focus();
+    });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      prev?.focus?.();
+    };
+  }, [open, busy, onClose]);
 
   if (!open) return null;
 
-  async function readDuration(file: File): Promise<number> {
+  async function readDuration(selected: File): Promise<number> {
     return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
+      const url = URL.createObjectURL(selected);
       const video = document.createElement("video");
       video.preload = "metadata";
       video.onloadedmetadata = () => {
@@ -53,12 +148,57 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     });
   }
 
-  async function capturePoster(file: File): Promise<Blob | null> {
+  function validateClient(selected: File, dur: number): string | null {
+    const mime = selected.type || "";
+    const okType =
+      !mime ||
+      ALLOWED_STORY_VIDEO_TYPES.has(mime) ||
+      /\.(mp4|webm|mov)$/i.test(selected.name);
+    if (!okType) return "This video format is not supported.";
+    if (selected.size <= 0) return "Empty file.";
+    if (selected.size > MAX_STORY_CLIP_BYTES) {
+      return "This file is too large. Each Story clip can be up to 50 MB.";
+    }
+    if (dur > MAX_STORY_CLIP_SECONDS + 0.5) {
+      return "Each Story clip can be up to 90 seconds.";
+    }
+    if (activeSeconds + Math.round(dur) > MAX_ACTIVE_STORY_SECONDS) {
+      return "You have reached your 90-minute active Story limit.";
+    }
+    return null;
+  }
+
+  async function acceptFile(selected: File) {
+    setError("");
+    setCaptureHint("");
+    let dur = 0;
     try {
-      const url = URL.createObjectURL(file);
+      dur = await readDuration(selected);
+    } catch {
+      setError("Could not read this video. Try MP4 or a shorter clip.");
+      return;
+    }
+    const invalid = validateClient(selected, dur);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    revokePreview();
+    const url = URL.createObjectURL(selected);
+    previewUrlRef.current = url;
+    setPreviewUrl(url);
+    setFile(selected);
+    setDuration(dur);
+    setStep("preview");
+  }
+
+  async function capturePoster(selected: File): Promise<Blob | null> {
+    try {
+      const url = URL.createObjectURL(selected);
       const video = document.createElement("video");
       video.src = url;
       video.muted = true;
+      video.playsInline = true;
       await video.play().catch(() => undefined);
       video.pause();
       video.currentTime = Math.min(0.4, (video.duration || 1) * 0.1);
@@ -84,30 +224,20 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     }
   }
 
-  async function uploadFile(file: File) {
-    setError("");
-    setFileName(file.name);
-    if (file.size > MAX_STORY_CLIP_BYTES) {
-      setError("Video too large. Each Story clip can be up to 50 MB.");
+  async function confirmUpload() {
+    if (!file || busy) return;
+    const invalid = validateClient(file, duration);
+    if (invalid) {
+      setError(invalid);
       return;
     }
-    let duration = 0;
-    try {
-      duration = await readDuration(file);
-    } catch {
-      setError("Could not read video duration. Try MP4 or MOV.");
-      return;
-    }
-    if (duration > MAX_STORY_CLIP_SECONDS + 0.5) {
-      setError("Each Story clip can be up to 90 seconds long.");
-      return;
-    }
-
     setBusy(true);
+    setStep("uploading");
     setProgress(8);
+    setError("");
     try {
       const poster = await capturePoster(file);
-      setProgress(20);
+      setProgress(18);
       const form = new FormData();
       form.append("file", file);
       form.append("durationSec", String(duration));
@@ -118,8 +248,7 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
         xhr.open("POST", "/api/stories");
         xhr.upload.onprogress = (ev) => {
           if (!ev.lengthComputable) return;
-          const pct = 20 + Math.round((ev.loaded / ev.total) * 70);
-          setProgress(pct);
+          setProgress(18 + Math.round((ev.loaded / ev.total) * 72));
         };
         xhr.onload = () => {
           try {
@@ -137,105 +266,243 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
             reject(new Error("Upload failed"));
           }
         };
-        xhr.onerror = () => reject(new Error("Upload failed"));
+        xhr.onerror = () => reject(new Error("Upload failed. Check your connection and retry."));
         xhr.send(form);
       });
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
+      setStep("preview");
     } finally {
       setBusy(false);
     }
   }
 
+  function openRecord() {
+    setError("");
+    setCaptureHint(
+      "If your browser cannot open the camera, record a short video with your device, then use Choose Video.",
+    );
+    recordRef.current?.click();
+  }
+
+  function openChoose() {
+    setError("");
+    setCaptureHint("");
+    chooseRef.current?.click();
+  }
+
+  const remaining = Math.max(0, MAX_ACTIVE_STORY_SECONDS - activeSeconds);
+
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 p-4 sm:items-center">
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/65 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:items-center sm:p-4">
       <div
+        ref={dialogRef}
         role="dialog"
-        aria-labelledby="create-story-title"
-        className="w-full max-w-md rounded-xl border border-white/15 bg-[#071428] p-5 text-white shadow-2xl"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="flex max-h-[min(92svh,40rem)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-white/15 bg-[#071428] text-white shadow-2xl"
       >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 id="create-story-title" className="font-display text-2xl">
-              Create Story
+        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-4 py-4 sm:px-5">
+          <div className="min-w-0">
+            <h2 id={titleId} className="font-display text-2xl">
+              {step === "choose"
+                ? "Add Story"
+                : step === "preview"
+                  ? "Preview Story"
+                  : "Uploading"}
             </h2>
-            <p className="mt-2 text-sm text-white/60">
-              Show people where you are and what you can access right now.
-            </p>
-            <p className="mt-2 text-xs text-electric/90">
-              Show us the local market.
-            </p>
+            {step === "choose" ? (
+              <>
+                <p className="mt-1.5 text-sm text-white/60">
+                  Show people where you are and what you can access right now.
+                </p>
+                <p className="mt-1 text-xs text-electric/90">
+                  Show us the local market.
+                </p>
+              </>
+            ) : null}
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-white/50 hover:text-white"
+            disabled={busy}
+            className="rounded-lg p-2 text-white/50 hover:text-white disabled:opacity-40"
             aria-label="Close"
           >
             <X size={18} />
           </button>
         </div>
-        <p className="mt-4 text-xs leading-relaxed text-white/45">
-          {STORY_PRIVACY_NOTICE}
-        </p>
-        <p className="mt-2 text-[11px] text-white/40">{STORY_FORMAT_HINT}</p>
 
-        <input
-          ref={inputRef}
-          type="file"
-          accept={STORY_VIDEO_ACCEPT}
-          capture="environment"
-          className="sr-only"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            e.target.value = "";
-            if (f) void uploadFile(f);
-          }}
-        />
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+          <input
+            ref={recordRef}
+            type="file"
+            accept={STORY_VIDEO_ACCEPT}
+            capture="environment"
+            className="sr-only"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void acceptFile(f);
+            }}
+          />
+          <input
+            ref={chooseRef}
+            type="file"
+            accept={STORY_VIDEO_ACCEPT}
+            className="sr-only"
+            aria-hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void acceptFile(f);
+            }}
+          />
 
-        {error ? (
-          <p className="mt-4 text-sm text-red-300">{error}</p>
-        ) : null}
-        {busy ? (
-          <div className="mt-4">
-            <p className="text-xs text-white/55">
-              Uploading{fileName ? ` “${fileName}”` : ""}… {progress}%
-            </p>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-              <div
-                className="h-full bg-electric transition-[width]"
-                style={{ width: `${progress}%` }}
-              />
+          {step === "choose" ? (
+            <div className="space-y-3">
+              <p className="text-xs leading-relaxed text-white/45">
+                {STORY_PRIVACY_NOTICE}
+              </p>
+              <p className="text-[11px] text-white/40">{STORY_FORMAT_HINT}</p>
+              <p className="text-[11px] text-white/40">
+                Active Story time remaining: {formatSeconds(remaining)} of 90
+                minutes.
+              </p>
+              {captureHint ? (
+                <p className="text-xs text-white/50">{captureHint}</p>
+              ) : null}
+              {error ? (
+                <p className="text-sm text-red-300" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              <div className="flex flex-col gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={openRecord}
+                  className="min-h-12 rounded-lg bg-electric px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
+                >
+                  Record Story
+                </button>
+                <button
+                  type="button"
+                  onClick={openChoose}
+                  className="min-h-12 rounded-lg border border-white/20 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white/85 hover:border-white/40"
+                >
+                  Choose Video
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="min-h-11 py-2 text-xs uppercase tracking-[0.12em] text-white/45 hover:text-white"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="mt-5 flex flex-col gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => inputRef.current?.click()}
-              className="rounded-lg bg-electric px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
-            >
-              Upload Video
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => inputRef.current?.click()}
-              className="rounded-lg border border-white/20 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white/80 hover:border-white/40"
-            >
-              Record / Choose from device
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="py-2 text-xs uppercase tracking-[0.12em] text-white/45 hover:text-white"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+          ) : null}
+
+          {(step === "preview" || step === "uploading") && file && previewUrl ? (
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-xl bg-black">
+                <video
+                  ref={videoRef}
+                  src={previewUrl}
+                  controls
+                  playsInline
+                  className="mx-auto max-h-[min(46svh,22rem)] w-full bg-black object-contain"
+                />
+              </div>
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs text-white/55">
+                <div>
+                  <dt className="uppercase tracking-[0.12em] text-white/35">
+                    Duration
+                  </dt>
+                  <dd className="mt-0.5 text-white/85">
+                    {formatSeconds(duration)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="uppercase tracking-[0.12em] text-white/35">
+                    Size
+                  </dt>
+                  <dd className="mt-0.5 text-white/85">
+                    {formatBytes(file.size)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="uppercase tracking-[0.12em] text-white/35">
+                    Type
+                  </dt>
+                  <dd className="mt-0.5 text-white/85">
+                    {mimeLabel(file.type)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="uppercase tracking-[0.12em] text-white/35">
+                    Allowance
+                  </dt>
+                  <dd className="mt-0.5 text-white/85">
+                    {formatSeconds(activeSeconds)} / 90m used
+                  </dd>
+                </div>
+              </dl>
+              <p className="text-xs text-white/45">
+                Stories are public and expire after 24 hours.
+              </p>
+              {error ? (
+                <p className="text-sm text-red-300" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              {step === "uploading" || busy ? (
+                <div aria-live="polite">
+                  <p className="text-xs text-white/55">
+                    Uploading… {progress}%
+                  </p>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full bg-electric transition-[width] motion-reduce:transition-none"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void confirmUpload()}
+                    className="min-h-12 rounded-lg bg-electric px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
+                  >
+                    Add to Story
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openChoose}
+                    className="min-h-11 rounded-lg border border-white/20 px-4 py-2.5 text-xs uppercase tracking-[0.12em] text-white/75 hover:border-white/40"
+                  >
+                    Replace video
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      reset();
+                      onClose();
+                    }}
+                    className="min-h-11 py-2 text-xs uppercase tracking-[0.12em] text-white/45 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

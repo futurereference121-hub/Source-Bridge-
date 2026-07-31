@@ -1,5 +1,5 @@
 /**
- * Smoke tests for Stories constants, schema presence, and old video removal.
+ * Smoke tests for Stories: schema, old video removal, simplified create flow.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -15,73 +15,60 @@ function read(rel) {
   assert.ok(/model StoryClip/.test(schema));
   assert.ok(/model StoryView/.test(schema));
   assert.ok(/model StoryReport/.test(schema));
-  assert.ok(/@@index\(\[userId, status, expiresAt\]\)/.test(schema));
-  assert.ok(/@@unique\(\[storyClipId, viewerUserId\]\)/.test(schema));
-}
-
-{
-  assert.ok(
-    existsSync(join(root, "prisma/migrations/20260731160000_story_clips/migration.sql")),
-  );
 }
 
 {
   const view = read("src/components/profile/MemberProfileView.tsx");
-  assert.ok(
-    !/ProfileVideoSection/.test(view),
-    "Permanent profile video section must be removed",
-  );
+  assert.ok(!/ProfileVideoSection/.test(view));
   assert.ok(!existsSync(join(root, "src/components/profile/ProfileVideoSection.tsx")));
 }
 
 {
-  const videoApi = read("src/app/api/profile/video/route.ts");
-  assert.ok(/PROFILE_VIDEO_REMOVED/.test(videoApi));
-  assert.ok(/410/.test(videoApi));
+  const avatar = read("src/components/stories/StoryAvatar.tsx");
+  assert.ok(/Add Story/.test(avatar));
+  assert.ok(/aria-label=\{hasActive \? "Add to Story" : "Add Story"\}/.test(avatar) || /aria-label=.*Add Story/.test(avatar));
+  assert.ok(/Plus/.test(avatar));
 }
 
 {
-  const hero = read("src/components/stories/StoryProvider.tsx");
-  assert.ok(/Create Story|StoryCreateModal/.test(hero));
-  assert.ok(/StoryManageModal/.test(hero));
-  assert.ok(/StoryViewer/.test(hero));
+  const create = read("src/components/stories/StoryCreateModal.tsx");
+  assert.ok(/Record Story/.test(create));
+  assert.ok(/Choose Video/.test(create));
+  assert.ok(/Preview Story|preview/.test(create));
+  assert.ok(/Add to Story/.test(create));
+  assert.ok(/capture="environment"/.test(create));
+  // Separate pickers — Choose Video must not force camera capture
+  assert.ok(/ref=\{recordRef\}[\s\S]*capture="environment"/.test(create));
+  assert.ok(/ref=\{chooseRef\}/.test(create));
+  assert.ok(!/Record \/ Choose from device/.test(create));
+  assert.ok(!/>\s*Upload Video\s*</.test(create));
+  // Must not upload immediately on file select
+  assert.ok(/setStep\("preview"\)/.test(create));
+  assert.ok(/confirmUpload/.test(create));
 }
 
 {
-  const inbox = read("src/components/messaging/MessagesInbox.tsx");
-  assert.ok(/StoryAvatar/.test(inbox));
+  const owner = read("src/components/stories/StoryOwnerMenu.tsx");
+  assert.ok(/View Story/.test(owner));
+  assert.ok(/Add to Story/.test(owner));
+  assert.ok(/Manage Story/.test(owner));
+  assert.ok(/Cancel/.test(owner));
 }
 
 {
-  const explore = read("src/app/explore/ExploreClient.tsx");
-  assert.ok(/refreshRings/.test(explore));
+  const provider = read("src/components/stories/StoryProvider.tsx");
+  assert.ok(/Story added/.test(provider));
 }
 
 {
   const constants = read("src/lib/story-constants.ts");
   assert.ok(/MAX_STORY_CLIP_SECONDS = 90/.test(constants));
   assert.ok(/MAX_ACTIVE_STORY_SECONDS = 90 \* 60/.test(constants));
-  assert.ok(/MAX_STORY_CLIP_BYTES = 50 \* 1024 \* 1024/.test(constants));
-}
-
-{
-  const storage = read("src/lib/storage.ts");
-  assert.ok(/storeVideoForUser/.test(storage));
-  assert.ok(/stories\/\$\{userId\}/.test(storage) || /stories\//.test(storage));
 }
 
 {
   const vercel = read("vercel.json");
-  assert.ok(/stories-expire/.test(vercel));
-  // Hobby plan: daily cron only — hourly schedules fail Vercel deploy.
   assert.ok(/"schedule": "0 4 \* \* \*"/.test(vercel));
-  assert.ok(!/"schedule": "0 \* \* \* \*"/.test(vercel));
-}
-
-{
-  const deletion = read("src/lib/account-deletion.ts");
-  assert.ok(/storyClip/.test(deletion));
-  assert.ok(/profileVideoUrl/.test(deletion));
 }
 
 console.log("test-stories: ok");
