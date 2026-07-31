@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { X } from "lucide-react";
+import { upload } from "@vercel/blob/client";
 import {
   ALLOWED_STORY_VIDEO_TYPES,
   MAX_ACTIVE_STORY_SECONDS,
@@ -16,6 +17,10 @@ import {
   STORY_FORMAT_HINT,
   STORY_PRIVACY_NOTICE,
   STORY_VIDEO_ACCEPT,
+  StoryUploadErrorCode,
+  resolveStoryMime,
+  storyErrorMessage,
+  type StoryUploadErrorCode as StoryErrorCode,
 } from "@/lib/story-constants";
 
 type Step = "choose" | "preview" | "uploading";
@@ -46,6 +51,19 @@ function mimeLabel(type: string) {
   return type || "Video";
 }
 
+function messageFromResponse(json: {
+  error?: string;
+  code?: string;
+  requestId?: string;
+}): string {
+  const code = json.code as StoryErrorCode | undefined;
+  if (code && Object.values(StoryUploadErrorCode).includes(code)) {
+    return storyErrorMessage(code, json.requestId);
+  }
+  if (json.error) return json.error;
+  return storyErrorMessage(StoryUploadErrorCode.UNKNOWN, json.requestId);
+}
+
 export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
   const titleId = useId();
   const recordRef = useRef<HTMLInputElement>(null);
@@ -58,10 +76,12 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
+  const [durationUnknown, setDurationUnknown] = useState(false);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState("");
   const [captureHint, setCaptureHint] = useState("");
 
   const revokePreview = useCallback(() => {
@@ -76,9 +96,11 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     setStep("choose");
     setFile(null);
     setDuration(0);
+    setDurationUnknown(false);
     setBusy(false);
     setProgress(0);
     setError("");
+    setErrorCode("");
     setCaptureHint("");
     revokePreview();
     if (recordRef.current) recordRef.current.value = "";
@@ -129,55 +151,72 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
 
   if (!open) return null;
 
-  async function readDuration(selected: File): Promise<number> {
-    return new Promise((resolve, reject) => {
+  async function readDuration(selected: File): Promise<number | null> {
+    return new Promise((resolve) => {
       const url = URL.createObjectURL(selected);
       const video = document.createElement("video");
       video.preload = "metadata";
-      video.onloadedmetadata = () => {
-        const d = video.duration;
+      const done = (value: number | null) => {
         URL.revokeObjectURL(url);
-        if (!Number.isFinite(d) || d <= 0) reject(new Error("duration"));
-        else resolve(d);
+        resolve(value);
+      };
+      const timer = window.setTimeout(() => done(null), 4000);
+      video.onloadedmetadata = () => {
+        window.clearTimeout(timer);
+        const d = video.duration;
+        if (!Number.isFinite(d) || d <= 0 || d === Infinity) done(null);
+        else done(d);
       };
       video.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("duration"));
+        window.clearTimeout(timer);
+        done(null);
       };
       video.src = url;
     });
   }
 
-  function validateClient(selected: File, dur: number): string | null {
-    const mime = selected.type || "";
+  function validateClient(selected: File, dur: number | null): string | null {
+    const mime = resolveStoryMime({
+      mime: selected.type,
+      filename: selected.name,
+    });
     const okType =
-      !mime ||
-      ALLOWED_STORY_VIDEO_TYPES.has(mime) ||
-      /\.(mp4|webm|mov)$/i.test(selected.name);
-    if (!okType) return "This video format is not supported.";
+      Boolean(mime) ||
+      !selected.type ||
+      ALLOWED_STORY_VIDEO_TYPES.has(selected.type) ||
+      /\.(mp4|webm|mov|m4v)$/i.test(selected.name);
+    if (!okType || (selected.type && !mime && !/\.(mp4|webm|mov|m4v)$/i.test(selected.name))) {
+      if (selected.type && !mime) {
+        return storyErrorMessage(StoryUploadErrorCode.UNSUPPORTED_FORMAT);
+      }
+    }
+    if (!mime && selected.type && !ALLOWED_STORY_VIDEO_TYPES.has(selected.type)) {
+      return storyErrorMessage(StoryUploadErrorCode.UNSUPPORTED_FORMAT);
+    }
+    if (!mime && !selected.type && !/\.(mp4|webm|mov|m4v)$/i.test(selected.name)) {
+      return storyErrorMessage(StoryUploadErrorCode.UNSUPPORTED_FORMAT);
+    }
     if (selected.size <= 0) return "Empty file.";
     if (selected.size > MAX_STORY_CLIP_BYTES) {
-      return "This file is too large. Each Story clip can be up to 50 MB.";
+      return storyErrorMessage(StoryUploadErrorCode.FILE_TOO_LARGE);
     }
-    if (dur > MAX_STORY_CLIP_SECONDS + 0.5) {
-      return "Each Story clip can be up to 90 seconds.";
+    if (dur !== null && dur > MAX_STORY_CLIP_SECONDS + 0.5) {
+      return storyErrorMessage(StoryUploadErrorCode.DURATION_INVALID);
     }
-    if (activeSeconds + Math.round(dur) > MAX_ACTIVE_STORY_SECONDS) {
-      return "You have reached your 90-minute active Story limit.";
+    if (
+      dur !== null &&
+      activeSeconds + Math.round(dur) > MAX_ACTIVE_STORY_SECONDS
+    ) {
+      return storyErrorMessage(StoryUploadErrorCode.QUOTA_EXCEEDED);
     }
     return null;
   }
 
   async function acceptFile(selected: File) {
     setError("");
+    setErrorCode("");
     setCaptureHint("");
-    let dur = 0;
-    try {
-      dur = await readDuration(selected);
-    } catch {
-      setError("Could not read this video. Try MP4 or a shorter clip.");
-      return;
-    }
+    const dur = await readDuration(selected);
     const invalid = validateClient(selected, dur);
     if (invalid) {
       setError(invalid);
@@ -188,7 +227,8 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     previewUrlRef.current = url;
     setPreviewUrl(url);
     setFile(selected);
-    setDuration(dur);
+    setDuration(dur || 0);
+    setDurationUnknown(dur === null);
     setStep("preview");
   }
 
@@ -226,60 +266,173 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
 
   async function confirmUpload() {
     if (!file || busy) return;
-    const invalid = validateClient(file, duration);
+    const invalid = validateClient(file, durationUnknown ? null : duration);
     if (invalid) {
       setError(invalid);
       return;
     }
     setBusy(true);
     setStep("uploading");
-    setProgress(8);
+    setProgress(4);
     setError("");
+    setErrorCode("");
     try {
       const poster = await capturePoster(file);
-      setProgress(18);
+      setProgress(8);
+
+      const mime =
+        resolveStoryMime({ mime: file.type, filename: file.name }) ||
+        file.type ||
+        "video/mp4";
+
+      const prepareRes = await fetch("/api/stories/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: mime,
+          size: file.size,
+        }),
+      });
+      const prepareJson = (await prepareRes.json().catch(() => ({}))) as {
+        ok?: boolean;
+        pathname?: string;
+        uploadSessionId?: string;
+        contentType?: string;
+        error?: string;
+        code?: string;
+        requestId?: string;
+        useClientUpload?: boolean;
+      };
+      if (prepareRes.status === 401) {
+        throw Object.assign(
+          new Error(storyErrorMessage(StoryUploadErrorCode.AUTH_FAILED)),
+          { code: StoryUploadErrorCode.AUTH_FAILED },
+        );
+      }
+      if (!prepareRes.ok || !prepareJson.pathname || !prepareJson.uploadSessionId) {
+        // Local/dev fallback: small proxy upload when client Blob tokens unavailable.
+        if (prepareRes.status === 503 || prepareJson.code === StoryUploadErrorCode.STORAGE_FAILED) {
+          await proxyUploadLegacy(file, poster);
+          onSuccess();
+          return;
+        }
+        throw Object.assign(new Error(messageFromResponse(prepareJson)), {
+          code: prepareJson.code,
+        });
+      }
+
+      setProgress(12);
+      const blob = await upload(prepareJson.pathname, file, {
+        access: "public",
+        handleUploadUrl: "/api/stories/client-upload",
+        contentType: prepareJson.contentType || mime,
+        multipart: file.size > 5 * 1024 * 1024,
+        clientPayload: JSON.stringify({
+          uploadSessionId: prepareJson.uploadSessionId,
+          size: file.size,
+          contentType: prepareJson.contentType || mime,
+          filename: file.name,
+        }),
+        onUploadProgress: (ev) => {
+          setProgress(12 + Math.round((ev.percentage || 0) * 0.7));
+        },
+      });
+
+      setProgress(86);
       const form = new FormData();
-      form.append("file", file);
-      form.append("durationSec", String(duration));
+      form.append("pathname", blob.pathname);
+      form.append("url", blob.url);
+      form.append("contentType", prepareJson.contentType || mime);
+      form.append("size", String(file.size));
+      form.append("uploadSessionId", prepareJson.uploadSessionId);
+      form.append("originalFilename", file.name || "");
+      if (!durationUnknown && duration > 0) {
+        form.append("durationSec", String(duration));
+      }
       if (poster) form.append("poster", poster, "poster.jpg");
 
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/stories");
-        xhr.upload.onprogress = (ev) => {
-          if (!ev.lengthComputable) return;
-          setProgress(18 + Math.round((ev.loaded / ev.total) * 72));
-        };
-        xhr.onload = () => {
-          try {
-            const json = JSON.parse(xhr.responseText || "{}") as {
-              error?: string;
-              ok?: boolean;
-            };
-            if (xhr.status >= 200 && xhr.status < 300 && json.ok) {
-              setProgress(100);
-              resolve();
-            } else {
-              reject(new Error(json.error || "Upload failed"));
-            }
-          } catch {
-            reject(new Error("Upload failed"));
-          }
-        };
-        xhr.onerror = () => reject(new Error("Upload failed. Check your connection and retry."));
-        xhr.send(form);
+      const finRes = await fetch("/api/stories/finalize", {
+        method: "POST",
+        credentials: "same-origin",
+        body: form,
       });
+      const finJson = (await finRes.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        code?: string;
+        requestId?: string;
+      };
+      if (finRes.status === 401) {
+        throw Object.assign(
+          new Error(storyErrorMessage(StoryUploadErrorCode.AUTH_FAILED)),
+          { code: StoryUploadErrorCode.AUTH_FAILED },
+        );
+      }
+      if (!finRes.ok || !finJson.ok) {
+        throw Object.assign(new Error(messageFromResponse(finJson)), {
+          code: finJson.code,
+          requestId: finJson.requestId,
+        });
+      }
+      setProgress(100);
       onSuccess();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: string }).code || "")
+          : "";
+      const requestId =
+        err && typeof err === "object" && "requestId" in err
+          ? String((err as { requestId?: string }).requestId || "")
+          : "";
+      let message =
+        err instanceof Error ? err.message : storyErrorMessage(StoryUploadErrorCode.UNKNOWN);
+      if (
+        /Failed to fetch|NetworkError|Load failed|network/i.test(message) ||
+        (err instanceof TypeError && /fetch/i.test(message))
+      ) {
+        message = storyErrorMessage(StoryUploadErrorCode.NETWORK, requestId);
+      }
+      setErrorCode(code);
+      setError(message);
       setStep("preview");
     } finally {
       setBusy(false);
     }
   }
 
+  async function proxyUploadLegacy(selected: File, poster: Blob | null) {
+    const form = new FormData();
+    form.append("file", selected);
+    form.append(
+      "durationSec",
+      String(durationUnknown ? 1 : Math.max(1, duration)),
+    );
+    if (poster) form.append("poster", poster, "poster.jpg");
+    const res = await fetch("/api/stories", {
+      method: "POST",
+      credentials: "same-origin",
+      body: form,
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      code?: string;
+      requestId?: string;
+    };
+    if (!res.ok || !json.ok) {
+      throw Object.assign(new Error(messageFromResponse(json)), {
+        code: json.code,
+        requestId: json.requestId,
+      });
+    }
+  }
+
   function openRecord() {
     setError("");
+    setErrorCode("");
     setCaptureHint(
       "If your browser cannot open the camera, record a short video with your device, then use Choose Video.",
     );
@@ -288,6 +441,7 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
 
   function openChoose() {
     setError("");
+    setErrorCode("");
     setCaptureHint("");
     chooseRef.current?.click();
   }
@@ -424,7 +578,9 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
                     Duration
                   </dt>
                   <dd className="mt-0.5 text-white/85">
-                    {formatSeconds(duration)}
+                    {durationUnknown
+                      ? "Verified on upload"
+                      : formatSeconds(duration)}
                   </dd>
                 </div>
                 <div>
@@ -440,7 +596,12 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
                     Type
                   </dt>
                   <dd className="mt-0.5 text-white/85">
-                    {mimeLabel(file.type)}
+                    {mimeLabel(
+                      resolveStoryMime({
+                        mime: file.type,
+                        filename: file.name,
+                      }) || file.type,
+                    )}
                   </dd>
                 </div>
                 <div>
@@ -452,12 +613,22 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
                   </dd>
                 </div>
               </dl>
+              {durationUnknown ? (
+                <p className="text-xs text-white/45">
+                  Duration will be verified during upload.
+                </p>
+              ) : null}
               <p className="text-xs text-white/45">
                 Stories are public and expire after 24 hours.
               </p>
               {error ? (
                 <p className="text-sm text-red-300" role="alert">
                   {error}
+                  {errorCode ? (
+                    <span className="mt-1 block text-[11px] text-red-300/70">
+                      {errorCode}
+                    </span>
+                  ) : null}
                 </p>
               ) : null}
               {step === "uploading" || busy ? (
@@ -479,14 +650,14 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
                     onClick={() => void confirmUpload()}
                     className="min-h-12 rounded-lg bg-electric px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-white hover:bg-electric-hover"
                   >
-                    Add to Story
+                    {error ? "Retry" : "Add to Story"}
                   </button>
                   <button
                     type="button"
                     onClick={openChoose}
                     className="min-h-11 rounded-lg border border-white/20 px-4 py-2.5 text-xs uppercase tracking-[0.12em] text-white/75 hover:border-white/40"
                   >
-                    Replace video
+                    Choose Another Video
                   </button>
                   <button
                     type="button"

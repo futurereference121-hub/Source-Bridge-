@@ -62,8 +62,13 @@ function getProvider(): "vercel-blob" | "local" {
 }
 
 /** Public listing/profile Blob token. */
-function getPublicBlobToken(): string | undefined {
+export function getPublicBlobToken(): string | undefined {
   return process.env.BLOB_READ_WRITE_TOKEN || undefined;
+}
+
+/** True when browser → Blob client tokens can be signed (requires static RW token). */
+export function isClientBlobUploadConfigured(): boolean {
+  return Boolean(getPublicBlobToken());
 }
 
 /**

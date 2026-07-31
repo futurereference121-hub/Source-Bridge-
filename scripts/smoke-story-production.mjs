@@ -10,6 +10,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
+import { put } from "@vercel/blob";
 
 const BASE = process.env.SMOKE_BASE_URL || "https://www.sourcebridge.app";
 const PASSWORD = "StorySmoke!2026Aa";
@@ -141,23 +142,63 @@ async function main() {
       assert(Array.isArray(data.clips), "clips array missing");
     }
 
-    // Upload
+    // Upload via prepare → direct Blob put → finalize (mirrors mobile/desktop client path)
     {
+      const { res: prepRes, data: prep } = await api(jarA, "/api/stories/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: "clip.mp4",
+          contentType: "video/mp4",
+          size: bytes.length,
+        }),
+      });
+      assert(prepRes.ok, `prepare failed: ${prep.error || prepRes.status}`);
+      assert(prep.pathname && prep.uploadSessionId, "prepare missing pathname/session");
+
+      const token = process.env.BLOB_READ_WRITE_TOKEN;
+      assert(token, "BLOB_READ_WRITE_TOKEN required for smoke Blob put");
+      const blob = await put(prep.pathname, bytes, {
+        access: "public",
+        token,
+        contentType: "video/mp4",
+        addRandomSuffix: false,
+      });
+
       const form = new FormData();
-      form.append(
-        "file",
-        new Blob([bytes], { type: "video/mp4" }),
-        "clip.mp4",
-      );
+      form.append("pathname", blob.pathname);
+      form.append("url", blob.url);
+      form.append("contentType", "video/mp4");
+      form.append("size", String(bytes.length));
       form.append("durationSec", "2");
-      const { res, data } = await api(jarA, "/api/stories", {
+      form.append("uploadSessionId", prep.uploadSessionId);
+      form.append("originalFilename", "clip.mp4");
+      const { res, data } = await api(jarA, "/api/stories/finalize", {
         method: "POST",
         body: form,
       });
-      assert(res.ok, `upload failed: ${data.error || res.status}`);
+      assert(res.ok, `finalize failed: ${data.error || data.code || res.status}`);
       assert(data.clip?.id, "clip id missing");
       clipId = data.clip.id;
-      console.log(`Uploaded clip ${clipId}`);
+      console.log(`Uploaded clip ${clipId} via direct Blob`);
+
+      // Idempotent finalize retry must not duplicate
+      const retry = await api(jarA, "/api/stories/finalize", {
+        method: "POST",
+        body: (() => {
+          const f = new FormData();
+          f.append("pathname", blob.pathname);
+          f.append("url", blob.url);
+          f.append("contentType", "video/mp4");
+          f.append("size", String(bytes.length));
+          f.append("durationSec", "2");
+          f.append("uploadSessionId", prep.uploadSessionId);
+          f.append("originalFilename", "clip.mp4");
+          return f;
+        })(),
+      });
+      assert(retry.res.ok, `idempotent finalize failed: ${retry.data.error}`);
+      assert(retry.data.clip?.id === clipId, "finalize retry created duplicate clip");
     }
 
     // Ring for A

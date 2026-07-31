@@ -645,16 +645,20 @@ model StoryClip {
   /// PROCESSING | ACTIVE | FAILED | EXPIRED | DELETED
   status               String        @default("ACTIVE")
   originalFilename     String        @default("")
+  /// Client-generated id for idempotent finalisation after direct-to-Blob upload.
+  uploadSessionId      String?
   createdAt            DateTime      @default(now())
   expiresAt            DateTime
   deletedAt            DateTime?
   views                StoryView[]
   reports              StoryReport[]
 
+  @@unique([uploadSessionId])
   @@index([userId, status, expiresAt])
   @@index([expiresAt])
   @@index([userId, createdAt])
   @@index([status, expiresAt])
+  @@index([userId, blobPathname])
 }
 
 /// Unique authenticated view of a Story clip (owner views excluded from public count).
