@@ -7,6 +7,12 @@ export async function POST(req: Request) {
   try {
     const user = await getSessionUser();
     if (!user) return jsonError("Sign in required", 401);
+    if (user.isDemo) {
+      return jsonError(
+        "Showcase profiles cannot submit identity verification",
+        403,
+      );
+    }
     const body = await req.json().catch(() => ({}));
     const requestId = typeof body.requestId === "string" ? body.requestId : "";
     const request = await prisma.identityVerificationRequest.findFirst({
@@ -14,6 +20,12 @@ export async function POST(req: Request) {
       include: { documents: { where: { deletedAt: null }, select: { id: true } } },
     });
     if (!request) return jsonError("Verification draft not found", 404);
+    if (request.status === "PENDING") {
+      return Response.json(
+        { ok: true, requestId: request.id, status: "PENDING", alreadyPending: true },
+        { status: 200 },
+      );
+    }
     if (request.status !== "DRAFT") {
       return jsonError("This verification request has already been submitted", 409);
     }

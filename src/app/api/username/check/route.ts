@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
     return Response.json({
       available: false,
       username,
-      reason: "Invalid username. Use 3–30 letters, numbers, or underscores.",
+      reason: "Invalid username. Use 3–30 letters, numbers, dots or underscores.",
     });
   }
 

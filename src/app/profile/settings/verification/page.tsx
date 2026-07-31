@@ -20,6 +20,8 @@ type VerificationPayload = {
     status: string;
     documentType: string;
     rejectionReason: string;
+    submittedAt?: string | null;
+    createdAt?: string;
     documents: Array<{ id: string; kind: string; uploaded: boolean }>;
   } | null;
   /** False when private document storage isn't configured (e.g. missing PRIVATE_BLOB_READ_WRITE_TOKEN on Vercel). */
@@ -184,7 +186,6 @@ export default function IdentityVerificationPage() {
     }
     setBusy(true);
     try {
-      // Persist document type / notes, creating a draft if needed.
       const saveRes = await fetch("/api/verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -197,19 +198,6 @@ export default function IdentityVerificationPage() {
       const requestId =
         (saveJson.request?.id as string | undefined) || data?.request?.id;
       if (!requestId) throw new Error("Verification draft not found");
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: saveJson.request?.status || prev.status,
-              request: saveJson.request || prev.request,
-            }
-          : {
-              status: saveJson.request?.status || "DRAFT",
-              identityVerified: false,
-              request: saveJson.request,
-            },
-      );
 
       const res = await fetch("/api/verification/submit", {
         method: "POST",
@@ -217,17 +205,23 @@ export default function IdentityVerificationPage() {
         body: JSON.stringify({ requestId }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Could not submit request");
-      await refreshAccount();
-      showToast(
-        "Verification documents submitted successfully. Review may take up to 48 hours.",
-      );
-      const slug = account?.slug || account?.username;
-      if (slug) {
-        router.replace(`/members/${slug}?verification=submitted`);
-      } else {
-        router.replace("/profile?verification=submitted");
+      if (!res.ok) {
+        // Already pending → treat as success state and show the pending card.
+        const msg = String(json.error || "");
+        if (
+          res.status === 409 ||
+          /already|pending|submitted/i.test(msg)
+        ) {
+          await refreshAccount();
+          await load();
+          showToast("Verification documents submitted successfully.");
+          return;
+        }
+        throw new Error(msg || "Could not submit request");
       }
+      await refreshAccount();
+      await load();
+      showToast("Verification documents submitted successfully.");
     } catch (err) {
       showToast(
         err instanceof Error
@@ -255,10 +249,27 @@ export default function IdentityVerificationPage() {
     (account.identityVerified ? "VERIFIED" : "UNVERIFIED")
   ).toUpperCase();
   const verified = Boolean(data?.identityVerified || account.identityVerified);
-  const pending = status === "PENDING";
+  const pending =
+    status === "PENDING" || data?.request?.status === "PENDING";
   const rejected = status === "REJECTED";
   const isAdminViewer = account.role === "ADMIN" || Boolean(account.isAdmin);
   const storageUnavailable = data?.storageAvailable === false;
+  const docTypeLabel =
+    DOC_TYPES.find((d) => d.value === (data?.request?.documentType || documentType))
+      ?.label || "Identity document";
+  const submittedLabel = (() => {
+    const iso = data?.request?.submittedAt || data?.request?.createdAt;
+    if (!iso) return null;
+    try {
+      return new Date(iso).toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return null;
+    }
+  })();
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -279,7 +290,7 @@ export default function IdentityVerificationPage() {
         </p>
 
         <div className="mt-6 inline-flex items-center rounded-full border border-white/15 bg-white/[0.04] px-3 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-white/70">
-          Status: {verified ? "VERIFIED" : status}
+          Status: {verified ? "VERIFIED" : pending ? "PENDING" : status}
         </div>
 
         {verified ? (
@@ -287,6 +298,45 @@ export default function IdentityVerificationPage() {
             <p className="text-sm text-white/75">
               Your identity is verified. The Verified badge is visible on your
               public profile.
+            </p>
+            <Link
+              href="/profile/settings"
+              className="mt-5 inline-block text-xs uppercase tracking-[0.14em] text-electric hover:text-electric-hover"
+            >
+              Back to settings
+            </Link>
+          </section>
+        ) : pending ? (
+          <section className="panel-navy mt-8 rounded-xl px-5 py-6 sm:px-6">
+            <h2 className="font-display text-2xl text-white">
+              Verification Pending
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-white/70">
+              Your identity verification request has been submitted and is
+              currently under review. Review may take up to 48 hours.
+            </p>
+            <p className="mt-3 text-sm leading-relaxed text-white/50">
+              You will receive a Source Bridge inbox notification when your
+              request has been approved or if further information is required.
+            </p>
+            <dl className="mt-6 space-y-3 border-t border-white/10 pt-5 text-sm">
+              {submittedLabel ? (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-white/45">Submitted</dt>
+                  <dd className="text-white/85">{submittedLabel}</dd>
+                </div>
+              ) : null}
+              <div className="flex justify-between gap-4">
+                <dt className="text-white/45">Document type</dt>
+                <dd className="text-white/85">{docTypeLabel}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-white/45">Status</dt>
+                <dd className="font-medium text-amber-200">Pending</dd>
+              </div>
+            </dl>
+            <p className="mt-6 text-xs leading-relaxed text-white/45">
+              Documents cannot be changed while under review.
             </p>
             <Link
               href="/profile/settings"
@@ -398,7 +448,6 @@ export default function IdentityVerificationPage() {
                     data?.request?.documents.find((d) => d.kind === "front")?.id
                   }
                   busy={uploading === "front"}
-                  locked={pending || data?.request?.status === "PENDING"}
                   error={uploadErrors.front}
                   onFile={(f) => void uploadKind("front", f)}
                   onRetry={() => retryUpload("front")}
@@ -420,7 +469,6 @@ export default function IdentityVerificationPage() {
                         ?.id
                     }
                     busy={uploading === "back"}
-                    locked={pending || data?.request?.status === "PENDING"}
                     error={uploadErrors.back}
                     onFile={(f) => void uploadKind("back", f)}
                     onRetry={() => retryUpload("back")}
@@ -442,7 +490,6 @@ export default function IdentityVerificationPage() {
                       ?.id
                   }
                   busy={uploading === "selfie"}
-                  locked={pending || data?.request?.status === "PENDING"}
                   capture="user"
                   error={uploadErrors.selfie}
                   onFile={(f) => void uploadKind("selfie", f)}
@@ -457,35 +504,25 @@ export default function IdentityVerificationPage() {
                 />
               </div>
 
-              {data?.request?.status === "PENDING" || pending ? (
-                <p className="mt-5 text-sm text-amber-200/90">
-                  Verification pending. Documents are locked until review
-                  completes. Your Verified badge will not appear until an
-                  administrator approves your request.
-                </p>
-              ) : (
-                <p className="mt-5 text-sm text-white/60">
-                  {canSubmit
-                    ? "All required images uploaded. Submit for review when ready."
-                    : "Upload every required image before submitting."}
-                </p>
-              )}
+              <p className="mt-5 text-sm text-white/60">
+                {canSubmit
+                  ? "All required images uploaded. Submit for review when ready."
+                  : "Upload every required image before submitting."}
+              </p>
 
-              {!(data?.request?.status === "PENDING" || pending) ? (
-                <PrimaryButton
-                  type="button"
-                  showArrow={false}
-                  disabled={busy || !canSubmit || uploading !== null}
-                  onClick={() => void submitRequest()}
-                  className="mt-5 w-full rounded-lg sm:w-auto"
-                >
-                  {busy
-                    ? "Submitting…"
-                    : rejected
-                      ? "Update Verification Request"
-                      : "Submit Verification Request"}
-                </PrimaryButton>
-              ) : null}
+              <PrimaryButton
+                type="button"
+                showArrow={false}
+                disabled={busy || !canSubmit || uploading !== null}
+                onClick={() => void submitRequest()}
+                className="mt-5 w-full rounded-lg sm:w-auto"
+              >
+                {busy
+                  ? "Submitting…"
+                  : rejected
+                    ? "Update Verification Request"
+                    : "Submit Verification Request"}
+              </PrimaryButton>
             </section>
           </>
         )}

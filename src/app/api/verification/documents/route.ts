@@ -20,6 +20,12 @@ export async function POST(req: Request) {
   try {
     const user = await getSessionUser();
     if (!user) return jsonError("Sign in required", 401);
+    if (user.isDemo) {
+      return jsonError(
+        "Showcase profiles cannot submit identity verification",
+        403,
+      );
+    }
 
     if (user.identityVerified) {
       return jsonError("Your identity is already verified", 400);

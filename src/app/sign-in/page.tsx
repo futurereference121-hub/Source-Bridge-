@@ -7,6 +7,12 @@ import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 
+function safeUserNext(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/explore";
+  if (raw === "/admin" || raw.startsWith("/admin/")) return "/explore";
+  return raw;
+}
+
 function SignInForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -17,6 +23,10 @@ function SignInForm() {
 
   useEffect(() => {
     if (!authReady || !signedIn || !account) return;
+    if (account.role === "ADMIN" || account.isAdmin) {
+      router.replace("/admin/verifications");
+      return;
+    }
     if (!account.emailVerified) {
       router.replace("/check-email");
       return;
@@ -25,8 +35,7 @@ function SignInForm() {
       router.replace("/onboarding");
       return;
     }
-    const next = searchParams.get("next");
-    router.replace(next || "/explore");
+    router.replace(safeUserNext(searchParams.get("next")));
   }, [authReady, signedIn, account, router, searchParams]);
 
   if (!authReady || (signedIn && account)) {

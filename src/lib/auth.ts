@@ -71,6 +71,7 @@ export type SessionUser = Pick<
   | "onboardingComplete"
   | "isDiscoverable"
   | "isTestAccount"
+  | "isDemo"
   | "notificationSoundsEnabled"
   | "notificationVolume"
   | "createdAt"
@@ -102,6 +103,7 @@ const userSelect = {
   onboardingComplete: true,
   isDiscoverable: true,
   isTestAccount: true,
+  isDemo: true,
   notificationSoundsEnabled: true,
   notificationVolume: true,
   deletedAt: true,
@@ -272,6 +274,7 @@ type PublicAccountInput = Pick<
   | "intent"
   | "isDiscoverable"
   | "isTestAccount"
+  | "isDemo"
   | "notificationSoundsEnabled"
   | "notificationVolume"
 > &
@@ -300,6 +303,9 @@ export function toPublicAccount(user: PublicAccountInput) {
     intent: user.intent,
     isDiscoverable: user.isDiscoverable,
     isTestAccount: user.isTestAccount,
+    isDemo: Boolean(
+      "isDemo" in user && (user as { isDemo?: boolean }).isDemo,
+    ),
     notificationSoundsEnabled: user.notificationSoundsEnabled,
     notificationVolume: user.notificationVolume,
   };

@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import type { Member } from "@/lib/types";
-import Image from "next/image";
 import Link from "next/link";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberPhoto } from "@/lib/placeholders";
@@ -70,12 +70,11 @@ export function MemberCard({ member }: MemberCardProps) {
           href={`/members/${member.slug}`}
           className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-navy-mid ring-1 ring-white/10 sm:h-[72px] sm:w-[72px]"
         >
-          <Image
+          <SafeMemberImage
             src={photo}
             alt={member.fullName}
             fill
             sizes="72px"
-            unoptimized={photo.startsWith("data:")}
             className="object-cover"
           />
         </Link>
@@ -96,7 +95,7 @@ export function MemberCard({ member }: MemberCardProps) {
           <p className="mt-1 text-sm text-white/45">{member.location.label}</p>
           {member.isDemo ? (
             <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-electric/90">
-              Showcase profile
+              Showcase Profile
             </p>
           ) : null}
         </div>
@@ -131,6 +130,14 @@ export function MemberCard({ member }: MemberCardProps) {
           >
             Manage Profile
           </PrimaryButton>
+        ) : member.isDemo ? (
+          <PrimaryButton
+            href={`/members/${member.slug}`}
+            className="w-full rounded-lg"
+            showArrow={false}
+          >
+            View Showcase Profile
+          </PrimaryButton>
         ) : (
           <PrimaryButton
             type="button"
@@ -145,7 +152,7 @@ export function MemberCard({ member }: MemberCardProps) {
           href={`/members/${member.slug}`}
           className="mt-3 block rounded-lg border border-white/15 py-2.5 text-center text-xs font-medium uppercase tracking-[0.14em] text-white/75 transition-colors hover:border-electric/40 hover:text-white"
         >
-          Explore Network
+          {member.isDemo ? "See How This Could Work" : "Explore Network"}
         </Link>
       </div>
 
@@ -177,12 +184,11 @@ export function MemberCardCompact({ member }: MemberCardProps) {
       className="card-navy flex items-start gap-4 rounded-xl p-4"
     >
       <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-navy-mid ring-1 ring-white/10">
-        <Image
+        <SafeMemberImage
           src={photo}
           alt={member.fullName}
           fill
           sizes="56px"
-          unoptimized={photo.startsWith("data:")}
           className="object-cover"
         />
       </div>

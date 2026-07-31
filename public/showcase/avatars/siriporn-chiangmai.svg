@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Showcase avatar">
+  <rect width="512" height="512" fill="#1f2e28"/>
+  <circle cx="256" cy="200" r="96" fill="#d2a88a"/>
+  <ellipse cx="256" cy="430" rx="150" ry="120" fill="#9fd4a3"/>
+  <circle cx="220" cy="190" r="10" fill="#1f2e28" opacity="0.55"/>
+  <circle cx="292" cy="190" r="10" fill="#1f2e28" opacity="0.55"/>
+  <path d="M220 230 Q256 250 292 230" stroke="#1f2e28" stroke-width="6" fill="none" opacity="0.4" stroke-linecap="round"/>
+</svg>

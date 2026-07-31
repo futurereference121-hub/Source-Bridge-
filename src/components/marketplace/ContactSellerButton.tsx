@@ -19,6 +19,7 @@ type Props = {
   opportunityTitle?: string;
   label?: string;
   variant?: "primary" | "outline";
+  isDemo?: boolean;
 };
 
 export function ContactSellerButton({
@@ -35,11 +36,18 @@ export function ContactSellerButton({
   opportunityTitle,
   label = "Contact seller",
   variant = "primary",
+  isDemo = false,
 }: Props) {
   const { account, requireAuth, showToast } = useAppUi();
   const [open, setOpen] = useState(false);
 
   function onClick() {
+    if (isDemo) {
+      showToast(
+        "Showcase profiles cannot receive messages. Choose a real member account.",
+      );
+      return;
+    }
     if (!requireAuth("contact this member")) return;
     if (account?.id === toUserId) {
       showToast("This is your own listing");

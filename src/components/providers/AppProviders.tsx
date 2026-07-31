@@ -156,11 +156,18 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   const requireAuth = useCallback((actionLabel = "continue", nextPath?: string) => {
     if (account) return true;
-    const next =
+    const rawNext =
       nextPath ||
       (typeof window !== "undefined"
         ? `${window.location.pathname}${window.location.search}`
         : "/explore");
+    const next =
+      !rawNext.startsWith("/") ||
+      rawNext.startsWith("//") ||
+      rawNext === "/admin" ||
+      rawNext.startsWith("/admin/")
+        ? "/explore"
+        : rawNext;
     setPrompt({
       kind: "auth",
       title: "Join to continue",

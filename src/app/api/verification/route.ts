@@ -70,13 +70,50 @@ export async function POST(req: NextRequest) {
       select: {
         identityVerified: true,
         identityVerificationStatus: true,
+        isDemo: true,
       },
     });
+    if (existing?.isDemo) {
+      return jsonError(
+        "Showcase profiles cannot submit identity verification",
+        403,
+      );
+    }
     if (existing?.identityVerified) {
       return jsonError("Your identity is already verified", 400);
     }
 
-    const pending = await prisma.identityVerificationRequest.findFirst({
+    const openPending = await prisma.identityVerificationRequest.findFirst({
+      where: { userId: user.id, status: "PENDING" },
+      include: {
+        documents: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            kind: true,
+            mimeType: true,
+            sizeBytes: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+    if (
+      openPending ||
+      (existing?.identityVerificationStatus || "").toUpperCase() === "PENDING"
+    ) {
+      return Response.json(
+        {
+          ok: false,
+          error: "You already have a verification request pending review",
+          request: openPending ? mapRequestForOwner(openPending) : null,
+          status: "PENDING",
+        },
+        { status: 409 },
+      );
+    }
+
+    const draft = await prisma.identityVerificationRequest.findFirst({
       where: { userId: user.id, status: "DRAFT" },
       include: {
         documents: {
@@ -91,9 +128,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    if (pending) {
+    if (draft) {
       const updated = await prisma.identityVerificationRequest.update({
-        where: { id: pending.id },
+        where: { id: draft.id },
         data: { documentType, notes },
         include: {
           documents: {

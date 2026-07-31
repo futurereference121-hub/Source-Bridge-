@@ -7,9 +7,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { Member } from "@/lib/types";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
+import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
-import { memberCover, memberPhoto } from "@/lib/placeholders";
+import { memberCover } from "@/lib/placeholders";
 
 type ProfileHeaderProps = {
   member: Member;
@@ -86,8 +87,8 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
       <div className="relative -mt-14 flex flex-col gap-6 sm:-mt-16 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
           <div className="relative h-24 w-24 overflow-hidden rounded-xl border-[3px] border-[#020b1c] bg-navy-mid shadow-[0_0_32px_rgba(59,130,246,0.18)] sm:h-28 sm:w-28">
-            <Image
-              src={memberPhoto(member.photo)}
+            <SafeMemberImage
+              src={member.photo}
               alt={member.fullName}
               fill
               sizes="112px"
@@ -110,7 +111,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
             <p className="mt-1.5 text-sm text-white/45">{member.location.label}</p>
             {member.isDemo ? (
               <p className="mt-2 inline-flex rounded-md border border-electric/35 bg-electric/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
-                Showcase profile
+                Showcase Profile
               </p>
             ) : null}
             {member.bio ? (
@@ -163,14 +164,20 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
               >
                 {following ? "Following" : "Follow"}
               </button>
-              <PrimaryButton
-                type="button"
-                className="btn-glow-primary rounded-lg"
-                showArrow={false}
-                onClick={sendRequest}
-              >
-                Send Sourcing Request
-              </PrimaryButton>
+              {messagingOk ? (
+                <PrimaryButton
+                  type="button"
+                  className="btn-glow-primary rounded-lg"
+                  showArrow={false}
+                  onClick={sendRequest}
+                >
+                  Send Sourcing Request
+                </PrimaryButton>
+              ) : member.isDemo ? (
+                <span className="inline-flex h-11 items-center rounded-lg border border-white/20 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/55">
+                  Showcase only — messaging disabled
+                </span>
+              ) : null}
             </>
           )}
         </div>

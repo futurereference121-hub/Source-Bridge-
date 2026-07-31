@@ -9,6 +9,7 @@ import { MobileNav } from "@/components/layout/MobileNav";
 export function HomeShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const isHome = pathname === "/";
+  const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
   const isAppNavy =
     pathname.startsWith("/explore") ||
     pathname.startsWith("/members") ||
@@ -19,6 +20,10 @@ export function HomeShell({ children }: { children: ReactNode }) {
     pathname.startsWith("/activity") ||
     pathname.startsWith("/join") ||
     pathname.startsWith("/sign-in");
+
+  if (isAdminRoute) {
+    return <div className="flex min-h-screen flex-col bg-navy">{children}</div>;
+  }
 
   return (
     <div

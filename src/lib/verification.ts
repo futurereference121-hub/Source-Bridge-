@@ -47,6 +47,7 @@ export function mapRequestForOwner(request: {
   reviewedAt: Date | null;
   approvedAt: Date | null;
   rejectedAt: Date | null;
+  submittedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   documents: Array<{
@@ -66,6 +67,7 @@ export function mapRequestForOwner(request: {
     reviewedAt: request.reviewedAt?.toISOString() ?? null,
     approvedAt: request.approvedAt?.toISOString() ?? null,
     rejectedAt: request.rejectedAt?.toISOString() ?? null,
+    submittedAt: request.submittedAt?.toISOString() ?? null,
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),
     documents: request.documents.map((d) => ({
@@ -80,22 +82,39 @@ export function mapRequestForOwner(request: {
   };
 }
 
+const requestInclude = {
+  documents: {
+    orderBy: { createdAt: "asc" as const },
+    select: {
+      id: true,
+      kind: true,
+      mimeType: true,
+      sizeBytes: true,
+      createdAt: true,
+    },
+  },
+};
+
 export async function getLatestVerificationRequest(userId: string) {
+  // Prefer PENDING so a newer abandoned DRAFT never hides an open review.
+  const pending = await prisma.identityVerificationRequest.findFirst({
+    where: { userId, status: "PENDING" },
+    orderBy: { createdAt: "desc" },
+    include: requestInclude,
+  });
+  if (pending) return pending;
+
+  const draft = await prisma.identityVerificationRequest.findFirst({
+    where: { userId, status: "DRAFT" },
+    orderBy: { createdAt: "desc" },
+    include: requestInclude,
+  });
+  if (draft) return draft;
+
   return prisma.identityVerificationRequest.findFirst({
     where: { userId },
     orderBy: { createdAt: "desc" },
-    include: {
-      documents: {
-        orderBy: { createdAt: "asc" },
-        select: {
-          id: true,
-          kind: true,
-          mimeType: true,
-          sizeBytes: true,
-          createdAt: true,
-        },
-      },
-    },
+    include: requestInclude,
   });
 }
 

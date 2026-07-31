@@ -7,13 +7,16 @@ export default function AdminSignInPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // If already authenticated as admin, go straight to the verification queue.
+  // Admin → verification queue. Ordinary signed-in users → Explore (never admin UI).
   useEffect(() => {
     if (!authReady) return;
-    const isAdmin = account?.role === "ADMIN" || account?.isAdmin;
+    if (!account) return;
+    const isAdmin = account.role === "ADMIN" || account.isAdmin;
     if (isAdmin) {
       window.location.replace("/admin/verifications");
+      return;
     }
+    window.location.replace("/explore");
   }, [authReady, account]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -60,8 +63,8 @@ export default function AdminSignInPage() {
     );
   }
 
-  // Already logged in as admin — redirect is firing in useEffect.
-  if (account?.role === "ADMIN" || account?.isAdmin) {
+  // Already authenticated — redirect is firing in useEffect. Never flash the form.
+  if (account) {
     return (
       <div className="mx-auto max-w-md">
         <p className="text-white/50">Redirecting…</p>

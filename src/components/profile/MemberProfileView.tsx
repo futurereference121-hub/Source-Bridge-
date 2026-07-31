@@ -277,7 +277,9 @@ function PublicProfilePanels({
                     >
                       Edit
                     </OwnerLink>
-                  ) : !member.isPrototype && !member.id.startsWith("m-") ? (
+                  ) : !member.isPrototype &&
+                    !member.isDemo &&
+                    !member.id.startsWith("m-") ? (
                     <div className="mt-4">
                       <ContactSellerButton
                         toUserId={member.id}
@@ -291,8 +293,14 @@ function PublicProfilePanels({
                         }
                         label="Enquire about opportunity"
                         variant="outline"
+                        isDemo={Boolean(member.isDemo)}
                       />
                     </div>
+                  ) : member.isDemo ? (
+                    <p className="mt-4 text-xs text-white/45">
+                      Showcase Profile — messaging is disabled on demonstration
+                      accounts.
+                    </p>
                   ) : null}
                 </div>
               ))}

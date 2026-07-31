@@ -1,10 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { CircleDot, MapPin, Sparkles } from "lucide-react";
 import type { FeedItem } from "@/lib/types";
-import { memberPhoto } from "@/lib/placeholders";
+import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { formatRelativeTime } from "@/lib/format";
 
 type LiveFeedProps = {
@@ -46,7 +45,6 @@ function formatOptionalDate(iso?: string): string | null {
 
 function FeedRow({ item }: { item: FeedItem }) {
   const relative = formatRelativeTime(item.postedAt);
-  const photo = memberPhoto(item.photo);
   const isOpportunity = item.kind === "opportunity";
   const place = [item.city, item.country].filter(Boolean).join(", ");
   const start = formatOptionalDate(item.startsAt);
@@ -78,12 +76,11 @@ function FeedRow({ item }: { item: FeedItem }) {
       className={`flex items-start gap-3 rounded-xl px-3 py-3 transition-colors sm:gap-3.5 sm:px-3.5 sm:py-3.5 ${kindStyles.wrapper} ${isOpportunity ? "sm:-translate-y-px" : ""}`}
     >
       <div className="relative mt-0.5 h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10">
-        <Image
-          src={photo}
+        <SafeMemberImage
+          src={item.photo}
           alt=""
           fill
           sizes="36px"
-          unoptimized={photo.startsWith("data:")}
           className="object-cover"
         />
       </div>

@@ -37,6 +37,37 @@ const nextConfig: NextConfig = {
         destination: "/explore",
         permanent: false,
       },
+      // Legacy showcase usernames → natural handles
+      {
+        source: "/members/sb_cdmx",
+        destination: "/members/lucia.in.mexico",
+        permanent: true,
+      },
+      {
+        source: "/members/sb_cartagena",
+        destination: "/members/valentina.cartagena",
+        permanent: true,
+      },
+      {
+        source: "/members/sb_dahab",
+        destination: "/members/omar.dahab",
+        permanent: true,
+      },
+      {
+        source: "/members/sb_hurghada",
+        destination: "/members/nadia.redsea",
+        permanent: true,
+      },
+      {
+        source: "/members/sb_oaxaca",
+        destination: "/members/mateo.oaxaca",
+        permanent: true,
+      },
+      {
+        source: "/members/sb_chiangmai",
+        destination: "/members/siriporn.chiangmai",
+        permanent: true,
+      },
     ];
   },
 };

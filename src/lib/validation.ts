@@ -8,7 +8,9 @@ import { validatePasswordStrength } from "@/lib/password-strength";
 
 const MESSAGE_IMAGES_MAX = 3;
 
-export const USERNAME_REGEX = /^[a-z0-9](?:[a-z0-9_]{1,28}[a-z0-9])?$/i;
+/** Letters, numbers, underscores and dots — no leading/trailing separator. */
+export const USERNAME_REGEX =
+  /^[a-z0-9](?:[a-z0-9._]{1,28}[a-z0-9])?$/i;
 
 export function normalizeUsername(raw: string): string {
   return raw.trim().replace(/^@/, "").toLowerCase();
@@ -17,6 +19,9 @@ export function normalizeUsername(raw: string): string {
 export function isValidUsername(raw: string): boolean {
   const u = normalizeUsername(raw);
   if (u.length < 3 || u.length > 30) return false;
+  if (u.includes("..") || u.includes("__") || u.includes("._") || u.includes("_.")) {
+    return false;
+  }
   return USERNAME_REGEX.test(u);
 }
 
@@ -29,7 +34,7 @@ export const usernameSchema = z
   .trim()
   .transform(normalizeUsername)
   .refine((u) => u.length >= 3 && u.length <= 30, "Username must be 3–30 characters")
-  .refine(isValidUsername, "Use letters, numbers, underscores; URL-safe");
+  .refine(isValidUsername, "Use letters, numbers, dots or underscores");
 
 const passwordFieldSchema = z.string().superRefine((value, ctx) => {
   const error = validatePasswordStrength(value);

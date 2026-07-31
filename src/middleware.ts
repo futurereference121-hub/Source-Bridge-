@@ -51,14 +51,20 @@ export function middleware(request: NextRequest) {
   }
 
   // ── Non-admin routing ────────────────────────────────────────────────────
-  // Guard /admin/* pages — but allow the public entry points so users can
-  // reach the sign-in form and the password setup page.
   const isAdminPath =
     pathname === "/admin" || pathname.startsWith("/admin/");
   const isPublicAdminEntry =
     pathname === "/admin/sign-in" ||
     pathname === "/admin/create-password";
 
+  // Ordinary signed-in users must never see admin UI (including admin sign-in).
+  // Role comes from the non-sensitive sb_role hint; real auth is still server-side.
+  if (isAdminPath && role === "USER") {
+    return NextResponse.redirect(new URL("/explore", request.url));
+  }
+
+  // Unauthenticated visitors hitting protected admin pages go to admin sign-in.
+  // Authenticated normal users are handled above; admins handled earlier.
   if (isAdminPath && !isPublicAdminEntry) {
     return NextResponse.redirect(new URL("/admin/sign-in", request.url));
   }
