@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -134,6 +135,18 @@ function formatTime(iso: string | null | undefined) {
 
 function previewText(message: Message | null) {
   if (!message) return "No messages yet";
+  if (message.messageType === "SOURCING_REQUEST") {
+    const firstLine =
+      message.body?.trim().split("\n").find((line) => line.trim()) || "";
+    const snippet = firstLine.slice(0, 72);
+    return snippet
+      ? `Sourcing request: ${snippet}${firstLine.length > 72 ? "…" : ""}`
+      : "Sourcing request";
+  }
+  if (message.messageType === "SYSTEM") {
+    const body = message.body?.trim();
+    return body ? body.slice(0, 90) : "Official notification";
+  }
   const body = message.body?.trim();
   if (body) return body;
   if (message.attachments?.length) return "Sent an image";
@@ -161,7 +174,9 @@ export function MessagesInbox({
   const [threadLoading, setThreadLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
-  const [draft, setDraft] = useState("");
+  const [draftByConversation, setDraftByConversation] = useState<
+    Record<string, string>
+  >({});
   const [pendingUrls, setPendingUrls] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -170,11 +185,19 @@ export function MessagesInbox({
   const threadScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldScrollRef = useRef(true);
+  const nearBottomRef = useRef(true);
 
   const myId = account?.id ?? "";
+  const draft = activeId ? draftByConversation[activeId] ?? "" : "";
+
+  function setDraft(value: string) {
+    if (!activeId) return;
+    setDraftByConversation((prev) => ({ ...prev, [activeId]: value }));
+  }
 
   const selectConversation = useCallback(
     (id: string | null) => {
+      setPendingUrls([]);
       setActiveId(id);
       if (id) router.replace(`/inbox/${id}`, { scroll: false });
       else router.replace("/inbox", { scroll: false });
@@ -243,12 +266,10 @@ export function MessagesInbox({
 
     async function openThread() {
       setThreadLoading(true);
+      setMessages([]);
       try {
-        // Fetch conversation metadata and messages in parallel for faster open.
-        const [res, page] = await Promise.all([
-          fetch(`/api/conversations/${activeId}`),
-          fetch(`/api/conversations/${activeId}/messages?limit=30`),
-        ]);
+        // Single request — conversation GET already returns recent messages.
+        const res = await fetch(`/api/conversations/${activeId}`);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || "Failed to open conversation");
@@ -262,19 +283,14 @@ export function MessagesInbox({
           ),
         );
 
-        if (!page.ok) {
-          const fallback = (data.messages as Message[]) ?? [];
-          setMessages(fallback);
-          setMessagesCursor(null);
-          return;
-        }
-        const pageData = (await page.json()) as {
-          messages: Message[];
-          nextCursor: string | null;
-        };
-        if (cancelled) return;
-        setMessages(pageData.messages ?? []);
-        setMessagesCursor(pageData.nextCursor);
+        const msgs = ((data.messages as Message[]) ?? []).slice().sort((a, b) => {
+          const at = Date.parse(a.createdAt);
+          const bt = Date.parse(b.createdAt);
+          if (at !== bt) return at - bt;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
+        setMessages(msgs);
+        setMessagesCursor(msgs.length >= 30 ? msgs[0]?.id ?? null : null);
       } catch (err) {
         if (!cancelled) {
           showToast(
@@ -302,7 +318,16 @@ export function MessagesInbox({
     if (!container) return;
     // Scroll only the message pane — never the browser window.
     container.scrollTop = container.scrollHeight;
+    nearBottomRef.current = true;
   }, [messages, threadLoading]);
+
+  function onThreadScroll() {
+    const container = threadScrollRef.current;
+    if (!container) return;
+    const distance =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    nearBottomRef.current = distance < 80;
+  }
 
   async function loadOlderMessages() {
     if (!activeId || !messagesCursor || loadingOlder) return;
@@ -372,8 +397,14 @@ export function MessagesInbox({
       setMessages((prev) =>
         prev.some((m) => m.id === message.id) ? prev : [...prev, message],
       );
-      setDraft("");
+      setDraftByConversation((prev) => {
+        if (!activeId) return prev;
+        const next = { ...prev };
+        delete next[activeId];
+        return next;
+      });
       setPendingUrls([]);
+      shouldScrollRef.current = nearBottomRef.current;
       setConversations((prev) => {
         const updated = prev.map((c) =>
           c.id === activeId
@@ -426,10 +457,14 @@ export function MessagesInbox({
 
   return (
     <>
-      <ReviewPrompt />
+      {!activeId ? <ReviewPrompt /> : null}
       <div className="panel-navy mt-8 flex min-h-[min(70vh,720px)] flex-col overflow-hidden rounded-xl lg:flex-row">
-        {/* Conversation list */}
-        <aside className="flex max-h-[40vh] w-full shrink-0 flex-col border-b border-white/10 lg:max-h-none lg:w-[340px] lg:border-b-0 lg:border-r">
+        {/* Conversation list — hidden on mobile while a thread is open */}
+        <aside
+          className={`w-full shrink-0 flex-col border-b border-white/10 lg:max-h-none lg:w-[340px] lg:border-b-0 lg:border-r ${
+            activeId ? "hidden lg:flex" : "flex max-h-[min(70vh,720px)]"
+          }`}
+        >
           <div className="border-b border-white/10 px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
               Inbox
@@ -492,17 +527,11 @@ export function MessagesInbox({
                               {formatTime(c.lastMessageAt)}
                             </span>
                           </div>
-                          <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-electric/80">
-                            {c.typeLabel || c.contextType}
-                          </p>
                           <p
                             className={`mt-0.5 truncate text-xs ${
                               c.unread ? "text-white/70" : "text-white/40"
                             }`}
                           >
-                            {c.subject?.trim()
-                              ? `${c.subject} · `
-                              : ""}
                             {previewText(c.lastMessage)}
                           </p>
                         </div>
@@ -532,8 +561,12 @@ export function MessagesInbox({
           </div>
         </aside>
 
-        {/* Thread */}
-        <section className="flex min-h-[320px] flex-1 flex-col">
+        {/* Thread — full-width on mobile when selected */}
+        <section
+          className={`min-h-0 min-w-0 flex-1 flex-col ${
+            activeId ? "flex" : "hidden lg:flex"
+          }`}
+        >
           {!activeId ? (
             <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
               <p className="text-sm text-white/70">Select a conversation</p>
@@ -544,6 +577,13 @@ export function MessagesInbox({
           ) : (
             <>
               <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
+                <button
+                  type="button"
+                  className="text-xs uppercase tracking-[0.12em] text-white/45 hover:text-white lg:hidden"
+                  onClick={() => selectConversation(null)}
+                >
+                  Back
+                </button>
                 <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-lg bg-navy-mid">
                   <Image
                     src={memberPhoto(activeOther?.photo)}
@@ -554,34 +594,37 @@ export function MessagesInbox({
                     className="object-cover"
                   />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-white">
-                    {activeConversation && account
-                      ? conversationTitle(activeConversation, account.id)
-                      : displayName(activeOther)}
+                    {activeOther?.name ||
+                      (activeConversation
+                        ? conversationTitle(activeConversation, myId)
+                        : "Member")}
                   </p>
                   {activeConversation?.contextType === "system" ? (
                     <p className="truncate text-xs uppercase tracking-[0.12em] text-electric">
                       Official notification
                     </p>
-                  ) : activeConversation?.subject?.trim() ? (
-                    <p className="truncate text-xs text-white/40">
-                      {activeConversation.subject}
+                  ) : activeOther?.username ? (
+                    <p className="truncate text-xs text-white/45">
+                      @{activeOther.username}
                     </p>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  className="ml-auto text-xs text-white/40 hover:text-white lg:hidden"
-                  onClick={() => selectConversation(null)}
-                >
-                  Back
-                </button>
+                {activeOther?.slug ? (
+                  <Link
+                    href={`/members/${activeOther.slug}`}
+                    className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-electric hover:text-electric-hover"
+                  >
+                    View profile
+                  </Link>
+                ) : null}
               </header>
 
               <div
                 ref={threadScrollRef}
-                className="flex flex-1 flex-col overflow-y-auto px-4 py-4"
+                onScroll={onThreadScroll}
+                className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-4 py-4"
               >
                 {messagesCursor ? (
                   <button
@@ -595,9 +638,11 @@ export function MessagesInbox({
                 ) : null}
 
                 {threadLoading ? (
-                  <p className="py-10 text-center text-sm text-white/45">
-                    Loading thread…
-                  </p>
+                  <div className="space-y-3 py-4" aria-busy="true">
+                    <div className="h-16 animate-pulse rounded-xl bg-white/[0.04]" />
+                    <div className="ml-auto h-12 w-2/3 animate-pulse rounded-xl bg-white/[0.06]" />
+                    <div className="h-14 w-3/4 animate-pulse rounded-xl bg-white/[0.04]" />
+                  </div>
                 ) : messages.length === 0 ? (
                   <div className="flex flex-1 flex-col items-center justify-center py-10 text-center">
                     <p className="text-sm text-white/70">No messages yet</p>
@@ -607,84 +652,62 @@ export function MessagesInbox({
                   </div>
                 ) : (
                   <ul className="space-y-3">
-                    {activeConversation?.sourcingRequest ? (
-                      <li className="rounded-xl border border-electric/30 bg-electric/10 px-4 py-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-electric">
-                          Sourcing request
-                        </p>
-                        {activeConversation.listing ? (
-                          <p className="mt-2 text-xs text-white/60">
-                            Listing: {activeConversation.listing.name}
-                          </p>
-                        ) : null}
-                        <dl className="mt-3 space-y-2 text-sm">
-                          <div>
-                            <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
-                              Looking for
-                            </dt>
-                            <dd className="mt-1 whitespace-pre-wrap text-white/85">
-                              {activeConversation.sourcingRequest.message}
-                            </dd>
-                          </div>
-                          {activeConversation.sourcingRequest.neededFrom ? (
-                            <div>
-                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
-                                Needed from
-                              </dt>
-                              <dd className="mt-1 text-white/80">
-                                {activeConversation.sourcingRequest.neededFrom}
-                              </dd>
-                            </div>
-                          ) : null}
-                          {activeConversation.sourcingRequest.budget ? (
-                            <div>
-                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
-                                Budget
-                              </dt>
-                              <dd className="mt-1 text-white/80">
-                                {activeConversation.sourcingRequest.budget}
-                              </dd>
-                            </div>
-                          ) : null}
-                          {activeConversation.sourcingRequest.deadline ? (
-                            <div>
-                              <dt className="text-[10px] uppercase tracking-[0.12em] text-white/40">
-                                Deadline
-                              </dt>
-                              <dd className="mt-1 text-white/80">
-                                {activeConversation.sourcingRequest.deadline}
-                              </dd>
-                            </div>
-                          ) : null}
-                        </dl>
-                        {activeConversation.sourcingRequest.referenceImages
-                          ?.length ? (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {activeConversation.sourcingRequest.referenceImages.map(
-                              (url) => (
-                                <a
-                                  key={url}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="relative h-16 w-16 overflow-hidden rounded-lg border border-white/15"
-                                >
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    src={url}
-                                    alt=""
-                                    className="h-full w-full object-cover"
-                                  />
-                                </a>
-                              ),
-                            )}
-                          </div>
-                        ) : null}
-                      </li>
-                    ) : null}
                     {messages.map((m) => {
-                      const isSystem = m.messageType === "SYSTEM" || !m.senderId;
+                      const isSystem =
+                        m.messageType === "SYSTEM" || !m.senderId;
+                      const isSourcing =
+                        m.messageType === "SOURCING_REQUEST";
                       const mine = !isSystem && m.senderId === myId;
+                      if (isSourcing) {
+                        return (
+                          <li key={m.id} className="flex justify-stretch">
+                            <div className="w-full rounded-xl border border-electric/30 bg-electric/10 px-4 py-3">
+                              <div className="flex items-baseline justify-between gap-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-electric">
+                                  Sourcing request
+                                </p>
+                                <p className="text-[10px] text-white/35">
+                                  {formatTime(m.createdAt)}
+                                </p>
+                              </div>
+                              {!mine ? (
+                                <p className="mt-1 text-[11px] text-white/45">
+                                  From {displayName(m.sender ?? null)}
+                                </p>
+                              ) : (
+                                <p className="mt-1 text-[11px] text-white/45">
+                                  You sent
+                                </p>
+                              )}
+                              {m.body?.trim() ? (
+                                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-white/85">
+                                  {m.body}
+                                </p>
+                              ) : null}
+                              {m.attachments?.length ? (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {m.attachments.map((a) => (
+                                    <a
+                                      key={a.id}
+                                      href={a.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="relative h-16 w-16 overflow-hidden rounded-lg border border-white/15"
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={a.url}
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                      />
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </li>
+                        );
+                      }
                       return (
                         <li
                           key={m.id}

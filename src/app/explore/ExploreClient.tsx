@@ -76,9 +76,15 @@ export function ExploreClient({
     }
   }, []);
 
-  // Initial server refresh + debounced search. Always hits the API — never
-  // filters only the SSR snapshot so new accounts appear immediately.
+  // Refresh when the user searches. Soft background refresh when using SSR data
+  // so the first paint is not blocked by a duplicate full directory fetch.
   useEffect(() => {
+    if (query === initialQ && !query && initialMembers.length > 0) {
+      const soft = window.setTimeout(() => {
+        void refreshDirectory("");
+      }, 2500);
+      return () => window.clearTimeout(soft);
+    }
     const handle = window.setTimeout(
       () => {
         void refreshDirectory(query);
@@ -86,7 +92,7 @@ export function ExploreClient({
       query === initialQ ? 0 : 280,
     );
     return () => window.clearTimeout(handle);
-  }, [query, initialQ, refreshDirectory]);
+  }, [query, initialQ, initialMembers.length, refreshDirectory]);
 
   useEffect(() => {
     function onVisible() {

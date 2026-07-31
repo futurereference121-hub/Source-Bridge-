@@ -34,7 +34,7 @@ export async function GET(req: NextRequest, { params }: Params) {
 
     const rows = await prisma.message.findMany({
       where: { conversationId: id },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       include: {

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppUi } from "@/components/providers/AppProviders";
 import type { NotificationItem } from "@/lib/types";
 
-const POLL_MS = 20_000;
+const POLL_MS = 45_000;
 const LAST_SEEN_KEY = "sb_notifications_last_seen_id";
 
 type NotificationsSnapshot = {

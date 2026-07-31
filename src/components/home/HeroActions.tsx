@@ -5,24 +5,21 @@ export function HeroActions() {
   return (
     <div className="animate-fade-up animate-delay-2 relative z-10 mx-auto mt-9 flex w-full max-w-xl flex-col items-stretch justify-center gap-3 sm:mt-10 sm:flex-row sm:items-stretch sm:justify-center">
       <PrimaryButton
-        href="/explore"
+        href="/join"
         className="btn-glow-primary min-h-[52px] rounded-lg px-8 text-[13px] tracking-[0.12em]"
+        showArrow={false}
       >
-        Explore
+        Join Source Bridge
       </PrimaryButton>
       <SecondaryButton
-        href="/join?intent=provider"
+        href="/sign-in"
         className="btn-glow-secondary min-h-[52px] rounded-lg px-6"
       >
-        <span className="flex flex-col items-start gap-0.5">
-          <span className="text-sm font-bold uppercase tracking-[0.08em]">
-            Start Earning
-          </span>
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-navy/75">
-            From Your Location
-          </span>
-        </span>
+        Sign In
       </SecondaryButton>
+      <p className="basis-full text-center text-sm leading-relaxed text-white/60 sm:mt-1">
+        Your location could be exactly what someone needs.
+      </p>
     </div>
   );
 }

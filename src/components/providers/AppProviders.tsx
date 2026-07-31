@@ -280,24 +280,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
         next?: string;
       };
       setAccount(payload.account);
-      await loadFollows();
       showToast("Signed in");
       router.push(payload.next || "/explore");
+      void loadFollows();
     },
     [loadFollows, router, showToast],
   );
 
   const signOut = useCallback(async () => {
-    try {
-      await fetch("/api/auth/sign-out", { method: "POST" });
-    } catch {
-      /* still clear local */
-    }
     setAccount(null);
     setFollows([]);
     sessionStorage.removeItem(VERIFY_PREVIEW_KEY);
     showToast("Signed out");
     router.push("/");
+    try {
+      await fetch("/api/auth/sign-out", { method: "POST" });
+    } catch {
+      /* already cleared local */
+    }
   }, [router, showToast]);
 
   const openPlaceholder = useCallback((title: string, message: string) => {

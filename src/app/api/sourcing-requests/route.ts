@@ -220,19 +220,27 @@ export async function POST(req: NextRequest) {
             updatedAt: now,
             pairKey,
             sourcingRequestId: sourcingRequest.id,
-            listingId: listingId ?? conversation.listingId,
-            opportunityId: opportunityId ?? conversation.opportunityId,
+            listingId: listingId ?? null,
+            opportunityId: opportunityId ?? null,
             contextType,
             subject: title,
             closedAt: null,
           },
         });
 
+        const detailLines = [
+          message,
+          neededFrom ? `Needed from: ${neededFrom}` : "",
+          budget ? `Budget: ${budget}` : "",
+          deadline ? `Deadline: ${deadline}` : "",
+          listingId && title ? `Context: ${title}` : "",
+        ].filter(Boolean);
+
         const firstMessage = await tx.message.create({
           data: {
             conversationId,
             senderId: user.id,
-            body: message,
+            body: detailLines.join("\n"),
             messageType: "SOURCING_REQUEST",
             clientMessageId: clientRequestId
               ? `${clientRequestId}:first`

@@ -27,7 +27,7 @@ export async function GET(_req: Request, { params }: Params) {
           include: { user: { select: participantUserSelect } },
         },
         messages: {
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: RECENT_MESSAGES,
           include: {
             attachments: true,

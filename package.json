@@ -39,6 +39,8 @@
     "seed:showcase": "node --env-file=.env.local --import=dotenv/config scripts/seed-showcase-accounts.mjs",
     "refine:showcase": "node --env-file=.env.local --import=dotenv/config scripts/refine-showcase-accounts.mjs",
     "generate:showcase-avatars": "node scripts/generate-showcase-avatars.mjs",
+    "audit:conversation-timeline": "node --env-file=.env.local --import=dotenv/config scripts/audit-conversation-timeline.mjs",
+    "test:performance-messaging-cta": "node scripts/test-performance-messaging-cta.mjs",
     "test:listing-editor": "node scripts/test-listing-editor-stability.mjs",
     "test:conversation-pair": "node scripts/test-conversation-pair.mjs",
     "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs"

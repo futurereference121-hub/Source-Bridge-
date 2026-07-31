@@ -58,7 +58,9 @@ export default function InboxThreadPage() {
         <h1 className="mt-2 font-display text-4xl text-white">Inbox</h1>
         <Suspense
           fallback={
-            <p className="mt-8 text-sm text-white/45">Loading conversation…</p>
+            <div className="panel-navy mt-8 flex min-h-[min(70vh,720px)] items-center justify-center rounded-xl">
+              <p className="text-sm text-white/45">Loading conversation…</p>
+            </div>
           }
         >
           <MessagesInbox initialConversationId={conversationId} />
