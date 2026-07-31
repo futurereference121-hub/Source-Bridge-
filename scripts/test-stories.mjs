@@ -73,6 +73,9 @@ function read(rel) {
 {
   const vercel = read("vercel.json");
   assert.ok(/stories-expire/.test(vercel));
+  // Hobby plan: daily cron only — hourly schedules fail Vercel deploy.
+  assert.ok(/"schedule": "0 4 \* \* \*"/.test(vercel));
+  assert.ok(!/"schedule": "0 \* \* \* \*"/.test(vercel));
 }
 
 {
