@@ -84,11 +84,12 @@ type MessagesInboxProps = {
 };
 
 function otherParticipant(
-  conversation: Conversation,
+  conversation: Conversation | null | undefined,
   myId: string,
 ): ParticipantUser | null {
+  if (!conversation) return null;
   if (conversation.contextType === "system") return null;
-  const part = conversation.participants.find((p) => p.userId !== myId);
+  const part = conversation.participants?.find((p) => p.userId !== myId);
   return part?.user ?? null;
 }
 
@@ -466,6 +467,7 @@ export function MessagesInbox({
                             alt=""
                             fill
                             sizes="40px"
+                            unoptimized
                             className="object-cover"
                           />
                         </div>
@@ -548,6 +550,7 @@ export function MessagesInbox({
                     alt=""
                     fill
                     sizes="36px"
+                    unoptimized
                     className="object-cover"
                   />
                 </div>
@@ -752,15 +755,29 @@ export function MessagesInbox({
                 <div ref={threadEndRef} />
               </div>
 
-              {activeConversation?.contextType === "system" ||
-              messages.some((m) => m.replyAllowed === false) ? (
+              {threadLoading && !activeConversation ? (
+                <div className="border-t border-white/10 px-4 py-4 text-sm text-white/45">
+                  Loading conversation…
+                </div>
+              ) : !activeConversation ? (
+                <div className="border-t border-white/10 px-4 py-4 text-sm text-white/50">
+                  <p>Unable to load this conversation.</p>
+                  <button
+                    type="button"
+                    className="mt-2 text-xs uppercase tracking-[0.12em] text-electric hover:text-electric-hover"
+                    onClick={() => selectConversation(null)}
+                  >
+                    Back to inbox
+                  </button>
+                </div>
+              ) : activeConversation.contextType === "system" ||
+                messages.some((m) => m.replyAllowed === false) ? (
                 <div className="border-t border-white/10 px-4 py-4 text-sm text-white/50">
                   This is an official Source Bridge notification. Replies are
                   disabled.
                 </div>
-              ) : account?.id &&
-                (() => {
-                  const other = otherParticipant(activeConversation!, account.id);
+              ) : (() => {
+                  const other = otherParticipant(activeConversation, myId);
                   return (
                     Boolean(other) &&
                     other!.name === "Deleted user" &&

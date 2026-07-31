@@ -2,6 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { assertDailyLimit, recordDailyAction } from "@/lib/rate-limit";
 import { pathnameBelongsToUser } from "@/lib/storage";
+import { conversationPairKey } from "@/lib/conversation-pair";
+
+export { conversationPairKey } from "@/lib/conversation-pair";
 
 const participantUserSelect = {
   id: true,
@@ -161,6 +164,86 @@ export async function findOpenConversationBetweenUsers(
   return findExistingDirectConversation({ fromUserId, toUserId });
 }
 
+/**
+ * Get or create the single 1:1 conversation for a user pair.
+ * Uses pairKey unique constraint; retries on race.
+ */
+export async function getOrCreateConversationPair(
+  fromUserId: string,
+  toUserId: string,
+  opts?: {
+    contextType?: string;
+    subject?: string;
+    listingId?: string | null;
+    opportunityId?: string | null;
+    sourcingRequestId?: string | null;
+    tx?: Prisma.TransactionClient;
+  },
+) {
+  if (fromUserId === toUserId) {
+    throwHttp("You cannot message yourself", 400);
+  }
+  const pairKey = conversationPairKey(fromUserId, toUserId);
+  const client = opts?.tx ?? prisma;
+
+  const existing = await client.conversation.findUnique({
+    where: { pairKey },
+    include: {
+      participants: { include: { user: { select: participantUserSelect } } },
+    },
+  });
+  if (existing) {
+    if (existing.closedAt) {
+      await client.conversation.update({
+        where: { id: existing.id },
+        data: { closedAt: null },
+      });
+    }
+    await ensureParticipant(existing.id, fromUserId, client);
+    await ensureParticipant(existing.id, toUserId, client);
+    return { conversation: existing, created: false, pairKey };
+  }
+
+  try {
+    const now = new Date();
+    const conversation = await client.conversation.create({
+      data: {
+        pairKey,
+        subject: opts?.subject || "",
+        contextType: opts?.contextType || "direct",
+        listingId: opts?.listingId ?? null,
+        opportunityId: opts?.opportunityId ?? null,
+        sourcingRequestId: opts?.sourcingRequestId ?? null,
+        lastMessageAt: now,
+        participants: {
+          create: [
+            { userId: fromUserId, lastReadAt: now },
+            { userId: toUserId },
+          ],
+        },
+      },
+      include: {
+        participants: { include: { user: { select: participantUserSelect } } },
+      },
+    });
+    return { conversation, created: true, pairKey };
+  } catch (err) {
+    // Unique race — another request created the pair first.
+    const code = (err as { code?: string }).code;
+    if (code !== "P2002") throw err;
+    const raced = await client.conversation.findUnique({
+      where: { pairKey },
+      include: {
+        participants: { include: { user: { select: participantUserSelect } } },
+      },
+    });
+    if (!raced) throw err;
+    await ensureParticipant(raced.id, fromUserId, client);
+    await ensureParticipant(raced.id, toUserId, client);
+    return { conversation: raced, created: false, pairKey };
+  }
+}
+
 async function findExistingDirectConversation(opts: {
   fromUserId: string;
   toUserId: string;
@@ -168,15 +251,30 @@ async function findExistingDirectConversation(opts: {
   listingId?: string | null;
   opportunityId?: string | null;
 }) {
+  const pairKey = conversationPairKey(opts.fromUserId, opts.toUserId);
+  const byKey = await prisma.conversation.findUnique({
+    where: { pairKey },
+    include: {
+      participants: { include: { user: { select: participantUserSelect } } },
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: { attachments: true },
+      },
+    },
+  });
+  if (byKey && !byKey.closedAt && byKey.contextType !== "system") {
+    return byKey;
+  }
+
+  // Legacy fallback before pairKey backfill completes.
   return prisma.conversation.findFirst({
     where: {
       closedAt: null,
-      // Exclude system-only threads (single participant notifications).
       contextType: { not: "system" },
       AND: [
         { participants: { some: { userId: opts.fromUserId, leftAt: null } } },
         { participants: { some: { userId: opts.toUserId, leftAt: null } } },
-        // Exactly two active participants — a true 1:1 thread.
         {
           participants: {
             none: {
@@ -271,6 +369,12 @@ export async function findOrCreateDirectConversation(
     const now = new Date();
 
     const message = await prisma.$transaction(async (tx) => {
+      if (!existing.pairKey) {
+        await tx.conversation.update({
+          where: { id: existing.id },
+          data: { pairKey: conversationPairKey(fromUserId, toUserId) },
+        }).catch(() => null);
+      }
       const msg = await tx.message.create({
         data: {
           conversationId: existing.id,
@@ -316,23 +420,36 @@ export async function findOrCreateDirectConversation(
 
   await assertDailyLimit(fromUserId, "message");
   const now = new Date();
+  const pairKey = conversationPairKey(fromUserId, toUserId);
 
   const result = await prisma.$transaction(async (tx) => {
-    const conversation = await tx.conversation.create({
-      data: {
-        subject: subject || "",
-        contextType,
-        listingId,
-        opportunityId,
-        lastMessageAt: now,
-        participants: {
-          create: [
-            { userId: fromUserId, lastReadAt: now },
-            { userId: toUserId },
-          ],
+    let conversation;
+    try {
+      conversation = await tx.conversation.create({
+        data: {
+          pairKey,
+          subject: subject || "",
+          contextType,
+          listingId,
+          opportunityId,
+          lastMessageAt: now,
+          participants: {
+            create: [
+              { userId: fromUserId, lastReadAt: now },
+              { userId: toUserId },
+            ],
+          },
         },
-      },
-    });
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "P2002") throw err;
+      const raced = await tx.conversation.findUnique({ where: { pairKey } });
+      if (!raced) throw err;
+      conversation = raced;
+      await ensureParticipant(conversation.id, fromUserId, tx);
+      await ensureParticipant(conversation.id, toUserId, tx);
+    }
 
     const message = await tx.message.create({
       data: {
@@ -352,6 +469,12 @@ export async function findOrCreateDirectConversation(
       },
       include: { attachments: true },
     });
+
+    await tx.conversation.update({
+      where: { id: conversation.id },
+      data: { lastMessageAt: now, updatedAt: now },
+    });
+    await markRead(conversation.id, fromUserId, tx);
 
     const full = await tx.conversation.findUniqueOrThrow({
       where: { id: conversation.id },

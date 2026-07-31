@@ -6,9 +6,10 @@ import {
   isAllowedAttachmentUrl,
   mapConversation,
   participantUserSelect,
-  findOpenConversationBetweenUsers,
+  getOrCreateConversationPair,
   ensureParticipant,
   markRead,
+  conversationPairKey,
 } from "@/lib/messaging";
 import { sendEmail } from "@/lib/email";
 import { jsonError, sourcingRequestSchema } from "@/lib/validation";
@@ -171,46 +172,12 @@ export async function POST(req: NextRequest) {
       contextType = "opportunity";
     }
 
-    const existingOpen = await prisma.sourcingRequest.findFirst({
-      where: {
-        fromUserId: user.id,
-        toUserId,
-        status: "open",
-        listingId: listingId ?? null,
-        opportunityId: opportunityId ?? null,
-      },
-      include: {
-        conversation: {
-          include: {
-            participants: {
-              include: { user: { select: participantUserSelect } },
-            },
-            messages: {
-              orderBy: { createdAt: "desc" },
-              take: 1,
-              include: { attachments: true },
-            },
-          },
-        },
-      },
-    });
-
-    if (existingOpen?.conversation) {
-      return Response.json({
-        ok: true,
-        existing: true,
-        sourcingRequest: mapSourcingRequest(existingOpen),
-        conversation: mapConversation(existingOpen.conversation, user.id),
-      });
-    }
-
+    // Always create a new sourcing request + message in the single shared
+    // 1:1 conversation for this pair. Never short-circuit without writing.
     await assertDailyLimit(user.id, "sourcing");
     await assertDailyLimit(user.id, "message");
     const now = new Date();
-
-    // Prefer an existing 1:1 conversation between these two users so every
-    // sourcing request lands in the same shared thread.
-    const existingPair = await findOpenConversationBetweenUsers(user.id, toUserId);
+    const pairKey = conversationPairKey(user.id, toUserId);
 
     const result = await prisma.$transaction(
       async (tx) => {
@@ -230,43 +197,36 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        let conversationId: string;
-        if (existingPair) {
-          conversationId = existingPair.id;
-          await ensureParticipant(conversationId, user.id, tx);
-          await ensureParticipant(conversationId, toUserId, tx);
-          await tx.conversation.update({
-            where: { id: conversationId },
-            data: {
-              lastMessageAt: now,
-              updatedAt: now,
-              // Keep the latest request context on the conversation for inbox cards.
-              sourcingRequestId: sourcingRequest.id,
-              listingId: listingId ?? existingPair.listingId,
-              opportunityId: opportunityId ?? existingPair.opportunityId,
-              contextType,
-              subject: title,
-            },
-          });
-        } else {
-          const conversation = await tx.conversation.create({
-            data: {
-              subject: title,
-              contextType,
-              listingId: listingId ?? null,
-              opportunityId: opportunityId ?? null,
-              sourcingRequestId: sourcingRequest.id,
-              lastMessageAt: now,
-              participants: {
-                create: [
-                  { userId: user.id, lastReadAt: now },
-                  { userId: toUserId },
-                ],
-              },
-            },
-          });
-          conversationId = conversation.id;
-        }
+        const { conversation, created } = await getOrCreateConversationPair(
+          user.id,
+          toUserId,
+          {
+            tx,
+            contextType,
+            subject: title,
+            listingId: listingId ?? null,
+            opportunityId: opportunityId ?? null,
+            sourcingRequestId: sourcingRequest.id,
+          },
+        );
+
+        const conversationId = conversation.id;
+        await ensureParticipant(conversationId, user.id, tx);
+        await ensureParticipant(conversationId, toUserId, tx);
+        await tx.conversation.update({
+          where: { id: conversationId },
+          data: {
+            lastMessageAt: now,
+            updatedAt: now,
+            pairKey,
+            sourcingRequestId: sourcingRequest.id,
+            listingId: listingId ?? conversation.listingId,
+            opportunityId: opportunityId ?? conversation.opportunityId,
+            contextType,
+            subject: title,
+            closedAt: null,
+          },
+        });
 
         const firstMessage = await tx.message.create({
           data: {
@@ -313,6 +273,7 @@ export async function POST(req: NextRequest) {
           conversationId,
           message: firstMessage,
           transaction,
+          reusedConversation: !created,
         };
       },
       { timeout: 20_000 },
@@ -384,7 +345,7 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         ok: true,
-        existing: false,
+        existing: result.reusedConversation,
         sourcingRequest: mapSourcingRequest(result.sourcingRequest),
         conversation: mapConversation(fullConversation, user.id),
         message: {

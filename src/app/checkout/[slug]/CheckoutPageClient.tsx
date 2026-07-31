@@ -301,11 +301,11 @@ export function CheckoutPageClient({ slug }: Props) {
                   until card checkout is enabled.
                 </p>
                 <PrimaryButton
-                  href="/messages"
+                  href="/inbox"
                   showArrow={false}
                   className="rounded-lg"
                 >
-                  Open messages
+                  Open inbox
                 </PrimaryButton>
               </div>
             ) : (

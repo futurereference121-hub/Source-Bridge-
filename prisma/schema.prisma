@@ -436,6 +436,8 @@ model Conversation {
   subject           String                    @default("")
   /// listing | opportunity | sourcing | direct | trip | system
   contextType       String                    @default("direct")
+  /// Canonical sorted "userA:userB" for 1:1 threads. Null for system/broadcast threads.
+  pairKey           String?                   @unique
   listingId         String?
   listing           StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
   opportunityId     String?

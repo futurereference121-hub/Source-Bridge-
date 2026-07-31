@@ -8,14 +8,15 @@ import { useAppUi } from "@/components/providers/AppProviders";
 
 export default function InboxThreadPage() {
   const router = useRouter();
-  const params = useParams<{ conversationId: string }>();
+  const params = useParams<{ conversationId: string | string[] }>();
   const { signedIn, authReady, account } = useAppUi();
-  const conversationId = params.conversationId;
+  const raw = params.conversationId;
+  const conversationId = Array.isArray(raw) ? raw[0] : raw;
 
   useEffect(() => {
     if (authReady && !signedIn) {
       router.replace(
-        `/sign-in?next=${encodeURIComponent(`/inbox/${conversationId}`)}`,
+        `/sign-in?next=${encodeURIComponent(`/inbox/${conversationId || ""}`)}`,
       );
     }
   }, [authReady, signedIn, router, conversationId]);
@@ -25,6 +26,24 @@ export default function InboxThreadPage() {
       <div className="min-h-[100svh] bg-app-navy pb-20 pt-28 text-white">
         <Container className="max-w-6xl">
           <p className="text-white/50">Loading…</p>
+        </Container>
+      </div>
+    );
+  }
+
+  if (!conversationId || conversationId === "undefined") {
+    return (
+      <div className="min-h-[100svh] bg-app-navy pb-20 pt-28 text-white">
+        <Container className="max-w-6xl">
+          <h1 className="font-display text-4xl text-white">Inbox</h1>
+          <p className="mt-4 text-sm text-white/60">Conversation not found.</p>
+          <button
+            type="button"
+            className="mt-4 text-xs uppercase tracking-[0.12em] text-electric"
+            onClick={() => router.replace("/inbox")}
+          >
+            Back to inbox
+          </button>
         </Container>
       </div>
     );

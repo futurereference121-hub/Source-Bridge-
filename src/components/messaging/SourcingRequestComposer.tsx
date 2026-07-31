@@ -248,15 +248,12 @@ export function SourcingRequestComposer({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not send request");
       const conversationId = data.conversation?.id as string | undefined;
-      showToast(
-        data.existing
-          ? "Opening your existing conversation"
-          : "Sourcing request sent",
-      );
+      if (!conversationId) {
+        throw new Error("Conversation could not be opened");
+      }
+      showToast("Sourcing request sent successfully.");
       onClose();
-      router.push(
-        conversationId ? `/inbox/${conversationId}` : "/inbox",
-      );
+      router.push(`/inbox/${conversationId}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not send request");
     } finally {
