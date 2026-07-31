@@ -74,7 +74,8 @@ export function ListingImageManager({
     })),
   );
   const [cropQueue, setCropQueue] = useState<File[]>([]);
-  const [cropSource, setCropSource] = useState<File | null>(null);
+  const [cropSource, setCropSource] = useState<File | string | null>(null);
+  const [replaceClientId, setReplaceClientId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const slotsRef = useRef(slots);
   slotsRef.current = slots;
@@ -256,7 +257,31 @@ export function ListingImageManager({
   }
 
   function onCropped(file: File) {
+    const replacingId = replaceClientId;
     setCropSource(null);
+    setReplaceClientId(null);
+
+    if (replacingId) {
+      const previewUrl = URL.createObjectURL(file);
+      setSlots((prev) =>
+        prev.map((s) =>
+          s.clientId === replacingId
+            ? {
+                ...s,
+                previewUrl,
+                file,
+                status: "preparing" as const,
+                progress: 0,
+                error: null,
+                // Keep old permanent url until upload succeeds so failure restores it
+              }
+            : s,
+        ),
+      );
+      void uploadSlot(replacingId, file, previewUrl);
+      return;
+    }
+
     const clientId = newClientId();
     const previewUrl = URL.createObjectURL(file);
     setSlots((prev) => {
@@ -279,6 +304,27 @@ export function ListingImageManager({
       ];
     });
     void uploadSlot(clientId, file, previewUrl);
+  }
+
+  function startEditExisting(slot: ListingImageSlot) {
+    if (disabled || uploading) return;
+    const source = slot.url || slot.previewUrl;
+    if (!source || isBlobObjectUrl(source)) {
+      if (slot.file) {
+        setReplaceClientId(slot.clientId);
+        setCropSource(slot.file);
+        return;
+      }
+      showToast("Wait for the image to finish uploading before editing");
+      return;
+    }
+    setReplaceClientId(slot.clientId);
+    setCropSource(source);
+  }
+
+  function cancelCrop() {
+    setCropSource(null);
+    setReplaceClientId(null);
   }
 
   function move(index: number, delta: number) {
@@ -421,6 +467,16 @@ export function ListingImageManager({
                       Retry
                     </button>
                   ) : null}
+                  {slot.status === "uploaded" ? (
+                    <button
+                      type="button"
+                      disabled={disabled || uploading}
+                      onClick={() => startEditExisting(slot)}
+                      className="rounded px-1.5 py-1 text-[10px] uppercase tracking-wide text-electric hover:bg-electric/15 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
+                  ) : null}
                   {i > 0 && slot.status === "uploaded" ? (
                     <button
                       type="button"
@@ -470,9 +526,9 @@ export function ListingImageManager({
         <SquareImageCropper
           source={cropSource}
           open
-          title="Crop listing image"
+          title={replaceClientId ? "Edit listing image" : "Crop listing image"}
           outputSize={1600}
-          onCancel={() => setCropSource(null)}
+          onCancel={cancelCrop}
           onConfirm={onCropped}
         />
       ) : null}

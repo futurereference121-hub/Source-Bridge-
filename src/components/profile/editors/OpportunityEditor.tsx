@@ -102,10 +102,10 @@ export function OpportunityEditor({
           `/api/opportunities/${opportunityId}`,
           jsonBody("PATCH", payload),
         );
-        showToast("Opportunity updated");
+        showToast("Opportunity updated successfully.");
       } else {
         await apiJson("/api/opportunities", jsonBody("POST", payload));
-        showToast("Opportunity published successfully.");
+        showToast("Opportunity posted successfully.");
         onPublished?.();
       }
       // Close immediately after confirmed success — no extra delay.

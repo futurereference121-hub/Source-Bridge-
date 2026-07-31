@@ -25,6 +25,7 @@ export type MessageRecipientCheck = {
   isAdmin: boolean;
   role: string;
   isTestAccount: boolean;
+  isDemo?: boolean;
   deletedAt: Date | null;
   isDiscoverable: boolean;
 };
@@ -32,8 +33,8 @@ export type MessageRecipientCheck = {
 /**
  * Guards direct-message / sourcing-request recipients. Throws an HTTP-style
  * error (`.status` set) so route handlers can surface it via their existing
- * catch-all error mapping. Never let admins, test fixtures, deleted, or
- * non-discoverable accounts receive messages from the public.
+ * catch-all error mapping. Never let admins, test fixtures, demo showcase,
+ * deleted, or non-discoverable accounts receive messages from the public.
  */
 export function assertUserCanReceiveMessages(
   user: MessageRecipientCheck | null | undefined,
@@ -47,11 +48,14 @@ export function assertUserCanReceiveMessages(
     user.isAdmin ||
     user.role === "ADMIN" ||
     user.isTestAccount ||
+    user.isDemo ||
     user.deletedAt ||
     !user.isDiscoverable
   ) {
     const err = new Error(
-      "This account cannot receive messages",
+      user.isDemo
+        ? "Showcase profiles cannot receive messages"
+        : "This account cannot receive messages",
     ) as Error & { status: number };
     err.status = 403;
     throw err;

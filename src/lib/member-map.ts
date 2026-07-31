@@ -197,9 +197,46 @@ export function dbUserToMember(user: DbUserBundle): Member | null {
     languages: [],
     joinedAt: user.createdAt.toISOString().slice(0, 10),
     isPrototype: false,
+    isDemo: Boolean(
+      "isDemo" in user && (user as { isDemo?: boolean }).isDemo,
+    ),
     followerCount,
     followingCount,
     isRealAccount: true,
+    profileVideo: (() => {
+      const url =
+        "profileVideoUrl" in user && typeof user.profileVideoUrl === "string"
+          ? user.profileVideoUrl
+          : "";
+      if (!url) return null;
+      return {
+        url,
+        posterUrl:
+          "profileVideoPosterUrl" in user &&
+          typeof user.profileVideoPosterUrl === "string"
+            ? user.profileVideoPosterUrl
+            : "",
+        durationSec:
+          "profileVideoDurationSec" in user &&
+          typeof user.profileVideoDurationSec === "number"
+            ? user.profileVideoDurationSec
+            : null,
+        mime:
+          "profileVideoMime" in user && typeof user.profileVideoMime === "string"
+            ? user.profileVideoMime
+            : "",
+        caption:
+          "profileVideoCaption" in user &&
+          typeof user.profileVideoCaption === "string"
+            ? user.profileVideoCaption
+            : "",
+        updatedAt:
+          "profileVideoUpdatedAt" in user &&
+          user.profileVideoUpdatedAt instanceof Date
+            ? user.profileVideoUpdatedAt.toISOString()
+            : null,
+      };
+    })(),
   };
 }
 

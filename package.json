@@ -35,7 +35,9 @@
     "wallapop:import": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/import.mjs",
     "wallapop:repair-imports": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/repair-imported-listings.mjs",
     "wallapop:check-destination": "node --env-file=.env.local --import=dotenv/config scripts/wallapop-migration/_check-destination.mjs",
-    "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs"
+    "generate-notification-sounds": "node scripts/generate-notification-sounds.mjs",
+    "seed:showcase": "node --env-file=.env.local --import=dotenv/config scripts/seed-showcase-accounts.mjs",
+    "test:listing-editor": "node scripts/test-listing-editor-stability.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

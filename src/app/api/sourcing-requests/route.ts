@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
         isAdmin: true,
         role: true,
         isTestAccount: true,
+        isDemo: true,
         deletedAt: true,
         isDiscoverable: true,
       },

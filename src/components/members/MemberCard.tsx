@@ -26,6 +26,7 @@ function displayMessage(member: Member): string {
 }
 
 function isRealMessagingTarget(member: Member): boolean {
+  if (member.isDemo) return false;
   if (member.isPrototype) return false;
   if (member.isRealAccount === false) return false;
   // Seed IDs look like m-niran-chai; real Prisma ids are cuid-like.
@@ -47,7 +48,7 @@ export function MemberCard({ member }: MemberCardProps) {
     if (isOwner) return;
     if (!canMessage) {
       showToast(
-        "Demo catalogue profiles cannot receive messages. Open a real member profile to send a sourcing request.",
+        "Showcase profiles cannot receive messages. Open a real member profile to send a sourcing request.",
       );
       return;
     }
@@ -93,6 +94,11 @@ export function MemberCard({ member }: MemberCardProps) {
           </div>
           <p className="mt-0.5 text-sm text-white/55">{member.fullName}</p>
           <p className="mt-1 text-sm text-white/45">{member.location.label}</p>
+          {member.isDemo ? (
+            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-electric/90">
+              Showcase profile
+            </p>
+          ) : null}
         </div>
       </div>
 

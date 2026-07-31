@@ -86,38 +86,6 @@ export default function IdentityVerificationPage() {
     uploadedKinds.has("selfie") &&
     (!needsBack || uploadedKinds.has("back"));
 
-  async function startOrUpdateRequest() {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentType, notes }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "Could not start request");
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              status: json.request?.status || "DRAFT",
-              request: json.request,
-            }
-          : {
-              status: json.request?.status || "DRAFT",
-              identityVerified: false,
-              request: json.request,
-            },
-      );
-      await refreshAccount();
-      showToast("Verification request saved — upload your documents");
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : "Request failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function uploadKind(kind: DocKind, file: File | null) {
     if (!file) return;
     const err = validateImageFileClient(file);
@@ -210,17 +178,50 @@ export default function IdentityVerificationPage() {
   }
 
   async function submitRequest() {
-    if (!data?.request?.id) return;
+    if (!canSubmit) {
+      showToast("Upload every required document before submitting");
+      return;
+    }
     setBusy(true);
     try {
+      // Persist document type / notes, creating a draft if needed.
+      const saveRes = await fetch("/api/verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentType, notes }),
+      });
+      const saveJson = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        throw new Error(saveJson.error || "Could not save verification request");
+      }
+      const requestId =
+        (saveJson.request?.id as string | undefined) || data?.request?.id;
+      if (!requestId) throw new Error("Verification draft not found");
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: saveJson.request?.status || prev.status,
+              request: saveJson.request || prev.request,
+            }
+          : {
+              status: saveJson.request?.status || "DRAFT",
+              identityVerified: false,
+              request: saveJson.request,
+            },
+      );
+
       const res = await fetch("/api/verification/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: data.request.id }),
+        body: JSON.stringify({ requestId }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || "Could not submit request");
       await refreshAccount();
+      showToast(
+        "Verification documents submitted successfully. Review may take up to 48 hours.",
+      );
       const slug = account?.slug || account?.username;
       if (slug) {
         router.replace(`/members/${slug}?verification=submitted`);
@@ -372,22 +373,6 @@ export default function IdentityVerificationPage() {
                   placeholder="Anything reviewers should know"
                 />
               </label>
-
-              <div className="mt-5">
-                <PrimaryButton
-                  type="button"
-                  showArrow={false}
-                  disabled={busy}
-                  onClick={() => void startOrUpdateRequest()}
-                  className="rounded-lg"
-                >
-                  {busy
-                    ? "Saving…"
-                    : data?.request
-                      ? "Update request"
-                      : "Start verification request"}
-                </PrimaryButton>
-              </div>
             </section>
 
             <section className="panel-navy mt-6 rounded-xl px-5 py-6 sm:px-6">
@@ -396,7 +381,8 @@ export default function IdentityVerificationPage() {
               </h2>
               <p className="mt-2 text-xs leading-relaxed text-white/50">
                 Images are stored privately via Vercel Blob and are never shown
-                on public profiles. Only admins can review them.
+                on public profiles. Only admins can review them. Upload every
+                required image below, then submit at the bottom of this form.
               </p>
 
               <div className="mt-5 space-y-4">
@@ -484,15 +470,20 @@ export default function IdentityVerificationPage() {
                     : "Upload every required image before submitting."}
                 </p>
               )}
-              {canSubmit && data?.request?.status === "DRAFT" ? (
+
+              {!(data?.request?.status === "PENDING" || pending) ? (
                 <PrimaryButton
                   type="button"
                   showArrow={false}
-                  disabled={busy}
+                  disabled={busy || !canSubmit || uploading !== null}
                   onClick={() => void submitRequest()}
-                  className="mt-4 rounded-lg"
+                  className="mt-5 w-full rounded-lg sm:w-auto"
                 >
-                  {busy ? "Submitting…" : "Submit for review"}
+                  {busy
+                    ? "Submitting…"
+                    : rejected
+                      ? "Update Verification Request"
+                      : "Submit Verification Request"}
                 </PrimaryButton>
               ) : null}
             </section>

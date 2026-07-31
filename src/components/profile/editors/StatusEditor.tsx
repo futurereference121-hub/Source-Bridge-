@@ -29,7 +29,7 @@ export function StatusEditor({ onClose, initialText = "" }: StatusEditorProps) {
     setBusy(true);
     try {
       await apiJson("/api/status", jsonBody("POST", { text: text.trim() }));
-      showToast("Status published");
+      showToast("Status published successfully.");
       onClose();
       router.refresh();
     } catch (err) {

@@ -7,12 +7,26 @@ type EditorShellProps = {
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  /**
+   * When false (default), clicking the dimmed backdrop does not close the editor.
+   * Product editing must stay open until intentional Close / Cancel / successful save.
+   */
+  closeOnBackdrop?: boolean;
+  /** When false, Escape does not close. Default true. */
+  closeOnEscape?: boolean;
 };
 
-export function EditorShell({ title, onClose, children, wide }: EditorShellProps) {
+export function EditorShell({
+  title,
+  onClose,
+  children,
+  wide,
+  closeOnBackdrop = false,
+  closeOnEscape = true,
+}: EditorShellProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && closeOnEscape) onClose();
     }
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -21,22 +35,26 @@ export function EditorShell({ title, onClose, children, wide }: EditorShellProps
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [onClose]);
+  }, [onClose, closeOnEscape]);
 
   return (
     <div
       className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 p-3 sm:items-center sm:p-6"
-      onClick={onClose}
+      onClick={closeOnBackdrop ? onClose : undefined}
       role="presentation"
+      data-editor-shell="true"
+      data-close-on-backdrop={closeOnBackdrop ? "true" : "false"}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
         className={`panel-navy max-h-[92vh] w-full overflow-y-auto rounded-xl p-5 text-white shadow-xl sm:p-6 ${
           wide ? "max-w-2xl" : "max-w-lg"
         }`}
+        data-editor-dialog="true"
       >
         <div className="mb-5 flex items-start justify-between gap-4">
           <h2 className="font-display text-2xl text-white">{title}</h2>

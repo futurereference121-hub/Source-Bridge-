@@ -46,12 +46,25 @@ model User {
   isDiscoverable             Boolean   @default(true)
   /// Automated/test fixtures — excluded from public discovery.
   isTestAccount              Boolean   @default(false)
+  /// Controlled showcase accounts — visible on Explore with “Showcase profile” badge.
+  /// Not identity-verified; excluded from verification queues and real payment flows.
+  isDemo                     Boolean   @default(false)
   /// Soft-delete marker; public surfaces exclude deleted users.
   deletedAt                  DateTime?
   /// Notification sound preferences
   notificationSoundsEnabled  Boolean   @default(true)
   /// low | medium | high
   notificationVolume         String    @default("medium")
+  /// One short public profile video (≤90s). Empty when none.
+  profileVideoUrl            String    @default("")
+  profileVideoPosterUrl      String    @default("")
+  profileVideoPathname       String    @default("")
+  profileVideoPosterPathname String    @default("")
+  profileVideoMime           String    @default("")
+  profileVideoDurationSec    Int?
+  profileVideoSizeBytes      Int?
+  profileVideoCaption        String    @default("")
+  profileVideoUpdatedAt      DateTime?
   createdAt                  DateTime  @default(now())
   updatedAt                  DateTime  @updatedAt
 
@@ -81,8 +94,10 @@ model User {
   notifications        Notification[]
 
   @@index([isDiscoverable, deletedAt, isTestAccount])
+  @@index([isDemo])
   @@index([role, isAdmin])
   @@index([deletedAt])
+  @@index([username])
 }
 
 model Session {

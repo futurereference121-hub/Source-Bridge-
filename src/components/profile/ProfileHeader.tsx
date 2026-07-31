@@ -21,6 +21,7 @@ function editHref(slug: string, edit: string) {
 }
 
 function canReceiveMessages(member: Member): boolean {
+  if (member.isDemo) return false;
   if (member.isPrototype) return false;
   if (member.isRealAccount === false) return false;
   if (member.id.startsWith("m-")) return false;
@@ -52,7 +53,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
     if (isOwner) return;
     if (!messagingOk) {
       showToast(
-        "Demo catalogue profiles cannot receive messages. Choose a real member account.",
+        "Showcase profiles cannot receive messages. Choose a real member account.",
       );
       return;
     }
@@ -107,6 +108,11 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
             </div>
             <p className="mt-1 text-base text-white/60">{member.fullName}</p>
             <p className="mt-1.5 text-sm text-white/45">{member.location.label}</p>
+            {member.isDemo ? (
+              <p className="mt-2 inline-flex rounded-md border border-electric/35 bg-electric/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
+                Showcase profile
+              </p>
+            ) : null}
             {member.bio ? (
               <p className="mt-3 max-w-xl text-sm leading-relaxed text-white/65">
                 {member.bio}

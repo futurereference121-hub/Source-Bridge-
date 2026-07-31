@@ -12,16 +12,24 @@ export async function GET(req: Request) {
     const where = status ? { status } : { status: "PENDING" };
     const [requests, total] = await prisma.$transaction([
       prisma.identityVerificationRequest.findMany({
-        where,
+        where: {
+          ...where,
+          user: { isDemo: false, isTestAccount: false, isAdmin: false },
+        },
         orderBy: { submittedAt: "asc" },
         skip: (page - 1) * take,
         take,
         include: {
-          user: { select: { id: true, email: true, name: true, username: true } },
+          user: { select: { id: true, email: true, name: true, username: true, isDemo: true } },
           documents: { where: { deletedAt: null }, select: { id: true, kind: true, mimeType: true, sizeBytes: true, createdAt: true } },
         },
       }),
-      prisma.identityVerificationRequest.count({ where }),
+      prisma.identityVerificationRequest.count({
+        where: {
+          ...where,
+          user: { isDemo: false, isTestAccount: false, isAdmin: false },
+        },
+      }),
     ]);
     return Response.json({ requests, total, page, limit: take });
   } catch (error) {

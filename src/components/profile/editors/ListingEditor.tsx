@@ -15,6 +15,16 @@ import {
 } from "@/lib/clothing";
 import type { Listing, ListingAvailability } from "@/lib/types";
 import {
+  DISCARD_UNSAVED_MESSAGE,
+  isListingFormDirty,
+  listingEditorHeading,
+  listingEditorMode,
+  listingEditorPrimaryLabel,
+  resolveDiscardDecision,
+  serializeListingFormSnapshot,
+  shouldCloseListingEditorOnBackdrop,
+} from "@/lib/listing-editor-stability";
+import {
   EditorField,
   EditorShell,
   EditorSubmit,
@@ -120,10 +130,16 @@ export function ListingEditor({
   const [imagesUploading, setImagesUploading] = useState(false);
   const [loading, setLoading] = useState(Boolean(listingId));
   const [generalCategories, setGeneralCategories] = useState<string[]>([]);
-  const isEdit = Boolean(listingId);
+  const mode = listingEditorMode(listingId);
+  const isEdit = mode === "edit";
+  const baselineRef = useRef<string | null>(null);
+  const skipDirtyGuardRef = useRef(false);
 
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
+
+  const currentSnapshot = serializeListingFormSnapshot(form);
+  const dirty = isListingFormDirty(baselineRef.current, currentSnapshot);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,11 +162,13 @@ export function ListingEditor({
   useEffect(() => {
     if (!listingId) {
       setForm(blank);
+      baselineRef.current = serializeListingFormSnapshot(blank);
       setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
+    baselineRef.current = null;
     (async () => {
       try {
         const data = await apiJson("/api/stock");
@@ -158,10 +176,14 @@ export function ListingEditor({
           (l: Listing) => l.id === listingId,
         );
         if (!cancelled) {
-          if (row) setForm(fromListing(row));
-          else {
+          if (row) {
+            const next = fromListing(row);
+            setForm(next);
+            baselineRef.current = serializeListingFormSnapshot(next);
+          } else {
             showToastRef.current("Listing not found");
             setForm(blank);
+            baselineRef.current = serializeListingFormSnapshot(blank);
           }
         }
       } catch (err) {
@@ -179,8 +201,29 @@ export function ListingEditor({
     };
   }, [listingId]);
 
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (!dirty || busy) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty, busy]);
+
+  function confirmDiscardIfNeeded(): boolean {
+    if (skipDirtyGuardRef.current) {
+      skipDirtyGuardRef.current = false;
+      return true;
+    }
+    if (!dirty) return true;
+    const ok = window.confirm(DISCARD_UNSAVED_MESSAGE);
+    return resolveDiscardDecision(dirty, ok) === "discard";
+  }
+
   function resetToCreate() {
     setForm(blank);
+    baselineRef.current = serializeListingFormSnapshot(blank);
     setImagesUploading(false);
     setBusy(false);
     setLoading(false);
@@ -192,12 +235,17 @@ export function ListingEditor({
     else onClose();
   }
 
-  function cancelEdit() {
+  function requestClose() {
+    if (!confirmDiscardIfNeeded()) return;
     if (isEdit) returnToCreateMode();
     else {
       resetToCreate();
       onClose();
     }
+  }
+
+  function cancelEdit() {
+    requestClose();
   }
 
   function toggleSize(size: string) {
@@ -265,12 +313,14 @@ export function ListingEditor({
       if (listingId) {
         await apiJson(`/api/stock/${listingId}`, jsonBody("PATCH", payload));
         showToast("Product updated successfully.");
+        skipDirtyGuardRef.current = true;
         resetToCreate();
         router.refresh();
         returnToCreateMode();
       } else {
         await apiJson("/api/stock", jsonBody("POST", payload));
         showToast("Product added successfully.");
+        skipDirtyGuardRef.current = true;
         resetToCreate();
         router.refresh();
       }
@@ -283,15 +333,18 @@ export function ListingEditor({
 
   if (!account) {
     return (
-      <EditorShell title="Manage Listing" onClose={onClose}>
+      <EditorShell
+        title="Manage Listing"
+        onClose={onClose}
+        closeOnBackdrop={shouldCloseListingEditorOnBackdrop()}
+      >
         <p className="text-sm text-white/45">Sign in to manage listings.</p>
       </EditorShell>
     );
   }
 
-  const title = isEdit
-    ? `Edit Listing: ${form.name || "Untitled"}`
-    : "Create New Listing";
+  const title = listingEditorHeading(mode, form.name);
+  const primaryLabel = listingEditorPrimaryLabel(mode);
 
   const categoryOptions =
     form.productKind === "clothing"
@@ -301,7 +354,12 @@ export function ListingEditor({
         : ["Jewellery", "Home & Living", "Collectibles", "Clothing"];
 
   return (
-    <EditorShell title={title} onClose={isEdit ? cancelEdit : onClose} wide>
+    <EditorShell
+      title={title}
+      onClose={requestClose}
+      wide
+      closeOnBackdrop={shouldCloseListingEditorOnBackdrop()}
+    >
       {loading ? (
         <p className="text-sm text-white/45">Loading…</p>
       ) : (
@@ -309,7 +367,7 @@ export function ListingEditor({
           <p className="sm:col-span-2 text-xs text-white/45">
             {isEdit
               ? "Update this listing, then Save Changes. Cancel Edit discards unsaved changes."
-              : "Fill in the fields below to add a new listing."}
+              : "Fill in the fields below to create a new listing."}
           </p>
 
           <EditorField label="Product type">
@@ -639,7 +697,7 @@ export function ListingEditor({
 
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
             <EditorSubmit busy={busy || imagesUploading}>
-              {isEdit ? "Save Changes" : "Add Product"}
+              {primaryLabel}
             </EditorSubmit>
             {isEdit ? (
               <button
@@ -653,7 +711,7 @@ export function ListingEditor({
             ) : (
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 disabled={busy}
                 className="inline-flex h-11 items-center justify-center rounded-lg border border-white/20 px-5 text-xs font-medium uppercase tracking-[0.12em] text-white/80 transition-colors hover:border-white/40 hover:text-white disabled:opacity-50"
               >

@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { CircleDot, Sparkles, Star } from "lucide-react";
 import type { Listing, Member } from "@/lib/types";
 import { ProfileHeader } from "@/components/profile/ProfileHeader";
+import { ProfileVideoSection } from "@/components/profile/ProfileVideoSection";
 import {
   ProfileTabs,
   parseProfileTab,
@@ -42,6 +43,7 @@ function MemberProfileFallback({
     <div className="bg-app-navy pb-28 text-white md:pb-24">
       <Container>
         <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileVideoSection member={member} isOwner={isOwner} />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active="public" />
         <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
           <PublicProfilePanels
@@ -103,6 +105,7 @@ function MemberProfileViewInner({
           </div>
         ) : null}
         <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileVideoSection member={member} isOwner={isOwner} />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active={activeTab} />
 
         <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">

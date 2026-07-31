@@ -291,9 +291,20 @@ export interface Member {
   joinedAt?: string;
   /** Subtle prototype note when profile is seed data. */
   isPrototype?: boolean;
+  /** Controlled showcase / demo account — show “Showcase profile”, not a real verified person. */
+  isDemo?: boolean;
   isRealAccount?: boolean;
   followerCount?: number;
   followingCount?: number;
+  /** Public profile video (≤90s). */
+  profileVideo?: {
+    url: string;
+    posterUrl: string;
+    durationSec: number | null;
+    mime: string;
+    caption: string;
+    updatedAt: string | null;
+  } | null;
 }
 
 /** Listing type is defined above with clothing/shipping fields. */

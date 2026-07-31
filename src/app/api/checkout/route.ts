@@ -15,6 +15,7 @@ const partySelect = {
   username: true,
   slug: true,
   photo: true,
+  isDemo: true,
 } as const;
 
 function mapCheckoutTransaction(t: {
@@ -146,6 +147,13 @@ export async function POST(req: NextRequest) {
 
     if (listing.userId === user.id) {
       return jsonError("You cannot buy your own listing", 400);
+    }
+
+    if (listing.user?.isDemo) {
+      return jsonError(
+        "Showcase profiles cannot receive real payments. Choose a real member listing.",
+        403,
+      );
     }
 
     const saleStatus = listing.saleStatus || "AVAILABLE";
