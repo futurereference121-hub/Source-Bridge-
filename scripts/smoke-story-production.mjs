@@ -83,6 +83,8 @@ function makeVideo(dir) {
       "-shortest",
       "-t",
       "2",
+      "-movflags",
+      "+faststart",
       out,
     ],
     { stdio: "ignore" },
@@ -181,6 +183,23 @@ async function main() {
       assert(data.clip?.id, "clip id missing");
       clipId = data.clip.id;
       console.log(`Uploaded clip ${clipId} via direct Blob`);
+
+      // Playback grant + CDN range (direct Blob, not proxied)
+      {
+        const { res, data } = await api(jarB, `/api/stories/${clipId}/playback`);
+        assert(res.ok, `playback failed: ${data.error || data.code || res.status}`);
+        assert(data.playbackUrl || data.grant?.playbackUrl, "playbackUrl missing");
+        const videoUrl = data.playbackUrl || data.grant?.playbackUrl;
+        const rangeRes = await fetch(videoUrl, {
+          method: "HEAD",
+          headers: { Range: "bytes=0-65535" },
+        });
+        assert(
+          rangeRes.status === 206 || rangeRes.status === 200,
+          `video HEAD/Range expected 206/200, got ${rangeRes.status}`,
+        );
+        console.log(`Playback OK status=${res.status} videoRange=${rangeRes.status}`);
+      }
 
       // Idempotent finalize retry must not duplicate
       const retry = await api(jarA, "/api/stories/finalize", {
