@@ -4,6 +4,7 @@ import {
   listActiveClipsForUser,
   mapClipPublic,
 } from "@/lib/stories";
+import { STORY_PLAYBACK_GRANT_MS } from "@/lib/story-constants";
 import { jsonError } from "@/lib/validation";
 import { memberPhoto } from "@/lib/placeholders";
 
@@ -54,22 +55,31 @@ export async function GET(_req: Request, { params }: Params) {
       viewedIds = new Set(views.map((v) => v.storyClipId));
     }
 
-    return Response.json({
-      ok: true,
-      user: {
-        id: owner.id,
-        name: owner.name,
-        username: owner.username,
-        slug: owner.slug,
-        photo: memberPhoto(owner.photo),
-        isDemo: owner.isDemo,
+    const playbackExpiresAt = new Date(
+      Date.now() + STORY_PLAYBACK_GRANT_MS,
+    ).toISOString();
+
+    return Response.json(
+      {
+        ok: true,
+        user: {
+          id: owner.id,
+          name: owner.name,
+          username: owner.username,
+          slug: owner.slug,
+          photo: memberPhoto(owner.photo),
+          isDemo: owner.isDemo,
+        },
+        clips: clips.map((c) => ({
+          ...mapClipPublic(c),
+          playbackExpiresAt,
+          delivery: "direct-blob-cdn",
+          viewed: viewedIds.has(c.id),
+        })),
+        isOwner: viewer?.id === owner.id,
       },
-      clips: clips.map((c) => ({
-        ...mapClipPublic(c),
-        viewed: viewedIds.has(c.id),
-      })),
-      isOwner: viewer?.id === owner.id,
-    });
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
   } catch (err) {
     console.error("[stories:user GET]", err);
     return jsonError("Failed to load Story", 500);

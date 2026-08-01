@@ -257,7 +257,7 @@ export function MessagesInbox({
       .map((c) => otherParticipant(c, myId)?.id)
       .filter((id): id is string => Boolean(id));
     if (ids.length) void stories?.refreshRings(ids);
-  }, [conversations, myId, stories]);
+  }, [conversations, myId, stories?.refreshRings]);
 
   useEffect(() => {
     setActiveId(queryId);

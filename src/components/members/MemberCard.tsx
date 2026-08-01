@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Member } from "@/lib/types";
 import Link from "next/link";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
@@ -10,7 +10,6 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberPhoto } from "@/lib/placeholders";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
-import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
 type MemberCardProps = {
   member: Member;
@@ -38,7 +37,6 @@ function isRealMessagingTarget(member: Member): boolean {
 
 export function MemberCard({ member }: MemberCardProps) {
   const { account, requireAuth, showToast } = useAppUi();
-  const stories = useStoriesOptional();
   const verified = isIdentityVerified(member);
   const message = displayMessage(member);
   const networkPreview = member.network.slice(0, 3);
@@ -46,10 +44,6 @@ export function MemberCard({ member }: MemberCardProps) {
   const isOwner = Boolean(account && account.id === member.id);
   const canMessage = isRealMessagingTarget(member);
   const [composerOpen, setComposerOpen] = useState(false);
-
-  useEffect(() => {
-    void stories?.refreshRings([member.id]);
-  }, [member.id, stories]);
 
   function sendRequest() {
     if (isOwner) return;

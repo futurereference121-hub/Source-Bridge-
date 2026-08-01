@@ -42,7 +42,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
   useEffect(() => {
     void stories?.refreshRings([member.id]);
-  }, [member.id, stories]);
+  }, [member.id, stories?.refreshRings]);
 
   useEffect(() => {
     if (isOwner || !messagingOk) return;

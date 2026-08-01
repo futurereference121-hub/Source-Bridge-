@@ -51,7 +51,7 @@ export function AccountMenu({
 
   useEffect(() => {
     if (account?.id) void stories?.refreshRings([account.id]);
-  }, [account?.id, stories]);
+  }, [account?.id, stories?.refreshRings]);
 
   useEffect(() => {
     if (!open) return;

@@ -17,7 +17,10 @@ export async function GET(req: Request) {
       .slice(0, 100);
 
     if (!userIds.length) {
-      return Response.json({ ok: true, rings: {} });
+      return Response.json(
+        { ok: true, rings: {} },
+        { headers: { "Cache-Control": "private, max-age=5" } },
+      );
     }
 
     const map = await getStoryRingStates(userIds, user?.id ?? null);
@@ -31,7 +34,15 @@ export async function GET(req: Request) {
         hasUnseenStory: state.hasUnseenStory,
       };
     }
-    return Response.json({ ok: true, rings });
+    return Response.json(
+      { ok: true, rings },
+      {
+        headers: {
+          // Short private cache cuts Explore N-storm DB load; client also TTL-batches.
+          "Cache-Control": "private, max-age=8, stale-while-revalidate=20",
+        },
+      },
+    );
   } catch (err) {
     console.error("[stories:rings]", err);
     return jsonError("Failed to load Story status", 500);

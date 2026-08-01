@@ -3,8 +3,12 @@ import { head } from "@vercel/blob";
 import { prisma } from "@/lib/db";
 import {
   MAX_ACTIVE_STORY_SECONDS,
+  MAX_STORY_AVG_BYTES_PER_SEC,
   MAX_STORY_CLIP_BYTES,
   MAX_STORY_CLIP_SECONDS,
+  MAX_STORY_DELIVERY_BYTES,
+  STORY_PLAYBACK_GRANT_MS,
+  STORY_READY_STATUSES,
   STORY_TTL_MS,
   ALLOWED_STORY_VIDEO_TYPES,
   StoryUploadErrorCode,
@@ -47,15 +51,11 @@ export type StoryRingState = {
   hasUnseenStory: boolean;
 };
 
-const activeClipWhere = {
-  status: "ACTIVE" as const,
-  deletedAt: null,
-  expiresAt: { gt: new Date() },
-};
+const readyStatusList = [...STORY_READY_STATUSES];
 
 export function activeStoryWhere(now = new Date()) {
   return {
-    status: "ACTIVE",
+    status: { in: readyStatusList },
     deletedAt: null,
     expiresAt: { gt: now },
   };
@@ -111,7 +111,10 @@ export async function listActiveClipsForOwner(userId: string) {
   });
 }
 
-/** Batch ring state for Explore / feed / inbox. Avoids N+1 and never returns video URLs. */
+/**
+ * Batch ring state for Explore / feed / inbox.
+ * One lightweight query (no video URLs). When viewerId is set, one extra views query.
+ */
 export async function getStoryRingStates(
   userIds: string[],
   viewerId?: string | null,
@@ -128,17 +131,38 @@ export async function getStoryRingStates(
   if (!unique.length) return map;
 
   const now = new Date();
+  const ownerFilter = {
+    deletedAt: null,
+    isAdmin: false,
+    role: { not: "ADMIN" },
+  } as const;
+
+  // Anonymous / no unseen tracking: distinct owners only — cheapest ring path.
+  if (!viewerId) {
+    const owners = await prisma.storyClip.findMany({
+      where: {
+        userId: { in: unique },
+        ...activeStoryWhere(now),
+        user: ownerFilter,
+      },
+      distinct: ["userId"],
+      select: { userId: true },
+    });
+    for (const row of owners) {
+      const state = map.get(row.userId);
+      if (state) {
+        state.hasActiveStory = true;
+        state.hasUnseenStory = true;
+      }
+    }
+    return map;
+  }
+
   const clips = await prisma.storyClip.findMany({
     where: {
       userId: { in: unique },
-      status: "ACTIVE",
-      deletedAt: null,
-      expiresAt: { gt: now },
-      user: {
-        deletedAt: null,
-        isAdmin: false,
-        role: { not: "ADMIN" },
-      },
+      ...activeStoryWhere(now),
+      user: ownerFilter,
     },
     select: { id: true, userId: true },
     orderBy: { createdAt: "asc" },
@@ -153,27 +177,20 @@ export async function getStoryRingStates(
     if (state) state.hasActiveStory = true;
   }
 
-  if (viewerId) {
-    const allClipIds = clips.map((c) => c.id);
-    if (allClipIds.length) {
-      const views = await prisma.storyView.findMany({
-        where: {
-          viewerUserId: viewerId,
-          storyClipId: { in: allClipIds },
-        },
-        select: { storyClipId: true },
-      });
-      const viewed = new Set(views.map((v) => v.storyClipId));
-      for (const [userId, clipIds] of byUser) {
-        const state = map.get(userId);
-        if (!state) continue;
-        state.hasUnseenStory = clipIds.some((id) => !viewed.has(id));
-      }
-    }
-  } else {
-    for (const [userId] of byUser) {
+  const allClipIds = clips.map((c) => c.id);
+  if (allClipIds.length) {
+    const views = await prisma.storyView.findMany({
+      where: {
+        viewerUserId: viewerId,
+        storyClipId: { in: allClipIds },
+      },
+      select: { storyClipId: true },
+    });
+    const viewed = new Set(views.map((v) => v.storyClipId));
+    for (const [userId, clipIds] of byUser) {
       const state = map.get(userId);
-      if (state?.hasActiveStory) state.hasUnseenStory = true;
+      if (!state) continue;
+      state.hasUnseenStory = clipIds.some((id) => !viewed.has(id));
     }
   }
 
@@ -195,6 +212,9 @@ export function validateStoryUploadMeta(opts: {
   if (opts.size > MAX_STORY_CLIP_BYTES) {
     return "Video too large. Each Story clip can be up to 100 MB.";
   }
+  if (opts.size > MAX_STORY_DELIVERY_BYTES) {
+    return "This video is too high-quality for reliable Story playback. Re-export at a lower bitrate (H.264 MP4, roughly 1080p or less) and try again.";
+  }
   if (opts.allowUnknownDuration && (!Number.isFinite(opts.durationSec) || opts.durationSec <= 0)) {
     return null;
   }
@@ -204,10 +224,19 @@ export function validateStoryUploadMeta(opts: {
   if (opts.durationSec > MAX_STORY_CLIP_SECONDS + 0.5) {
     return "Each Story clip can be up to 90 seconds long.";
   }
+  if (opts.size / opts.durationSec > MAX_STORY_AVG_BYTES_PER_SEC) {
+    return "This video is too high-quality for reliable Story playback. Re-export at a lower bitrate (H.264 MP4, roughly 1080p or less) and try again.";
+  }
   return null;
 }
 
 export function storyMetaErrorCode(message: string): StoryErrorCode {
+  if (/too high-quality|bitrate|1080p/i.test(message)) {
+    return StoryUploadErrorCode.BITRATE_TOO_HIGH;
+  }
+  if (/fast-start|web-optim|web optim/i.test(message)) {
+    return StoryUploadErrorCode.NOT_FAST_START;
+  }
   if (/too large|100 MB|50 MB/i.test(message)) return StoryUploadErrorCode.FILE_TOO_LARGE;
   if (/Unsupported video type|format/i.test(message)) {
     return StoryUploadErrorCode.UNSUPPORTED_FORMAT;
@@ -257,6 +286,49 @@ export function probeMp4DurationSeconds(buffer: Buffer): number | null {
   return null;
 }
 
+/**
+ * True when `moov` appears before `mdat` in the scanned prefix (fast-start).
+ * False when `mdat` appears first (browser must download most of the file).
+ * Null when neither atom is found in the buffer (inconclusive).
+ */
+export function mp4MoovIsBeforeMdat(buffer: Buffer): boolean | null {
+  try {
+    const len = buffer.length;
+    let offset = 0;
+    let sawMoov = false;
+    let sawMdat = false;
+    while (offset + 8 <= len) {
+      let size = buffer.readUInt32BE(offset);
+      const type = buffer.toString("ascii", offset + 4, offset + 8);
+      let header = 8;
+      if (size === 1) {
+        if (offset + 16 > len) break;
+        size = Number(buffer.readBigUInt64BE(offset + 8));
+        header = 16;
+      } else if (size === 0) {
+        size = len - offset;
+      }
+      if (size < header) return null;
+      if (type === "moov") {
+        if (sawMdat) return false;
+        sawMoov = true;
+        return true;
+      }
+      if (type === "mdat") {
+        if (sawMoov) return true;
+        sawMdat = true;
+        // keep scanning in case moov follows (non-fast-start)
+      }
+      offset += size;
+    }
+    if (sawMdat && !sawMoov) return false;
+    if (sawMoov) return true;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createStoryClip(opts: {
   userId: string;
   file: File;
@@ -298,6 +370,15 @@ export async function createStoryClip(opts: {
     mime.includes("mp4") || mime.includes("quicktime")
       ? probeMp4DurationSeconds(buffer)
       : null;
+  if (mime.includes("mp4") || mime.includes("quicktime")) {
+    const fastStart = mp4MoovIsBeforeMdat(buffer);
+    if (fastStart === false) {
+      throw new StoryUploadError(
+        StoryUploadErrorCode.NOT_FAST_START,
+        "This MP4 isn’t web-optimised (fast-start). Re-export with “fast start” / “web optimized” enabled and try again.",
+      );
+    }
+  }
   const durationSeconds = Math.max(
     1,
     Math.round(probed && probed > 0 ? probed : opts.clientDurationSec),
@@ -307,6 +388,14 @@ export async function createStoryClip(opts: {
       StoryUploadErrorCode.DURATION_INVALID,
       "Each Story clip can be up to 90 seconds long.",
     );
+  }
+  const bitrateError = validateStoryUploadMeta({
+    mime,
+    size: opts.file.size,
+    durationSec: durationSeconds,
+  });
+  if (bitrateError) {
+    throw new StoryUploadError(storyMetaErrorCode(bitrateError), bitrateError);
   }
 
   const active = await getActiveDurationSeconds(opts.userId);
@@ -378,9 +467,10 @@ export async function createStoryClip(opts: {
 }
 
 /**
- * Fetch a limited prefix of a public Blob for duration probing without loading the whole file.
+ * Fetch a limited prefix of a public Blob for duration / fast-start probing
+ * without loading the whole file into serverless memory.
  */
-async function probeRemoteMp4Duration(url: string): Promise<number | null> {
+async function probeRemoteMp4Prefix(url: string): Promise<Buffer | null> {
   try {
     const res = await fetch(url, {
       headers: { Range: "bytes=0-2097151" },
@@ -388,11 +478,16 @@ async function probeRemoteMp4Duration(url: string): Promise<number | null> {
       signal: AbortSignal.timeout(20_000),
     });
     if (!(res.ok || res.status === 206)) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return probeMp4DurationSeconds(buf);
+    return Buffer.from(await res.arrayBuffer());
   } catch {
     return null;
   }
+}
+
+async function probeRemoteMp4Duration(url: string): Promise<number | null> {
+  const buf = await probeRemoteMp4Prefix(url);
+  if (!buf) return null;
+  return probeMp4DurationSeconds(buf);
 }
 
 /**
@@ -517,8 +612,22 @@ export async function finalizeStoryFromBlob(opts: {
   }
 
   let probed: number | null = null;
+  let prefix: Buffer | null = null;
   if (mime.includes("mp4") || mime.includes("quicktime")) {
-    probed = await probeRemoteMp4Duration(blobMeta.url || opts.url);
+    prefix = await probeRemoteMp4Prefix(blobMeta.url || opts.url);
+    if (prefix) {
+      probed = probeMp4DurationSeconds(prefix);
+      const fastStart = mp4MoovIsBeforeMdat(prefix);
+      if (fastStart === false) {
+        await deleteStoredVideoForUser(blobMeta.url || opts.url, opts.userId);
+        throw new StoryUploadError(
+          StoryUploadErrorCode.NOT_FAST_START,
+          "This MP4 isn’t web-optimised (fast-start). Re-export with “fast start” / “web optimized” enabled and try again.",
+        );
+      }
+    } else {
+      probed = await probeRemoteMp4Duration(blobMeta.url || opts.url);
+    }
   }
   const clientDur = Number(opts.clientDurationSec);
   const durationSeconds = Math.max(
@@ -544,6 +653,17 @@ export async function finalizeStoryFromBlob(opts: {
       StoryUploadErrorCode.DURATION_INVALID,
       "Each Story clip can be up to 90 seconds long.",
     );
+  }
+
+  const bitrateError = validateStoryUploadMeta({
+    mime,
+    size,
+    durationSec: durationSeconds,
+    allowUnknownDuration: false,
+  });
+  if (bitrateError) {
+    await deleteStoredVideoForUser(blobMeta.url || opts.url, opts.userId);
+    throw new StoryUploadError(storyMetaErrorCode(bitrateError), bitrateError);
   }
 
   const active = await getActiveDurationSeconds(opts.userId);
@@ -675,7 +795,7 @@ export async function expireStoryClips(limit = 200) {
   const now = new Date();
   const expired = await prisma.storyClip.findMany({
     where: {
-      status: "ACTIVE",
+      status: { in: [...readyStatusList, "PROCESSING"] },
       OR: [{ expiresAt: { lte: now } }, { deletedAt: { not: null } }],
     },
     take: limit,
@@ -695,7 +815,7 @@ export async function expireStoryClips(limit = 200) {
       where: { id: clip.id },
       data: {
         status: "EXPIRED",
-        deletedAt: clip ? new Date() : new Date(),
+        deletedAt: new Date(),
       },
     });
     await deleteStoredVideoForUser(clip.videoUrl, clip.userId);
@@ -708,5 +828,39 @@ export async function expireStoryClips(limit = 200) {
   return { scanned: expired.length, cleaned };
 }
 
-// silence unused import warning for activeClipWhere if any
-void activeClipWhere;
+/**
+ * Authorised playback grant for a ready clip.
+ * Stories are stored on the public Blob store and streamed directly from CDN
+ * (not proxied through Next.js). The grant adds a client refresh window.
+ */
+export async function getClipPlaybackGrant(clipId: string) {
+  const clip = await prisma.storyClip.findFirst({
+    where: { id: clipId, ...activeStoryWhere() },
+    select: {
+      id: true,
+      userId: true,
+      videoUrl: true,
+      mimeType: true,
+      status: true,
+      expiresAt: true,
+      fileSizeBytes: true,
+    },
+  });
+  if (!clip) return null;
+  if (clip.status === "FAILED" || clip.status === "PROCESSING") return null;
+
+  const grantExpiresAt = new Date(
+    Math.min(Date.now() + STORY_PLAYBACK_GRANT_MS, clip.expiresAt.getTime()),
+  );
+
+  return {
+    clipId: clip.id,
+    userId: clip.userId,
+    playbackUrl: clip.videoUrl,
+    contentType: clip.mimeType || "video/mp4",
+    expiresAt: grantExpiresAt.toISOString(),
+    storyExpiresAt: clip.expiresAt.toISOString(),
+    fileSizeBytes: clip.fileSizeBytes,
+    delivery: "direct-blob-cdn" as const,
+  };
+}

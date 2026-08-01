@@ -19,7 +19,7 @@ export function LiveFeed({ items }: LiveFeedProps) {
   useEffect(() => {
     const ids = [...new Set(items.map((i) => i.memberId).filter(Boolean))];
     if (ids.length) void stories?.refreshRings(ids);
-  }, [items, stories]);
+  }, [items, stories?.refreshRings]);
 
   if (!items.length) {
     return (

@@ -47,7 +47,7 @@ export function ExploreClient({
   useEffect(() => {
     const ids = members.map((m) => m.id);
     if (ids.length) void stories?.refreshRings(ids);
-  }, [members, stories]);
+  }, [members, stories?.refreshRings]);
 
   const refreshDirectory = useCallback(async (q: string) => {
     setSearching(true);

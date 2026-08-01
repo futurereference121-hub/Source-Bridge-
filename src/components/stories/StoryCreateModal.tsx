@@ -12,8 +12,10 @@ import { upload } from "@vercel/blob/client";
 import {
   ALLOWED_STORY_VIDEO_TYPES,
   MAX_ACTIVE_STORY_SECONDS,
+  MAX_STORY_AVG_BYTES_PER_SEC,
   MAX_STORY_CLIP_BYTES,
   MAX_STORY_CLIP_SECONDS,
+  MAX_STORY_DELIVERY_BYTES,
   STORY_FORMAT_HINT,
   STORY_PRIVACY_NOTICE,
   STORY_VIDEO_ACCEPT,
@@ -200,8 +202,18 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     if (selected.size > MAX_STORY_CLIP_BYTES) {
       return storyErrorMessage(StoryUploadErrorCode.FILE_TOO_LARGE);
     }
+    if (selected.size > MAX_STORY_DELIVERY_BYTES) {
+      return storyErrorMessage(StoryUploadErrorCode.BITRATE_TOO_HIGH);
+    }
     if (dur !== null && dur > MAX_STORY_CLIP_SECONDS + 0.5) {
       return storyErrorMessage(StoryUploadErrorCode.DURATION_INVALID);
+    }
+    if (
+      dur !== null &&
+      dur > 0 &&
+      selected.size / dur > MAX_STORY_AVG_BYTES_PER_SEC
+    ) {
+      return storyErrorMessage(StoryUploadErrorCode.BITRATE_TOO_HIGH);
     }
     if (
       dur !== null &&

@@ -53,7 +53,7 @@ export function FollowList({
   useEffect(() => {
     const ids = items.map((i) => i.id);
     if (ids.length) void stories?.refreshRings(ids);
-  }, [items, stories]);
+  }, [items, stories?.refreshRings]);
 
   if (!authReady || loading) {
     return <Shell title={title}><p className="text-white/45">Loading…</p></Shell>;
