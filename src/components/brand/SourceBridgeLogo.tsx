@@ -15,6 +15,18 @@ const COLORS = {
   electric: "#3B82F6",
 } as const;
 
+/** Six outer nodes + six spokes + central point (no outer ring / chord geometry). */
+const NODE_RADIUS = 18;
+const OUTER_R = 2.6;
+const CENTER_R = 2.2;
+const OUTER_NODES = Array.from({ length: 6 }, (_, i) => {
+  const angle = (Math.PI / 2) * -1 + (i * Math.PI) / 3;
+  return {
+    x: 24 + NODE_RADIUS * Math.cos(angle),
+    y: 24 + NODE_RADIUS * Math.sin(angle),
+  };
+});
+
 export function SourceBridgeLogo({
   size = 36,
   color = "white",
@@ -37,40 +49,31 @@ export function SourceBridgeLogo({
         aria-label={withWordmark ? undefined : "Source Bridge"}
       >
         <title>Source Bridge</title>
-        <circle
-          cx="24"
-          cy="24"
-          r="22.5"
-          stroke={fill}
-          strokeWidth="2"
-          fill="none"
-        />
-        {/* Left person */}
-        <circle cx="16.5" cy="17" r="2.4" fill={fill} />
-        <path
-          d="M12.2 28.5c1.1-4.2 3.2-6.3 4.3-6.3s3.2 2.1 4.3 6.3"
-          stroke={fill}
-          strokeWidth="2"
-          strokeLinecap="round"
-          fill="none"
-        />
-        {/* Right person */}
-        <circle cx="31.5" cy="17" r="2.4" fill={fill} />
-        <path
-          d="M27.2 28.5c1.1-4.2 3.2-6.3 4.3-6.3s3.2 2.1 4.3 6.3"
-          stroke={fill}
-          strokeWidth="2"
-          strokeLinecap="round"
-          fill="none"
-        />
-        {/* Bridge curve connecting the two */}
-        <path
-          d="M18.8 22.8c2.2-3.2 8.2-3.2 10.4 0"
-          stroke={fill}
-          strokeWidth="2"
-          strokeLinecap="round"
-          fill="none"
-        />
+        {OUTER_NODES.map((node, i) => (
+          <line
+            key={`spoke-${i}`}
+            x1={24}
+            y1={24}
+            x2={node.x}
+            y2={node.y}
+            stroke={fill}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            opacity={0.85}
+          />
+        ))}
+        {OUTER_NODES.map((node, i) => (
+          <circle
+            key={`node-${i}`}
+            cx={node.x}
+            cy={node.y}
+            r={OUTER_R}
+            fill={fill}
+          />
+        ))}
+        {/* Soft central glow — simplified for header scale */}
+        <circle cx={24} cy={24} r={5.5} fill={fill} opacity={0.18} />
+        <circle cx={24} cy={24} r={CENTER_R} fill={fill} />
       </svg>
       {withWordmark ? (
         <span
