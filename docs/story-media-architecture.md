@@ -74,10 +74,14 @@ asynchronously by Mux as `FAILED`).
 
 ## Env vars (names only)
 
-- `MUX_TOKEN_ID`
-- `MUX_TOKEN_SECRET`
-- `MUX_WEBHOOK_SECRET`
+- `MUX_TOKEN_ID` — Mux Access Token **ID** (not a placeholder; typically longer than a short label)
+- `MUX_TOKEN_SECRET` — matching Access Token **Secret** from the same token
+- `MUX_WEBHOOK_SECRET` — signing secret for `https://www.sourcebridge.app/api/webhooks/mux`
 - `APP_URL` (CORS origin for direct uploads)
+
+If prepare returns `STORY_MUX_AUTH_FAILED` (HTTP 502), Production credentials were rejected by Mux (`401 Unauthorized`). Re-create the Access Token in the Mux dashboard (Video + Direct Uploads), update both ID and Secret in Vercel Production, and redeploy. Do not paste secrets into git or chat.
+
+Known failure mapping for request reference `358b8e0d0876` (2026-08): prepare → `uploads.create` → Mux `401 unauthorized` → previously collapsed to `STORY_UNKNOWN`; now returns `STORY_MUX_AUTH_FAILED`.
 
 Without `MUX_TOKEN_ID` / `MUX_TOKEN_SECRET`, production (`process.env.VERCEL`)
 returns `503 STORY_STORAGE_FAILED` from prepare/finalize rather than publishing an

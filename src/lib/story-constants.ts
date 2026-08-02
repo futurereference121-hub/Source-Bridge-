@@ -110,6 +110,14 @@ export const StoryUploadErrorCode = {
   BITRATE_TOO_HIGH: "STORY_BITRATE_TOO_HIGH",
   NOT_FAST_START: "STORY_NOT_FAST_START",
   NETWORK: "STORY_NETWORK",
+  PREPARE_FAILED: "STORY_PREPARE_FAILED",
+  MUX_NOT_CONFIGURED: "STORY_MUX_NOT_CONFIGURED",
+  MUX_AUTH_FAILED: "STORY_MUX_AUTH_FAILED",
+  MUX_PERMISSION_DENIED: "STORY_MUX_PERMISSION_DENIED",
+  MUX_DIRECT_UPLOAD_FAILED: "STORY_MUX_DIRECT_UPLOAD_FAILED",
+  MUX_UPLOAD_REJECTED: "STORY_MUX_UPLOAD_REJECTED",
+  FINALISATION_FAILED: "STORY_FINALISATION_FAILED",
+  WEBHOOK_FAILED: "STORY_WEBHOOK_FAILED",
   UNKNOWN: "STORY_UNKNOWN",
 } as const;
 
@@ -164,6 +172,32 @@ export function storyErrorMessage(code: StoryUploadErrorCode, requestId?: string
       return "This MP4 isn’t web-optimised (fast-start). Re-export with “fast start” / “web optimized” enabled and try again.";
     case StoryUploadErrorCode.NETWORK:
       return "The upload was interrupted. Check your connection and try again.";
+    case StoryUploadErrorCode.PREPARE_FAILED:
+      return requestId
+        ? `We couldn’t start this Story upload. Error reference: ${requestId}.`
+        : "We couldn’t start this Story upload. Please try again.";
+    case StoryUploadErrorCode.MUX_NOT_CONFIGURED:
+      return "Story video processing is not configured. Your video has not been published.";
+    case StoryUploadErrorCode.MUX_AUTH_FAILED:
+      return requestId
+        ? `Story upload could not authenticate with the video service. Error reference: ${requestId}.`
+        : "Story upload could not authenticate with the video service. Please try again shortly.";
+    case StoryUploadErrorCode.MUX_PERMISSION_DENIED:
+      return requestId
+        ? `Story upload is not permitted by the video service. Error reference: ${requestId}.`
+        : "Story upload is not permitted by the video service.";
+    case StoryUploadErrorCode.MUX_DIRECT_UPLOAD_FAILED:
+      return requestId
+        ? `We couldn’t create a Story upload session. Error reference: ${requestId}.`
+        : "We couldn’t create a Story upload session. Please try again.";
+    case StoryUploadErrorCode.MUX_UPLOAD_REJECTED:
+      return "The video service rejected this upload. Please choose another recording.";
+    case StoryUploadErrorCode.FINALISATION_FAILED:
+      return requestId
+        ? `We couldn’t finalise this Story. Error reference: ${requestId}.`
+        : "We couldn’t finalise this Story. Please try again.";
+    case StoryUploadErrorCode.WEBHOOK_FAILED:
+      return "Story processing updates failed. Please try again shortly.";
     default:
       return requestId
         ? `We couldn’t upload this Story. Error reference: ${requestId}.`

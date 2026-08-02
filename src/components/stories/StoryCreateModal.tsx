@@ -345,13 +345,18 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
 
       if (!prepareRes.ok || !prepareJson.pathname || !prepareJson.uploadSessionId) {
         // Local/dev fallback: small proxy upload when no direct upload target exists.
-        if (prepareRes.status === 503 || prepareJson.code === StoryUploadErrorCode.STORAGE_FAILED) {
+        if (
+          prepareRes.status === 503 ||
+          prepareJson.code === StoryUploadErrorCode.STORAGE_FAILED ||
+          prepareJson.code === StoryUploadErrorCode.MUX_NOT_CONFIGURED
+        ) {
           const result = await proxyUploadLegacy(file, poster);
           onSuccess(result);
           return;
         }
         throw Object.assign(new Error(messageFromResponse(prepareJson)), {
           code: prepareJson.code,
+          requestId: prepareJson.requestId,
         });
       }
 

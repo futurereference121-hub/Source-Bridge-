@@ -12,9 +12,10 @@ function read(rel) {
   return readFileSync(join(root, rel), "utf8");
 }
 
-// Homepage CTA
+// Homepage CTA — Explore left, combined Sign Up/In right (hero, not header)
 {
   const hero = read("src/components/home/HeroActions.tsx");
+  const site = read("src/lib/site.ts");
   assert.ok(
     !/Start Earning/i.test(hero),
     "Old Start Earning CTA must be removed",
@@ -23,16 +24,33 @@ function read(rel) {
     !/Start earning from your location now/i.test(hero),
     "Scheme-like earning CTA must be absent",
   );
+  assert.ok(/href="\/explore"/.test(hero), "Explore hero button required");
+  assert.ok(/Explore/.test(hero), "Explore label required in hero");
   assert.ok(/Sign Up\/In/.test(hero), "Combined Sign Up/In CTA required");
   assert.ok(
     /Earn from your location\./.test(hero),
     "Supporting earn-from-location line required",
+  );
+  const exploreIdx = hero.indexOf('href="/explore"');
+  const joinIdx = hero.indexOf('href="/join"');
+  assert.ok(
+    exploreIdx >= 0 && joinIdx > exploreIdx,
+    "Explore must appear left of Sign Up/In in the hero",
   );
   assert.ok(
     !/Your location could be exactly what someone needs/.test(hero),
     "Old dual-CTA mission line must be absent",
   );
   assert.ok(!/Join Source Bridge/.test(hero), "Old Join Source Bridge CTA must be absent");
+  // Homepage header must not also render Explore (avoid duplicates).
+  const homeNavBlock = site.slice(
+    site.indexOf("homeNavItems"),
+    site.indexOf("navItems"),
+  );
+  assert.ok(
+    !/label:\s*"Explore"/.test(homeNavBlock),
+    "Explore must not be in homepage header homeNavItems",
+  );
 }
 
 // Timeline: sticky sourcing card removed; SOURCING_REQUEST rendered inline

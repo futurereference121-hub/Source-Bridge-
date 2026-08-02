@@ -10,9 +10,11 @@ export const siteConfig = {
   address: "Community locations worldwide",
 };
 
-/** Homepage header — text links (auth CTA is rendered separately) */
+/**
+ * Homepage header — text links (auth CTA is rendered separately).
+ * Explore belongs in the hero CTA group, not the top-right homepage header.
+ */
 export const homeNavItems: NavItem[] = [
-  { label: "Explore", href: "/explore" },
   { label: "How It Works", href: "/how-it-works" },
 ];
 

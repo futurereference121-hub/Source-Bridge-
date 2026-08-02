@@ -48,6 +48,7 @@ function read(rel) {
   assert.ok(/isMuxConfigured/.test(mux));
   assert.ok(/getMuxClient/.test(mux));
   assert.ok(/createMuxDirectUpload/.test(mux));
+  assert.ok(/classifyMuxError/.test(mux));
   assert.ok(/muxHlsUrl/.test(mux));
   assert.ok(/muxMp4Url/.test(mux));
   assert.ok(/muxThumbnailUrl/.test(mux));
@@ -56,8 +57,8 @@ function read(rel) {
   assert.ok(/MUX_TOKEN_ID/.test(mux));
   assert.ok(/MUX_TOKEN_SECRET/.test(mux));
   assert.ok(/MUX_WEBHOOK_SECRET/.test(mux));
-  assert.ok(/max_resolution_tier: "1080p"/.test(mux));
-  assert.ok(/mp4_support: "standard"/.test(mux));
+  assert.ok(/MUX_AUTH_FAILED/.test(mux));
+  assert.ok(/video_quality:\s*"basic"/.test(mux));
   assert.ok(/passthrough: opts\.uploadSessionId/.test(mux));
   // Never hard-code secrets.
   assert.ok(!/MUX_TOKEN_SECRET\s*=\s*"[^"]+"/.test(mux));
@@ -270,12 +271,18 @@ function read(rel) {
   const prepare = read("src/app/api/stories/prepare/route.ts");
   assert.ok(/isMuxConfigured/.test(prepare));
   assert.ok(/createMuxDirectUpload/.test(prepare));
+  assert.ok(/classifyMuxError/.test(prepare));
   assert.ok(/provider: "mux"/.test(prepare));
   assert.ok(/uploadUrl/.test(prepare));
   assert.ok(/maxBytes: MAX_STORY_CLIP_BYTES/.test(prepare));
+  assert.ok(/MUX_AUTH_FAILED/.test(prepare));
   // Production without Mux must refuse rather than publish an unprocessed file.
   assert.ok(/process\.env\.VERCEL/.test(prepare));
-  assert.ok(/STORAGE_FAILED[\s\S]{0,200}503|503,[\s\S]{0,200}STORAGE_FAILED/.test(prepare));
+  assert.ok(
+    /MUX_NOT_CONFIGURED[\s\S]{0,200}503|503,[\s\S]{0,200}MUX_NOT_CONFIGURED/.test(
+      prepare,
+    ),
+  );
 
   const finalize = read("src/app/api/stories/finalize/route.ts");
   assert.ok(/finalizeStoryFromMux/.test(finalize));

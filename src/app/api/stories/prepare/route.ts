@@ -6,7 +6,11 @@ import {
   resolveStoryMime,
   storyErrorMessage,
 } from "@/lib/story-constants";
-import { createMuxDirectUpload, isMuxConfigured } from "@/lib/mux-stories";
+import {
+  classifyMuxError,
+  createMuxDirectUpload,
+  isMuxConfigured,
+} from "@/lib/mux-stories";
 import { storyCorsOrigin } from "@/lib/stories";
 import {
   blobPathForUser,
@@ -43,7 +47,7 @@ export async function POST(req: Request) {
     }
     if (!user.emailVerified || !user.onboardingComplete) {
       return jsonError("Complete your profile before posting a Story", 400, {
-        code: StoryUploadErrorCode.UNKNOWN,
+        code: StoryUploadErrorCode.PREPARE_FAILED,
         requestId,
       });
     }
@@ -84,28 +88,61 @@ export async function POST(req: Request) {
     const uploadSessionId = `us_${randomBytes(16).toString("hex")}`;
 
     if (isMuxConfigured()) {
-      const upload = await createMuxDirectUpload({
-        uploadSessionId,
-        corsOrigin: storyCorsOrigin(req.headers.get("origin")),
-      });
-      return Response.json({
-        ok: true,
-        provider: "mux",
-        uploadUrl: upload.uploadUrl,
-        uploadId: upload.uploadId,
-        uploadSessionId,
-        contentType: mime,
-        maxBytes: MAX_STORY_CLIP_BYTES,
-        requestId,
-      });
+      try {
+        const upload = await createMuxDirectUpload({
+          uploadSessionId,
+          corsOrigin: storyCorsOrigin(req.headers.get("origin")),
+        });
+        return Response.json({
+          ok: true,
+          provider: "mux",
+          uploadUrl: upload.uploadUrl,
+          uploadId: upload.uploadId,
+          uploadSessionId,
+          contentType: mime,
+          maxBytes: MAX_STORY_CLIP_BYTES,
+          requestId,
+        });
+      } catch (muxErr) {
+        const classified =
+          muxErr &&
+          typeof muxErr === "object" &&
+          "code" in muxErr &&
+          typeof (muxErr as { code?: string }).code === "string" &&
+          String((muxErr as { code: string }).code).startsWith("STORY_MUX_")
+            ? {
+                code: (muxErr as { code: string }).code as
+                  | typeof StoryUploadErrorCode.MUX_AUTH_FAILED
+                  | typeof StoryUploadErrorCode.MUX_PERMISSION_DENIED
+                  | typeof StoryUploadErrorCode.MUX_DIRECT_UPLOAD_FAILED
+                  | typeof StoryUploadErrorCode.MUX_NOT_CONFIGURED,
+                status: Number((muxErr as { status?: number }).status) || 502,
+                logMessage:
+                  muxErr instanceof Error
+                    ? muxErr.message
+                    : "Mux direct upload failed",
+              }
+            : classifyMuxError(muxErr);
+        console.error(
+          "[stories:prepare]",
+          requestId,
+          classified.code,
+          classified.logMessage,
+        );
+        return jsonError(
+          storyErrorMessage(classified.code, requestId),
+          classified.status,
+          { code: classified.code, requestId },
+        );
+      }
     }
 
     // Without Mux there is no transcoder — never publish raw originals in prod.
     if (process.env.VERCEL || !isClientBlobUploadConfigured()) {
       return jsonError(
-        storyErrorMessage(StoryUploadErrorCode.STORAGE_FAILED, requestId),
+        storyErrorMessage(StoryUploadErrorCode.MUX_NOT_CONFIGURED, requestId),
         503,
-        { code: StoryUploadErrorCode.STORAGE_FAILED, requestId },
+        { code: StoryUploadErrorCode.MUX_NOT_CONFIGURED, requestId },
       );
     }
 
@@ -121,9 +158,9 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("[stories:prepare]", requestId, err);
     return jsonError(
-      storyErrorMessage(StoryUploadErrorCode.UNKNOWN, requestId),
+      storyErrorMessage(StoryUploadErrorCode.PREPARE_FAILED, requestId),
       500,
-      { code: StoryUploadErrorCode.UNKNOWN, requestId },
+      { code: StoryUploadErrorCode.PREPARE_FAILED, requestId },
     );
   }
 }
