@@ -10,10 +10,10 @@ export const siteConfig = {
   address: "Community locations worldwide",
 };
 
-/** Homepage header — minimal welcome screen */
+/** Homepage header — text links (auth CTA is rendered separately) */
 export const homeNavItems: NavItem[] = [
+  { label: "Explore", href: "/explore" },
   { label: "How It Works", href: "/how-it-works" },
-  { label: "Sign In / Up", href: "/sign-in" },
 ];
 
 /** Desktop primary navigation (internal pages) */

@@ -25,8 +25,7 @@ export function SiteHeader() {
 
   const isHome = pathname === "/";
 
-  const desktopNav = (isHome ? homeNavItems : navItems).filter((item) => {
-    if (isHome) return true;
+  const desktopNav = navItems.filter((item) => {
     // Admins see no public nav — only the account menu with admin links.
     if (isAdmin && signedIn) return false;
     if (item.href === "/sign-in" && signedIn) return false;
@@ -43,12 +42,15 @@ export function SiteHeader() {
           </Link>
 
           <nav className="hidden items-center gap-6 sm:flex">
-            <Link
-              href="/how-it-works"
-              className="text-xs font-medium uppercase tracking-[0.16em] text-white/90 transition-colors hover:text-white"
-            >
-              How It Works
-            </Link>
+            {homeNavItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="text-xs font-medium uppercase tracking-[0.16em] text-white/90 transition-colors hover:text-white"
+              >
+                {item.label}
+              </Link>
+            ))}
             {signedIn ? (
               <div className="flex items-center gap-1">
                 <NotificationBell />
@@ -77,12 +79,15 @@ export function SiteHeader() {
         {open ? (
           <div className="border-t border-white/10 bg-navy/95 backdrop-blur-md sm:hidden">
             <nav className="mx-auto flex max-w-7xl flex-col gap-1 px-5 py-5">
-              <Link
-                href="/how-it-works"
-                className="py-3 text-sm font-medium uppercase tracking-[0.14em] text-white"
-              >
-                How It Works
-              </Link>
+              {homeNavItems.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="py-3 text-sm font-medium uppercase tracking-[0.14em] text-white"
+                >
+                  {item.label}
+                </Link>
+              ))}
               {signedIn ? (
                 <AccountMenuMobileLinks onNavigate={() => setOpen(false)} />
               ) : (
