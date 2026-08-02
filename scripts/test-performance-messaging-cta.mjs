@@ -23,12 +23,16 @@ function read(rel) {
     !/Start earning from your location now/i.test(hero),
     "Scheme-like earning CTA must be absent",
   );
-  assert.ok(/Join Source Bridge/.test(hero), "Join Source Bridge CTA required");
+  assert.ok(/Sign Up\/In/.test(hero), "Combined Sign Up/In CTA required");
   assert.ok(
-    /Your location could be exactly what someone needs/.test(hero),
-    "Supporting mission line required",
+    /Earn from your location\./.test(hero),
+    "Supporting earn-from-location line required",
   );
-  assert.ok(/Sign In/.test(hero), "Sign In secondary action required");
+  assert.ok(
+    !/Your location could be exactly what someone needs/.test(hero),
+    "Old dual-CTA mission line must be absent",
+  );
+  assert.ok(!/Join Source Bridge/.test(hero), "Old Join Source Bridge CTA must be absent");
 }
 
 // Timeline: sticky sourcing card removed; SOURCING_REQUEST rendered inline
