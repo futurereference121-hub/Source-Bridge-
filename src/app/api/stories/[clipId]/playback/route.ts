@@ -11,7 +11,8 @@ type Params = { params: Promise<{ clipId: string }> };
 
 /**
  * Issues a short-lived authorised playback grant for a READY Story clip.
- * Bytes stream directly from Blob/CDN — this route never proxies video bodies.
+ * Bytes stream directly from the Mux CDN (or the legacy Blob/CDN for pre-Mux
+ * clips) — this route never proxies video bodies.
  */
 export async function GET(_req: Request, { params }: Params) {
   try {
@@ -38,6 +39,8 @@ export async function GET(_req: Request, { params }: Params) {
         ok: true,
         clipId: grant.clipId,
         playbackUrl: grant.playbackUrl,
+        hlsUrl: grant.hlsUrl,
+        mp4Url: grant.mp4Url,
         contentType: grant.contentType,
         expiresAt: grant.expiresAt,
         storyExpiresAt: grant.storyExpiresAt,

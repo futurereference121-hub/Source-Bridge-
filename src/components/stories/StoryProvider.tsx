@@ -209,13 +209,15 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       <StoryCreateModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onSuccess={() => {
+        onSuccess={(result) => {
           setCreateOpen(false);
-          showToast("Story added.");
+          // Processing clips have no ring yet — never open the viewer here.
+          showToast(
+            result.processing ? "Your Story is processing." : "Story added.",
+          );
           if (account?.id) {
             invalidateRings([account.id]);
             void refreshRings([account.id], { force: true });
-            setViewerUserId(account.id);
           }
         }}
       />

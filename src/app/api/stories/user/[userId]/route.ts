@@ -73,7 +73,6 @@ export async function GET(_req: Request, { params }: Params) {
         clips: clips.map((c) => ({
           ...mapClipPublic(c),
           playbackExpiresAt,
-          delivery: "direct-blob-cdn",
           viewed: viewedIds.has(c.id),
         })),
         isOwner: viewer?.id === owner.id,

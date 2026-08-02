@@ -3,17 +3,17 @@ import { head } from "@vercel/blob";
 import { prisma } from "@/lib/db";
 import {
   MAX_ACTIVE_STORY_SECONDS,
-  MAX_STORY_AVG_BYTES_PER_SEC,
   MAX_STORY_CLIP_BYTES,
   MAX_STORY_CLIP_SECONDS,
-  MAX_STORY_DELIVERY_BYTES,
   STORY_PLAYBACK_GRANT_MS,
+  STORY_PROCESSING_TTL_MS,
   STORY_READY_STATUSES,
   STORY_TTL_MS,
   ALLOWED_STORY_VIDEO_TYPES,
   StoryUploadErrorCode,
   resolveStoryMime,
   type StoryClipPublic,
+  type StoryDelivery,
   type StoryUploadErrorCode as StoryErrorCode,
 } from "@/lib/story-constants";
 import {
@@ -22,6 +22,14 @@ import {
   pathnameBelongsToUser,
   storeVideoForUser,
 } from "@/lib/storage";
+import {
+  createMuxDirectUpload,
+  deleteMuxAsset,
+  isMuxConfigured,
+  muxHlsUrl,
+  muxMp4Url,
+  muxThumbnailUrl,
+} from "@/lib/mux-stories";
 import { revalidatePublicMemberSurfaces } from "@/lib/revalidate-public";
 
 export class StoryUploadError extends Error {
@@ -51,8 +59,12 @@ export type StoryRingState = {
   hasUnseenStory: boolean;
 };
 
-const readyStatusList = [...STORY_READY_STATUSES];
+const readyStatusList: string[] = [...STORY_READY_STATUSES];
 
+/** Statuses that consume the owner’s 90-minute allowance before they go public. */
+const inFlightStatusList: string[] = ["UPLOADING", "PROCESSING"];
+
+/** Public rings / viewer: only clips that are actually playable right now. */
 export function activeStoryWhere(now = new Date()) {
   return {
     status: { in: readyStatusList },
@@ -61,36 +73,63 @@ export function activeStoryWhere(now = new Date()) {
   };
 }
 
+/**
+ * Owner-facing set: everything the uploader should still see, including clips
+ * Mux has not finished transcoding. Never used for public surfaces.
+ */
+export function ownerStoryWhere(now = new Date()) {
+  return {
+    status: { in: [...readyStatusList, ...inFlightStatusList] },
+    deletedAt: null,
+    expiresAt: { gt: now },
+  };
+}
+
+type ClipRecordLike = {
+  id: string;
+  userId: string;
+  videoUrl: string;
+  thumbnailUrl: string;
+  durationSeconds: number;
+  createdAt: Date;
+  expiresAt: Date;
+  status?: string;
+  muxPlaybackId?: string | null;
+  _count?: { views: number };
+};
+
 export function mapClipPublic(
-  clip: {
-    id: string;
-    userId: string;
-    videoUrl: string;
-    thumbnailUrl: string;
-    durationSeconds: number;
-    createdAt: Date;
-    expiresAt: Date;
-    _count?: { views: number };
-  },
+  clip: ClipRecordLike,
   includeViews = false,
+  includeStatus = false,
 ): StoryClipPublic {
+  const playbackId = clip.muxPlaybackId || "";
+  const hlsUrl = playbackId ? muxHlsUrl(playbackId) : "";
+  const mp4Url = playbackId ? muxMp4Url(playbackId) : "";
   return {
     id: clip.id,
     userId: clip.userId,
-    videoUrl: clip.videoUrl,
+    videoUrl: clip.videoUrl || hlsUrl,
     thumbnailUrl: clip.thumbnailUrl,
     durationSeconds: clip.durationSeconds,
     createdAt: clip.createdAt.toISOString(),
     expiresAt: clip.expiresAt.toISOString(),
-    ...(includeViews
-      ? { viewCount: clip._count?.views ?? 0 }
-      : {}),
+    delivery: (playbackId
+      ? "mux-cdn"
+      : "direct-blob-cdn") satisfies StoryDelivery,
+    ...(playbackId ? { hlsUrl, mp4Url } : {}),
+    ...(includeViews ? { viewCount: clip._count?.views ?? 0 } : {}),
+    ...(includeStatus ? { status: clip.status || "" } : {}),
   };
 }
 
+/**
+ * Allowance usage. Counts PROCESSING clips too, so a member cannot queue
+ * unlimited uploads while Mux is still transcoding.
+ */
 export async function getActiveDurationSeconds(userId: string): Promise<number> {
   const clips = await prisma.storyClip.findMany({
-    where: { userId, ...activeStoryWhere() },
+    where: { userId, ...ownerStoryWhere() },
     select: { durationSeconds: true },
   });
   return clips.reduce((sum, c) => sum + Math.max(0, c.durationSeconds), 0);
@@ -106,6 +145,27 @@ export async function listActiveClipsForUser(userId: string) {
 export async function listActiveClipsForOwner(userId: string) {
   return prisma.storyClip.findMany({
     where: { userId, ...activeStoryWhere() },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    include: { _count: { select: { views: true } } },
+  });
+}
+
+/**
+ * Owner’s Manage Story list — includes PROCESSING clips (and recently FAILED
+ * ones) so the uploader can see progress instead of an empty list.
+ */
+export async function listOwnerClips(userId: string) {
+  const now = new Date();
+  const recentFailedCutoff = new Date(now.getTime() - STORY_TTL_MS);
+  return prisma.storyClip.findMany({
+    where: {
+      userId,
+      deletedAt: null,
+      OR: [
+        ownerStoryWhere(now),
+        { status: "FAILED", createdAt: { gt: recentFailedCutoff } },
+      ],
+    },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     include: { _count: { select: { views: true } } },
   });
@@ -197,11 +257,16 @@ export async function getStoryRingStates(
   return map;
 }
 
+/**
+ * Upload gate. Deliberately does NOT inspect bitrate or MP4 atom order —
+ * Mux re-encodes every accepted clip, so high-bitrate phone originals are fine.
+ * Rejects only: wrong type, empty, over 500 MB, over 90 seconds.
+ */
 export function validateStoryUploadMeta(opts: {
   mime: string;
   size: number;
   durationSec: number;
-  /** When true, duration may be 0/NaN — server will probe later. */
+  /** When true, duration may be 0/NaN — Mux reports the real duration on ready. */
   allowUnknownDuration?: boolean;
 }): string | null {
   const mime = resolveStoryMime({ mime: opts.mime });
@@ -210,10 +275,7 @@ export function validateStoryUploadMeta(opts: {
   }
   if (opts.size <= 0) return "Empty file.";
   if (opts.size > MAX_STORY_CLIP_BYTES) {
-    return "Video too large. Each Story clip can be up to 100 MB.";
-  }
-  if (opts.size > MAX_STORY_DELIVERY_BYTES) {
-    return "This video is too high-quality for reliable Story playback. Re-export at a lower bitrate (H.264 MP4, roughly 1080p or less) and try again.";
+    return "Video too large. Each Story clip can be up to 500 MB.";
   }
   if (opts.allowUnknownDuration && (!Number.isFinite(opts.durationSec) || opts.durationSec <= 0)) {
     return null;
@@ -224,20 +286,11 @@ export function validateStoryUploadMeta(opts: {
   if (opts.durationSec > MAX_STORY_CLIP_SECONDS + 0.5) {
     return "Each Story clip can be up to 90 seconds long.";
   }
-  if (opts.size / opts.durationSec > MAX_STORY_AVG_BYTES_PER_SEC) {
-    return "This video is too high-quality for reliable Story playback. Re-export at a lower bitrate (H.264 MP4, roughly 1080p or less) and try again.";
-  }
   return null;
 }
 
 export function storyMetaErrorCode(message: string): StoryErrorCode {
-  if (/too high-quality|bitrate|1080p/i.test(message)) {
-    return StoryUploadErrorCode.BITRATE_TOO_HIGH;
-  }
-  if (/fast-start|web-optim|web optim/i.test(message)) {
-    return StoryUploadErrorCode.NOT_FAST_START;
-  }
-  if (/too large|100 MB|50 MB/i.test(message)) return StoryUploadErrorCode.FILE_TOO_LARGE;
+  if (/too large|500 MB/i.test(message)) return StoryUploadErrorCode.FILE_TOO_LARGE;
   if (/Unsupported video type|format/i.test(message)) {
     return StoryUploadErrorCode.UNSUPPORTED_FORMAT;
   }
@@ -286,49 +339,6 @@ export function probeMp4DurationSeconds(buffer: Buffer): number | null {
   return null;
 }
 
-/**
- * True when `moov` appears before `mdat` in the scanned prefix (fast-start).
- * False when `mdat` appears first (browser must download most of the file).
- * Null when neither atom is found in the buffer (inconclusive).
- */
-export function mp4MoovIsBeforeMdat(buffer: Buffer): boolean | null {
-  try {
-    const len = buffer.length;
-    let offset = 0;
-    let sawMoov = false;
-    let sawMdat = false;
-    while (offset + 8 <= len) {
-      let size = buffer.readUInt32BE(offset);
-      const type = buffer.toString("ascii", offset + 4, offset + 8);
-      let header = 8;
-      if (size === 1) {
-        if (offset + 16 > len) break;
-        size = Number(buffer.readBigUInt64BE(offset + 8));
-        header = 16;
-      } else if (size === 0) {
-        size = len - offset;
-      }
-      if (size < header) return null;
-      if (type === "moov") {
-        if (sawMdat) return false;
-        sawMoov = true;
-        return true;
-      }
-      if (type === "mdat") {
-        if (sawMoov) return true;
-        sawMdat = true;
-        // keep scanning in case moov follows (non-fast-start)
-      }
-      offset += size;
-    }
-    if (sawMdat && !sawMoov) return false;
-    if (sawMoov) return true;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 export async function createStoryClip(opts: {
   userId: string;
   file: File;
@@ -370,15 +380,6 @@ export async function createStoryClip(opts: {
     mime.includes("mp4") || mime.includes("quicktime")
       ? probeMp4DurationSeconds(buffer)
       : null;
-  if (mime.includes("mp4") || mime.includes("quicktime")) {
-    const fastStart = mp4MoovIsBeforeMdat(buffer);
-    if (fastStart === false) {
-      throw new StoryUploadError(
-        StoryUploadErrorCode.NOT_FAST_START,
-        "This MP4 isn’t web-optimised (fast-start). Re-export with “fast start” / “web optimized” enabled and try again.",
-      );
-    }
-  }
   const durationSeconds = Math.max(
     1,
     Math.round(probed && probed > 0 ? probed : opts.clientDurationSec),
@@ -389,20 +390,31 @@ export async function createStoryClip(opts: {
       "Each Story clip can be up to 90 seconds long.",
     );
   }
-  const bitrateError = validateStoryUploadMeta({
-    mime,
-    size: opts.file.size,
-    durationSec: durationSeconds,
-  });
-  if (bitrateError) {
-    throw new StoryUploadError(storyMetaErrorCode(bitrateError), bitrateError);
-  }
 
   const active = await getActiveDurationSeconds(opts.userId);
   if (active + durationSeconds > MAX_ACTIVE_STORY_SECONDS) {
     throw new StoryUploadError(
       StoryUploadErrorCode.QUOTA_EXCEEDED,
       "You currently have 90 minutes of active Story content. Delete a clip or wait for an older Story to expire before adding more.",
+    );
+  }
+
+  // Preferred path: hand the bytes to Mux and let the webhook publish the clip.
+  if (isMuxConfigured()) {
+    return uploadProxyClipToMux({
+      userId: opts.userId,
+      buffer,
+      mime,
+      durationSeconds,
+      originalFilename: opts.file.name,
+    });
+  }
+  // No transcoding service in production — refuse rather than publish a raw file.
+  if (process.env.VERCEL) {
+    throw new StoryUploadError(
+      StoryUploadErrorCode.STORAGE_FAILED,
+      "Story video processing is unavailable right now. Your video has not been published — please try again shortly.",
+      503,
     );
   }
 
@@ -445,8 +457,10 @@ export async function createStoryClip(opts: {
         fileSizeBytes: opts.file.size,
         mimeType: mime,
         status: "ACTIVE",
+        mediaProvider: "blob",
         originalFilename: (opts.file.name || "").slice(0, 120),
         createdAt: now,
+        readyAt: now,
         expiresAt: new Date(now.getTime() + STORY_TTL_MS),
       },
     });
@@ -467,7 +481,216 @@ export async function createStoryClip(opts: {
 }
 
 /**
- * Fetch a limited prefix of a public Blob for duration / fast-start probing
+ * Legacy multipart path with Mux available: push the (small) proxied bytes to a
+ * fresh Mux direct upload, then record a PROCESSING clip. The webhook publishes.
+ */
+async function uploadProxyClipToMux(opts: {
+  userId: string;
+  buffer: Buffer;
+  mime: string;
+  durationSeconds: number;
+  originalFilename: string;
+}) {
+  const uploadSessionId = `us_${randomBytes(16).toString("hex")}`;
+  let muxUploadId = "";
+  try {
+    const upload = await createMuxDirectUpload({
+      uploadSessionId,
+      corsOrigin: storyCorsOrigin(),
+    });
+    muxUploadId = upload.uploadId;
+    const put = await fetch(upload.uploadUrl, {
+      method: "PUT",
+      body: new Uint8Array(opts.buffer),
+      headers: { "Content-Type": opts.mime },
+      signal: AbortSignal.timeout(55_000),
+    });
+    if (!put.ok) {
+      throw new Error(`Mux upload PUT failed with ${put.status}`);
+    }
+  } catch (err) {
+    console.error("[stories:proxy-mux]", err);
+    throw new StoryUploadError(
+      StoryUploadErrorCode.STORAGE_FAILED,
+      "Story video processing is unavailable right now. Your video has not been published — please try again shortly.",
+      503,
+    );
+  }
+
+  return createProcessingClip({
+    userId: opts.userId,
+    uploadSessionId,
+    muxUploadId,
+    size: opts.buffer.length,
+    mime: opts.mime,
+    durationSeconds: opts.durationSeconds,
+    originalFilename: opts.originalFilename,
+  });
+}
+
+/** CORS origin advertised to Mux for browser direct uploads. */
+export function storyCorsOrigin(requestOrigin?: string | null): string {
+  const fromRequest = (requestOrigin || "").trim();
+  if (/^https?:\/\//i.test(fromRequest)) return fromRequest;
+  const appUrl = (process.env.APP_URL || "").trim();
+  if (/^https?:\/\//i.test(appUrl)) return appUrl.replace(/\/+$/, "");
+  return "*";
+}
+
+/** Inserts the PROCESSING row shared by both Mux entry points. Idempotent. */
+async function createProcessingClip(opts: {
+  userId: string;
+  uploadSessionId: string;
+  muxUploadId: string;
+  size: number;
+  mime: string;
+  durationSeconds: number;
+  originalFilename: string;
+  thumbnailUrl?: string;
+  thumbnailBlobPathname?: string;
+}) {
+  const now = new Date();
+  try {
+    return await prisma.storyClip.create({
+      data: {
+        userId: opts.userId,
+        // Filled in by the Mux webhook once the asset is ready.
+        videoUrl: "",
+        blobPathname: "",
+        thumbnailUrl: opts.thumbnailUrl || "",
+        thumbnailBlobPathname: opts.thumbnailBlobPathname || "",
+        durationSeconds: opts.durationSeconds,
+        fileSizeBytes: opts.size,
+        mimeType: opts.mime,
+        status: "PROCESSING",
+        mediaProvider: "mux",
+        muxUploadId: opts.muxUploadId,
+        uploadSessionId: opts.uploadSessionId,
+        originalFilename: (opts.originalFilename || "").slice(0, 120),
+        createdAt: now,
+        // Provisional window; replaced with readyAt + 24h by the webhook.
+        expiresAt: new Date(now.getTime() + STORY_PROCESSING_TTL_MS),
+      },
+    });
+  } catch (err) {
+    const raced = await prisma.storyClip.findUnique({
+      where: { uploadSessionId: opts.uploadSessionId },
+    });
+    if (raced && raced.userId === opts.userId) return raced;
+    console.error("[stories:createProcessingClip]", err);
+    throw new StoryUploadError(
+      StoryUploadErrorCode.DATABASE_FAILED,
+      "We couldn’t save this Story. Your video has not been published.",
+      500,
+    );
+  }
+}
+
+/**
+ * Finalise a browser → Mux direct upload. Creates a PROCESSING clip only —
+ * the clip is not public until the `video.asset.ready` webhook arrives.
+ * No bitrate, codec or container checks: Mux decides what it can decode.
+ */
+export async function finalizeStoryFromMux(opts: {
+  userId: string;
+  uploadSessionId: string;
+  muxUploadId: string;
+  size?: number | null;
+  contentType?: string | null;
+  clientDurationSec?: number | null;
+  originalFilename?: string | null;
+  poster?: File | null;
+}) {
+  if (opts.userId === "adminsource") {
+    throw new StoryUploadError(
+      StoryUploadErrorCode.AUTH_FAILED,
+      "Administrator accounts cannot post Stories",
+      403,
+    );
+  }
+
+  const uploadSessionId = opts.uploadSessionId.trim().slice(0, 64);
+  const muxUploadId = opts.muxUploadId.trim().slice(0, 128);
+  if (!uploadSessionId || !muxUploadId) {
+    throw new StoryUploadError(
+      StoryUploadErrorCode.UNKNOWN,
+      "Missing upload session.",
+    );
+  }
+
+  const existing = await prisma.storyClip.findUnique({
+    where: { uploadSessionId },
+  });
+  if (existing) {
+    if (existing.userId !== opts.userId) {
+      throw new StoryUploadError(
+        StoryUploadErrorCode.OWNERSHIP_FAILED,
+        "We couldn’t verify this upload. Please try again.",
+        403,
+      );
+    }
+    return existing;
+  }
+
+  const mime = resolveStoryMime({
+    mime: opts.contentType || "",
+    filename: opts.originalFilename || "",
+  });
+  const size = Number(opts.size || 0);
+  // Soft client-reported check only; Mux re-verifies duration on ready.
+  const metaError = validateStoryUploadMeta({
+    mime,
+    size,
+    durationSec: Number(opts.clientDurationSec || 0),
+    allowUnknownDuration: true,
+  });
+  if (metaError) {
+    throw new StoryUploadError(storyMetaErrorCode(metaError), metaError);
+  }
+
+  const clientDur = Number(opts.clientDurationSec);
+  const durationSeconds = Math.max(
+    1,
+    Math.round(Number.isFinite(clientDur) && clientDur > 0 ? clientDur : 1),
+  );
+
+  const active = await getActiveDurationSeconds(opts.userId);
+  if (active + durationSeconds > MAX_ACTIVE_STORY_SECONDS) {
+    throw new StoryUploadError(
+      StoryUploadErrorCode.QUOTA_EXCEEDED,
+      "You currently have 90 minutes of active Story content. Delete a clip or wait for an older Story to expire before adding more.",
+    );
+  }
+
+  let thumbnailUrl = "";
+  let thumbnailBlobPathname = "";
+  if (opts.poster && opts.poster.size > 0) {
+    const { storeImageForUser } = await import("@/lib/storage");
+    const poster = await storeImageForUser(opts.poster, {
+      userId: opts.userId,
+      folder: "stories",
+    });
+    if (poster.ok) {
+      thumbnailUrl = poster.image.url;
+      thumbnailBlobPathname = poster.image.pathname || "";
+    }
+  }
+
+  return createProcessingClip({
+    userId: opts.userId,
+    uploadSessionId,
+    muxUploadId,
+    size,
+    mime: mime || "video/mp4",
+    durationSeconds,
+    originalFilename: opts.originalFilename || "",
+    thumbnailUrl,
+    thumbnailBlobPathname,
+  });
+}
+
+/**
+ * Fetch a limited prefix of a public Blob for duration probing
  * without loading the whole file into serverless memory.
  */
 async function probeRemoteMp4Prefix(url: string): Promise<Buffer | null> {
@@ -612,22 +835,11 @@ export async function finalizeStoryFromBlob(opts: {
   }
 
   let probed: number | null = null;
-  let prefix: Buffer | null = null;
   if (mime.includes("mp4") || mime.includes("quicktime")) {
-    prefix = await probeRemoteMp4Prefix(blobMeta.url || opts.url);
-    if (prefix) {
-      probed = probeMp4DurationSeconds(prefix);
-      const fastStart = mp4MoovIsBeforeMdat(prefix);
-      if (fastStart === false) {
-        await deleteStoredVideoForUser(blobMeta.url || opts.url, opts.userId);
-        throw new StoryUploadError(
-          StoryUploadErrorCode.NOT_FAST_START,
-          "This MP4 isn’t web-optimised (fast-start). Re-export with “fast start” / “web optimized” enabled and try again.",
-        );
-      }
-    } else {
-      probed = await probeRemoteMp4Duration(blobMeta.url || opts.url);
-    }
+    const prefix = await probeRemoteMp4Prefix(blobMeta.url || opts.url);
+    probed = prefix
+      ? probeMp4DurationSeconds(prefix)
+      : await probeRemoteMp4Duration(blobMeta.url || opts.url);
   }
   const clientDur = Number(opts.clientDurationSec);
   const durationSeconds = Math.max(
@@ -653,17 +865,6 @@ export async function finalizeStoryFromBlob(opts: {
       StoryUploadErrorCode.DURATION_INVALID,
       "Each Story clip can be up to 90 seconds long.",
     );
-  }
-
-  const bitrateError = validateStoryUploadMeta({
-    mime,
-    size,
-    durationSec: durationSeconds,
-    allowUnknownDuration: false,
-  });
-  if (bitrateError) {
-    await deleteStoredVideoForUser(blobMeta.url || opts.url, opts.userId);
-    throw new StoryUploadError(storyMetaErrorCode(bitrateError), bitrateError);
   }
 
   const active = await getActiveDurationSeconds(opts.userId);
@@ -702,9 +903,11 @@ export async function finalizeStoryFromBlob(opts: {
         fileSizeBytes: size,
         mimeType: mime,
         status: "ACTIVE",
+        mediaProvider: "blob",
         originalFilename: (opts.originalFilename || "").slice(0, 120),
         uploadSessionId,
         createdAt: now,
+        readyAt: now,
         expiresAt: new Date(now.getTime() + STORY_TTL_MS),
       },
     });
@@ -749,7 +952,10 @@ export async function deleteStoryClip(opts: {
     data: { status: "DELETED", deletedAt: new Date() },
   });
 
-  await deleteStoredVideoForUser(clip.videoUrl, opts.userId);
+  await deleteMuxAsset(clip.muxAssetId);
+  if (clip.blobPathname) {
+    await deleteStoredVideoForUser(clip.videoUrl, opts.userId);
+  }
   if (clip.thumbnailUrl) {
     await deleteStoredVideoForUser(clip.thumbnailUrl, opts.userId);
   }
@@ -791,11 +997,16 @@ export async function recordStoryView(opts: {
   }
 }
 
+/**
+ * Sweeps expired clips and uploads that never finished processing.
+ * Stuck PROCESSING rows past their provisional window are expired too, so an
+ * abandoned Mux upload never keeps consuming the owner’s allowance.
+ */
 export async function expireStoryClips(limit = 200) {
   const now = new Date();
   const expired = await prisma.storyClip.findMany({
     where: {
-      status: { in: [...readyStatusList, "PROCESSING"] },
+      status: { in: [...readyStatusList, ...inFlightStatusList, "FAILED"] },
       OR: [{ expiresAt: { lte: now } }, { deletedAt: { not: null } }],
     },
     take: limit,
@@ -806,6 +1017,7 @@ export async function expireStoryClips(limit = 200) {
       thumbnailUrl: true,
       blobPathname: true,
       thumbnailBlobPathname: true,
+      muxAssetId: true,
     },
   });
 
@@ -818,7 +1030,10 @@ export async function expireStoryClips(limit = 200) {
         deletedAt: new Date(),
       },
     });
-    await deleteStoredVideoForUser(clip.videoUrl, clip.userId);
+    await deleteMuxAsset(clip.muxAssetId);
+    if (clip.blobPathname) {
+      await deleteStoredVideoForUser(clip.videoUrl, clip.userId);
+    }
     if (clip.thumbnailUrl) {
       await deleteStoredVideoForUser(clip.thumbnailUrl, clip.userId);
     }
@@ -830,8 +1045,9 @@ export async function expireStoryClips(limit = 200) {
 
 /**
  * Authorised playback grant for a ready clip.
- * Stories are stored on the public Blob store and streamed directly from CDN
- * (not proxied through Next.js). The grant adds a client refresh window.
+ * Mux clips stream HLS/MP4 from the Mux CDN; legacy clips stream from the
+ * public Blob CDN. Bytes never pass through Next.js — the grant only adds a
+ * client refresh window. `activeStoryWhere` already excludes PROCESSING/FAILED.
  */
 export async function getClipPlaybackGrant(clipId: string) {
   const clip = await prisma.storyClip.findFirst({
@@ -844,23 +1060,170 @@ export async function getClipPlaybackGrant(clipId: string) {
       status: true,
       expiresAt: true,
       fileSizeBytes: true,
+      muxPlaybackId: true,
     },
   });
   if (!clip) return null;
-  if (clip.status === "FAILED" || clip.status === "PROCESSING") return null;
 
   const grantExpiresAt = new Date(
     Math.min(Date.now() + STORY_PLAYBACK_GRANT_MS, clip.expiresAt.getTime()),
   );
-
-  return {
+  const base = {
     clipId: clip.id,
     userId: clip.userId,
-    playbackUrl: clip.videoUrl,
-    contentType: clip.mimeType || "video/mp4",
     expiresAt: grantExpiresAt.toISOString(),
     storyExpiresAt: clip.expiresAt.toISOString(),
     fileSizeBytes: clip.fileSizeBytes,
-    delivery: "direct-blob-cdn" as const,
   };
+
+  if (clip.muxPlaybackId) {
+    const hlsUrl = muxHlsUrl(clip.muxPlaybackId);
+    const mp4Url = muxMp4Url(clip.muxPlaybackId);
+    return {
+      ...base,
+      playbackUrl: hlsUrl,
+      hlsUrl,
+      mp4Url,
+      contentType: "application/vnd.apple.mpegurl",
+      delivery: "mux-cdn" as StoryDelivery,
+    };
+  }
+
+  return {
+    ...base,
+    playbackUrl: clip.videoUrl,
+    hlsUrl: "",
+    mp4Url: clip.videoUrl,
+    contentType: clip.mimeType || "video/mp4",
+    delivery: "direct-blob-cdn" as StoryDelivery,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Mux webhook transitions. All handlers are idempotent — Mux retries.
+ * ------------------------------------------------------------------ */
+
+export type MuxEventRef = {
+  assetId?: string | null;
+  uploadId?: string | null;
+  /** Our uploadSessionId, round-tripped through Mux `passthrough`. */
+  passthrough?: string | null;
+};
+
+/** Resolve the clip a Mux event belongs to, by asset, upload, or session id. */
+async function findClipForMuxEvent(ref: MuxEventRef) {
+  if (ref.assetId) {
+    const byAsset = await prisma.storyClip.findFirst({
+      where: { muxAssetId: ref.assetId },
+    });
+    if (byAsset) return byAsset;
+  }
+  if (ref.uploadId) {
+    const byUpload = await prisma.storyClip.findUnique({
+      where: { muxUploadId: ref.uploadId },
+    });
+    if (byUpload) return byUpload;
+  }
+  const session = (ref.passthrough || "").trim();
+  if (session) {
+    const bySession = await prisma.storyClip.findUnique({
+      where: { uploadSessionId: session },
+    });
+    if (bySession) return bySession;
+  }
+  return null;
+}
+
+/** `video.upload.asset_created` — link the asset id to the pending clip. */
+export async function attachMuxAssetToClip(ref: MuxEventRef & { assetId: string }) {
+  const clip = await findClipForMuxEvent(ref);
+  if (!clip) return null;
+  if (clip.muxAssetId === ref.assetId) return clip;
+  return prisma.storyClip.update({
+    where: { id: clip.id },
+    data: { muxAssetId: ref.assetId, mediaProvider: "mux" },
+  });
+}
+
+export type MuxReadyResult =
+  | { outcome: "not_found" }
+  | { outcome: "already_ready"; clip: { id: string; userId: string } }
+  | { outcome: "ready"; clip: { id: string; userId: string } }
+  | { outcome: "rejected"; clip: { id: string; userId: string }; reason: string };
+
+/**
+ * `video.asset.ready` — publish the clip. Duration is taken from Mux, never
+ * from the client, and a clip longer than the limit is rejected here.
+ */
+export async function markMuxClipReady(opts: {
+  assetId: string;
+  passthrough?: string | null;
+  playbackId: string;
+  durationSec: number;
+}): Promise<MuxReadyResult> {
+  const clip = await findClipForMuxEvent({
+    assetId: opts.assetId,
+    passthrough: opts.passthrough,
+  });
+  if (!clip) return { outcome: "not_found" };
+  if (clip.deletedAt) return { outcome: "not_found" };
+  if (readyStatusList.includes(clip.status) && clip.muxPlaybackId) {
+    return { outcome: "already_ready", clip };
+  }
+
+  const durationSeconds = Math.max(1, Math.round(opts.durationSec || 0));
+  if (durationSeconds > MAX_STORY_CLIP_SECONDS) {
+    await prisma.storyClip.update({
+      where: { id: clip.id },
+      data: {
+        status: "FAILED",
+        muxAssetId: opts.assetId,
+        processingError: "Clip exceeds the 90 second Story limit.",
+      },
+    });
+    await deleteMuxAsset(opts.assetId);
+    return {
+      outcome: "rejected",
+      clip,
+      reason: "Clip exceeds the 90 second Story limit.",
+    };
+  }
+
+  const readyAt = new Date();
+  const updated = await prisma.storyClip.update({
+    where: { id: clip.id },
+    data: {
+      status: "READY",
+      mediaProvider: "mux",
+      muxAssetId: opts.assetId,
+      muxPlaybackId: opts.playbackId,
+      videoUrl: muxHlsUrl(opts.playbackId),
+      thumbnailUrl: clip.thumbnailUrl || muxThumbnailUrl(opts.playbackId),
+      durationSeconds,
+      processingError: "",
+      readyAt,
+      expiresAt: new Date(readyAt.getTime() + STORY_TTL_MS),
+    },
+  });
+  return { outcome: "ready", clip: updated };
+}
+
+/** `video.asset.errored` / `video.upload.errored` — mark undecodable input. */
+export async function markMuxClipFailed(
+  ref: MuxEventRef & { reason?: string },
+) {
+  const clip = await findClipForMuxEvent(ref);
+  if (!clip || clip.status === "FAILED") return clip;
+  const updated = await prisma.storyClip.update({
+    where: { id: clip.id },
+    data: {
+      status: "FAILED",
+      processingError: (
+        ref.reason || "This video could not be processed."
+      ).slice(0, 300),
+      ...(ref.assetId ? { muxAssetId: ref.assetId } : {}),
+    },
+  });
+  await deleteMuxAsset(ref.assetId || clip.muxAssetId);
+  return updated;
 }

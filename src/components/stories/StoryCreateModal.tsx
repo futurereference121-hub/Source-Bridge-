@@ -12,10 +12,8 @@ import { upload } from "@vercel/blob/client";
 import {
   ALLOWED_STORY_VIDEO_TYPES,
   MAX_ACTIVE_STORY_SECONDS,
-  MAX_STORY_AVG_BYTES_PER_SEC,
   MAX_STORY_CLIP_BYTES,
   MAX_STORY_CLIP_SECONDS,
-  MAX_STORY_DELIVERY_BYTES,
   STORY_FORMAT_HINT,
   STORY_PRIVACY_NOTICE,
   STORY_VIDEO_ACCEPT,
@@ -27,10 +25,12 @@ import {
 
 type Step = "choose" | "preview" | "uploading";
 
+export type StoryCreateResult = { processing: boolean };
+
 type Props = {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (result: StoryCreateResult) => void;
 };
 
 function formatBytes(n: number) {
@@ -202,18 +202,9 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     if (selected.size > MAX_STORY_CLIP_BYTES) {
       return storyErrorMessage(StoryUploadErrorCode.FILE_TOO_LARGE);
     }
-    if (selected.size > MAX_STORY_DELIVERY_BYTES) {
-      return storyErrorMessage(StoryUploadErrorCode.BITRATE_TOO_HIGH);
-    }
+    // No bitrate or fast-start gate: the server transcodes every accepted clip.
     if (dur !== null && dur > MAX_STORY_CLIP_SECONDS + 0.5) {
       return storyErrorMessage(StoryUploadErrorCode.DURATION_INVALID);
-    }
-    if (
-      dur !== null &&
-      dur > 0 &&
-      selected.size / dur > MAX_STORY_AVG_BYTES_PER_SEC
-    ) {
-      return storyErrorMessage(StoryUploadErrorCode.BITRATE_TOO_HIGH);
     }
     if (
       dur !== null &&
@@ -309,6 +300,9 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
       });
       const prepareJson = (await prepareRes.json().catch(() => ({}))) as {
         ok?: boolean;
+        provider?: string;
+        uploadUrl?: string;
+        uploadId?: string;
         pathname?: string;
         uploadSessionId?: string;
         contentType?: string;
@@ -323,11 +317,37 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
           { code: StoryUploadErrorCode.AUTH_FAILED },
         );
       }
+
+      // Primary path: browser → Mux direct upload → async transcode.
+      if (
+        prepareRes.ok &&
+        prepareJson.provider === "mux" &&
+        prepareJson.uploadUrl &&
+        prepareJson.uploadId &&
+        prepareJson.uploadSessionId
+      ) {
+        await putToDirectUpload(
+          prepareJson.uploadUrl,
+          file,
+          prepareJson.contentType || mime,
+        );
+        setProgress(88);
+        await finalizeUpload({
+          uploadSessionId: prepareJson.uploadSessionId,
+          muxUploadId: prepareJson.uploadId,
+          contentType: prepareJson.contentType || mime,
+          poster,
+        });
+        setProgress(100);
+        onSuccess({ processing: true });
+        return;
+      }
+
       if (!prepareRes.ok || !prepareJson.pathname || !prepareJson.uploadSessionId) {
-        // Local/dev fallback: small proxy upload when client Blob tokens unavailable.
+        // Local/dev fallback: small proxy upload when no direct upload target exists.
         if (prepareRes.status === 503 || prepareJson.code === StoryUploadErrorCode.STORAGE_FAILED) {
-          await proxyUploadLegacy(file, poster);
-          onSuccess();
+          const result = await proxyUploadLegacy(file, poster);
+          onSuccess(result);
           return;
         }
         throw Object.assign(new Error(messageFromResponse(prepareJson)), {
@@ -389,7 +409,7 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
         });
       }
       setProgress(100);
-      onSuccess();
+      onSuccess({ processing: false });
     } catch (err) {
       const code =
         err && typeof err === "object" && "code" in err
@@ -415,7 +435,97 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     }
   }
 
-  async function proxyUploadLegacy(selected: File, poster: Blob | null) {
+  /** PUT the original to a short-lived direct-upload URL with real progress. */
+  function putToDirectUpload(
+    uploadUrl: string,
+    selected: File,
+    contentType: string,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", uploadUrl, true);
+      xhr.setRequestHeader("Content-Type", contentType);
+      xhr.upload.onprogress = (ev) => {
+        if (!ev.lengthComputable) return;
+        setProgress(10 + Math.round((ev.loaded / ev.total) * 75));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+          return;
+        }
+        reject(
+          Object.assign(
+            new Error(storyErrorMessage(StoryUploadErrorCode.STORAGE_FAILED)),
+            { code: StoryUploadErrorCode.STORAGE_FAILED },
+          ),
+        );
+      };
+      xhr.onerror = () =>
+        reject(
+          Object.assign(
+            new Error(storyErrorMessage(StoryUploadErrorCode.NETWORK)),
+            { code: StoryUploadErrorCode.NETWORK },
+          ),
+        );
+      xhr.ontimeout = () =>
+        reject(
+          Object.assign(
+            new Error(storyErrorMessage(StoryUploadErrorCode.UPLOAD_TIMEOUT)),
+            { code: StoryUploadErrorCode.UPLOAD_TIMEOUT },
+          ),
+        );
+      xhr.send(selected);
+    });
+  }
+
+  async function finalizeUpload(opts: {
+    uploadSessionId: string;
+    muxUploadId: string;
+    contentType: string;
+    poster: Blob | null;
+  }) {
+    if (!file) return;
+    const form = new FormData();
+    form.append("uploadSessionId", opts.uploadSessionId);
+    form.append("muxUploadId", opts.muxUploadId);
+    form.append("contentType", opts.contentType);
+    form.append("size", String(file.size));
+    form.append("originalFilename", file.name || "");
+    if (!durationUnknown && duration > 0) {
+      form.append("durationSec", String(duration));
+    }
+    if (opts.poster) form.append("poster", opts.poster, "poster.jpg");
+
+    const res = await fetch("/api/stories/finalize", {
+      method: "POST",
+      credentials: "same-origin",
+      body: form,
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      code?: string;
+      requestId?: string;
+    };
+    if (res.status === 401) {
+      throw Object.assign(
+        new Error(storyErrorMessage(StoryUploadErrorCode.AUTH_FAILED)),
+        { code: StoryUploadErrorCode.AUTH_FAILED },
+      );
+    }
+    if (!res.ok || !json.ok) {
+      throw Object.assign(new Error(messageFromResponse(json)), {
+        code: json.code,
+        requestId: json.requestId,
+      });
+    }
+  }
+
+  async function proxyUploadLegacy(
+    selected: File,
+    poster: Blob | null,
+  ): Promise<StoryCreateResult> {
     const form = new FormData();
     form.append("file", selected);
     form.append(
@@ -430,6 +540,7 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
     });
     const json = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
+      processing?: boolean;
       error?: string;
       code?: string;
       requestId?: string;
@@ -440,6 +551,7 @@ export function StoryCreateModal({ open, onClose, onSuccess }: Props) {
         requestId: json.requestId,
       });
     }
+    return { processing: Boolean(json.processing) };
   }
 
   function openRecord() {

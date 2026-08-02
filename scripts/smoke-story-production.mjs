@@ -144,7 +144,7 @@ async function main() {
       assert(Array.isArray(data.clips), "clips array missing");
     }
 
-    // Upload via prepare → direct Blob put → finalize (mirrors mobile/desktop client path)
+    // Upload via prepare → direct put → finalize (mirrors mobile/desktop client path)
     {
       const { res: prepRes, data: prep } = await api(jarA, "/api/stories/prepare", {
         method: "POST",
@@ -156,6 +156,24 @@ async function main() {
         }),
       });
       assert(prepRes.ok, `prepare failed: ${prep.error || prepRes.status}`);
+
+      // Mux target: the clip only becomes public after an async webhook, which
+      // this synchronous smoke cannot wait on. Verify the handshake and stop.
+      if (prep.provider === "mux") {
+        assert(prep.uploadUrl && prep.uploadId, "mux prepare missing uploadUrl/uploadId");
+        assert(prep.uploadSessionId, "mux prepare missing uploadSessionId");
+        assert(
+          /^https:\/\/[^/]*\.mux\.com\//.test(prep.uploadUrl) ||
+            /storage\.googleapis\.com/.test(prep.uploadUrl),
+          `unexpected mux upload host: ${prep.uploadUrl.slice(0, 40)}`,
+        );
+        console.log(
+          "Mux direct upload prepared OK — async processing path, skipping Blob smoke.",
+        );
+        console.log("Story production smoke: PARTIAL OK (Mux path)");
+        return;
+      }
+
       assert(prep.pathname && prep.uploadSessionId, "prepare missing pathname/session");
 
       const token = process.env.BLOB_READ_WRITE_TOKEN;

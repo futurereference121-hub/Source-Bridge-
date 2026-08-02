@@ -1,5 +1,6 @@
 /**
- * Smoke tests for Stories: schema, direct-to-Blob flow, ring batching, playback.
+ * Smoke tests for Stories: schema, Mux direct-upload + async processing,
+ * ring batching, playback delivery.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -17,6 +18,74 @@ function read(rel) {
   assert.ok(/model StoryView/.test(schema));
   assert.ok(/model StoryReport/.test(schema));
   assert.ok(/@@index\(\[userId, status, expiresAt\]\)/.test(schema));
+  // Mux async processing columns
+  assert.ok(/mediaProvider\s+String\s+@default\(""\)/.test(schema));
+  assert.ok(/muxUploadId\s+String\?\s+@unique/.test(schema));
+  assert.ok(/muxAssetId\s+String\?/.test(schema));
+  assert.ok(/muxPlaybackId\s+String\?/.test(schema));
+  assert.ok(/processingError\s+String\s+@default\(""\)/.test(schema));
+  assert.ok(/readyAt\s+DateTime\?/.test(schema));
+  assert.ok(/@@index\(\[muxAssetId\]\)/.test(schema));
+  assert.ok(
+    /UPLOADING \| PROCESSING \| READY \| ACTIVE \| FAILED \| EXPIRED \| DELETED/.test(
+      schema,
+    ),
+  );
+}
+
+{
+  // Mux architecture files exist and are wired up.
+  assert.ok(existsSync(join(root, "src/lib/mux-stories.ts")));
+  assert.ok(existsSync(join(root, "docs/story-media-architecture.md")));
+  assert.ok(existsSync(join(root, "src/app/api/webhooks/mux/route.ts")));
+  assert.ok(
+    existsSync(
+      join(root, "prisma/migrations/20260801100000_story_mux_processing/migration.sql"),
+    ),
+  );
+
+  const mux = read("src/lib/mux-stories.ts");
+  assert.ok(/isMuxConfigured/.test(mux));
+  assert.ok(/getMuxClient/.test(mux));
+  assert.ok(/createMuxDirectUpload/.test(mux));
+  assert.ok(/muxHlsUrl/.test(mux));
+  assert.ok(/muxMp4Url/.test(mux));
+  assert.ok(/muxThumbnailUrl/.test(mux));
+  assert.ok(/deleteMuxAsset/.test(mux));
+  assert.ok(/verifyMuxWebhook/.test(mux));
+  assert.ok(/MUX_TOKEN_ID/.test(mux));
+  assert.ok(/MUX_TOKEN_SECRET/.test(mux));
+  assert.ok(/MUX_WEBHOOK_SECRET/.test(mux));
+  assert.ok(/max_resolution_tier: "1080p"/.test(mux));
+  assert.ok(/mp4_support: "standard"/.test(mux));
+  assert.ok(/passthrough: opts\.uploadSessionId/.test(mux));
+  // Never hard-code secrets.
+  assert.ok(!/MUX_TOKEN_SECRET\s*=\s*"[^"]+"/.test(mux));
+
+  const pkg = JSON.parse(read("package.json"));
+  assert.ok(pkg.dependencies["@mux/mux-node"], "@mux/mux-node dependency missing");
+
+  const envExample = read(".env.example");
+  assert.ok(/MUX_TOKEN_ID/.test(envExample));
+  assert.ok(/MUX_TOKEN_SECRET/.test(envExample));
+  assert.ok(/MUX_WEBHOOK_SECRET/.test(envExample));
+}
+
+{
+  const webhook = read("src/app/api/webhooks/mux/route.ts");
+  assert.ok(/verifyMuxWebhook/.test(webhook));
+  // Signature must be checked against the raw body, before parsing.
+  assert.ok(/req\.text\(\)/.test(webhook));
+  assert.ok(
+    webhook.indexOf("verifyMuxWebhook(raw") < webhook.indexOf("JSON.parse(raw)"),
+  );
+  assert.ok(/video\.upload\.asset_created/.test(webhook));
+  assert.ok(/video\.asset\.ready/.test(webhook));
+  assert.ok(/video\.asset\.errored/.test(webhook));
+  assert.ok(/video\.upload\.errored/.test(webhook));
+  assert.ok(/createNotification/.test(webhook));
+  assert.ok(/Your Story is ready/.test(webhook));
+  assert.ok(/revalidatePublicMemberSurfaces/.test(webhook));
 }
 
 {
@@ -45,13 +114,24 @@ function read(rel) {
   assert.ok(!/>\s*Upload Video\s*</.test(create));
   assert.ok(/setStep\("preview"\)/.test(create));
   assert.ok(/confirmUpload/.test(create));
-  assert.ok(/@vercel\/blob\/client/.test(create));
   assert.ok(/\/api\/stories\/prepare/.test(create));
   assert.ok(/\/api\/stories\/finalize/.test(create));
   assert.ok(/Choose Another Video/.test(create));
   assert.ok(/Duration will be verified during upload/.test(create));
   assert.ok(/storyErrorMessage|STORY_FILE_TOO_LARGE|StoryUploadErrorCode/.test(create));
-  assert.ok(/MAX_STORY_DELIVERY_BYTES|BITRATE_TOO_HIGH|MAX_STORY_AVG_BYTES_PER_SEC/.test(create));
+  assert.ok(/STORY_FORMAT_HINT/.test(create));
+  // Mux direct upload with real progress
+  assert.ok(/provider === "mux"/.test(create));
+  assert.ok(/putToDirectUpload/.test(create));
+  assert.ok(/XMLHttpRequest/.test(create));
+  assert.ok(/muxUploadId/.test(create));
+  assert.ok(/onSuccess\(\{ processing: true \}\)/.test(create));
+  // No client-side bitrate / fast-start rejection.
+  assert.ok(!/MAX_STORY_DELIVERY_BYTES/.test(create));
+  assert.ok(!/MAX_STORY_AVG_BYTES_PER_SEC/.test(create));
+  assert.ok(!/BITRATE_TOO_HIGH/.test(create));
+  assert.ok(!/NOT_FAST_START/.test(create));
+  assert.ok(!/lower bitrate/i.test(create));
 }
 
 {
@@ -64,10 +144,24 @@ function read(rel) {
 
 {
   const provider = read("src/components/stories/StoryProvider.tsx");
-  assert.ok(/Story added/.test(provider));
+  assert.ok(/Your Story is processing\./.test(provider));
   assert.ok(/BATCH_FLUSH_MS|RING_TTL_MS/.test(provider));
   assert.ok(/invalidateRings/.test(provider));
   assert.ok(/pendingRef/.test(provider));
+  // A processing clip has no ring yet — the viewer must not auto-open.
+  assert.ok(!/setViewerUserId\(account\.id\);\s*\n\s*\}\s*\n\s*\}\}\s*\n\s*\/>/.test(provider));
+  const onSuccessBlock = provider.slice(
+    provider.indexOf("onSuccess={(result)"),
+    provider.indexOf("<StoryOwnerMenu"),
+  );
+  assert.ok(onSuccessBlock.length > 0);
+  assert.ok(!/setViewerUserId/.test(onSuccessBlock));
+}
+
+{
+  const manage = read("src/components/stories/StoryManageModal.tsx");
+  assert.ok(/storyStatusLabel/.test(manage));
+  assert.ok(/clip\.status/.test(manage));
 }
 
 {
@@ -90,19 +184,40 @@ function read(rel) {
   assert.ok(/\/api\/stories\/\$\{clipId\}\/playback|\/playback/.test(viewer));
   assert.ok(/Buffering/.test(viewer));
   assert.ok(/\[story-playback\]/.test(viewer));
+  // HLS-first with progressive MP4 fallback for non-Safari devices.
+  assert.ok(/application\/vnd\.apple\.mpegurl/.test(viewer));
+  assert.ok(/canPlayType/.test(viewer));
+  assert.ok(/preferredSource/.test(viewer));
+  assert.ok(/mp4Url/.test(viewer));
+  assert.ok(/mux-cdn/.test(viewer));
 }
 
 {
   const constants = read("src/lib/story-constants.ts");
   assert.ok(/MAX_STORY_CLIP_SECONDS = 90/.test(constants));
   assert.ok(/MAX_ACTIVE_STORY_SECONDS = 90 \* 60/.test(constants));
-  assert.ok(/MAX_STORY_CLIP_BYTES = 100/.test(constants));
+  assert.ok(/MAX_STORY_CLIP_BYTES = 500 \* 1024 \* 1024/.test(constants));
   assert.ok(/STORY_FILE_TOO_LARGE/.test(constants));
-  assert.ok(/STORY_BITRATE_TOO_HIGH/.test(constants));
   assert.ok(/STORY_URL_EXPIRED/.test(constants));
-  assert.ok(/STORY_READY_STATUSES/.test(constants));
+  assert.ok(/STORY_PROCESSING_TTL_MS/.test(constants));
   assert.ok(/resolveStoryMime/.test(constants));
-  assert.ok(/MAX_STORY_DELIVERY_BYTES/.test(constants));
+  assert.ok(/storyStatusLabel/.test(constants));
+  // READY (Mux) must be listed before ACTIVE (legacy Blob).
+  const ready = constants.match(/STORY_READY_STATUSES = \[([^\]]+)\]/);
+  assert.ok(ready, "STORY_READY_STATUSES not found");
+  const readyList = ready[1].split(",").map((s) => s.trim().replace(/"/g, ""));
+  assert.equal(readyList[0], "READY");
+  assert.equal(readyList[1], "ACTIVE");
+  // Upload copy must promise automatic optimisation, not manual re-export.
+  assert.ok(
+    /STORY_FORMAT_HINT =\s*\n?\s*"Up to 90 seconds\. Videos are optimised automatically\."/.test(
+      constants,
+    ),
+  );
+  assert.ok(/500 MB Story upload limit/.test(constants));
+  // Legacy codes may remain declared, but must not be produced any more.
+  assert.ok(!/MAX_STORY_DELIVERY_BYTES/.test(constants));
+  assert.ok(!/MAX_STORY_AVG_BYTES_PER_SEC/.test(constants));
 }
 
 {
@@ -112,15 +227,61 @@ function read(rel) {
   assert.ok(existsSync(join(root, "src/app/api/stories/[clipId]/playback/route.ts")));
   const storiesLib = read("src/lib/stories.ts");
   assert.ok(/finalizeStoryFromBlob/.test(storiesLib));
+  assert.ok(/finalizeStoryFromMux/.test(storiesLib));
   assert.ok(/StoryUploadError/.test(storiesLib));
   assert.ok(/probeRemoteMp4Duration|Range: "bytes=0-/.test(storiesLib));
-  assert.ok(/mp4MoovIsBeforeMdat/.test(storiesLib));
   assert.ok(/getClipPlaybackGrant/.test(storiesLib));
   assert.ok(/direct-blob-cdn/.test(storiesLib));
+  assert.ok(/mux-cdn/.test(storiesLib));
   assert.ok(/STORY_READY_STATUSES|readyStatusList/.test(storiesLib));
   assert.ok(/distinct: \["userId"\]/.test(storiesLib));
+  // Owner surfaces must show in-flight clips; public surfaces must not.
+  assert.ok(/listOwnerClips/.test(storiesLib));
+  assert.ok(/ownerStoryWhere/.test(storiesLib));
+  assert.ok(/inFlightStatusList/.test(storiesLib));
+  // Webhook transitions
+  assert.ok(/markMuxClipReady/.test(storiesLib));
+  assert.ok(/markMuxClipFailed/.test(storiesLib));
+  assert.ok(/attachMuxAssetToClip/.test(storiesLib));
+  assert.ok(/deleteMuxAsset/.test(storiesLib));
+  // No bitrate / fast-start rejection anywhere in the upload path.
+  assert.ok(!/mp4MoovIsBeforeMdat/.test(storiesLib));
+  assert.ok(!/MAX_STORY_AVG_BYTES_PER_SEC/.test(storiesLib));
+  assert.ok(!/MAX_STORY_DELIVERY_BYTES/.test(storiesLib));
+  assert.ok(!/BITRATE_TOO_HIGH/.test(storiesLib));
+  assert.ok(!/NOT_FAST_START/.test(storiesLib));
+  assert.ok(!/lower bitrate/i.test(storiesLib));
+  assert.ok(!/fast-start/i.test(storiesLib));
+  // validateStoryUploadMeta keeps only type / size / duration gates.
+  const validate = storiesLib.slice(
+    storiesLib.indexOf("export function validateStoryUploadMeta"),
+    storiesLib.indexOf("export function storyMetaErrorCode"),
+  );
+  assert.ok(validate.length > 0);
+  assert.ok(/MAX_STORY_CLIP_BYTES/.test(validate));
+  assert.ok(/MAX_STORY_CLIP_SECONDS/.test(validate));
+  assert.ok(!/durationSec >[\s\S]*BYTES_PER_SEC/.test(validate));
+  assert.ok(!/bitrate/i.test(validate));
   // Must not proxy full video through Next.js
   assert.ok(!/arrayBuffer\(\).*video|proxy.*story.*bytes/i.test(storiesLib));
+}
+
+{
+  const prepare = read("src/app/api/stories/prepare/route.ts");
+  assert.ok(/isMuxConfigured/.test(prepare));
+  assert.ok(/createMuxDirectUpload/.test(prepare));
+  assert.ok(/provider: "mux"/.test(prepare));
+  assert.ok(/uploadUrl/.test(prepare));
+  assert.ok(/maxBytes: MAX_STORY_CLIP_BYTES/.test(prepare));
+  // Production without Mux must refuse rather than publish an unprocessed file.
+  assert.ok(/process\.env\.VERCEL/.test(prepare));
+  assert.ok(/STORAGE_FAILED[\s\S]{0,200}503|503,[\s\S]{0,200}STORAGE_FAILED/.test(prepare));
+
+  const finalize = read("src/app/api/stories/finalize/route.ts");
+  assert.ok(/finalizeStoryFromMux/.test(finalize));
+  assert.ok(/muxUploadId/.test(finalize));
+  assert.ok(/processing: true/.test(finalize));
+  assert.ok(/Your Story is processing/.test(finalize));
 }
 
 {
@@ -160,73 +321,78 @@ function read(rel) {
 }
 
 {
-  // Bitrate policy mirror
-  const MAX_STORY_AVG_BYTES_PER_SEC = 750_000;
-  const MAX_STORY_DELIVERY_BYTES = 12 * 1024 * 1024;
-  const huge = 23.6 * 1024 * 1024;
-  const dur = 9;
-  assert.ok(huge > MAX_STORY_DELIVERY_BYTES);
-  assert.ok(huge / dur > MAX_STORY_AVG_BYTES_PER_SEC);
-  const okSize = 2 * 1024 * 1024;
-  assert.ok(okSize / 5 < MAX_STORY_AVG_BYTES_PER_SEC);
-}
+  // Upload policy mirror: a 23.6 MB / 9s high-bitrate phone clip that the old
+  // bitrate gate rejected must now be accepted — Mux re-encodes it.
+  const MAX_STORY_CLIP_BYTES = 500 * 1024 * 1024;
+  const MAX_STORY_CLIP_SECONDS = 90;
 
-{
-  // Fast-start atom order helpers (minimal ftyp+moov+mdat vs ftyp+mdat)
-  function mp4MoovIsBeforeMdat(buffer) {
-    const len = buffer.length;
-    let offset = 0;
-    let sawMoov = false;
-    let sawMdat = false;
-    while (offset + 8 <= len) {
-      let size = buffer.readUInt32BE(offset);
-      const type = buffer.toString("ascii", offset + 4, offset + 8);
-      let header = 8;
-      if (size === 1) {
-        if (offset + 16 > len) break;
-        size = Number(buffer.readBigUInt64BE(offset + 8));
-        header = 16;
-      } else if (size === 0) {
-        size = len - offset;
-      }
-      if (size < header) return null;
-      if (type === "moov") {
-        if (sawMdat) return false;
-        sawMoov = true;
-        return true;
-      }
-      if (type === "mdat") {
-        if (sawMoov) return true;
-        sawMdat = true;
-      }
-      offset += size;
+  function validateStoryUploadMeta({ mime, size, durationSec }) {
+    if (!["video/mp4", "video/webm", "video/quicktime"].includes(mime)) {
+      return "Unsupported video type. Use MP4, MOV, or WebM.";
     }
-    if (sawMdat && !sawMoov) return false;
-    if (sawMoov) return true;
+    if (size <= 0) return "Empty file.";
+    if (size > MAX_STORY_CLIP_BYTES) {
+      return "Video too large. Each Story clip can be up to 500 MB.";
+    }
+    if (!Number.isFinite(durationSec) || durationSec <= 0) {
+      return "Could not read video duration.";
+    }
+    if (durationSec > MAX_STORY_CLIP_SECONDS + 0.5) {
+      return "Each Story clip can be up to 90 seconds long.";
+    }
     return null;
   }
 
-  function box(type, payload) {
-    const size = 8 + payload.length;
-    const buf = Buffer.alloc(size);
-    buf.writeUInt32BE(size, 0);
-    buf.write(type, 4, 4, "ascii");
-    payload.copy(buf, 8);
-    return buf;
-  }
+  assert.equal(
+    validateStoryUploadMeta({
+      mime: "video/quicktime",
+      size: 23.6 * 1024 * 1024,
+      durationSec: 9,
+    }),
+    null,
+    "high-bitrate clips must no longer be rejected",
+  );
+  assert.equal(
+    validateStoryUploadMeta({
+      mime: "video/mp4",
+      size: 400 * 1024 * 1024,
+      durationSec: 88,
+    }),
+    null,
+  );
+  // Still rejected: oversized, too long, wrong type, empty.
+  assert.ok(
+    validateStoryUploadMeta({
+      mime: "video/mp4",
+      size: 600 * 1024 * 1024,
+      durationSec: 30,
+    }),
+  );
+  assert.ok(
+    validateStoryUploadMeta({
+      mime: "video/mp4",
+      size: 1024,
+      durationSec: 120,
+    }),
+  );
+  assert.ok(
+    validateStoryUploadMeta({ mime: "image/png", size: 1024, durationSec: 5 }),
+  );
+  assert.ok(
+    validateStoryUploadMeta({ mime: "video/mp4", size: 0, durationSec: 5 }),
+  );
+}
 
-  const fast = Buffer.concat([
-    box("ftyp", Buffer.from("isom")),
-    box("moov", Buffer.from("x")),
-    box("mdat", Buffer.from("yyyy")),
-  ]);
-  const slow = Buffer.concat([
-    box("ftyp", Buffer.from("isom")),
-    box("mdat", Buffer.from("yyyy")),
-    box("moov", Buffer.from("x")),
-  ]);
-  assert.equal(mp4MoovIsBeforeMdat(fast), true);
-  assert.equal(mp4MoovIsBeforeMdat(slow), false);
+{
+  // Lifecycle: expiry is 24h from readyAt (webhook), not from upload start.
+  const STORY_TTL_MS = 24 * 60 * 60 * 1000;
+  const STORY_PROCESSING_TTL_MS = 48 * 60 * 60 * 1000;
+  assert.ok(STORY_PROCESSING_TTL_MS > STORY_TTL_MS);
+  const uploadedAt = new Date("2026-08-01T10:00:00Z");
+  const readyAt = new Date("2026-08-01T10:04:00Z");
+  const expiresAt = new Date(readyAt.getTime() + STORY_TTL_MS);
+  assert.equal(expiresAt.toISOString(), "2026-08-02T10:04:00.000Z");
+  assert.ok(expiresAt.getTime() > uploadedAt.getTime() + STORY_TTL_MS);
 }
 
 console.log("test-stories: ok");

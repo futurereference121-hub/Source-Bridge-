@@ -7,30 +7,29 @@ export const MAX_STORY_CLIP_SECONDS = 90;
 export const MAX_ACTIVE_STORY_SECONDS = 90 * 60; // 90 minutes
 
 /**
- * Practical ceiling for ≤90s mobile recordings when uploading direct-to-Blob.
- * Must not route this size through the Next.js request body (Vercel ~4.5 MB limit).
+ * Practical ceiling for ≤90s mobile camera originals (HEVC/MOV/high bitrate).
+ * Bytes go direct to Mux — never through the Next.js request body.
  */
-export const MAX_STORY_CLIP_BYTES = 100 * 1024 * 1024; // 100 MB
+export const MAX_STORY_CLIP_BYTES = 500 * 1024 * 1024; // 500 MB
 
-/** Soft server-proxy ceiling — only for local/dev fallback without client Blob tokens. */
+/** Soft server-proxy ceiling — only for local/dev fallback without Mux. */
 export const MAX_STORY_PROXY_BYTES = 4 * 1024 * 1024; // 4 MB
 
 /**
- * Soft delivery bitrate ceiling (~6 Mbps). Camera originals like 9s / 23.6 MB
- * (~21 Mbps) fail on cellular; reject before publishing a public ring.
+ * Public Story lifetime after the clip becomes READY (not after upload start).
+ * PROCESSING clips use a longer provisional window until Mux finishes.
  */
-export const MAX_STORY_AVG_BYTES_PER_SEC = 750_000;
-
-/** Absolute soft ceiling for reliable mobile Story playback (~12 MB). */
-export const MAX_STORY_DELIVERY_BYTES = 12 * 1024 * 1024;
-
 export const STORY_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Abandoned upload / stuck PROCESSING cleanup window. */
+export const STORY_PROCESSING_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Status values that may appear on public rings / viewer timelines.
- * Schema comment also mentions READY — treat as alias of ACTIVE.
+ * READY = Mux-processed delivery. ACTIVE = legacy direct-Blob clips (pre-Mux).
+ * PROCESSING never appears on public rings.
  */
-export const STORY_READY_STATUSES = ["ACTIVE", "READY"] as const;
+export const STORY_READY_STATUSES = ["READY", "ACTIVE"] as const;
 
 /** Short-lived client playback grant window (public Blob URL itself does not expire). */
 export const STORY_PLAYBACK_GRANT_MS = 60 * 60 * 1000;
@@ -45,7 +44,7 @@ export const STORY_VIDEO_ACCEPT =
   "video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov";
 
 export const STORY_FORMAT_HINT =
-  "MP4 / MOV / WebM · H.264 preferred · max 90s · keep under ~12 MB for reliable mobile playback";
+  "Up to 90 seconds. Videos are optimised automatically.";
 
 export const STORY_PRIVACY_NOTICE =
   "Stories are visible on your public Source Bridge profile and expire after 24 hours.";
@@ -65,13 +64,34 @@ export type StoryReportReason = (typeof STORY_REPORT_REASONS)[number];
 export type StoryClipPublic = {
   id: string;
   userId: string;
+  /** HLS manifest for Mux clips, public Blob URL for legacy clips. */
   videoUrl: string;
   thumbnailUrl: string;
   durationSeconds: number;
   createdAt: string;
   expiresAt: string;
   viewCount?: number;
+  /** Present on owner-facing lists so PROCESSING / FAILED clips can be labelled. */
+  status?: string;
+  hlsUrl?: string;
+  mp4Url?: string;
+  delivery?: StoryDelivery;
 };
+
+export type StoryDelivery = "mux-cdn" | "direct-blob-cdn";
+
+/** Owner-facing label for a clip that is not yet publicly playable. */
+export function storyStatusLabel(status?: string): string {
+  switch (status) {
+    case "PROCESSING":
+    case "UPLOADING":
+      return "Processing…";
+    case "FAILED":
+      return "Processing failed";
+    default:
+      return "";
+  }
+}
 
 /** Safe machine-readable codes for Story upload failures (no secrets). */
 export const StoryUploadErrorCode = {
@@ -115,7 +135,7 @@ export type StoryUploadErrorCode =
 export function storyErrorMessage(code: StoryUploadErrorCode, requestId?: string): string {
   switch (code) {
     case StoryUploadErrorCode.FILE_TOO_LARGE:
-      return "This video is larger than the current Story upload limit.";
+      return "This video is larger than the 500 MB Story upload limit.";
     case StoryUploadErrorCode.UNSUPPORTED_FORMAT:
       return "This video format is not supported. Try MP4, MOV or WebM.";
     case StoryUploadErrorCode.UNSUPPORTED_CODEC:
@@ -127,7 +147,7 @@ export function storyErrorMessage(code: StoryUploadErrorCode, requestId?: string
     case StoryUploadErrorCode.QUOTA_EXCEEDED:
       return "You have reached your 90-minute active Story limit.";
     case StoryUploadErrorCode.STORAGE_FAILED:
-      return "We couldn’t store this Story. Your video has not been published.";
+      return "Story video processing is unavailable right now. Your video has not been published — please try again shortly.";
     case StoryUploadErrorCode.DATABASE_FAILED:
       return "We couldn’t save this Story. Your video has not been published.";
     case StoryUploadErrorCode.UPLOAD_TIMEOUT:

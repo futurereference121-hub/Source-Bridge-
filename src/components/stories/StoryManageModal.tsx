@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { useAppUi } from "@/components/providers/AppProviders";
-import type { StoryClipPublic } from "@/lib/story-constants";
+import {
+  storyStatusLabel,
+  type StoryClipPublic,
+} from "@/lib/story-constants";
 
 type Props = {
   open: boolean;
@@ -90,7 +93,9 @@ export function StoryManageModal({ open, onClose, onChanged }: Props) {
             <p className="text-sm text-white/55">No active Story clips.</p>
           ) : (
             <ul className="space-y-3">
-              {clips.map((clip) => (
+              {clips.map((clip) => {
+                const pendingLabel = storyStatusLabel(clip.status);
+                return (
                 <li
                   key={clip.id}
                   className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3"
@@ -107,7 +112,9 @@ export function StoryManageModal({ open, onClose, onChanged }: Props) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm text-white/85">
-                      {clip.durationSeconds}s · {formatRemaining(clip.expiresAt)}
+                      {pendingLabel
+                        ? pendingLabel
+                        : `${clip.durationSeconds}s · ${formatRemaining(clip.expiresAt)}`}
                     </p>
                     <p className="mt-0.5 text-xs text-white/40">
                       Uploaded{" "}
@@ -118,9 +125,17 @@ export function StoryManageModal({ open, onClose, onChanged }: Props) {
                         minute: "2-digit",
                       })}
                     </p>
-                    <p className="mt-1 text-xs text-electric/90">
-                      {clip.viewCount ?? 0} views
-                    </p>
+                    {pendingLabel ? (
+                      <p className="mt-1 text-xs text-white/45">
+                        {clip.status === "FAILED"
+                          ? "This clip couldn’t be processed and was not published."
+                          : "Not visible on your profile until processing finishes."}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-electric/90">
+                        {clip.viewCount ?? 0} views
+                      </p>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -131,7 +146,8 @@ export function StoryManageModal({ open, onClose, onChanged }: Props) {
                     {busyId === clip.id ? "…" : "Delete"}
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

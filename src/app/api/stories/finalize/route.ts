@@ -3,6 +3,7 @@ import { getSessionUser, isAdminUser } from "@/lib/auth";
 import {
   StoryUploadError,
   finalizeStoryFromBlob,
+  finalizeStoryFromMux,
   mapClipPublic,
 } from "@/lib/stories";
 import {
@@ -16,8 +17,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Finalises a direct-to-Blob Story upload into a public StoryClip record.
- * Small poster images may still arrive as multipart; video bytes never do.
+ * Finalises a direct upload into a StoryClip record.
+ *
+ * Mux payloads create a PROCESSING clip — it is NOT public until the
+ * `video.asset.ready` webhook lands. Legacy Blob payloads still publish
+ * immediately. Video bytes never arrive here; only metadata and a poster image.
  */
 export async function POST(req: Request) {
   const requestId = randomBytes(6).toString("hex");
@@ -50,6 +54,7 @@ export async function POST(req: Request) {
     let size = 0;
     let durationSec: number | null = null;
     let uploadSessionId = "";
+    let muxUploadId = "";
     let originalFilename = "";
     let poster: File | null = null;
 
@@ -63,6 +68,7 @@ export async function POST(req: Request) {
       durationSec =
         durRaw === null || durRaw === "" ? null : Number(durRaw);
       uploadSessionId = String(form.get("uploadSessionId") || "");
+      muxUploadId = String(form.get("muxUploadId") || "");
       originalFilename = String(form.get("originalFilename") || "");
       const p = form.get("poster");
       poster = p instanceof File ? p : null;
@@ -74,6 +80,7 @@ export async function POST(req: Request) {
         size?: number;
         durationSec?: number | null;
         uploadSessionId?: string;
+        muxUploadId?: string;
         originalFilename?: string;
       };
       pathname = body.pathname || "";
@@ -85,10 +92,41 @@ export async function POST(req: Request) {
           ? null
           : Number(body.durationSec);
       uploadSessionId = body.uploadSessionId || "";
+      muxUploadId = body.muxUploadId || "";
       originalFilename = body.originalFilename || "";
     }
 
-    if (!pathname || !url || !uploadSessionId) {
+    if (!uploadSessionId) {
+      return jsonError("Incomplete upload finalisation payload.", 400, {
+        code: StoryUploadErrorCode.UNKNOWN,
+        requestId,
+      });
+    }
+
+    if (muxUploadId) {
+      const clip = await finalizeStoryFromMux({
+        userId: user.id,
+        uploadSessionId,
+        muxUploadId,
+        size,
+        contentType: mime,
+        clientDurationSec: durationSec,
+        originalFilename,
+        poster,
+      });
+
+      return Response.json({
+        ok: true,
+        provider: "mux",
+        processing: true,
+        clip: mapClipPublic(clip, false, true),
+        message:
+          "Your Story is processing. We’ll publish it as soon as it’s ready.",
+        requestId,
+      });
+    }
+
+    if (!pathname || !url) {
       return jsonError("Incomplete upload finalisation payload.", 400, {
         code: StoryUploadErrorCode.UNKNOWN,
         requestId,
@@ -111,6 +149,8 @@ export async function POST(req: Request) {
 
     return Response.json({
       ok: true,
+      provider: "blob",
+      processing: false,
       clip: mapClipPublic(clip),
       message: "Story added successfully.",
       requestId,

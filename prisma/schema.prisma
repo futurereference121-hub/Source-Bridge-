@@ -642,11 +642,20 @@ model StoryClip {
   durationSeconds      Int
   fileSizeBytes        Int           @default(0)
   mimeType             String        @default("")
-  /// PROCESSING | ACTIVE | FAILED | EXPIRED | DELETED
+  /// UPLOADING | PROCESSING | READY | ACTIVE | FAILED | EXPIRED | DELETED
   status               String        @default("ACTIVE")
   originalFilename     String        @default("")
-  /// Client-generated id for idempotent finalisation after direct-to-Blob upload.
+  /// Client-generated id for idempotent finalisation after direct upload.
   uploadSessionId      String?
+  /// "mux" for async-transcoded clips, "blob" for legacy direct-Blob clips.
+  mediaProvider        String        @default("")
+  muxUploadId          String?       @unique
+  muxAssetId           String?
+  muxPlaybackId        String?
+  /// Safe, non-secret reason recorded when Mux processing fails.
+  processingError      String        @default("")
+  /// Set when the clip becomes publicly playable — expiresAt is derived from this.
+  readyAt              DateTime?
   createdAt            DateTime      @default(now())
   expiresAt            DateTime
   deletedAt            DateTime?
@@ -659,6 +668,7 @@ model StoryClip {
   @@index([userId, createdAt])
   @@index([status, expiresAt])
   @@index([userId, blobPathname])
+  @@index([muxAssetId])
 }
 
 /// Unique authenticated view of a Story clip (owner views excluded from public count).

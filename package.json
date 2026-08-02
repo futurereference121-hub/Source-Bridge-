@@ -48,6 +48,7 @@
     "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs"
   },
   "dependencies": {
+    "@mux/mux-node": "^14.1.1",
     "@prisma/client": "^6.19.3",
     "@vercel/blob": "^2.6.1",
     "dotenv": "^17.4.2",

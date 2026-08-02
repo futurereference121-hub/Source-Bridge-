@@ -6,6 +6,8 @@ import {
   resolveStoryMime,
   storyErrorMessage,
 } from "@/lib/story-constants";
+import { createMuxDirectUpload, isMuxConfigured } from "@/lib/mux-stories";
+import { storyCorsOrigin } from "@/lib/stories";
 import {
   blobPathForUser,
   isClientBlobUploadConfigured,
@@ -16,19 +18,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Returns a user-scoped Blob pathname + upload session id before direct upload.
+ * Issues an upload target before the browser sends any bytes.
+ *
+ * Primary: a short-lived Mux direct-upload URL — the client PUTs the original
+ * straight to Mux and the file never touches a Next.js request body.
+ * Fallback: a user-scoped Blob pathname, local development only.
  */
 export async function POST(req: Request) {
   const requestId = randomBytes(6).toString("hex");
   try {
-    if (!isClientBlobUploadConfigured()) {
-      return jsonError(
-        storyErrorMessage(StoryUploadErrorCode.STORAGE_FAILED, requestId),
-        503,
-        { code: StoryUploadErrorCode.STORAGE_FAILED, requestId },
-      );
-    }
-
     const user = await getSessionUser();
     if (!user) {
       return jsonError(
@@ -83,12 +81,38 @@ export async function POST(req: Request) {
       );
     }
 
-    const pathname = blobPathForUser(user.id, "stories", mime);
     const uploadSessionId = `us_${randomBytes(16).toString("hex")}`;
+
+    if (isMuxConfigured()) {
+      const upload = await createMuxDirectUpload({
+        uploadSessionId,
+        corsOrigin: storyCorsOrigin(req.headers.get("origin")),
+      });
+      return Response.json({
+        ok: true,
+        provider: "mux",
+        uploadUrl: upload.uploadUrl,
+        uploadId: upload.uploadId,
+        uploadSessionId,
+        contentType: mime,
+        maxBytes: MAX_STORY_CLIP_BYTES,
+        requestId,
+      });
+    }
+
+    // Without Mux there is no transcoder — never publish raw originals in prod.
+    if (process.env.VERCEL || !isClientBlobUploadConfigured()) {
+      return jsonError(
+        storyErrorMessage(StoryUploadErrorCode.STORAGE_FAILED, requestId),
+        503,
+        { code: StoryUploadErrorCode.STORAGE_FAILED, requestId },
+      );
+    }
 
     return Response.json({
       ok: true,
-      pathname,
+      provider: "blob",
+      pathname: blobPathForUser(user.id, "stories", mime),
       uploadSessionId,
       contentType: mime,
       maxBytes: MAX_STORY_CLIP_BYTES,

@@ -19,6 +19,9 @@ type Clip = {
   createdAt: string;
   playbackExpiresAt?: string;
   viewed?: boolean;
+  hlsUrl?: string;
+  mp4Url?: string;
+  delivery?: string;
 };
 
 type Props = {
@@ -49,6 +52,34 @@ function logStage(
   console.info("[story-playback]", { stage, ...detail, t: Date.now() });
 }
 
+/** Safari and iOS play HLS natively; everywhere else falls back to the MP4. */
+function supportsNativeHls(): boolean {
+  if (typeof document === "undefined") return false;
+  const probe = document.createElement("video");
+  return Boolean(
+    probe.canPlayType("application/vnd.apple.mpegurl") ||
+      probe.canPlayType("application/x-mpegURL"),
+  );
+}
+
+/**
+ * Pick the best source for this device. Mux clips ship both an HLS manifest
+ * (adaptive) and a progressive MP4; legacy Blob clips only have videoUrl.
+ */
+function preferredSource(
+  clip: Clip,
+  forceMp4 = false,
+): { src: string; type: string } {
+  const isMux = Boolean(clip.hlsUrl || clip.mp4Url || clip.delivery === "mux-cdn");
+  if (isMux) {
+    if (!forceMp4 && clip.hlsUrl && supportsNativeHls()) {
+      return { src: clip.hlsUrl, type: "application/vnd.apple.mpegurl" };
+    }
+    if (clip.mp4Url) return { src: clip.mp4Url, type: "video/mp4" };
+  }
+  return { src: clip.videoUrl, type: "video/mp4" };
+}
+
 function mediaErrorCode(video: HTMLVideoElement | null): PlaybackCode {
   const code = video?.error?.code;
   if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
@@ -77,6 +108,8 @@ export function StoryViewer({ userId, onClose }: Props) {
   const [errorCode, setErrorCode] = useState<PlaybackCode | "">("");
   const [reportOpen, setReportOpen] = useState(false);
   const [paused, setPaused] = useState(false);
+  /** Clips whose HLS manifest failed — retried as progressive MP4. */
+  const [mp4Fallback, setMp4Fallback] = useState<Record<string, boolean>>({});
   const viewedRef = useRef<Set<string>>(new Set());
   const holdTimer = useRef<number | null>(null);
   const refreshedRef = useRef<Set<string>>(new Set());
@@ -158,6 +191,9 @@ export function StoryViewer({ userId, onClose }: Props) {
   }, [userId]);
 
   const current = clips[index] || null;
+  const source = current
+    ? preferredSource(current, Boolean(mp4Fallback[current.id]))
+    : null;
 
   const recordView = useCallback(async (clipId: string) => {
     if (viewedRef.current.has(clipId)) return;
@@ -190,6 +226,9 @@ export function StoryViewer({ userId, onClose }: Props) {
       if (!res.ok || !data.playbackUrl) return null;
       return {
         url: String(data.playbackUrl),
+        hlsUrl: data.hlsUrl ? String(data.hlsUrl) : undefined,
+        mp4Url: data.mp4Url ? String(data.mp4Url) : undefined,
+        delivery: data.delivery ? String(data.delivery) : undefined,
         expiresAt: String(data.expiresAt || ""),
       };
     } catch {
@@ -255,6 +294,23 @@ export function StoryViewer({ userId, onClose }: Props) {
   async function handleMediaError() {
     if (!current) return;
     const code = mediaErrorCode(videoRef.current);
+
+    // HLS refused by this device — retry the same clip as progressive MP4.
+    if (
+      current.mp4Url &&
+      !mp4Fallback[current.id] &&
+      source?.type === "application/vnd.apple.mpegurl"
+    ) {
+      setMp4Fallback((prev) => ({ ...prev, [current.id]: true }));
+      setPhase("buffering");
+      logStage("hls_fallback_mp4", {
+        requestId: requestIdRef.current,
+        userId,
+        clipId: current.id,
+      });
+      return;
+    }
+
     const grantExpired =
       current.playbackExpiresAt &&
       Date.parse(current.playbackExpiresAt) < Date.now();
@@ -268,6 +324,9 @@ export function StoryViewer({ userId, onClose }: Props) {
               ? {
                   ...c,
                   videoUrl: refreshed.url,
+                  hlsUrl: refreshed.hlsUrl ?? c.hlsUrl,
+                  mp4Url: refreshed.mp4Url ?? c.mp4Url,
+                  delivery: refreshed.delivery ?? c.delivery,
                   playbackExpiresAt: refreshed.expiresAt || c.playbackExpiresAt,
                 }
               : c,
@@ -342,6 +401,9 @@ export function StoryViewer({ userId, onClose }: Props) {
             ? {
                 ...c,
                 videoUrl: refreshed.url,
+                hlsUrl: refreshed.hlsUrl ?? c.hlsUrl,
+                mp4Url: refreshed.mp4Url ?? c.mp4Url,
+                delivery: refreshed.delivery ?? c.delivery,
                 playbackExpiresAt: refreshed.expiresAt || c.playbackExpiresAt,
               }
             : c,
@@ -447,12 +509,12 @@ export function StoryViewer({ userId, onClose }: Props) {
                 Close
               </button>
             </div>
-          ) : current ? (
+          ) : current && source ? (
             <>
               <video
                 ref={videoRef}
-                key={`${current.id}:${current.videoUrl.slice(-24)}`}
-                src={current.videoUrl}
+                key={`${current.id}:${source.src.slice(-24)}`}
+                src={source.src}
                 poster={current.thumbnailUrl || undefined}
                 className="max-h-full max-w-full object-contain"
                 playsInline

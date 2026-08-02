@@ -1,5 +1,5 @@
 /**
- * Expire Story clips and delete Blob assets.
+ * Expire Story clips, delete Mux assets and legacy Blob assets.
  * Dry-run by default. Pass --confirm to apply.
  *
  *   npm run stories:expire
@@ -7,9 +7,31 @@
  */
 import { PrismaClient } from "@prisma/client";
 import { del } from "@vercel/blob";
+import Mux from "@mux/mux-node";
 
 const prisma = new PrismaClient();
 const CONFIRM = process.argv.includes("--confirm");
+
+const muxConfigured = Boolean(
+  process.env.MUX_TOKEN_ID?.trim() && process.env.MUX_TOKEN_SECRET?.trim(),
+);
+
+async function deleteMuxAsset(assetId) {
+  if (!assetId || !muxConfigured) return;
+  try {
+    const mux = new Mux({
+      tokenId: process.env.MUX_TOKEN_ID,
+      tokenSecret: process.env.MUX_TOKEN_SECRET,
+    });
+    await mux.video.assets.delete(assetId);
+  } catch (err) {
+    console.warn(
+      "Mux asset delete failed",
+      assetId,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
 
 async function deleteBlob(url, pathname, userId) {
   if (!url && !pathname) return true;
@@ -31,7 +53,10 @@ async function main() {
   const expired = await prisma.storyClip.findMany({
     where: {
       OR: [
-        { status: "ACTIVE", expiresAt: { lte: now } },
+        {
+          status: { in: ["READY", "ACTIVE", "PROCESSING", "UPLOADING", "FAILED"] },
+          expiresAt: { lte: now },
+        },
         { status: "DELETED" },
         { deletedAt: { not: null }, status: { not: "EXPIRED" } },
       ],
@@ -55,7 +80,10 @@ async function main() {
       where: { id: clip.id },
       data: { status: "EXPIRED", deletedAt: clip.deletedAt || now },
     });
-    await deleteBlob(clip.videoUrl, clip.blobPathname, clip.userId);
+    await deleteMuxAsset(clip.muxAssetId);
+    if (clip.blobPathname) {
+      await deleteBlob(clip.videoUrl, clip.blobPathname, clip.userId);
+    }
     if (clip.thumbnailUrl) {
       await deleteBlob(clip.thumbnailUrl, clip.thumbnailBlobPathname, clip.userId);
     }

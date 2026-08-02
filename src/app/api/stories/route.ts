@@ -4,7 +4,7 @@ import {
   StoryUploadError,
   createStoryClip,
   getActiveDurationSeconds,
-  listActiveClipsForOwner,
+  listOwnerClips,
   mapClipPublic,
 } from "@/lib/stories";
 import {
@@ -37,12 +37,12 @@ export async function GET() {
       });
     }
     const [clips, activeSeconds] = await Promise.all([
-      listActiveClipsForOwner(user.id),
+      listOwnerClips(user.id),
       getActiveDurationSeconds(user.id),
     ]);
     return Response.json({
       ok: true,
-      clips: clips.map((c) => mapClipPublic(c, true)),
+      clips: clips.map((c) => mapClipPublic(c, true, true)),
       activeSeconds,
       maxActiveSeconds: MAX_ACTIVE_STORY_SECONDS,
       privacyNotice: STORY_PRIVACY_NOTICE,
@@ -82,8 +82,8 @@ export async function POST(req: Request) {
       });
     }
 
-    // Prefer direct-to-Blob in production — reject fat bodies early with a clear code.
-    if (isClientBlobUploadConfigured() && process.env.VERCEL) {
+    // Production clients must use prepare → direct upload → finalize.
+    if (process.env.VERCEL) {
       return jsonError(
         storyErrorMessage(StoryUploadErrorCode.REQUEST_TOO_LARGE, requestId),
         413,
@@ -129,10 +129,14 @@ export async function POST(req: Request) {
       slug: user.slug,
     });
 
+    const processing = clip.status === "PROCESSING";
     return Response.json({
       ok: true,
-      clip: mapClipPublic(clip),
-      message: "Story added successfully.",
+      processing,
+      clip: mapClipPublic(clip, false, true),
+      message: processing
+        ? "Your Story is processing. We’ll publish it as soon as it’s ready."
+        : "Story added successfully.",
       requestId,
     });
   } catch (err) {
