@@ -512,7 +512,7 @@ export function MessagesInbox({
                             userId={other.id}
                             profileHref={profileHref}
                             size={40}
-                            className="rounded-lg ring-1 ring-white/10"
+                            className="rounded-lg"
                           >
                             <Image
                               src={memberPhoto(other.photo)}
@@ -624,7 +624,7 @@ export function MessagesInbox({
                       activeOther.slug ? `/members/${activeOther.slug}` : null
                     }
                     size={36}
-                    className="rounded-lg ring-1 ring-white/10"
+                    className="rounded-lg"
                   >
                     <Image
                       src={memberPhoto(activeOther.photo)}

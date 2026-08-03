@@ -39,7 +39,7 @@ export async function GET(req: Request) {
       {
         headers: {
           // Short private cache cuts Explore N-storm DB load; client also TTL-batches.
-          "Cache-Control": "private, max-age=8, stale-while-revalidate=20",
+          "Cache-Control": "private, max-age=5, stale-while-revalidate=15",
         },
       },
     );

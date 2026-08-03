@@ -102,7 +102,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
             profileHref={`/members/${member.slug}`}
             size={112}
             showAddLabel
-            className="border-[3px] border-[#020b1c] shadow-[0_0_32px_rgba(59,130,246,0.18)] sm:!h-28 sm:!w-28"
+            className="border-[3px] border-[#020b1c] shadow-[0_0_32px_rgba(59,130,246,0.18)]"
           >
             <SafeMemberImage
               src={member.photo}

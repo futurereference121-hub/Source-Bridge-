@@ -100,6 +100,9 @@ function read(rel) {
   assert.ok(/Add Story/.test(avatar));
   assert.ok(/aria-label=\{hasActive \? "Add to Story" : "Add Story"\}/.test(avatar) || /aria-label=.*Add Story/.test(avatar));
   assert.ok(/Plus/.test(avatar));
+  // Ring shell must not share overflow-hidden with the Story ring paint.
+  assert.ok(/data-story-ring/.test(avatar));
+  assert.ok(/RING_PAD/.test(avatar));
 }
 
 {
@@ -185,12 +188,14 @@ function read(rel) {
   assert.ok(/\/api\/stories\/\$\{clipId\}\/playback|\/playback/.test(viewer));
   assert.ok(/Buffering/.test(viewer));
   assert.ok(/\[story-playback\]/.test(viewer));
-  // HLS-first with progressive MP4 fallback for non-Safari devices.
-  assert.ok(/application\/vnd\.apple\.mpegurl/.test(viewer));
-  assert.ok(/canPlayType/.test(viewer));
+  // Adaptive Mux HLS via hls.js (Chrome/Edge) + native HLS (Safari); MP4 fallback.
+  assert.ok(/from "hls\.js"/.test(viewer));
+  assert.ok(/Hls\.isSupported|useHlsJs/.test(viewer));
+  assert.ok(/application\/vnd\.apple\.mpegurl|type: "hls"/.test(viewer));
   assert.ok(/preferredSource/.test(viewer));
   assert.ok(/mp4Url/.test(viewer));
   assert.ok(/mux-cdn/.test(viewer));
+  assert.ok(/reduceStoryPlayer|STORY_BUFFERING_DEBOUNCE_MS/.test(viewer));
 }
 
 {

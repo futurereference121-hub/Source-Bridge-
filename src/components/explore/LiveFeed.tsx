@@ -90,7 +90,7 @@ function FeedRow({ item }: { item: FeedItem }) {
           userId={item.memberId}
           profileHref={`/members/${item.memberSlug}`}
           size={36}
-          className="rounded-lg ring-1 ring-white/10"
+          className="rounded-lg"
         >
           <SafeMemberImage
             src={item.photo}

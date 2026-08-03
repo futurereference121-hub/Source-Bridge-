@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Hls from "hls.js";
 import { Volume2, VolumeX, X, Flag, Play } from "lucide-react";
 import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import {
@@ -9,6 +10,15 @@ import {
   storyPlaybackErrorMessage,
   type StoryPlaybackErrorCode as PlaybackCode,
 } from "@/lib/story-constants";
+import {
+  STORY_BUFFERING_DEBOUNCE_MS,
+  initialStoryPlayerState,
+  reduceStoryPlayer,
+  storyPlayerShowsStatusOverlay,
+  storyPlayerStatusLabel,
+  type StoryPlayerEvent,
+  type StoryPlayerState,
+} from "@/lib/story-player-state";
 import { useAppUi } from "@/components/providers/AppProviders";
 
 type Clip = {
@@ -29,12 +39,12 @@ type Props = {
   onClose: () => void;
 };
 
-type UiPhase =
-  | "loading_meta"
-  | "buffering"
-  | "tap_to_play"
-  | "playing"
-  | "error";
+type MediaPick = {
+  src: string;
+  type: "hls" | "mp4";
+  /** Use hls.js MSE when true; native <video src> otherwise. */
+  useHlsJs: boolean;
+};
 
 function relativeAge(iso: string) {
   const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
@@ -52,7 +62,7 @@ function logStage(
   console.info("[story-playback]", { stage, ...detail, t: Date.now() });
 }
 
-/** Safari and iOS play HLS natively; everywhere else falls back to the MP4. */
+/** Safari / iOS play HLS natively; Chrome/Edge/Firefox need hls.js. */
 function supportsNativeHls(): boolean {
   if (typeof document === "undefined") return false;
   const probe = document.createElement("video");
@@ -63,21 +73,35 @@ function supportsNativeHls(): boolean {
 }
 
 /**
- * Pick the best source for this device. Mux clips ship both an HLS manifest
- * (adaptive) and a progressive MP4; legacy Blob clips only have videoUrl.
+ * Prefer Mux adaptive HLS (native or hls.js). Progressive MP4 only as fallback
+ * when HLS is unavailable or explicitly forced after a failure.
  */
-function preferredSource(
-  clip: Clip,
-  forceMp4 = false,
-): { src: string; type: string } {
-  const isMux = Boolean(clip.hlsUrl || clip.mp4Url || clip.delivery === "mux-cdn");
+function preferredSource(clip: Clip, forceMp4 = false): MediaPick | null {
+  const isMux = Boolean(
+    clip.hlsUrl || clip.mp4Url || clip.delivery === "mux-cdn",
+  );
   if (isMux) {
-    if (!forceMp4 && clip.hlsUrl && supportsNativeHls()) {
-      return { src: clip.hlsUrl, type: "application/vnd.apple.mpegurl" };
+    if (!forceMp4 && clip.hlsUrl) {
+      if (supportsNativeHls()) {
+        return { src: clip.hlsUrl, type: "hls", useHlsJs: false };
+      }
+      if (Hls.isSupported()) {
+        return { src: clip.hlsUrl, type: "hls", useHlsJs: true };
+      }
     }
-    if (clip.mp4Url) return { src: clip.mp4Url, type: "video/mp4" };
+    if (clip.mp4Url) return { src: clip.mp4Url, type: "mp4", useHlsJs: false };
   }
-  return { src: clip.videoUrl, type: "video/mp4" };
+  const url = clip.videoUrl;
+  if (!url) return null;
+  if (!forceMp4 && /\.m3u8(\?|$)/i.test(url)) {
+    if (supportsNativeHls()) {
+      return { src: url, type: "hls", useHlsJs: false };
+    }
+    if (Hls.isSupported()) {
+      return { src: url, type: "hls", useHlsJs: true };
+    }
+  }
+  return { src: url, type: "mp4", useHlsJs: false };
 }
 
 function mediaErrorCode(video: HTMLVideoElement | null): PlaybackCode {
@@ -94,6 +118,7 @@ function mediaErrorCode(video: HTMLVideoElement | null): PlaybackCode {
 export function StoryViewer({ userId, onClose }: Props) {
   const { showToast, account } = useAppUi();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [user, setUser] = useState<{
     name: string;
@@ -103,15 +128,20 @@ export function StoryViewer({ userId, onClose }: Props) {
   } | null>(null);
   const [index, setIndex] = useState(0);
   const [muted, setMuted] = useState(true);
-  const [phase, setPhase] = useState<UiPhase>("loading_meta");
+  const [player, setPlayer] = useState<StoryPlayerState>(() =>
+    initialStoryPlayerState("loading"),
+  );
+  const playerRef = useRef(player);
+  playerRef.current = player;
   const [error, setError] = useState("");
   const [errorCode, setErrorCode] = useState<PlaybackCode | "">("");
   const [reportOpen, setReportOpen] = useState(false);
-  const [paused, setPaused] = useState(false);
-  /** Clips whose HLS manifest failed — retried as progressive MP4. */
+  /** Clips whose HLS failed — retried as progressive MP4. */
   const [mp4Fallback, setMp4Fallback] = useState<Record<string, boolean>>({});
   const viewedRef = useRef<Set<string>>(new Set());
   const holdTimer = useRef<number | null>(null);
+  const bufferTimer = useRef<number | null>(null);
+  const lastTimeRef = useRef(0);
   const refreshedRef = useRef<Set<string>>(new Set());
   const requestIdRef = useRef(
     typeof crypto !== "undefined" && crypto.randomUUID
@@ -119,10 +149,42 @@ export function StoryViewer({ userId, onClose }: Props) {
       : Math.random().toString(36).slice(2, 10),
   );
 
+  /** Sync reduce so event handlers never read a stale phase from a closure. */
+  const dispatch = useCallback((event: StoryPlayerEvent) => {
+    const next = reduceStoryPlayer(playerRef.current, event);
+    playerRef.current = next;
+    setPlayer(next);
+    return next;
+  }, []);
+
+  const clearBufferTimer = useCallback(() => {
+    if (bufferTimer.current != null) {
+      window.clearTimeout(bufferTimer.current);
+      bufferTimer.current = null;
+    }
+  }, []);
+
+  const armBuffering = useCallback(() => {
+    const next = dispatch({ type: "WAITING" });
+    if (!next.bufferingArmed) return;
+    clearBufferTimer();
+    bufferTimer.current = window.setTimeout(() => {
+      bufferTimer.current = null;
+      dispatch({ type: "BUFFERING_CONFIRMED" });
+    }, STORY_BUFFERING_DEBOUNCE_MS);
+  }, [clearBufferTimer, dispatch]);
+
+  const destroyHls = useCallback(() => {
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setPhase("loading_meta");
+      dispatch({ type: "META_LOADING" });
       setError("");
       setErrorCode("");
       logStage("meta_request", {
@@ -155,14 +217,15 @@ export function StoryViewer({ userId, onClose }: Props) {
           clipCount: (data.clips || []).length,
           status: res.status,
         });
+        dispatch({
+          type: "META_OK",
+          hasClips: Boolean((data.clips || []).length),
+        });
         if (!(data.clips || []).length) {
-          setPhase("error");
           setErrorCode(StoryPlaybackErrorCode.MEDIA_NOT_FOUND);
           setError(
             storyPlaybackErrorMessage(StoryPlaybackErrorCode.MEDIA_NOT_FOUND),
           );
-        } else {
-          setPhase("buffering");
         }
       } catch (err) {
         if (!cancelled) {
@@ -176,7 +239,7 @@ export function StoryViewer({ userId, onClose }: Props) {
               ? err.message
               : storyPlaybackErrorMessage(code),
           );
-          setPhase("error");
+          dispatch({ type: "META_FAIL" });
           logStage("meta_fail", {
             requestId: requestIdRef.current,
             userId,
@@ -188,96 +251,187 @@ export function StoryViewer({ userId, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, dispatch]);
 
   const current = clips[index] || null;
   const source = current
     ? preferredSource(current, Boolean(mp4Fallback[current.id]))
     : null;
 
-  const recordView = useCallback(async (clipId: string) => {
-    if (viewedRef.current.has(clipId)) return;
-    viewedRef.current.add(clipId);
-    try {
-      void fetch(`/api/stories/${clipId}/view`, { method: "POST" });
-      logStage("view_recorded", {
+  const recordView = useCallback(
+    async (clipId: string) => {
+      if (viewedRef.current.has(clipId)) return;
+      viewedRef.current.add(clipId);
+      try {
+        void fetch(`/api/stories/${clipId}/view`, { method: "POST" });
+        logStage("view_recorded", {
+          requestId: requestIdRef.current,
+          userId,
+          clipId,
+        });
+      } catch {
+        /* non-blocking */
+      }
+    },
+    [userId],
+  );
+
+  const refreshPlaybackUrl = useCallback(
+    async (clipId: string) => {
+      if (refreshedRef.current.has(clipId)) return null;
+      refreshedRef.current.add(clipId);
+      logStage("playback_url_refresh", {
         requestId: requestIdRef.current,
         userId,
         clipId,
       });
-    } catch {
-      /* non-blocking */
-    }
-  }, [userId]);
-
-  const refreshPlaybackUrl = useCallback(async (clipId: string) => {
-    if (refreshedRef.current.has(clipId)) return null;
-    refreshedRef.current.add(clipId);
-    logStage("playback_url_refresh", {
-      requestId: requestIdRef.current,
-      userId,
-      clipId,
-    });
-    try {
-      const res = await fetch(`/api/stories/${clipId}/playback`, {
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.playbackUrl) return null;
-      return {
-        url: String(data.playbackUrl),
-        hlsUrl: data.hlsUrl ? String(data.hlsUrl) : undefined,
-        mp4Url: data.mp4Url ? String(data.mp4Url) : undefined,
-        delivery: data.delivery ? String(data.delivery) : undefined,
-        expiresAt: String(data.expiresAt || ""),
-      };
-    } catch {
-      return null;
-    }
-  }, [userId]);
+      try {
+        const res = await fetch(`/api/stories/${clipId}/playback`, {
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.playbackUrl) return null;
+        return {
+          url: String(data.playbackUrl),
+          hlsUrl: data.hlsUrl ? String(data.hlsUrl) : undefined,
+          mp4Url: data.mp4Url ? String(data.mp4Url) : undefined,
+          delivery: data.delivery ? String(data.delivery) : undefined,
+          expiresAt: String(data.expiresAt || ""),
+        };
+      } catch {
+        return null;
+      }
+    },
+    [userId],
+  );
 
   const tryPlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
     try {
       await video.play();
-      setPaused(false);
-      setPhase("playing");
+      clearBufferTimer();
+      dispatch({ type: "PLAYING" });
       logStage("playback_started", {
         requestId: requestIdRef.current,
         userId,
         clipId: current?.id,
       });
     } catch {
-      setPhase("tap_to_play");
-      setPaused(true);
+      clearBufferTimer();
+      dispatch({ type: "AUTOPLAY_BLOCKED" });
       logStage("autoplay_blocked", {
         requestId: requestIdRef.current,
         userId,
         clipId: current?.id,
       });
     }
-  }, [current?.id, userId]);
+  }, [clearBufferTimer, current?.id, dispatch, userId]);
 
+  // Attach media source (hls.js or native) whenever the clip / fallback changes.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !current) return;
+    if (!video || !current || !source) return;
 
-    setPhase("buffering");
+    clearBufferTimer();
+    destroyHls();
+    lastTimeRef.current = 0;
+    dispatch({ type: "CLIP_CHANGE" });
     setError("");
     setErrorCode("");
-    setPaused(false);
-    video.load();
-    void tryPlay();
 
     logStage("media_request", {
       requestId: requestIdRef.current,
       userId,
       clipId: current.id,
+      delivery: source.type,
+      hlsJs: source.useHlsJs,
       hostname:
         typeof window !== "undefined" ? window.location.hostname : "",
     });
-  }, [current, tryPlay, userId]);
+
+    let cancelled = false;
+
+    if (source.useHlsJs) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        // Start at a modest rung — ABR will climb; never force 1080p.
+        startLevel: -1,
+        capLevelToPlayerSize: true,
+        maxBufferLength: 20,
+        maxMaxBufferLength: 40,
+      });
+      hlsRef.current = hls;
+      hls.loadSource(source.src);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (cancelled) return;
+        logStage("hls_manifest", {
+          requestId: requestIdRef.current,
+          userId,
+          clipId: current.id,
+          levels: hls.levels?.length,
+        });
+        void tryPlay();
+      });
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (cancelled || !data.fatal) return;
+        logStage("hls_fatal", {
+          requestId: requestIdRef.current,
+          userId,
+          clipId: current.id,
+          details: data.details,
+        });
+        // Fatal HLS → progressive MP4 fallback when available.
+        if (current.mp4Url && !mp4Fallback[current.id]) {
+          setMp4Fallback((prev) => ({ ...prev, [current.id]: true }));
+          return;
+        }
+        dispatch({ type: "ERROR" });
+        setErrorCode(StoryPlaybackErrorCode.STREAM_FAILED);
+        setError(
+          storyPlaybackErrorMessage(
+            StoryPlaybackErrorCode.STREAM_FAILED,
+            requestIdRef.current,
+          ),
+        );
+      });
+    } else {
+      video.src = source.src;
+      video.load();
+      void tryPlay();
+    }
+
+    return () => {
+      cancelled = true;
+      clearBufferTimer();
+      destroyHls();
+    };
+    // mp4Fallback intentionally included so HLS→MP4 retry rebinds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, source?.src, source?.useHlsJs, userId]);
+
+  // Lightweight safeguard: advancing currentTime clears stale Buffering.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTime = () => {
+      const t = video.currentTime;
+      if (t > lastTimeRef.current + 0.15) {
+        lastTimeRef.current = t;
+        if (
+          playerRef.current.phase === "buffering" ||
+          playerRef.current.bufferingArmed
+        ) {
+          clearBufferTimer();
+          dispatch({ type: "TIME_ADVANCED" });
+        }
+      }
+    };
+    video.addEventListener("timeupdate", onTime);
+    return () => video.removeEventListener("timeupdate", onTime);
+  }, [clearBufferTimer, dispatch, current?.id]);
 
   function go(delta: number) {
     setIndex((i) => {
@@ -295,14 +449,13 @@ export function StoryViewer({ userId, onClose }: Props) {
     if (!current) return;
     const code = mediaErrorCode(videoRef.current);
 
-    // HLS refused by this device — retry the same clip as progressive MP4.
     if (
       current.mp4Url &&
       !mp4Fallback[current.id] &&
-      source?.type === "application/vnd.apple.mpegurl"
+      source?.type === "hls"
     ) {
       setMp4Fallback((prev) => ({ ...prev, [current.id]: true }));
-      setPhase("buffering");
+      dispatch({ type: "MEDIA_LOADING" });
       logStage("hls_fallback_mp4", {
         requestId: requestIdRef.current,
         userId,
@@ -332,13 +485,14 @@ export function StoryViewer({ userId, onClose }: Props) {
               : c,
           ),
         );
-        setPhase("buffering");
+        refreshedRef.current.delete(current.id);
+        dispatch({ type: "MEDIA_LOADING" });
         setErrorCode(StoryPlaybackErrorCode.URL_EXPIRED);
         return;
       }
     }
 
-    setPhase("error");
+    dispatch({ type: "ERROR" });
     setErrorCode(code);
     setError(storyPlaybackErrorMessage(code, requestIdRef.current));
     logStage("media_error", {
@@ -363,15 +517,23 @@ export function StoryViewer({ userId, onClose }: Props) {
           void tryPlay();
         } else {
           v.pause();
-          setPaused(true);
-          setPhase("tap_to_play");
+          clearBufferTimer();
+          dispatch({ type: "PAUSE" });
         }
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clips.length, onClose, tryPlay]);
+  }, [clips.length, onClose, tryPlay, clearBufferTimer, dispatch]);
+
+  useEffect(() => {
+    return () => {
+      clearBufferTimer();
+      destroyHls();
+      if (holdTimer.current) window.clearTimeout(holdTimer.current);
+    };
+  }, [clearBufferTimer, destroyHls]);
 
   async function submitReport(reason: string) {
     if (!current) return;
@@ -412,22 +574,17 @@ export function StoryViewer({ userId, onClose }: Props) {
     }
     setError("");
     setErrorCode("");
-    setPhase("buffering");
-    const video = videoRef.current;
-    if (video) {
-      video.load();
-      void tryPlay();
-    }
+    setMp4Fallback((prev) => {
+      const next = { ...prev };
+      delete next[current.id];
+      return next;
+    });
+    dispatch({ type: "RETRY" });
   }
 
-  const statusLabel =
-    phase === "loading_meta"
-      ? "Loading Story…"
-      : phase === "buffering"
-        ? "Buffering…"
-        : phase === "tap_to_play"
-          ? "Tap to play"
-          : null;
+  const phase = player.phase;
+  const statusLabel = storyPlayerStatusLabel(phase);
+  const showStatus = storyPlayerShowsStatusOverlay(phase);
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black">
@@ -513,8 +670,7 @@ export function StoryViewer({ userId, onClose }: Props) {
             <>
               <video
                 ref={videoRef}
-                key={`${current.id}:${source.src.slice(-24)}`}
-                src={source.src}
+                key={`${current.id}:${source.useHlsJs ? "hlsjs" : "native"}:${mp4Fallback[current.id] ? "mp4" : "abr"}`}
                 poster={current.thumbnailUrl || undefined}
                 className="max-h-full max-w-full object-contain"
                 playsInline
@@ -528,16 +684,25 @@ export function StoryViewer({ userId, onClose }: Props) {
                   });
                 }}
                 onCanPlay={() => {
+                  clearBufferTimer();
+                  const next = dispatch({ type: "CAN_PLAY" });
                   logStage("canplay", {
                     requestId: requestIdRef.current,
                     userId,
                     clipId: current.id,
+                    phase: next.phase,
                   });
-                  if (phase === "buffering") void tryPlay();
+                  if (
+                    next.phase === "loading" ||
+                    next.phase === "ready" ||
+                    next.phase === "idle"
+                  ) {
+                    void tryPlay();
+                  }
                 }}
                 onPlaying={() => {
-                  setPhase("playing");
-                  setPaused(false);
+                  clearBufferTimer();
+                  dispatch({ type: "PLAYING" });
                   logStage("first_frame", {
                     requestId: requestIdRef.current,
                     userId,
@@ -546,12 +711,20 @@ export function StoryViewer({ userId, onClose }: Props) {
                   void recordView(current.id);
                 }}
                 onWaiting={() => {
-                  if (!paused) setPhase("buffering");
+                  armBuffering();
                 }}
                 onStalled={() => {
-                  if (!paused) setPhase("buffering");
+                  armBuffering();
                 }}
-                onEnded={() => go(1)}
+                onPause={() => {
+                  if (playerRef.current.phase === "tap_to_play") return;
+                  if (videoRef.current?.ended) return;
+                  // Ignore brief pauses from seek / buffer — hold-to-pause sets PAUSE explicitly.
+                }}
+                onEnded={() => {
+                  dispatch({ type: "ENDED" });
+                  go(1);
+                }}
                 onError={() => void handleMediaError()}
               />
 
@@ -580,7 +753,7 @@ export function StoryViewer({ userId, onClose }: Props) {
                 </div>
               ) : null}
 
-{(phase === "buffering" || phase === "loading_meta") ? (
+              {showStatus && statusLabel ? (
                 <div className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center bg-black/35">
                   <p className="text-sm text-white/70">{statusLabel}</p>
                 </div>
@@ -600,43 +773,53 @@ export function StoryViewer({ userId, onClose }: Props) {
                 </button>
               ) : null}
 
-              {/* Tap zones — below overlays */}
-              <button
-                type="button"
-                aria-label="Previous"
-                className="absolute inset-y-0 left-0 z-[1] w-1/3"
-                onClick={() => go(-1)}
-                onPointerDown={() => {
-                  holdTimer.current = window.setTimeout(() => {
-                    videoRef.current?.pause();
-                    setPaused(true);
-                    setPhase("tap_to_play");
-                  }, 200);
-                }}
-                onPointerUp={() => {
-                  if (holdTimer.current) window.clearTimeout(holdTimer.current);
-                  if (paused) void tryPlay();
-                }}
-              />
-              <button
-                type="button"
-                aria-label="Next"
-                className="absolute inset-y-0 right-0 z-[1] w-1/3"
-                onClick={() => go(1)}
-                onPointerDown={() => {
-                  holdTimer.current = window.setTimeout(() => {
-                    videoRef.current?.pause();
-                    setPaused(true);
-                    setPhase("tap_to_play");
-                  }, 200);
-                }}
-                onPointerUp={() => {
-                  if (holdTimer.current) window.clearTimeout(holdTimer.current);
-                  if (paused) void tryPlay();
-                }}
-              />
+              {/* Tap zones — below overlays; only when no blocking overlay mounted */}
+              {phase !== "tap_to_play" && phase !== "error" ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Previous"
+                    className="absolute inset-y-0 left-0 z-[1] w-1/3"
+                    onClick={() => go(-1)}
+                    onPointerDown={() => {
+                      holdTimer.current = window.setTimeout(() => {
+                        videoRef.current?.pause();
+                        clearBufferTimer();
+                        dispatch({ type: "AUTOPLAY_BLOCKED" });
+                      }, 200);
+                    }}
+                    onPointerUp={() => {
+                      if (holdTimer.current)
+                        window.clearTimeout(holdTimer.current);
+                      if (playerRef.current.phase === "tap_to_play") {
+                        void tryPlay();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    aria-label="Next"
+                    className="absolute inset-y-0 right-0 z-[1] w-1/3"
+                    onClick={() => go(1)}
+                    onPointerDown={() => {
+                      holdTimer.current = window.setTimeout(() => {
+                        videoRef.current?.pause();
+                        clearBufferTimer();
+                        dispatch({ type: "AUTOPLAY_BLOCKED" });
+                      }, 200);
+                    }}
+                    onPointerUp={() => {
+                      if (holdTimer.current)
+                        window.clearTimeout(holdTimer.current);
+                      if (playerRef.current.phase === "tap_to_play") {
+                        void tryPlay();
+                      }
+                    }}
+                  />
+                </>
+              ) : null}
             </>
-          ) : phase === "loading_meta" ? (
+          ) : phase === "loading" || phase === "idle" ? (
             <p className="text-sm text-white/50">Loading Story…</p>
           ) : null}
         </div>
@@ -661,7 +844,7 @@ export function StoryViewer({ userId, onClose }: Props) {
               <button
                 type="button"
                 onClick={() => setReportOpen(false)}
-                className="mt-2 w-full py-2 text-xs uppercase tracking-[0.12em] text-white/45"
+                className="w-full py-2 text-xs uppercase tracking-[0.12em] text-white/45"
               >
                 Close
               </button>

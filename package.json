@@ -43,6 +43,7 @@
     "test:performance-messaging-cta": "node scripts/test-performance-messaging-cta.mjs",
     "stories:expire": "node --env-file=.env.local --import=dotenv/config scripts/expire-stories.mjs",
     "test:stories": "node scripts/test-stories.mjs",
+    "test:stories:ring-playback": "node scripts/test-story-ring-playback.mjs",
     "test:listing-editor": "node scripts/test-listing-editor-stability.mjs",
     "test:conversation-pair": "node scripts/test-conversation-pair.mjs",
     "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs"
@@ -53,6 +54,7 @@
     "@vercel/blob": "^2.6.1",
     "dotenv": "^17.4.2",
     "framer-motion": "^12.42.2",
+    "hls.js": "^1.6.16",
     "lucide-react": "^1.26.0",
     "next": "15.5.21",
     "react": "19.1.0",

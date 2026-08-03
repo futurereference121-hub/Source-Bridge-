@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -36,8 +37,13 @@ type StoryContextValue = {
 
 const StoryContext = createContext<StoryContextValue | null>(null);
 
-const RING_TTL_MS = 25_000;
+/** Short TTL so open Explore tabs pick up READY rings without a hard refresh. */
+const RING_TTL_MS = 12_000;
 const BATCH_FLUSH_MS = 60;
+const RING_VISIBILITY_POLL_MS = 15_000;
+/** After Mux processing starts, poll the owner ring until READY (or timeout). */
+const OWNER_READY_POLL_MS = 4_000;
+const OWNER_READY_POLL_MAX_MS = 120_000;
 
 export function StoryProvider({ children }: { children: ReactNode }) {
   const { account, showToast } = useAppUi();
@@ -53,6 +59,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   const flushTimerRef = useRef<number | null>(null);
   const inFlightRef = useRef<Promise<void> | null>(null);
   const waitersRef = useRef<Array<() => void>>([]);
+  const ownerReadyPollRef = useRef<number | null>(null);
 
   ringsRef.current = rings;
 
@@ -145,6 +152,36 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Visibility / focus + light polling so second accounts see new READY rings.
+  useEffect(() => {
+    function refreshKnown(force: boolean) {
+      const ids = Object.keys(ringsRef.current);
+      if (!ids.length) return;
+      void refreshRings(ids, force ? { force: true } : undefined);
+    }
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        refreshKnown(true);
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refreshKnown(false);
+      }
+    }, RING_VISIBILITY_POLL_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+      window.clearInterval(poll);
+      if (ownerReadyPollRef.current != null) {
+        window.clearInterval(ownerReadyPollRef.current);
+        ownerReadyPollRef.current = null;
+      }
+    };
+  }, [refreshRings]);
+
   const openStory = useCallback((userId: string) => {
     setViewerUserId(userId);
   }, []);
@@ -216,8 +253,33 @@ export function StoryProvider({ children }: { children: ReactNode }) {
             result.processing ? "Your Story is processing." : "Story added.",
           );
           if (account?.id) {
-            invalidateRings([account.id]);
-            void refreshRings([account.id], { force: true });
+            const ownerId = account.id;
+            invalidateRings([ownerId]);
+            void refreshRings([ownerId], { force: true });
+            // Mux READY arrives via webhook — poll until the ring lights up.
+            if (result.processing) {
+              if (ownerReadyPollRef.current != null) {
+                window.clearInterval(ownerReadyPollRef.current);
+              }
+              const started = Date.now();
+              ownerReadyPollRef.current = window.setInterval(() => {
+                invalidateRings([ownerId]);
+                void refreshRings([ownerId], { force: true }).then(() => {
+                  if (ringsRef.current[ownerId]?.hasActiveStory) {
+                    if (ownerReadyPollRef.current != null) {
+                      window.clearInterval(ownerReadyPollRef.current);
+                      ownerReadyPollRef.current = null;
+                    }
+                  }
+                });
+                if (Date.now() - started > OWNER_READY_POLL_MAX_MS) {
+                  if (ownerReadyPollRef.current != null) {
+                    window.clearInterval(ownerReadyPollRef.current);
+                    ownerReadyPollRef.current = null;
+                  }
+                }
+              }, OWNER_READY_POLL_MS);
+            }
           }
         }}
       />

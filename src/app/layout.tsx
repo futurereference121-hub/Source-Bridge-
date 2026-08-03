@@ -46,6 +46,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${outfit.variable} ${cormorant.variable} antialiased`}>
+        {/* Early Mux CDN hints — kept in body so App Router Metadata owns <head>. */}
+        <link rel="preconnect" href="https://stream.mux.com" />
+        <link rel="preconnect" href="https://image.mux.com" />
+        <link rel="dns-prefetch" href="https://stream.mux.com" />
         <SiteShell>{children}</SiteShell>
       </body>
     </html>

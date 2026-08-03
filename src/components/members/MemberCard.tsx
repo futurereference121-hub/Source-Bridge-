@@ -72,7 +72,6 @@ export function MemberCard({ member }: MemberCardProps) {
           isSelf={isOwner}
           profileHref={`/members/${member.slug}`}
           size={72}
-          className="ring-1 ring-white/10"
         >
           <SafeMemberImage
             src={photo}

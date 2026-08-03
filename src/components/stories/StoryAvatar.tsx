@@ -16,6 +16,10 @@ type Props = {
   isSelf?: boolean;
   profileHref?: string | null;
   size?: number;
+  /**
+   * Face-only styles (rounded crop, border, soft shadow).
+   * Do NOT pass Tailwind `ring-*` here — the Story ring lives on the outer shell.
+   */
   className?: string;
   children: ReactNode;
   onClickEmpty?: () => void;
@@ -23,8 +27,14 @@ type Props = {
   showAddLabel?: boolean;
 };
 
+/** Outer padding so box-shadow ring is never clipped by overflow-hidden parents. */
+const RING_PAD = 4;
+
 /**
  * Profile avatar with Story ring and owner-only Add Story control.
+ *
+ * Ring is painted on an OUTER shell (no overflow-hidden). The image crop
+ * lives on an INNER face. This avoids Tailwind `ring-*` being clipped.
  */
 export function StoryAvatar({
   userId,
@@ -45,11 +55,15 @@ export function StoryAvatar({
   const ownerControls = Boolean(isSelf && !isAdmin && stories && account);
   const labelVisible = showAddLabel ?? size >= 72;
 
-  const ringClass = hasActive
+  // Unseen = strong luminous blue + soft gold glow; seen = solid blue, no gold.
+  // Uses box-shadow (not Tailwind ring) so it cannot be clipped by the face crop.
+  const shellRingClass = hasActive
     ? hasUnseen
-      ? "ring-[3px] ring-electric shadow-[0_0_0_2px_rgba(2,11,28,1)]"
-      : "ring-[3px] ring-electric/35 shadow-[0_0_0_2px_rgba(2,11,28,1)]"
+      ? "shadow-[0_0_0_3px_#3b82f6,0_0_0_5px_#020b1c,0_0_16px_2px_rgba(59,130,246,0.65),0_0_22px_1px_rgba(212,168,75,0.4)]"
+      : "shadow-[0_0_0_3px_rgba(59,130,246,0.78),0_0_0_5px_#020b1c]"
     : "";
+
+  const faceIdleEdge = hasActive ? "" : "ring-1 ring-white/10";
 
   const addStory = useCallback(
     (e?: MouseEvent | KeyboardEvent) => {
@@ -82,10 +96,11 @@ export function StoryAvatar({
 
   const badgeSize = Math.max(18, Math.round(size * 0.28));
   const plusIcon = Math.max(10, Math.round(badgeSize * 0.55));
+  const outerSize = size + RING_PAD * 2;
 
-  const avatarFace = (
+  const face = (
     <span
-      className={`relative inline-flex overflow-hidden rounded-xl bg-navy-mid ${ringClass} ${className}`}
+      className={`relative inline-flex overflow-hidden rounded-xl bg-navy-mid ${faceIdleEdge} ${className}`}
       style={{ width: size, height: size }}
       onClick={ownerControls ? undefined : handleAvatarClick}
       role={!ownerControls && (isSelf || hasActive) ? "button" : undefined}
@@ -105,50 +120,67 @@ export function StoryAvatar({
     </span>
   );
 
-  const ownerBlock = ownerControls ? (
-    <span className="inline-flex flex-col items-center gap-1.5">
-      <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
-        {avatarFace}
-        <button
-          type="button"
-          onClick={addStory}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") addStory(e);
-          }}
-          aria-label={hasActive ? "Add to Story" : "Add Story"}
-          title={hasActive ? "Add to Story" : "Add Story"}
-          className="absolute z-10 flex items-center justify-center rounded-full border-2 border-[#020b1c] bg-electric text-white shadow-md transition hover:bg-electric-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric"
-          style={{
-            width: badgeSize,
-            height: badgeSize,
-            right: -2,
-            bottom: -2,
-          }}
-        >
-          <Plus size={plusIcon} strokeWidth={2.75} aria-hidden />
-        </button>
-        {/* Clicking the face also opens the same owner flow */}
-        <button
-          type="button"
-          className="absolute inset-0 z-[1] rounded-xl"
-          aria-label={hasActive ? "Story options" : "Add Story"}
-          onClick={addStory}
-        />
-      </span>
-      {labelVisible ? (
-        <button
-          type="button"
-          onClick={addStory}
-          className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric hover:text-electric-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric"
-        >
-          {hasActive ? "Add to Story" : "Add Story"}
-        </button>
+  const shell = (
+    <span
+      className={`relative inline-flex shrink-0 items-center justify-center rounded-[14px] ${shellRingClass}`}
+      style={{
+        width: outerSize,
+        height: outerSize,
+        padding: RING_PAD,
+      }}
+      data-story-ring={hasActive ? (hasUnseen ? "unseen" : "seen") : "none"}
+    >
+      {face}
+      {ownerControls ? (
+        <>
+          <button
+            type="button"
+            onClick={addStory}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") addStory(e);
+            }}
+            aria-label={hasActive ? "Add to Story" : "Add Story"}
+            title={hasActive ? "Add to Story" : "Add Story"}
+            className="absolute z-10 flex items-center justify-center rounded-full border-2 border-[#020b1c] bg-electric text-white shadow-md transition hover:bg-electric-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric"
+            style={{
+              width: badgeSize,
+              height: badgeSize,
+              // Sit on the face corner — inside the ring padding so it never covers the ring.
+              right: Math.max(0, RING_PAD - 1),
+              bottom: Math.max(0, RING_PAD - 1),
+            }}
+          >
+            <Plus size={plusIcon} strokeWidth={2.75} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="absolute z-[1] rounded-xl"
+            style={{
+              inset: RING_PAD,
+            }}
+            aria-label={hasActive ? "Story options" : "Add Story"}
+            onClick={addStory}
+          />
+        </>
       ) : null}
     </span>
-  ) : null;
+  );
 
   if (ownerControls) {
-    return ownerBlock;
+    return (
+      <span className="inline-flex flex-col items-center gap-1.5">
+        {shell}
+        {labelVisible ? (
+          <button
+            type="button"
+            onClick={addStory}
+            className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric hover:text-electric-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric"
+          >
+            {hasActive ? "Add to Story" : "Add Story"}
+          </button>
+        ) : null}
+      </span>
+    );
   }
 
   if (!hasActive && profileHref) {
@@ -158,10 +190,10 @@ export function StoryAvatar({
         className="inline-flex shrink-0"
         onClick={onClickEmpty}
       >
-        {avatarFace}
+        {shell}
       </Link>
     );
   }
 
-  return <span className="inline-flex shrink-0">{avatarFace}</span>;
+  return <span className="inline-flex shrink-0">{shell}</span>;
 }

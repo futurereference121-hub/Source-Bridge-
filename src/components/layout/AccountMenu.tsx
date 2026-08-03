@@ -102,7 +102,7 @@ export function AccountMenu({
           userId={account.id}
           isSelf
           size={36}
-          className="rounded-lg ring-1 ring-white/15"
+          className="rounded-lg"
         >
           <Image
             src={memberPhoto(account.photo)}

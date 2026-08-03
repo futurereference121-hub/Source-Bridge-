@@ -49,6 +49,20 @@ export function ExploreClient({
     if (ids.length) void stories?.refreshRings(ids);
   }, [members, stories?.refreshRings]);
 
+  // Force-refresh rings when returning to an open Explore tab (READY / expiry).
+  useEffect(() => {
+    const ids = members.map((m) => m.id);
+    if (!ids.length || !stories?.refreshRings) return;
+    const refresh = stories.refreshRings;
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        void refresh(ids, { force: true });
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [members, stories?.refreshRings]);
+
   const refreshDirectory = useCallback(async (q: string) => {
     setSearching(true);
     setError(null);

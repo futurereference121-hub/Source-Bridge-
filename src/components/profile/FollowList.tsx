@@ -80,7 +80,7 @@ export function FollowList({
               isSelf={account?.id === item.id}
               profileHref={`/members/${item.slug}`}
               size={56}
-              className="rounded-xl ring-1 ring-white/10"
+              className="rounded-xl"
             >
               <Image
                 src={memberPhoto(item.photo)}
