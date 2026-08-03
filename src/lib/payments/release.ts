@@ -1,0 +1,359 @@
+import { prisma } from "@/lib/db";
+import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
+import {
+  assertStripeModeCompatible,
+  getStripeMode,
+  isPaymentsEnabled,
+} from "@/lib/payments/flags";
+import { getStripe, isStripeConfigured, CHARGE_MODEL } from "@/lib/payments/stripe/client";
+import {
+  canTransition,
+  nextStatus,
+  type DomainAction,
+  type ProtectedStatus,
+} from "@/lib/payments/state-machine";
+
+/**
+ * Release engine — Separate Charges and Transfers.
+ * Rechecks domain state before every money movement.
+ */
+export async function releaseProcurement(opts: {
+  protectedTxnId: string;
+  actorUserId?: string | null;
+}) {
+  if (!isPaymentsEnabled() || !isStripeConfigured()) {
+    throw Object.assign(new Error("Payments not configured"), {
+      status: 503,
+      code: "STRIPE_NOT_CONFIGURED",
+    });
+  }
+
+  const txn = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.protectedTxnId },
+  });
+  if (!txn) {
+    throw Object.assign(new Error("Transaction not found"), { status: 404 });
+  }
+  assertStripeModeCompatible(txn.stripeMode);
+
+  if (!txn.procurementAdvanceAgreed || txn.procurementAdvanceMinor <= 0) {
+    throw Object.assign(new Error("No procurement advance on this transaction"), {
+      status: 400,
+      code: "NO_PROCUREMENT",
+    });
+  }
+  if (txn.procurementTransferredMinor >= txn.procurementAdvanceMinor) {
+    return { alreadyReleased: true, txn };
+  }
+
+  const status = txn.status as ProtectedStatus;
+  if (!canTransition(status, "RELEASE_PROCUREMENT")) {
+    throw Object.assign(
+      new Error(`Cannot release procurement from status ${status}`),
+      { status: 409, code: "INVALID_TRANSITION" },
+    );
+  }
+
+  const connect = await prisma.stripeConnectAccount.findUnique({
+    where: { userId: txn.sellerId },
+  });
+  if (!connect?.chargesEnabled || !connect.payoutsEnabled) {
+    throw Object.assign(new Error("Seller Connect account not ready for transfers"), {
+      status: 409,
+      code: "CONNECT_NOT_READY",
+    });
+  }
+
+  const amount = txn.procurementAdvanceMinor - txn.procurementTransferredMinor;
+  const idempotencyKey = `proc_xfer_${txn.id}_${txn.termsHash}`;
+
+  const existingAttempt = await prisma.transferAttempt.findUnique({
+    where: { idempotencyKey },
+  });
+  if (existingAttempt?.status === "SUCCEEDED") {
+    return { alreadyReleased: true, txn };
+  }
+
+  const attempt =
+    existingAttempt ||
+    (await prisma.transferAttempt.create({
+      data: {
+        protectedTxnId: txn.id,
+        kind: "PROCUREMENT",
+        amountMinor: amount,
+        currency: txn.currency,
+        stripeMode: getStripeMode(),
+        idempotencyKey,
+        status: "PENDING",
+      },
+    }));
+
+  const stripe = getStripe();
+  try {
+    const transfer = await stripe.transfers.create(
+      {
+        amount,
+        currency: txn.currency.toLowerCase(),
+        destination: connect.stripeAccountId,
+        transfer_group: txn.id,
+        metadata: {
+          protectedTxnId: txn.id,
+          kind: "PROCUREMENT",
+          chargeModel: CHARGE_MODEL,
+        },
+      },
+      { idempotencyKey },
+    );
+
+    const next = nextStatus(status, "RELEASE_PROCUREMENT");
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.transferAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "SUCCEEDED",
+          stripeTransferId: transfer.id,
+          succeededAt: new Date(),
+          lastAttemptAt: new Date(),
+        },
+      });
+      return tx.protectedTransaction.update({
+        where: { id: txn.id },
+        data: {
+          status: next,
+          procurementTransferredMinor: txn.procurementTransferredMinor + amount,
+          procurementReleasedAt: new Date(),
+          sellerConnectAccountId: connect.stripeAccountId,
+        },
+      });
+    });
+
+    await appendLedgerEntry({
+      protectedTxnId: txn.id,
+      entryType: "PROCUREMENT_TRANSFER",
+      direction: "DEBIT",
+      amountMinor: amount,
+      currency: txn.currency,
+      idempotencyKey: `ledger_${idempotencyKey}`,
+      stripeObjectId: transfer.id,
+      stripeObjectType: "transfer",
+    });
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      actorUserId: opts.actorUserId,
+      action: "RELEASE_PROCUREMENT",
+      meta: { transferId: transfer.id, amountMinor: amount },
+    });
+
+    return { alreadyReleased: false, txn: updated, transferId: transfer.id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Transfer failed";
+    await prisma.transferAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: "FAILED",
+        failureMessage: message.slice(0, 500),
+        attemptCount: { increment: 1 },
+        lastAttemptAt: new Date(),
+      },
+    });
+    throw err;
+  }
+}
+
+export async function releaseFinal(opts: {
+  protectedTxnId: string;
+  actorUserId?: string | null;
+  action?: Extract<DomainAction, "RELEASE_FINAL">;
+}) {
+  if (!isPaymentsEnabled() || !isStripeConfigured()) {
+    throw Object.assign(new Error("Payments not configured"), {
+      status: 503,
+      code: "STRIPE_NOT_CONFIGURED",
+    });
+  }
+
+  const txn = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.protectedTxnId },
+  });
+  if (!txn) {
+    throw Object.assign(new Error("Transaction not found"), { status: 404 });
+  }
+  assertStripeModeCompatible(txn.stripeMode);
+
+  const status = txn.status as ProtectedStatus;
+  // Instant: allow release from FUNDED. Protected: READY_TO_RELEASE (or FUNDED for instant option).
+  const action: DomainAction = "RELEASE_FINAL";
+  if (!canTransition(status, action)) {
+    throw Object.assign(
+      new Error(`Cannot release final from status ${status}`),
+      { status: 409, code: "INVALID_TRANSITION" },
+    );
+  }
+
+  if (txn.paymentOption === "PROTECTED" && status === "FUNDED") {
+    throw Object.assign(
+      new Error("Protected transactions require delivery/inspection before final release"),
+      { status: 409, code: "INSPECTION_REQUIRED" },
+    );
+  }
+
+  const connect = await prisma.stripeConnectAccount.findUnique({
+    where: { userId: txn.sellerId },
+  });
+  if (!connect?.payoutsEnabled) {
+    throw Object.assign(new Error("Seller Connect account not ready for transfers"), {
+      status: 409,
+      code: "CONNECT_NOT_READY",
+    });
+  }
+
+  const sellerShare =
+    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
+  const already = txn.procurementTransferredMinor + txn.finalTransferredMinor;
+  const amount = Math.max(0, sellerShare - already);
+  if (amount <= 0) {
+    const next = nextStatus(status, action);
+    const updated = await prisma.protectedTransaction.update({
+      where: { id: txn.id },
+      data: { status: next, releasedAt: new Date() },
+    });
+    return { alreadyReleased: true, txn: updated };
+  }
+
+  const idempotencyKey = `final_xfer_${txn.id}_${txn.termsHash}`;
+  const existingAttempt = await prisma.transferAttempt.findUnique({
+    where: { idempotencyKey },
+  });
+  if (existingAttempt?.status === "SUCCEEDED") {
+    return { alreadyReleased: true, txn };
+  }
+
+  const attempt =
+    existingAttempt ||
+    (await prisma.transferAttempt.create({
+      data: {
+        protectedTxnId: txn.id,
+        kind: "FINAL",
+        amountMinor: amount,
+        currency: txn.currency,
+        stripeMode: getStripeMode(),
+        idempotencyKey,
+        status: "PENDING",
+      },
+    }));
+
+  const stripe = getStripe();
+  try {
+    const transfer = await stripe.transfers.create(
+      {
+        amount,
+        currency: txn.currency.toLowerCase(),
+        destination: connect.stripeAccountId,
+        transfer_group: txn.id,
+        metadata: {
+          protectedTxnId: txn.id,
+          kind: "FINAL",
+          chargeModel: CHARGE_MODEL,
+        },
+      },
+      { idempotencyKey },
+    );
+
+    const next = nextStatus(status, action);
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.transferAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "SUCCEEDED",
+          stripeTransferId: transfer.id,
+          succeededAt: new Date(),
+          lastAttemptAt: new Date(),
+        },
+      });
+      return tx.protectedTransaction.update({
+        where: { id: txn.id },
+        data: {
+          status: next,
+          finalTransferredMinor: txn.finalTransferredMinor + amount,
+          releasedAt: new Date(),
+          sellerConnectAccountId: connect.stripeAccountId,
+        },
+      });
+    });
+
+    await appendLedgerEntry({
+      protectedTxnId: txn.id,
+      entryType: "FINAL_TRANSFER",
+      direction: "DEBIT",
+      amountMinor: amount,
+      currency: txn.currency,
+      idempotencyKey: `ledger_${idempotencyKey}`,
+      stripeObjectId: transfer.id,
+      stripeObjectType: "transfer",
+    });
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      actorUserId: opts.actorUserId,
+      action: "RELEASE_FINAL",
+      meta: { transferId: transfer.id, amountMinor: amount },
+    });
+
+    return { alreadyReleased: false, txn: updated, transferId: transfer.id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Transfer failed";
+    await prisma.transferAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: "FAILED",
+        failureMessage: message.slice(0, 500),
+        attemptCount: { increment: 1 },
+        lastAttemptAt: new Date(),
+      },
+    });
+    throw err;
+  }
+}
+
+/** Cron/job entry: release READY_TO_RELEASE txns whose inspection window ended. */
+export async function processInspectionReleases(limit = 25) {
+  const now = new Date();
+  const due = await prisma.protectedTransaction.findMany({
+    where: {
+      status: "IN_INSPECTION",
+      inspectionEndsAt: { lte: now },
+    },
+    take: limit,
+    orderBy: { inspectionEndsAt: "asc" },
+  });
+
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  for (const txn of due) {
+    try {
+      // Recheck state before money movement
+      const fresh = await prisma.protectedTransaction.findUnique({
+        where: { id: txn.id },
+      });
+      if (!fresh || fresh.status !== "IN_INSPECTION") {
+        results.push({ id: txn.id, ok: false, error: "state_changed" });
+        continue;
+      }
+      if (fresh.inspectionEndsAt && fresh.inspectionEndsAt > new Date()) {
+        results.push({ id: txn.id, ok: false, error: "window_open" });
+        continue;
+      }
+      await prisma.protectedTransaction.update({
+        where: { id: fresh.id },
+        data: { status: nextStatus("IN_INSPECTION", "COMPLETE_INSPECTION") },
+      });
+      await releaseFinal({ protectedTxnId: fresh.id, actorUserId: null });
+      results.push({ id: txn.id, ok: true });
+    } catch (err) {
+      results.push({
+        id: txn.id,
+        ok: false,
+        error: err instanceof Error ? err.message : "error",
+      });
+    }
+  }
+  return results;
+}

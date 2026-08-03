@@ -515,6 +515,7 @@ export function mapMessage(m: {
   messageType?: string;
   systemEventType?: string;
   replyAllowed?: boolean;
+  paymentTicketId?: string | null;
   attachments?: { id: string; url: string; pathname: string; mimeType: string; sizeBytes: number }[];
   sender?: ParticipantUser | null;
 }) {
@@ -527,6 +528,7 @@ export function mapMessage(m: {
     messageType: m.messageType || "USER",
     systemEventType: m.systemEventType || "",
     replyAllowed: m.replyAllowed !== false,
+    paymentTicketId: m.paymentTicketId || null,
     attachments: (m.attachments ?? []).map((a) => ({
       id: a.id,
       url: a.url,

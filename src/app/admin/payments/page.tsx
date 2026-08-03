@@ -1,0 +1,156 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getSessionUser, isAdminUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { paymentFlagsSnapshot } from "@/lib/payments/flags";
+import { getPlatformPaymentConfig } from "@/lib/payments/config";
+import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
+import { formatMinor } from "@/lib/payments/money";
+
+export default async function AdminPaymentsPage() {
+  const user = await getSessionUser();
+  if (!user) redirect("/admin/sign-in");
+  if (!isAdminUser(user)) redirect("/explore");
+  if (user.mustChangePassword) redirect("/admin/change-password");
+
+  const flags = paymentFlagsSnapshot();
+  const config = await getPlatformPaymentConfig();
+
+  const [funded, inFlight, disputed, released, failedTransfers, openDisputes, recent] =
+    await Promise.all([
+      prisma.protectedTransaction.count({ where: { status: "FUNDED" } }),
+      prisma.protectedTransaction.count({
+        where: {
+          status: {
+            in: [
+              "PROCUREMENT_RELEASED",
+              "AWAITING_SHIPMENT",
+              "IN_TRANSIT",
+              "DELIVERED",
+              "IN_INSPECTION",
+              "READY_TO_RELEASE",
+            ],
+          },
+        },
+      }),
+      prisma.protectedTransaction.count({ where: { status: "DISPUTED" } }),
+      prisma.protectedTransaction.count({ where: { status: "RELEASED" } }),
+      prisma.transferAttempt.count({ where: { status: "FAILED" } }),
+      prisma.disputeCase.count({ where: { status: "OPEN" } }),
+      prisma.protectedTransaction.findMany({
+        take: 25,
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          status: true,
+          paymentOption: true,
+          currency: true,
+          totalChargeMinor: true,
+          stripeMode: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+  const cards = [
+    ["Funded", funded],
+    ["In flight", inFlight],
+    ["Disputed", disputed],
+    ["Released", released],
+    ["Failed transfers", failedTransfers],
+    ["Open disputes", openDisputes],
+  ] as const;
+
+  return (
+    <>
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-electric">
+        Financial operations
+      </p>
+      <h1 className="mt-2 font-display text-4xl">Protected Payments</h1>
+      <p className="mt-2 max-w-2xl text-sm text-white/55">
+        Stripe is the processor ({CHARGE_MODEL}). Source Bridge owns transaction
+        state and transfer timing. Live mode is forced off.
+      </p>
+
+      <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+        <p>
+          Stripe configured: {isStripeConfigured() ? "yes" : "no"} · Mode:{" "}
+          {flags.stripeMode} · LIVE_PAYMENTS_ENABLED: false
+        </p>
+        <p className="mt-1">
+          Flags — payments: {String(flags.PAYMENTS_ENABLED)}, protected:{" "}
+          {String(flags.PROTECTED_PAYMENTS_ENABLED)}, instant:{" "}
+          {String(flags.INSTANT_PAYMENTS_ENABLED)}, procurement:{" "}
+          {String(flags.PROCUREMENT_ADVANCES_ENABLED)}
+        </p>
+        <p className="mt-1">
+          Protection fee: {config.protectionFeeBps} bps (floor{" "}
+          {config.protectionFeeFloorMinor} minor) · Inspection:{" "}
+          {config.inspectionHours}h · Procurement min trust:{" "}
+          {config.procurementMinTrustLevel}
+        </p>
+      </div>
+
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {cards.map(([label, value]) => (
+          <div
+            key={label}
+            className="rounded-xl border border-white/10 bg-white/5 p-5"
+          >
+            <p className="text-sm text-white/60">{label}</p>
+            <p className="mt-2 text-3xl font-semibold">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <h2 className="mt-10 text-lg font-semibold">Recent protected transactions</h2>
+      <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-white/5 text-white/50">
+            <tr>
+              <th className="px-3 py-2 font-medium">ID</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 font-medium">Option</th>
+              <th className="px-3 py-2 font-medium">Total</th>
+              <th className="px-3 py-2 font-medium">Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recent.length === 0 ? (
+              <tr>
+                <td className="px-3 py-4 text-white/40" colSpan={5}>
+                  No protected transactions yet.
+                </td>
+              </tr>
+            ) : (
+              recent.map((row) => (
+                <tr key={row.id} className="border-t border-white/10">
+                  <td className="px-3 py-2 font-mono text-xs text-white/70">
+                    {row.id.slice(0, 12)}…
+                  </td>
+                  <td className="px-3 py-2">{row.status}</td>
+                  <td className="px-3 py-2">{row.paymentOption}</td>
+                  <td className="px-3 py-2">
+                    {formatMinor(row.totalChargeMinor, row.currency)}
+                  </td>
+                  <td className="px-3 py-2">{row.stripeMode}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="mt-6 text-xs text-white/40">
+        Sensitive actions require re-auth + reason via audited APIs. There is no
+        universal “mark completed” bypass.
+      </p>
+      <Link
+        href="/admin"
+        className="mt-4 inline-block text-sm text-electric hover:text-electric-hover"
+      >
+        ← Admin home
+      </Link>
+    </>
+  );
+}

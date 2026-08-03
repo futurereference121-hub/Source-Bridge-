@@ -96,11 +96,23 @@ model User {
   storyViews           StoryView[]                   @relation("StoryViewer")
   storyReports         StoryReport[]                 @relation("StoryReporter")
 
+  /// 0–3 trust band for procurement advances (admin-configurable).
+  trustLevel                    Int     @default(0)
+  /// When false, this account cannot receive procurement advances.
+  procurementAdvancesEnabled    Boolean @default(true)
+  stripeConnectAccount          StripeConnectAccount?
+  protectedTxAsBuyer            ProtectedTransaction[] @relation("ProtectedTxnBuyer")
+  protectedTxAsSeller           ProtectedTransaction[] @relation("ProtectedTxnSeller")
+  paymentTicketsCreated         PaymentTicket[]        @relation("PaymentTicketCreator")
+  financialAuditEvents          FinancialAuditEvent[]
+  disputesOpened                DisputeCase[]          @relation("DisputeOpener")
+
   @@index([isDiscoverable, deletedAt, isTestAccount])
   @@index([isDemo])
   @@index([role, isAdmin])
   @@index([deletedAt])
   @@index([username])
+  @@index([trustLevel])
 }
 
 model Session {
@@ -295,12 +307,20 @@ model StockListing {
   conversations     Conversation[]
   sourcingRequests  SourcingRequest[]
   transactions      Transaction[]
+  protectedTxns     ProtectedTransaction[]
+
+  /// CONTACT_ONLY | PROTECTED_ONLY | INSTANT_ONLY | BOTH
+  /// Existing listings default CONTACT_ONLY until the owner opts into Source Bridge payments.
+  paymentOptions    String            @default("CONTACT_ONLY")
+  /// Reserved quantity / size holds for active checkouts (JSON object).
+  inventoryReserved String            @default("{}")
 
   @@index([userId])
   @@index([slug])
   @@index([productKind, category])
   @@index([saleStatus])
   @@index([userId, saleStatus])
+  @@index([paymentOptions])
 }
 
 model ListingImage {
@@ -456,6 +476,8 @@ model Conversation {
   messages          Message[]
   blocks            ConversationBlock[]
   transactions      Transaction[]
+  paymentTickets    PaymentTicket[]
+  protectedTxns     ProtectedTransaction[]
 
   @@index([updatedAt])
   @@index([listingId])
@@ -491,11 +513,15 @@ model Message {
   editedAt        DateTime?
   /// Client idempotency key for send retries
   clientMessageId String              @default("")
+  /// Optional link to a Payment Ticket timeline card.
+  paymentTicketId String?
+  paymentTicket   PaymentTicket?      @relation(fields: [paymentTicketId], references: [id], onDelete: SetNull)
   attachments     MessageAttachment[]
 
   @@index([conversationId, createdAt])
   @@index([senderId])
   @@index([conversationId, clientMessageId])
+  @@index([paymentTicketId])
 }
 
 model MessageAttachment {
@@ -701,4 +727,299 @@ model StoryReport {
   @@unique([storyClipId, reporterUserId])
   @@index([storyClipId, createdAt])
   @@index([status, createdAt])
+}
+
+// ─── Protected Payments / Stripe Connect (TEST mode gated) ───────────────────
+// Public UI: "Protected Payment" / "Protected Transaction" — never "escrow".
+// Charge model: Separate Charges and Transfers (platform charge → transfer at release).
+
+/// Singleton-style platform fee / inspection / trust thresholds (admin-editable).
+model PlatformPaymentConfig {
+  id                              String   @id @default("default")
+  /// Basis points of item+shipping charged as Source Bridge Protection Fee (e.g. 350 = 3.5%).
+  protectionFeeBps                Int      @default(350)
+  /// Flat protection fee floor in minor units (USD cents default currency).
+  protectionFeeFloorMinor         Int      @default(50)
+  /// Seller service fee basis points (shown separately from protection fee).
+  sellerServiceFeeBps             Int      @default(0)
+  /// Default inspection window hours after delivery confirmed by tracking.
+  inspectionHours                 Int      @default(48)
+  /// Minimum trust level (0–3) required for procurement advances.
+  procurementMinTrustLevel        Int      @default(2)
+  /// Global kill-switch for procurement advances (also gated by feature flag).
+  procurementAdvancesGloballyOn   Boolean  @default(true)
+  /// Allowed currencies (JSON string[]). Empty = USD only until expanded.
+  allowedCurrenciesJson           String   @default("[\"USD\"]")
+  /// Stripe platform country hint for Connect capability docs (ISO 3166-1 alpha-2).
+  stripePlatformCountry           String   @default("")
+  updatedAt                       DateTime @updatedAt
+  createdAt                       DateTime @default(now())
+}
+
+/// Stripe Connect Express/Custom account linkage for a seller.
+model StripeConnectAccount {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripeAccountId       String    @unique
+  /// TEST | LIVE — refuse mode conflicts with platform keys.
+  stripeMode            String    @default("TEST")
+  chargesEnabled        Boolean   @default(false)
+  payoutsEnabled        Boolean   @default(false)
+  detailsSubmitted      Boolean   @default(false)
+  /// card_payments / transfers capability status JSON snapshot.
+  capabilitiesJson      String    @default("{}")
+  /// requirements currently_due / past_due JSON snapshot (no PII secrets).
+  requirementsJson      String    @default("{}")
+  country               String    @default("")
+  defaultCurrency       String    @default("usd")
+  email                 String    @default("")
+  disabledReason        String    @default("")
+  lastSyncedAt          DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([stripeMode, chargesEnabled, payoutsEnabled])
+}
+
+/// Chat Payment Ticket — terms negotiation before funding. Both parties must approve same revision.
+model PaymentTicket {
+  id                    String    @id @default(cuid())
+  conversationId        String
+  conversation          Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdById           String
+  createdBy             User      @relation("PaymentTicketCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  buyerId               String
+  sellerId              String
+  listingId             String?
+  /// DRAFT | PROPOSED | ACCEPTED | DECLINED | SUPERSEDED | CANCELLED | FUNDED
+  status                String    @default("DRAFT")
+  revision              Int       @default(1)
+  /// SHA-256 of canonical terms JSON — pay only against matching hash.
+  termsHash             String    @default("")
+  title                 String    @default("")
+  currency              String    @default("USD")
+  itemCostMinor         Int       @default(0)
+  shippingMinor         Int       @default(0)
+  sellerServiceFeeMinor Int       @default(0)
+  protectionFeeMinor    Int       @default(0)
+  totalChargeMinor      Int       @default(0)
+  /// PROTECTED | INSTANT
+  paymentOption         String    @default("PROTECTED")
+  procurementAdvanceAgreed Boolean @default(false)
+  procurementAdvanceMinor  Int    @default(0)
+  notes                 String    @default("")
+  buyerApprovedRevision Int?
+  sellerApprovedRevision Int?
+  buyerApprovedAt       DateTime?
+  sellerApprovedAt      DateTime?
+  declinedById          String?
+  declinedAt            DateTime?
+  declineReason         String    @default("")
+  supersededById        String?
+  protectedTransactionId String?  @unique
+  protectedTransaction  ProtectedTransaction? @relation(fields: [protectedTransactionId], references: [id], onDelete: SetNull)
+  stripeMode            String    @default("TEST")
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  messages              Message[]
+
+  @@index([conversationId, createdAt])
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+  @@index([status, updatedAt])
+  @@index([termsHash])
+}
+
+/// Source Bridge–controlled protected transaction (Stripe is processor only).
+model ProtectedTransaction {
+  id                       String    @id @default(cuid())
+  /// Domain state machine — transitions only via explicit domain actions.
+  /// DRAFT | AWAITING_ACCEPTANCE | ACCEPTED | AWAITING_PAYMENT | FUNDED |
+  /// PROCUREMENT_RELEASED | AWAITING_SHIPMENT | IN_TRANSIT | DELIVERED |
+  /// IN_INSPECTION | READY_TO_RELEASE | RELEASED | REFUNDED | PARTIALLY_REFUNDED |
+  /// DISPUTED | CANCELLED | FAILED
+  status                   String    @default("DRAFT")
+  /// CHAT_TICKET | PRODUCT_CHECKOUT
+  origin                   String
+  /// PROTECTED | INSTANT
+  paymentOption            String    @default("PROTECTED")
+  buyerId                  String
+  buyer                    User      @relation("ProtectedTxnBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  sellerId                 String
+  seller                   User      @relation("ProtectedTxnSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  conversationId           String?
+  conversation             Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  listingId                String?
+  listing                  StockListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  paymentTicket            PaymentTicket?
+  title                    String    @default("")
+  currency                 String    @default("USD")
+  /// TEST | LIVE
+  stripeMode               String    @default("TEST")
+  termsHash                String    @default("")
+  termsVersion             Int       @default(1)
+  itemCostMinor            Int       @default(0)
+  shippingMinor            Int       @default(0)
+  sellerServiceFeeMinor    Int       @default(0)
+  protectionFeeMinor       Int       @default(0)
+  totalChargeMinor         Int       @default(0)
+  procurementAdvanceAgreed Boolean   @default(false)
+  procurementAdvanceMinor  Int       @default(0)
+  procurementTransferredMinor Int    @default(0)
+  finalTransferredMinor    Int       @default(0)
+  refundedMinor            Int       @default(0)
+  stripePaymentIntentId    String    @default("")
+  stripeCheckoutSessionId  String    @default("")
+  stripeChargeId           String    @default("")
+  sellerConnectAccountId   String    @default("")
+  fundedAt                 DateTime?
+  procurementReleasedAt    DateTime?
+  shippedAt                DateTime?
+  deliveredAt              DateTime?
+  inspectionEndsAt         DateTime?
+  releasedAt               DateTime?
+  cancelledAt              DateTime?
+  selectedSize             String    @default("")
+  trackingProvider         String    @default("")
+  trackingNumber           String    @default("")
+  trackingCarrier          String    @default("")
+  /// Normalized tracking status (see TrackingProvider).
+  trackingStatus           String    @default("")
+  /// Seller cannot self-declare tracked DELIVERED — only provider/admin.
+  trackingDeliveredAt      DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  ledgerEntries            LedgerEntry[]
+  auditEvents              FinancialAuditEvent[]
+  trackingEvents           TrackingEvent[]
+  disputes                 DisputeCase[]
+  transferAttempts         TransferAttempt[]
+
+  @@index([buyerId, status])
+  @@index([sellerId, status])
+  @@index([status, updatedAt])
+  @@index([stripeMode, status])
+  @@index([stripePaymentIntentId])
+  @@index([conversationId])
+  @@index([listingId, status])
+  @@index([inspectionEndsAt])
+}
+
+/// Immutable financial ledger — never update amounts; append only.
+model LedgerEntry {
+  id                  String   @id @default(cuid())
+  protectedTxnId      String
+  protectedTxn        ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Restrict)
+  /// CHARGE | PROCUREMENT_TRANSFER | FINAL_TRANSFER | REFUND | FEE | ADJUSTMENT | DISPUTE_HOLD
+  entryType           String
+  /// CREDIT | DEBIT relative to platform books
+  direction           String
+  amountMinor         Int
+  currency            String
+  stripeMode          String   @default("TEST")
+  stripeObjectId      String   @default("")
+  stripeObjectType    String   @default("")
+  /// Unique per Stripe write / domain action — enforces idempotency.
+  idempotencyKey      String   @unique
+  metaJson            String   @default("{}")
+  createdAt           DateTime @default(now())
+
+  @@index([protectedTxnId, createdAt])
+  @@index([entryType, createdAt])
+  @@index([stripeObjectId])
+}
+
+/// Idempotent Stripe transfer attempts (procurement + final release).
+model TransferAttempt {
+  id               String    @id @default(cuid())
+  protectedTxnId   String
+  protectedTxn     ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Cascade)
+  /// PROCUREMENT | FINAL
+  kind             String
+  amountMinor      Int
+  currency         String
+  stripeMode       String    @default("TEST")
+  idempotencyKey   String    @unique
+  /// PENDING | SUCCEEDED | FAILED | RECONCILED
+  status           String    @default("PENDING")
+  stripeTransferId String    @default("")
+  failureCode      String    @default("")
+  failureMessage   String    @default("")
+  attemptCount     Int       @default(1)
+  lastAttemptAt    DateTime  @default(now())
+  succeededAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([protectedTxnId, kind])
+  @@index([status, lastAttemptAt])
+}
+
+model FinancialAuditEvent {
+  id             String   @id @default(cuid())
+  protectedTxnId String?
+  protectedTxn   ProtectedTransaction? @relation(fields: [protectedTxnId], references: [id], onDelete: SetNull)
+  actorUserId    String?
+  actorUser      User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  /// Domain action name (e.g. TICKET_ACCEPTED, FUNDED, RELEASE_FINAL).
+  action         String
+  reason         String   @default("")
+  metaJson       String   @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([protectedTxnId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+model TrackingEvent {
+  id             String   @id @default(cuid())
+  protectedTxnId String
+  protectedTxn   ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Cascade)
+  provider       String
+  providerStatus String   @default("")
+  /// LABEL_CREATED | IN_TRANSIT | OUT_FOR_DELIVERY | DELIVERED | EXCEPTION | UNKNOWN
+  normalizedStatus String @default("UNKNOWN")
+  rawPayloadJson String   @default("{}")
+  occurredAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([protectedTxnId, createdAt])
+  @@index([normalizedStatus, createdAt])
+}
+
+model DisputeCase {
+  id             String    @id @default(cuid())
+  protectedTxnId String
+  protectedTxn   ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Cascade)
+  openedById     String
+  openedBy       User      @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  /// OPEN | UNDER_REVIEW | RESOLVED_BUYER | RESOLVED_SELLER | RESOLVED_SPLIT | CLOSED
+  status         String    @default("OPEN")
+  reason         String    @default("")
+  details        String    @default("")
+  resolutionNote String    @default("")
+  resolvedById   String?
+  resolvedAt     DateTime?
+  stripeDisputeId String   @default("")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([protectedTxnId])
+  @@index([status, createdAt])
+  @@index([openedById])
+}
+
+/// Processed Stripe/webhook event ids for at-least-once delivery dedupe.
+model ProcessedWebhookEvent {
+  id          String   @id @default(cuid())
+  provider    String
+  eventId     String
+  eventType   String   @default("")
+  stripeMode  String   @default("TEST")
+  processedAt DateTime @default(now())
+
+  @@unique([provider, eventId])
+  @@index([processedAt])
 }

@@ -26,6 +26,12 @@ export default async function AdminLayout({
           >
             Verification Applicants
           </Link>
+          <Link
+            href="/admin/payments"
+            className="font-medium text-electric hover:text-electric-hover"
+          >
+            Protected Payments
+          </Link>
           <AdminSignOutButton />
         </nav>
       ) : null}

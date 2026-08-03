@@ -16,6 +16,8 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { memberPhoto } from "@/lib/placeholders";
 import { ReviewPrompt } from "@/components/messaging/ReviewPrompt";
+import { PaymentTicketCard } from "@/components/messaging/PaymentTicketCard";
+import { ProposePaymentTicketButton } from "@/components/messaging/ProposePaymentTicketButton";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
@@ -51,6 +53,7 @@ type Message = {
   messageType?: string;
   systemEventType?: string;
   replyAllowed?: boolean;
+  paymentTicketId?: string | null;
   attachments: Attachment[];
   sender?: ParticipantUser;
 };
@@ -145,6 +148,9 @@ function previewText(message: Message | null) {
       ? `Sourcing request: ${snippet}${firstLine.length > 72 ? "…" : ""}`
       : "Sourcing request";
   }
+  if (message.messageType === "PAYMENT_TICKET") {
+    return "Payment Ticket";
+  }
   if (message.messageType === "SYSTEM") {
     const body = message.body?.trim();
     return body ? body.slice(0, 90) : "Official notification";
@@ -183,6 +189,7 @@ export function MessagesInbox({
   const [pendingUrls, setPendingUrls] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [threadRefresh, setThreadRefresh] = useState(0);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -319,7 +326,7 @@ export function MessagesInbox({
     return () => {
       cancelled = true;
     };
-  }, [activeId, myId, showToast]);
+  }, [activeId, myId, showToast, threadRefresh]);
 
   useEffect(() => {
     if (!shouldScrollRef.current) return;
@@ -710,7 +717,21 @@ export function MessagesInbox({
                         m.messageType === "SYSTEM" || !m.senderId;
                       const isSourcing =
                         m.messageType === "SOURCING_REQUEST";
+                      const isPaymentTicket =
+                        m.messageType === "PAYMENT_TICKET" ||
+                        Boolean(m.paymentTicketId);
                       const mine = !isSystem && m.senderId === myId;
+                      if (isPaymentTicket && m.paymentTicketId) {
+                        return (
+                          <li key={m.id} className="flex justify-stretch">
+                            <PaymentTicketCard
+                              ticketId={m.paymentTicketId}
+                              myId={myId}
+                              onChanged={() => setThreadRefresh((n) => n + 1)}
+                            />
+                          </li>
+                        );
+                      }
                       if (isSourcing) {
                         return (
                           <li key={m.id} className="flex justify-stretch">
@@ -899,6 +920,11 @@ export function MessagesInbox({
                   </div>
                 ) : null}
                 <div className="flex items-end gap-2">
+                  <ProposePaymentTicketButton
+                    conversationId={activeId!}
+                    myId={myId}
+                    onCreated={() => setThreadRefresh((n) => n + 1)}
+                  />
                   <input
                     ref={fileInputRef}
                     type="file"

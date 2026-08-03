@@ -160,9 +160,30 @@ export default function AccountSettingsPage() {
         </section>
 
         <section
+          id="payments"
+          className="panel-navy mt-6 scroll-mt-28 rounded-xl px-5 py-6 sm:px-6"
+        >
+          <SectionTitle>Payments & Payouts</SectionTitle>
+          <p className="mt-2 text-sm text-white/55">
+            Set up Stripe Connect to receive Protected Payments. Source Bridge
+            controls release timing; Stripe processes the charge.
+          </p>
+          <div className="mt-4">
+            <PrimaryButton
+              href="/profile/settings/payments"
+              showArrow={false}
+              className="rounded-lg"
+            >
+              Open Payments & Payouts
+            </PrimaryButton>
+          </div>
+        </section>
+
+        <section
           id="payment-methods"
           className="panel-navy mt-6 scroll-mt-28 rounded-xl px-5 py-6 sm:px-6"
         >
+          <SectionTitle>Crypto payment methods</SectionTitle>
           <PaymentMethodsEditor />
         </section>
 

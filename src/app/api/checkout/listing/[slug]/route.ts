@@ -2,6 +2,10 @@ import { getListingBySlugAsync } from "@/lib/listings-service";
 import { getMemberForListingAsync } from "@/lib/listings-service";
 import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
+import { checkoutPublicConfig } from "@/lib/payments/checkout";
+import { paymentFlagsSnapshot } from "@/lib/payments/flags";
+import { parseListingPaymentOptions } from "@/lib/payments/listing-options";
+import { getConnectStatus } from "@/lib/payments/stripe/connect";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -41,6 +45,9 @@ export async function GET(_req: Request, ctx: Ctx) {
       instructions: string;
     }> = [];
 
+    let paymentOptions = "CONTACT_ONLY";
+    let sellerConnectReady = false;
+
     if (listing.isDbListing) {
       methods = await prisma.sellerPaymentMethod.findMany({
         where: {
@@ -58,13 +65,28 @@ export async function GET(_req: Request, ctx: Ctx) {
           instructions: true,
         },
       });
+      const row = await prisma.stockListing.findUnique({
+        where: { id: listing.id },
+        select: { paymentOptions: true },
+      });
+      paymentOptions = parseListingPaymentOptions(row?.paymentOptions);
+      const connect = await getConnectStatus(listing.memberId);
+      sellerConnectReady = connect.canReceiveProtectedPayments;
     }
+
+    const stripe = checkoutPublicConfig();
+    const flags = paymentFlagsSnapshot();
 
     return Response.json({
       listing,
       seller,
       cryptoPaymentMethods: methods,
-      stripeConfigured: false,
+      paymentOptions,
+      sellerConnectReady,
+      flags,
+      stripeConfigured: stripe.stripeConfigured,
+      stripeMode: stripe.stripeMode,
+      chargeModel: stripe.chargeModel,
       isDemo: !listing.isDbListing,
       message: listing.isDbListing
         ? null

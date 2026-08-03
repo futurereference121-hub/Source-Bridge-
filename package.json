@@ -46,7 +46,8 @@
     "test:stories:ring-playback": "node scripts/test-story-ring-playback.mjs",
     "test:listing-editor": "node scripts/test-listing-editor-stability.mjs",
     "test:conversation-pair": "node scripts/test-conversation-pair.mjs",
-    "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs"
+    "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs",
+    "test:payments": "node scripts/test-payments-domain.mjs"
   },
   "dependencies": {
     "@mux/mux-node": "^14.1.1",
@@ -59,6 +60,7 @@
     "next": "15.5.21",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "stripe": "^18.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
