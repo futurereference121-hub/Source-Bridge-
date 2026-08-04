@@ -221,8 +221,13 @@ export async function POST(req: Request) {
       try {
         // Same parameters as createConnectOnboardingLink in connect.ts (no DB, no PAYMENTS flag).
         const account = await stripe.accounts.create({
-          type: "express",
           email: `stripe-diag-${requestId}@sourcebridge.invalid`,
+          controller: {
+            stripe_dashboard: { type: "express" },
+            fees: { payer: "application" },
+            losses: { payments: "application" },
+            requirement_collection: "stripe",
+          },
           capabilities: {
             card_payments: { requested: true },
             transfers: { requested: true },

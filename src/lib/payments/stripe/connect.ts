@@ -134,10 +134,19 @@ export async function createConnectOnboardingLink(opts: {
     where: { userId: opts.userId },
   });
   if (!row) {
+    // Controller-based Express equivalent (Accounts v1 without deprecated type=express).
+    // Required for newer Connect platforms where type: "express" is rejected in favor of
+    // controller properties (or Accounts v2). Keeps Stripe-hosted Express dashboard +
+    // card_payments + transfers for Separate Charges and Transfers.
     const account = await stripe.accounts.create(
       {
-        type: "express",
         email: opts.email,
+        controller: {
+          stripe_dashboard: { type: "express" },
+          fees: { payer: "application" },
+          losses: { payments: "application" },
+          requirement_collection: "stripe",
+        },
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
