@@ -78,7 +78,8 @@ export default async function AdminPaymentsPage() {
           {flags.stripeMode} · LIVE_PAYMENTS_ENABLED: false
         </p>
         <p className="mt-1">
-          Flags — payments: {String(flags.PAYMENTS_ENABLED)}, protected:{" "}
+          Flags — payments: {String(flags.PAYMENTS_ENABLED)}, connect
+          onboarding: {String(flags.CONNECT_ONBOARDING_ENABLED)}, protected:{" "}
           {String(flags.PROTECTED_PAYMENTS_ENABLED)}, instant:{" "}
           {String(flags.INSTANT_PAYMENTS_ENABLED)}, procurement:{" "}
           {String(flags.PROCUREMENT_ADVANCES_ENABLED)}

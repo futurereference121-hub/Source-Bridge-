@@ -1,12 +1,36 @@
 import { prisma } from "@/lib/db";
-import { getStripeMode } from "@/lib/payments/flags";
+import {
+  getStripeMode,
+  isConnectOnboardingEnabled,
+} from "@/lib/payments/flags";
 import {
   getStripe,
   getStripeSecretKey,
   hasStripeTestSecretKey,
+  isConnectOnboardingApiReady,
   isStripeConfigured,
 } from "@/lib/payments/stripe/client";
 import { recordAuditEvent } from "@/lib/payments/ledger";
+
+function assertConnectOnboardingApiReady(): void {
+  if (isConnectOnboardingApiReady()) return;
+  if (!hasStripeTestSecretKey()) {
+    throw Object.assign(
+      new Error("Stripe test configuration is unavailable."),
+      { status: 503, code: "STRIPE_TEST_NOT_CONFIGURED" },
+    );
+  }
+  if (!isConnectOnboardingEnabled()) {
+    throw Object.assign(
+      new Error("Payout setup is not currently available."),
+      { status: 503, code: "CONNECT_ONBOARDING_DISABLED" },
+    );
+  }
+  throw Object.assign(
+    new Error("Payout setup is not currently available."),
+    { status: 503, code: "CONNECT_ONBOARDING_UNAVAILABLE" },
+  );
+}
 
 /**
  * Stripe Accounts v2 API version required for new Connect platforms that reject
@@ -146,7 +170,12 @@ export async function createExpressStyleConnectedAccount(opts: {
 }
 
 export type ConnectStatus = {
+  /** @deprecated prefer stripeTestConfigured + onboardingReady */
   configured: boolean;
+  /** Stripe sk_test_ present (independent of PAYMENTS_ENABLED). */
+  stripeTestConfigured: boolean;
+  /** CONNECT_ONBOARDING_ENABLED + TEST keys + TEST mode. */
+  onboardingReady: boolean;
   stripeMode: string;
   hasAccount: boolean;
   stripeAccountId: string | null;
@@ -155,11 +184,19 @@ export type ConnectStatus = {
   detailsSubmitted: boolean;
   capabilities: Record<string, unknown>;
   requirements: Record<string, unknown>;
+  requirementsDueCount: number;
   country: string;
   disabledReason: string;
+  /** True only after Stripe reports charges + payouts enabled (not assumed from form submit). */
   canReceiveProtectedPayments: boolean;
   lastSyncedAt: string | null;
 };
+
+function requirementsDueCount(req: Record<string, unknown>): number {
+  const currently = Array.isArray(req.currently_due) ? req.currently_due.length : 0;
+  const past = Array.isArray(req.past_due) ? req.past_due.length : 0;
+  return currently + past;
+}
 
 function parseJsonObject(raw: string): Record<string, unknown> {
   try {
@@ -176,10 +213,15 @@ export async function getConnectStatus(userId: string): Promise<ConnectStatus> {
   const row = await prisma.stripeConnectAccount.findUnique({
     where: { userId },
   });
-  const configured = isStripeConfigured();
+  const stripeTestConfigured = hasStripeTestSecretKey();
+  const onboardingReady = isConnectOnboardingApiReady();
+  // `configured` drives legacy clients: Connect onboarding readiness (not PAYMENTS_ENABLED).
+  const configured = onboardingReady;
   if (!row) {
     return {
       configured,
+      stripeTestConfigured,
+      onboardingReady,
       stripeMode: getStripeMode(),
       hasAccount: false,
       stripeAccountId: null,
@@ -188,14 +230,18 @@ export async function getConnectStatus(userId: string): Promise<ConnectStatus> {
       detailsSubmitted: false,
       capabilities: {},
       requirements: {},
+      requirementsDueCount: 0,
       country: "",
       disabledReason: "",
       canReceiveProtectedPayments: false,
       lastSyncedAt: null,
     };
   }
+  const requirements = parseJsonObject(row.requirementsJson);
   return {
     configured,
+    stripeTestConfigured,
+    onboardingReady,
     stripeMode: row.stripeMode,
     hasAccount: true,
     stripeAccountId: row.stripeAccountId,
@@ -203,9 +249,11 @@ export async function getConnectStatus(userId: string): Promise<ConnectStatus> {
     payoutsEnabled: row.payoutsEnabled,
     detailsSubmitted: row.detailsSubmitted,
     capabilities: parseJsonObject(row.capabilitiesJson),
-    requirements: parseJsonObject(row.requirementsJson),
+    requirements,
+    requirementsDueCount: requirementsDueCount(requirements),
     country: row.country,
     disabledReason: row.disabledReason,
+    // Never claim ready for Protected Payments until Stripe confirms both.
     canReceiveProtectedPayments: row.chargesEnabled && row.payoutsEnabled,
     lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,
   };
@@ -219,14 +267,19 @@ export async function syncConnectAccount(
   userId: string,
   opts?: { allowWhenPaymentsDisabled?: boolean; eventId?: string; eventType?: string },
 ) {
+  // Webhooks: key-only. User-facing: Connect onboarding flag (not PAYMENTS_ENABLED).
+  // Money movement still uses isStripeConfigured elsewhere.
   const apiReady = opts?.allowWhenPaymentsDisabled
     ? hasStripeTestSecretKey()
-    : isStripeConfigured();
+    : isConnectOnboardingApiReady() || isStripeConfigured();
   if (!apiReady) {
-    throw Object.assign(new Error("Payments are not enabled or Stripe is not configured"), {
-      status: 503,
-      code: "STRIPE_NOT_CONFIGURED",
-    });
+    if (opts?.allowWhenPaymentsDisabled) {
+      throw Object.assign(new Error("Stripe test configuration is unavailable."), {
+        status: 503,
+        code: "STRIPE_TEST_NOT_CONFIGURED",
+      });
+    }
+    assertConnectOnboardingApiReady();
   }
   const existing = await prisma.stripeConnectAccount.findUnique({
     where: { userId },
@@ -319,43 +372,51 @@ export async function createConnectOnboardingLink(opts: {
   returnUrl: string;
   refreshUrl: string;
 }) {
-  if (!isStripeConfigured()) {
-    throw Object.assign(new Error("Payments are not enabled or Stripe is not configured"), {
-      status: 503,
-      code: "STRIPE_NOT_CONFIGURED",
-    });
-  }
+  assertConnectOnboardingApiReady();
   const stripe = getStripe();
+  // Reuse existing local mapping — never create a second Connect account per user.
   let row = await prisma.stripeConnectAccount.findUnique({
     where: { userId: opts.userId },
   });
   if (!row) {
     // New Connect platforms reject Accounts v1 type=express; use Accounts v2.
+    // Idempotency key + unique userId prevent duplicate Stripe accounts.
     const account = await createExpressStyleConnectedAccount({
       email: opts.email,
       userId: opts.userId,
       idempotencyKey: `connect_create_${opts.userId}_${getStripeMode()}`,
     });
-    row = await prisma.stripeConnectAccount.create({
-      data: {
-        userId: opts.userId,
-        stripeAccountId: account.id,
-        stripeMode: getStripeMode(),
-        chargesEnabled: false,
-        payoutsEnabled: false,
-        detailsSubmitted: false,
-        country: account.country || "",
-        defaultCurrency: account.defaultCurrency || "gbp",
-        email: opts.email,
-        capabilitiesJson: JSON.stringify(account.capabilities),
-        lastSyncedAt: new Date(),
-      },
-    });
-    await recordAuditEvent({
-      actorUserId: opts.userId,
-      action: "CONNECT_ACCOUNT_CREATED",
-      meta: { stripeAccountId: account.id, api: "v2" },
-    });
+    try {
+      row = await prisma.stripeConnectAccount.create({
+        data: {
+          userId: opts.userId,
+          stripeAccountId: account.id,
+          stripeMode: getStripeMode(),
+          chargesEnabled: false,
+          payoutsEnabled: false,
+          detailsSubmitted: false,
+          country: account.country || "",
+          defaultCurrency: account.defaultCurrency || "gbp",
+          email: opts.email,
+          capabilitiesJson: JSON.stringify(account.capabilities),
+          lastSyncedAt: new Date(),
+        },
+      });
+    } catch (err) {
+      // Race: another request created the row — reuse it (no second account row).
+      const existing = await prisma.stripeConnectAccount.findUnique({
+        where: { userId: opts.userId },
+      });
+      if (!existing) throw err;
+      row = existing;
+    }
+    if (row.stripeAccountId === account.id) {
+      await recordAuditEvent({
+        actorUserId: opts.userId,
+        action: "CONNECT_ACCOUNT_CREATED",
+        meta: { stripeAccountId: account.id, api: "v2" },
+      });
+    }
   }
   const link = await stripe.accountLinks.create({
     account: row.stripeAccountId,
@@ -367,12 +428,7 @@ export async function createConnectOnboardingLink(opts: {
 }
 
 export async function createConnectLoginLink(userId: string) {
-  if (!isStripeConfigured()) {
-    throw Object.assign(new Error("Payments are not enabled or Stripe is not configured"), {
-      status: 503,
-      code: "STRIPE_NOT_CONFIGURED",
-    });
-  }
+  assertConnectOnboardingApiReady();
   const row = await prisma.stripeConnectAccount.findUnique({
     where: { userId },
   });

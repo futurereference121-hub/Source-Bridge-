@@ -7,12 +7,25 @@
 `StockListing.paymentOptions = CONTACT_ONLY` — preserves contact/crypto checkout until the owner explicitly opts into `PROTECTED_ONLY`, `INSTANT_ONLY`, or `BOTH`.
 
 ## Feature flags (all default off)
-- `PAYMENTS_ENABLED`
+- `PAYMENTS_ENABLED` — buyer checkout, PaymentIntents, transfers, refunds, funding
+- `CONNECT_ONBOARDING_ENABLED` — **TEST-only** seller Connect onboard (Account create + Account Link + status sync). Safe with `PAYMENTS_ENABLED=false`; does **not** enable money movement
 - `PROTECTED_PAYMENTS_ENABLED`
 - `INSTANT_PAYMENTS_ENABLED`
 - `PROCUREMENT_ADVANCES_ENABLED`
 - `TRACKING_AUTOMATION_ENABLED`
-- `LIVE_PAYMENTS_ENABLED` — **must stay false**; code forces TEST mode even if set.
+- `LIVE_PAYMENTS_ENABLED` — **must stay false**; code forces TEST mode even if set
+
+### Connect onboarding without payments (TEST)
+Set `CONNECT_ONBOARDING_ENABLED=true` in **Production and Preview** when Stripe **TEST** keys are loaded. Leave `PAYMENTS_ENABLED`, `PROTECTED_PAYMENTS_ENABLED`, `INSTANT_PAYMENTS_ENABLED`, `PROCUREMENT_ADVANCES_ENABLED`, and `LIVE_PAYMENTS_ENABLED` at `false` until deliberately enabling checkout.
+
+| Env | Recommended for early Connect testing |
+|-----|--------------------------------------|
+| `CONNECT_ONBOARDING_ENABLED` | `true` (Production + Preview) |
+| `STRIPE_SECRET_KEY_TEST` | `sk_test_…` required |
+| `PAYMENTS_ENABLED` | `false` |
+| `LIVE_PAYMENTS_ENABLED` | `false` |
+
+Seller path: `/profile/settings/payments` → **Set up payouts** (Account Link). Return/refresh URLs: `{APP_URL}/profile/settings/payments?connect=return|refresh`.
 
 ## Connect Accounts v2 + webhooks
 
@@ -38,6 +51,7 @@ Webhook signature verification, idempotent `processedWebhookEvent` storage, and 
 ### Environment variables (Vercel Production — TEST only)
 | Name | Purpose |
 |------|---------|
+| `CONNECT_ONBOARDING_ENABLED` | `true` to allow TEST seller Connect onboarding without money movement |
 | `STRIPE_SECRET_KEY_TEST` | API (TEST) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST` | Client publishable key when payments UI is enabled later |
 | `STRIPE_WEBHOOK_SECRET_TEST` | Signing secret for platform destination (fallback: `STRIPE_WEBHOOK_SECRET`) |
@@ -106,4 +120,4 @@ Only if you want redundant `account.updated` delivery (not required when thin ev
 Never use “escrow” in UI. Use Protected Payment / Protected Transaction / Protected by Source Bridge.
 
 ## Phase status
-Webhook foundation accepts Stripe delivery while payment flags stay off. Checkout and funding remain gated until ops enables TEST flags deliberately.
+Webhook foundation accepts Stripe delivery while payment flags stay off. Checkout and funding remain gated until ops enables TEST flags deliberately. TEST Connect onboarding can be enabled independently via `CONNECT_ONBOARDING_ENABLED` (with `sk_test_` keys) without turning on money movement.

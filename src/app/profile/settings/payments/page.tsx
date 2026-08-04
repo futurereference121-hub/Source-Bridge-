@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
@@ -10,11 +10,14 @@ import { useAppUi } from "@/components/providers/AppProviders";
 
 type ConnectStatus = {
   configured: boolean;
+  stripeTestConfigured: boolean;
+  onboardingReady: boolean;
   stripeMode: string;
   hasAccount: boolean;
   chargesEnabled: boolean;
   payoutsEnabled: boolean;
   detailsSubmitted: boolean;
+  requirementsDueCount: number;
   canReceiveProtectedPayments: boolean;
   country: string;
   disabledReason: string;
@@ -23,19 +26,32 @@ type ConnectStatus = {
 
 type Flags = {
   PAYMENTS_ENABLED: boolean;
+  CONNECT_ONBOARDING_ENABLED: boolean;
   PROTECTED_PAYMENTS_ENABLED: boolean;
   INSTANT_PAYMENTS_ENABLED: boolean;
   LIVE_PAYMENTS_ENABLED: boolean;
   stripeMode: string;
 };
 
-export default function PaymentsSettingsPage() {
+function payoutsHelpCopy(connect: ConnectStatus | null, flags: Flags | null): string {
+  if (!connect?.stripeTestConfigured) {
+    return "Stripe test configuration is unavailable.";
+  }
+  if (!flags?.CONNECT_ONBOARDING_ENABLED || !connect.onboardingReady) {
+    return "Payout setup is not currently available.";
+  }
+  return "Set up payouts securely through Stripe.";
+}
+
+function PaymentsSettingsInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { account, signedIn, authReady, showToast } = useAppUi();
   const [connect, setConnect] = useState<ConnectStatus | null>(null);
   const [flags, setFlags] = useState<Flags | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const returnSynced = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -92,6 +108,26 @@ export default function PaymentsSettingsPage() {
     }
   }
 
+  // After Stripe Account Link return/refresh: re-sync local status from Stripe.
+  useEffect(() => {
+    if (!signedIn || loading || returnSynced.current) return;
+    const connectParam = searchParams.get("connect");
+    if (connectParam !== "return" && connectParam !== "refresh") return;
+    returnSynced.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/payments/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sync" }),
+        });
+        if (res.ok) await refresh();
+      } catch {
+        // Best-effort; user can still click Refresh status.
+      }
+    })();
+  }, [signedIn, loading, searchParams, refresh]);
+
   if (!authReady || !account) {
     return (
       <div className="bg-app-navy min-h-[100svh] pt-28 pb-20 text-white">
@@ -101,6 +137,12 @@ export default function PaymentsSettingsPage() {
       </div>
     );
   }
+
+  const canOnboard = Boolean(connect?.onboardingReady);
+  const helpCopy = payoutsHelpCopy(connect, flags);
+  // Money-moving product surfaces stay off when payments flags are false.
+  const showProtectedProduct = Boolean(flags?.PROTECTED_PAYMENTS_ENABLED);
+  const showInstantProduct = Boolean(flags?.INSTANT_PAYMENTS_ENABLED);
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -145,9 +187,21 @@ export default function PaymentsSettingsPage() {
                   {flags?.PAYMENTS_ENABLED ? "Yes" : "No (feature flag)"}
                 </li>
                 <li>
-                  Protected Payments:{" "}
-                  {flags?.PROTECTED_PAYMENTS_ENABLED ? "On" : "Off"}
+                  Connect onboarding:{" "}
+                  {flags?.CONNECT_ONBOARDING_ENABLED ? "On" : "Off"}
                 </li>
+                {showProtectedProduct ? (
+                  <li>
+                    Protected Payments:{" "}
+                    {flags?.PROTECTED_PAYMENTS_ENABLED ? "On" : "Off"}
+                  </li>
+                ) : null}
+                {showInstantProduct ? (
+                  <li>
+                    Instant Payments:{" "}
+                    {flags?.INSTANT_PAYMENTS_ENABLED ? "On" : "Off"}
+                  </li>
+                ) : null}
                 <li>
                   Connect linked: {connect?.hasAccount ? "Yes" : "Not yet"}
                 </li>
@@ -156,6 +210,16 @@ export default function PaymentsSettingsPage() {
                 </li>
                 <li>
                   Payouts enabled: {connect?.payoutsEnabled ? "Yes" : "No"}
+                </li>
+                <li>
+                  Details submitted:{" "}
+                  {connect?.detailsSubmitted ? "Yes" : "No"}
+                </li>
+                <li>
+                  Requirements due:{" "}
+                  {connect?.requirementsDueCount
+                    ? String(connect.requirementsDueCount)
+                    : "None"}
                 </li>
                 <li>
                   Ready for Protected Payments:{" "}
@@ -182,7 +246,7 @@ export default function PaymentsSettingsPage() {
                 <PrimaryButton
                   showArrow={false}
                   className="rounded-lg"
-                  disabled={busy || !connect?.configured}
+                  disabled={busy || !canOnboard}
                   onClick={() => void runAction("onboard")}
                 >
                   {connect?.hasAccount ? "Continue onboarding" : "Set up payouts"}
@@ -191,7 +255,7 @@ export default function PaymentsSettingsPage() {
                   <>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !canOnboard}
                       onClick={() => void runAction("sync")}
                       className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
                     >
@@ -199,7 +263,7 @@ export default function PaymentsSettingsPage() {
                     </button>
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !canOnboard}
                       onClick={() => void runAction("login")}
                       className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
                     >
@@ -208,17 +272,33 @@ export default function PaymentsSettingsPage() {
                   </>
                 ) : null}
               </div>
-              {!connect?.configured ? (
-                <p className="mt-4 text-xs text-amber-300/90">
-                  Stripe TEST keys are not configured in this environment, or
-                  PAYMENTS_ENABLED is off. Onboarding will activate once ops
-                  sets secrets and flags.
-                </p>
-              ) : null}
+              <p
+                className={`mt-4 text-xs ${
+                  canOnboard ? "text-white/55" : "text-amber-300/90"
+                }`}
+              >
+                {helpCopy}
+              </p>
             </section>
           </>
         )}
       </Container>
     </div>
+  );
+}
+
+export default function PaymentsSettingsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="bg-app-navy min-h-[100svh] pt-28 pb-20 text-white">
+          <Container className="max-w-lg">
+            <p className="text-white/50">Loading…</p>
+          </Container>
+        </div>
+      }
+    >
+      <PaymentsSettingsInner />
+    </Suspense>
   );
 }

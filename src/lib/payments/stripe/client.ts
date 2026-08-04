@@ -1,5 +1,10 @@
 import Stripe from "stripe";
-import { getStripeMode, isPaymentsEnabled } from "@/lib/payments/flags";
+import {
+  getStripeMode,
+  isConnectOnboardingEnabled,
+  isLivePaymentsEnabled,
+  isPaymentsEnabled,
+} from "@/lib/payments/flags";
 
 let stripeSingleton: Stripe | null = null;
 
@@ -24,6 +29,13 @@ export function hasStripeTestSecretKey(): boolean {
   const key =
     trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY");
   return key.startsWith("sk_test_");
+}
+
+/** True when a live secret key is present (always refused while LIVE stays off). */
+export function hasStripeLiveSecretKey(): boolean {
+  const key =
+    trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY");
+  return key.startsWith("sk_live_");
 }
 
 export function getStripePublishableKey(): string {
@@ -58,11 +70,23 @@ export function getStripeConnectWebhookSecret(): string {
 }
 
 /**
- * Product features (checkout, public payment UI readiness).
- * Requires flags ON + TEST secret key.
+ * Product features (checkout, PaymentIntent, transfers, public purchase readiness).
+ * Requires PAYMENTS_ENABLED + TEST secret key. Independent of Connect onboarding.
  */
 export function isStripeConfigured(): boolean {
   return hasStripeTestSecretKey() && isPaymentsEnabled();
+}
+
+/**
+ * TEST Connect onboarding / account-link / status APIs.
+ * Requires CONNECT_ONBOARDING_ENABLED + TEST secret key.
+ * Does NOT require PAYMENTS_ENABLED (and never allows live keys / live mode).
+ */
+export function isConnectOnboardingApiReady(): boolean {
+  if (isLivePaymentsEnabled()) return false;
+  if (getStripeMode() !== "TEST") return false;
+  if (hasStripeLiveSecretKey()) return false;
+  return hasStripeTestSecretKey() && isConnectOnboardingEnabled();
 }
 
 /**

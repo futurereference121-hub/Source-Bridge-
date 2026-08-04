@@ -1,6 +1,7 @@
 export {
   paymentFlagsSnapshot,
   isPaymentsEnabled,
+  isConnectOnboardingEnabled,
   isProtectedPaymentsEnabled,
   isInstantPaymentsEnabled,
   isProcurementAdvancesEnabled,
@@ -16,4 +17,9 @@ export {
   nextStatus,
   PROTECTED_STATUSES,
 } from "@/lib/payments/state-machine";
-export { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
+export {
+  CHARGE_MODEL,
+  isStripeConfigured,
+  isConnectOnboardingApiReady,
+  hasStripeTestSecretKey,
+} from "@/lib/payments/stripe/client";

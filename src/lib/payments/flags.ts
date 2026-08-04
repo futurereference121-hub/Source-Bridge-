@@ -30,6 +30,14 @@ export function isPaymentsEnabled(): boolean {
   return envBool("PAYMENTS_ENABLED", false);
 }
 
+/**
+ * TEST-only Connect onboarding (Account create + Account Link + status sync).
+ * Does NOT enable checkout, PaymentIntents, transfers, refunds, or live mode.
+ */
+export function isConnectOnboardingEnabled(): boolean {
+  return envBool("CONNECT_ONBOARDING_ENABLED", false);
+}
+
 export function isProtectedPaymentsEnabled(): boolean {
   return isPaymentsEnabled() && envBool("PROTECTED_PAYMENTS_ENABLED", false);
 }
@@ -64,10 +72,12 @@ export function assertStripeModeCompatible(recordMode: string): void {
 export function paymentFlagsSnapshot() {
   return {
     PAYMENTS_ENABLED: isPaymentsEnabled(),
+    CONNECT_ONBOARDING_ENABLED: isConnectOnboardingEnabled(),
     PROTECTED_PAYMENTS_ENABLED: isProtectedPaymentsEnabled(),
     INSTANT_PAYMENTS_ENABLED: isInstantPaymentsEnabled(),
     PROCUREMENT_ADVANCES_ENABLED: isProcurementAdvancesEnabled(),
     TRACKING_AUTOMATION_ENABLED: isTrackingAutomationEnabled(),
+    /** Hard-coded off while activation checklist incomplete (matches getStripeMode). */
     LIVE_PAYMENTS_ENABLED: false,
     stripeMode: getStripeMode(),
   };
