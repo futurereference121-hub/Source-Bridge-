@@ -3,6 +3,10 @@ import { getStripeMode, isPaymentsEnabled } from "@/lib/payments/flags";
 
 let stripeSingleton: Stripe | null = null;
 
+function trimEnv(name: string): string {
+  return (process.env[name] || "").trim();
+}
+
 export function getStripeSecretKey(): string {
   const mode = getStripeMode();
   if (mode === "LIVE") {
@@ -12,27 +16,67 @@ export function getStripeSecretKey(): string {
       code: "LIVE_DISABLED",
     });
   }
-  return (process.env.STRIPE_SECRET_KEY_TEST || process.env.STRIPE_SECRET_KEY || "").trim();
+  return (trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY")).trim();
+}
+
+/** True when a Stripe TEST secret key is present (independent of PAYMENTS_ENABLED). */
+export function hasStripeTestSecretKey(): boolean {
+  const key =
+    trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY");
+  return key.startsWith("sk_test_");
 }
 
 export function getStripePublishableKey(): string {
   return (
-    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST ||
-    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
-    ""
-  ).trim();
+    trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST") ||
+    trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")
+  );
+}
+
+/** Platform / payment-intent destination secrets (TEST first, then legacy). */
+export function getStripeWebhookSecrets(): string[] {
+  return [
+    trimEnv("STRIPE_WEBHOOK_SECRET_TEST"),
+    trimEnv("STRIPE_WEBHOOK_SECRET"),
+  ].filter(Boolean);
 }
 
 export function getStripeWebhookSecret(): string {
-  return (
-    process.env.STRIPE_WEBHOOK_SECRET_TEST ||
-    process.env.STRIPE_WEBHOOK_SECRET ||
-    ""
-  ).trim();
+  return getStripeWebhookSecrets()[0] || "";
 }
 
+/** Connect destination secrets (thin Your-account and/or snapshot Connected-accounts). */
+export function getStripeConnectWebhookSecrets(): string[] {
+  return [
+    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_TEST"),
+    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET"),
+  ].filter(Boolean);
+}
+
+export function getStripeConnectWebhookSecret(): string {
+  return getStripeConnectWebhookSecrets()[0] || "";
+}
+
+/**
+ * Product features (checkout, public payment UI readiness).
+ * Requires flags ON + TEST secret key.
+ */
 export function isStripeConfigured(): boolean {
-  return Boolean(getStripeSecretKey()) && isPaymentsEnabled();
+  return hasStripeTestSecretKey() && isPaymentsEnabled();
+}
+
+/**
+ * Webhook routes may verify signatures when a signing secret exists even if
+ * PAYMENTS_ENABLED is false. API sync after verify still needs a test key.
+ */
+export function isStripeWebhookSecretConfigured(kind: "platform" | "connect" = "platform"): boolean {
+  if (kind === "connect") {
+    return (
+      getStripeConnectWebhookSecrets().length > 0 ||
+      getStripeWebhookSecrets().length > 0
+    );
+  }
+  return getStripeWebhookSecrets().length > 0;
 }
 
 export function getStripe(): Stripe {

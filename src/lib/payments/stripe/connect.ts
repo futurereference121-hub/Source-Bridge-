@@ -3,6 +3,7 @@ import { getStripeMode } from "@/lib/payments/flags";
 import {
   getStripe,
   getStripeSecretKey,
+  hasStripeTestSecretKey,
   isStripeConfigured,
 } from "@/lib/payments/stripe/client";
 import { recordAuditEvent } from "@/lib/payments/ledger";
@@ -210,8 +211,18 @@ export async function getConnectStatus(userId: string): Promise<ConnectStatus> {
   };
 }
 
-export async function syncConnectAccount(userId: string) {
-  if (!isStripeConfigured()) {
+/**
+ * Sync local Connect row from Stripe.
+ * @param allowWhenPaymentsDisabled — webhook path: status sync only, no money movement.
+ */
+export async function syncConnectAccount(
+  userId: string,
+  opts?: { allowWhenPaymentsDisabled?: boolean; eventId?: string; eventType?: string },
+) {
+  const apiReady = opts?.allowWhenPaymentsDisabled
+    ? hasStripeTestSecretKey()
+    : isStripeConfigured();
+  if (!apiReady) {
     throw Object.assign(new Error("Payments are not enabled or Stripe is not configured"), {
       status: 503,
       code: "STRIPE_NOT_CONFIGURED",
@@ -226,12 +237,48 @@ export async function syncConnectAccount(userId: string) {
       code: "CONNECT_NOT_FOUND",
     });
   }
+  return applyStripeAccountSnapshot(existing.userId, existing.stripeAccountId, existing, opts);
+}
+
+/**
+ * Webhook helper: resolve seller by Stripe account id and refresh non-financial status.
+ * Safe while PAYMENTS_ENABLED is false (read + local status only).
+ */
+export async function syncConnectAccountByStripeId(
+  stripeAccountId: string,
+  opts?: { allowWhenPaymentsDisabled?: boolean; eventId?: string; eventType?: string },
+): Promise<boolean> {
+  const row = await prisma.stripeConnectAccount.findUnique({
+    where: { stripeAccountId },
+  });
+  if (!row) return false;
+  await syncConnectAccount(row.userId, {
+    allowWhenPaymentsDisabled: opts?.allowWhenPaymentsDisabled ?? true,
+    eventId: opts?.eventId,
+    eventType: opts?.eventType,
+  });
+  return true;
+}
+
+async function applyStripeAccountSnapshot(
+  userId: string,
+  stripeAccountId: string,
+  existing: {
+    country: string;
+    defaultCurrency: string;
+    email: string;
+  },
+  opts?: { eventId?: string; eventType?: string },
+) {
   const stripe = getStripe();
-  const account = await stripe.accounts.retrieve(existing.stripeAccountId);
+  // v1 retrieve is compatible with Accounts v2 connected account ids and
+  // exposes charges_enabled / payouts_enabled / requirements for local status.
+  const account = await stripe.accounts.retrieve(stripeAccountId);
   const caps = (account.capabilities || {}) as Record<string, unknown>;
   const req = {
     currently_due: account.requirements?.currently_due || [],
     past_due: account.requirements?.past_due || [],
+    eventually_due: account.requirements?.eventually_due || [],
     disabled_reason: account.requirements?.disabled_reason || null,
   };
   const updated = await prisma.stripeConnectAccount.update({
@@ -253,7 +300,15 @@ export async function syncConnectAccount(userId: string) {
   await recordAuditEvent({
     actorUserId: userId,
     action: "CONNECT_ACCOUNT_SYNCED",
-    meta: { stripeAccountId: updated.stripeAccountId },
+    meta: {
+      stripeAccountId: updated.stripeAccountId,
+      eventId: opts?.eventId || null,
+      eventType: opts?.eventType || null,
+      chargesEnabled: updated.chargesEnabled,
+      payoutsEnabled: updated.payoutsEnabled,
+      detailsSubmitted: updated.detailsSubmitted,
+      disabledReason: updated.disabledReason || null,
+    },
   });
   return updated;
 }
