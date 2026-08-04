@@ -6,6 +6,7 @@ import {
   getStripeSecretKey,
   getStripeWebhookSecret,
 } from "@/lib/payments/stripe/client";
+import { createExpressStyleConnectedAccount } from "@/lib/payments/stripe/connect";
 import { getStripeMode, paymentFlagsSnapshot } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
@@ -219,26 +220,16 @@ export async function POST(req: Request) {
       const refreshUrl =
         "https://www.sourcebridge.app/profile/settings/payments?connect=refresh";
       try {
-        // Same parameters as createConnectOnboardingLink in connect.ts (no DB, no PAYMENTS flag).
-        const account = await stripe.accounts.create({
+        // Same helper used by createConnectOnboardingLink (Accounts v2 Express-equivalent).
+        const account = await createExpressStyleConnectedAccount({
           email: `stripe-diag-${requestId}@sourcebridge.invalid`,
-          controller: {
-            stripe_dashboard: { type: "express" },
-            fees: { payer: "application" },
-            losses: { payments: "application" },
-            requirement_collection: "stripe",
-          },
-          capabilities: {
-            card_payments: { requested: true },
-            transfers: { requested: true },
-          },
+          userId: `diag_${requestId}`,
           metadata: {
             sourceBridgeDiag: "true",
             sourceBridgeRequestId: requestId,
           },
         });
 
-        const caps = (account.capabilities || {}) as Record<string, string | undefined>;
         const link = await stripe.accountLinks.create({
           account: account.id,
           refresh_url: refreshUrl,
@@ -256,12 +247,11 @@ export async function POST(req: Request) {
 
         connect = {
           create: "PASS",
+          api: "v2",
           accountIdRedacted: redactAccountId(account.id),
-          type: account.type,
-          capabilitiesRequested: {
-            card_payments: caps.card_payments || "requested",
-            transfers: caps.transfers || "requested",
-          },
+          type: "express_equivalent_v2",
+          capabilitiesRequested: account.capabilities,
+          country: account.country,
           accountLink: link.url ? "PASS" : "FAIL",
           accountLinkHost: (() => {
             try {
@@ -280,6 +270,7 @@ export async function POST(req: Request) {
           || null;
         connect = {
           create: "FAIL",
+          api: "v2",
           accountLink: "FAIL",
           httpStatus: status,
           safeError:
