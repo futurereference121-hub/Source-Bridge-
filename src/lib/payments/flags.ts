@@ -70,6 +70,14 @@ export function assertStripeModeCompatible(recordMode: string): void {
 }
 
 export function paymentFlagsSnapshot() {
+  // Lazy import pattern avoided — keep flags pure env reads.
+  // Allowlist configured status is safe to expose (not the entries themselves).
+  const raw = (process.env.PAYMENTS_TEST_ALLOWLIST || "").trim();
+  const allowlistConfigured = raw
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean).length > 0;
+
   return {
     PAYMENTS_ENABLED: isPaymentsEnabled(),
     CONNECT_ONBOARDING_ENABLED: isConnectOnboardingEnabled(),
@@ -80,5 +88,10 @@ export function paymentFlagsSnapshot() {
     /** Hard-coded off while activation checklist incomplete (matches getStripeMode). */
     LIVE_PAYMENTS_ENABLED: false,
     stripeMode: getStripeMode(),
+    /**
+     * When false, ticket/checkout/fund are denied even if PAYMENTS_ENABLED.
+     * Fill PAYMENTS_TEST_ALLOWLIST with test user IDs or emails.
+     */
+    PAYMENTS_TEST_ALLOWLIST_CONFIGURED: allowlistConfigured,
   };
 }

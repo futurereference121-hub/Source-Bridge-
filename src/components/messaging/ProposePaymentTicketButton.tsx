@@ -11,7 +11,7 @@ type ProposePaymentTicketButtonProps = {
 
 /**
  * Compact composer action to propose a Payment Ticket (no funding).
- * Fees are recalculated server-side.
+ * Fees are recalculated server-side. Only visible on payments test allowlist.
  */
 export function ProposePaymentTicketButton({
   conversationId,
@@ -21,23 +21,37 @@ export function ProposePaymentTicketButton({
   const [open, setOpen] = useState(false);
   const [itemMajor, setItemMajor] = useState("");
   const [shippingMajor, setShippingMajor] = useState("0");
+  const [serviceMajor, setServiceMajor] = useState("0");
   const [title, setTitle] = useState("");
+  const [currency, setCurrency] = useState("GBP");
   const [procurement, setProcurement] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(false);
+  const [procurementFlag, setProcurementFlag] = useState(false);
 
   useEffect(() => {
     void fetch("/api/payments/connect")
       .then((r) => r.json())
-      .then((j: { flags?: { PROTECTED_PAYMENTS_ENABLED?: boolean; INSTANT_PAYMENTS_ENABLED?: boolean } }) => {
-        setEnabled(
-          Boolean(
+      .then(
+        (j: {
+          flags?: {
+            PROTECTED_PAYMENTS_ENABLED?: boolean;
+            INSTANT_PAYMENTS_ENABLED?: boolean;
+            PROCUREMENT_ADVANCES_ENABLED?: boolean;
+            PAYMENTS_TEST_ALLOWLIST_CONFIGURED?: boolean;
+          };
+          paymentsAccess?: { testAccessAllowed?: boolean };
+        }) => {
+          const flagOn = Boolean(
             j.flags?.PROTECTED_PAYMENTS_ENABLED ||
               j.flags?.INSTANT_PAYMENTS_ENABLED,
-          ),
-        );
-      })
+          );
+          const access = Boolean(j.paymentsAccess?.testAccessAllowed);
+          setEnabled(flagOn && access);
+          setProcurementFlag(Boolean(j.flags?.PROCUREMENT_ADVANCES_ENABLED));
+        },
+      )
       .catch(() => setEnabled(false));
   }, []);
 
@@ -49,6 +63,7 @@ export function ProposePaymentTicketButton({
     setError("");
     const item = Math.round(Number(itemMajor) * 100);
     const shipping = Math.round(Number(shippingMajor || "0") * 100);
+    const service = Math.round(Number(serviceMajor || "0") * 100);
     if (!Number.isFinite(item) || item <= 0) {
       setError("Enter a valid item cost");
       setBusy(false);
@@ -62,9 +77,13 @@ export function ProposePaymentTicketButton({
           conversationId,
           itemCostMinor: item,
           shippingMinor: Number.isFinite(shipping) ? Math.max(0, shipping) : 0,
+          sellerServiceFeeMinor: Number.isFinite(service)
+            ? Math.max(0, service)
+            : 0,
           title: title || undefined,
+          currency: currency || "GBP",
           paymentOption: "PROTECTED",
-          procurementAdvanceAgreed: procurement,
+          procurementAdvanceAgreed: procurementFlag ? procurement : false,
         }),
       });
       const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -74,6 +93,7 @@ export function ProposePaymentTicketButton({
         setOpen(false);
         setItemMajor("");
         setShippingMajor("0");
+        setServiceMajor("0");
         setTitle("");
         setProcurement(false);
         onCreated?.();
@@ -106,7 +126,7 @@ export function ProposePaymentTicketButton({
           </p>
           <p className="mt-1 text-[11px] text-white/45">
             Both parties must accept the same terms before payment. Fees are
-            calculated by Source Bridge.
+            calculated by Source Bridge. TEST allowlist only.
           </p>
           <label className="mt-3 block text-[11px] text-white/55">
             Title
@@ -118,33 +138,57 @@ export function ProposePaymentTicketButton({
             />
           </label>
           <label className="mt-2 block text-[11px] text-white/55">
-            Item cost (USD)
+            Currency
+            <select
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+            >
+              <option value="GBP">GBP (£)</option>
+              <option value="USD">USD ($)</option>
+            </select>
+          </label>
+          <label className="mt-2 block text-[11px] text-white/55">
+            Item cost
             <input
               value={itemMajor}
               onChange={(e) => setItemMajor(e.target.value)}
               inputMode="decimal"
               required
               className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              placeholder="0.00"
+              placeholder="5.00"
             />
           </label>
           <label className="mt-2 block text-[11px] text-white/55">
-            Shipping (USD)
+            Shipping
             <input
               value={shippingMajor}
               onChange={(e) => setShippingMajor(e.target.value)}
               inputMode="decimal"
               className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+              placeholder="1.00"
             />
           </label>
-          <label className="mt-3 flex items-center gap-2 text-[11px] text-white/60">
+          <label className="mt-2 block text-[11px] text-white/55">
+            Seller Service Fee
             <input
-              type="checkbox"
-              checked={procurement}
-              onChange={(e) => setProcurement(e.target.checked)}
+              value={serviceMajor}
+              onChange={(e) => setServiceMajor(e.target.value)}
+              inputMode="decimal"
+              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+              placeholder="1.00"
             />
-            Request procurement advance (Item Cost, if eligible)
           </label>
+          {procurementFlag ? (
+            <label className="mt-3 flex items-center gap-2 text-[11px] text-white/60">
+              <input
+                type="checkbox"
+                checked={procurement}
+                onChange={(e) => setProcurement(e.target.checked)}
+              />
+              Request procurement advance (Item Cost, if eligible)
+            </label>
+          ) : null}
           {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}
           <div className="mt-3 flex justify-end gap-2">
             <button

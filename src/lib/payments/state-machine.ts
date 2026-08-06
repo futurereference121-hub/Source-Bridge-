@@ -59,6 +59,8 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
   },
   START_CHECKOUT: {
     ACCEPTED: "AWAITING_PAYMENT",
+    /** Reuse / refresh client secret — no status change. */
+    AWAITING_PAYMENT: "AWAITING_PAYMENT",
   },
   MARK_FUNDED: {
     AWAITING_PAYMENT: "FUNDED",

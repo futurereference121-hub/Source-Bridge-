@@ -16,6 +16,7 @@ import {
   isProtectedPaymentsEnabled,
   getStripeMode,
 } from "@/lib/payments/flags";
+import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import { calculateFees } from "@/lib/payments/fees";
 import { getPlatformPaymentConfig, assertCurrencyAllowed } from "@/lib/payments/config";
 import { majorToMinor, normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
         user: {
           select: {
             id: true,
+            email: true,
             isDemo: true,
             isTestAccount: true,
             isAdmin: true,
@@ -88,6 +90,7 @@ export async function POST(req: NextRequest) {
       where: { id: user.id },
       select: {
         id: true,
+        email: true,
         isDemo: true,
         isTestAccount: true,
         isAdmin: true,
@@ -101,6 +104,9 @@ export async function POST(req: NextRequest) {
     });
     assertEligiblePaymentParty(buyer, "buyer");
     assertEligiblePaymentParty(listing.user, "seller");
+    assertPaymentsTestAllowlisted([buyer, listing.user], {
+      action: "start product checkout",
+    });
 
     const connect = await getConnectStatus(listing.userId);
     if (!connect.canReceiveProtectedPayments) {

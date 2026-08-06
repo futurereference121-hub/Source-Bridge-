@@ -144,4 +144,47 @@ assert.notEqual(a, c);
 const DEFAULT = "CONTACT_ONLY";
 assert.equal(DEFAULT, "CONTACT_ONLY");
 
+// ── Test amounts (GBP-style minor units): £5 + £1 + £1 service + platform fee
+{
+  const fees = calculateFees({
+    itemCostMinor: 500,
+    shippingMinor: 100,
+    config: { protectionFeeBps: 350, protectionFeeFloorMinor: 50, sellerServiceFeeBps: 0 },
+    sellerServiceFeeMinorOverride: 100,
+  });
+  assert.equal(fees.itemCostMinor, 500);
+  assert.equal(fees.shippingMinor, 100);
+  assert.equal(fees.sellerServiceFeeMinor, 100);
+  // base 600 → ceil(600*0.035)=21, floor 50 → protection 50
+  assert.equal(fees.protectionFeeMinor, 50);
+  assert.equal(totalChargeMinor(fees), 750);
+}
+
+// ── Allowlist parse (mirrors src/lib/payments/allowlist.ts)
+function parseAllowlist(raw) {
+  if (!(raw || "").trim()) return [];
+  return raw
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+function matchesAllowlist(list, user) {
+  if (!list.length) return false;
+  const id = (user.id || "").toLowerCase();
+  const email = (user.email || "").toLowerCase();
+  return list.includes(id) || (email && list.includes(email));
+}
+{
+  assert.deepEqual(parseAllowlist(""), []);
+  assert.equal(matchesAllowlist([], { id: "x", email: "a@b.com" }), false);
+  const list = parseAllowlist("abc123, Buyer@Example.com");
+  assert.equal(matchesAllowlist(list, { id: "ABC123", email: "other@x.com" }), true);
+  assert.equal(matchesAllowlist(list, { id: "nope", email: "buyer@example.com" }), true);
+  assert.equal(matchesAllowlist(list, { id: "nope", email: "c@d.com" }), false);
+}
+
+// ── RELEASE_FINAL blocked from FUNDED for protected (domain note)
+// Implementation re-checks paymentOption === PROTECTED && status FUNDED → throw
+assert.equal(canTransition("FUNDED", "RELEASE_FINAL"), true); // state map allows; release.ts guards PROTECTED
+
 console.log("test-payments-domain: all assertions passed");

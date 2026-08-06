@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { requireSessionUser, isAdminUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { paymentFlagsSnapshot } from "@/lib/payments/flags";
+import { paymentsAllowlistGateSnapshot } from "@/lib/payments/allowlist";
 import {
   createConnectLoginLink,
   createConnectOnboardingLink,
@@ -25,9 +26,17 @@ export async function GET() {
   try {
     const user = await requireSessionUser();
     const status = await getConnectStatus(user.id);
+    const full = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, email: true },
+    });
+    const allowlist = paymentsAllowlistGateSnapshot(
+      full || { id: user.id, email: user.email },
+    );
     return Response.json({
       ok: true,
       flags: paymentFlagsSnapshot(),
+      paymentsAccess: allowlist,
       connect: status,
     });
   } catch (err) {

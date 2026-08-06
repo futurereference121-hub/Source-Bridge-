@@ -82,7 +82,9 @@ export default async function AdminPaymentsPage() {
           onboarding: {String(flags.CONNECT_ONBOARDING_ENABLED)}, protected:{" "}
           {String(flags.PROTECTED_PAYMENTS_ENABLED)}, instant:{" "}
           {String(flags.INSTANT_PAYMENTS_ENABLED)}, procurement:{" "}
-          {String(flags.PROCUREMENT_ADVANCES_ENABLED)}
+          {String(flags.PROCUREMENT_ADVANCES_ENABLED)}, test allowlist
+          configured:{" "}
+          {String(flags.PAYMENTS_TEST_ALLOWLIST_CONFIGURED)}
         </p>
         <p className="mt-1">
           Protection fee: {config.protectionFeeBps} bps (floor{" "}

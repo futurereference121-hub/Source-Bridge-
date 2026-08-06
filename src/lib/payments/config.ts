@@ -26,15 +26,19 @@ export async function getPlatformPaymentConfig(): Promise<PlatformConfig> {
     create: { id: "default" },
     update: {},
   });
-  let allowed: string[] = ["USD"];
+  let allowed: string[] = ["USD", "GBP"];
   try {
     const parsed = JSON.parse(row.allowedCurrenciesJson || "[]") as unknown;
     if (Array.isArray(parsed)) {
       allowed = parsed.filter((x): x is string => typeof x === "string");
     }
   } catch {
-    allowed = ["USD"];
+    allowed = ["USD", "GBP"];
   }
+  // Always permit TEST ramp currencies (do not require a DB migration).
+  const merged = Array.from(
+    new Set([...(allowed.length ? allowed : ["USD"]), "USD", "GBP"].map((c) => c.toUpperCase())),
+  );
   return {
     protectionFeeBps: row.protectionFeeBps,
     protectionFeeFloorMinor: row.protectionFeeFloorMinor,
@@ -42,7 +46,7 @@ export async function getPlatformPaymentConfig(): Promise<PlatformConfig> {
     inspectionHours: row.inspectionHours,
     procurementMinTrustLevel: row.procurementMinTrustLevel,
     procurementAdvancesGloballyOn: row.procurementAdvancesGloballyOn,
-    allowedCurrencies: allowed.length ? allowed : ["USD"],
+    allowedCurrencies: merged,
     stripePlatformCountry: row.stripePlatformCountry || "",
   };
 }

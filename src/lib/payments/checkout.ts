@@ -8,6 +8,7 @@ import {
   isProtectedPaymentsEnabled,
   isProcurementAdvancesEnabled,
 } from "@/lib/payments/flags";
+import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   CHARGE_MODEL,
   getStripe,
@@ -20,6 +21,7 @@ import { releaseFinal, releaseProcurement } from "@/lib/payments/release";
 /**
  * Create a platform PaymentIntent (Separate Charges and Transfers).
  * Funds land on the platform; transfers happen at release — not at charge time.
+ * Idempotent: reuses an existing open PaymentIntent for the same txn when still payable.
  */
 export async function createPaymentIntentForTxn(opts: {
   protectedTxnId: string;
@@ -51,17 +53,49 @@ export async function createPaymentIntentForTxn(opts: {
     throw Object.assign(new Error("Instant payments disabled"), { status: 503 });
   }
 
+  const buyer = await prisma.user.findUniqueOrThrow({
+    where: { id: txn.buyerId },
+    select: { id: true, email: true },
+  });
+  const seller = await prisma.user.findUniqueOrThrow({
+    where: { id: txn.sellerId },
+    select: { id: true, email: true },
+  });
+  assertPaymentsTestAllowlisted([buyer, seller], {
+    action: "start Protected Payment checkout",
+  });
+
+  if (txn.status === "FUNDED" || txn.fundedAt) {
+    throw Object.assign(new Error("Transaction is already funded"), {
+      status: 409,
+      code: "ALREADY_FUNDED",
+    });
+  }
+
+  if (txn.status === "CANCELLED") {
+    throw Object.assign(new Error("Transaction was cancelled (terms may have been revised)"), {
+      status: 409,
+      code: "TXN_CANCELLED",
+    });
+  }
+
   if (!["ACCEPTED", "AWAITING_PAYMENT"].includes(txn.status)) {
     throw Object.assign(new Error(`Cannot pay from status ${txn.status}`), {
       status: 409,
     });
   }
 
-  // Refuse stale terms: ticket must still match
+  // Refuse stale terms: ticket must still match active open ticket
   const ticket = await prisma.paymentTicket.findFirst({
     where: { protectedTransactionId: txn.id },
   });
-  if (ticket && ticket.termsHash !== txn.termsHash) {
+  if (!ticket || ticket.status === "SUPERSEDED" || ticket.status === "DECLINED") {
+    throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
+      status: 409,
+      code: "STALE_TERMS",
+    });
+  }
+  if (ticket.termsHash !== txn.termsHash) {
     throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
       status: 409,
       code: "STALE_TERMS",
@@ -69,6 +103,51 @@ export async function createPaymentIntentForTxn(opts: {
   }
 
   const stripe = getStripe();
+
+  // Idempotent: reuse open PaymentIntent (no second charge path for same terms).
+  if (txn.stripePaymentIntentId) {
+    try {
+      const existing = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
+      const reusable =
+        existing.status === "requires_payment_method" ||
+        existing.status === "requires_confirmation" ||
+        existing.status === "requires_action" ||
+        existing.status === "requires_capture";
+      if (
+        reusable &&
+        existing.amount === txn.totalChargeMinor &&
+        existing.currency?.toLowerCase() === txn.currency.toLowerCase() &&
+        !existing.livemode
+      ) {
+        if (txn.status === "ACCEPTED") {
+          await prisma.protectedTransaction.update({
+            where: { id: txn.id },
+            data: { status: nextStatus("ACCEPTED", "START_CHECKOUT") },
+          });
+        }
+        return {
+          clientSecret: existing.client_secret,
+          paymentIntentId: existing.id,
+          publishableKey: getStripePublishableKey(),
+          amountMinor: txn.totalChargeMinor,
+          currency: txn.currency,
+          transaction: txn,
+          reused: true as const,
+        };
+      }
+      if (existing.status === "succeeded") {
+        throw Object.assign(
+          new Error("Payment already succeeded — wait for funding confirmation"),
+          { status: 409, code: "PI_ALREADY_SUCCEEDED" },
+        );
+      }
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "PI_ALREADY_SUCCEEDED") throw err;
+      // Missing PI or API error — fall through to create with idempotency key
+    }
+  }
+
   const intent = await stripe.paymentIntents.create(
     {
       amount: txn.totalChargeMinor,
@@ -79,16 +158,25 @@ export async function createPaymentIntentForTxn(opts: {
         termsHash: txn.termsHash,
         chargeModel: CHARGE_MODEL,
         paymentOption: txn.paymentOption,
+        releaseStrategy: "KEEP_ALL_PROTECTED",
       },
       automatic_payment_methods: { enabled: true },
     },
     { idempotencyKey: opts.idempotencyKey },
   );
 
+  if (intent.livemode) {
+    throw Object.assign(new Error("Live PaymentIntents are refused"), {
+      status: 503,
+      code: "LIVE_PI_REFUSED",
+    });
+  }
+
+  const status = txn.status as ProtectedStatus;
   const updated = await prisma.protectedTransaction.update({
     where: { id: txn.id },
     data: {
-      status: nextStatus(txn.status as ProtectedStatus, "START_CHECKOUT"),
+      status: nextStatus(status, "START_CHECKOUT"),
       stripePaymentIntentId: intent.id,
     },
   });
@@ -97,7 +185,7 @@ export async function createPaymentIntentForTxn(opts: {
     protectedTxnId: txn.id,
     actorUserId: opts.buyerId,
     action: "START_CHECKOUT",
-    meta: { paymentIntentId: intent.id },
+    meta: { paymentIntentId: intent.id, reused: false },
   });
 
   return {
@@ -107,10 +195,11 @@ export async function createPaymentIntentForTxn(opts: {
     amountMinor: txn.totalChargeMinor,
     currency: txn.currency,
     transaction: updated,
+    reused: false as const,
   };
 }
 
-/** Apply funding from verified webhook (source of truth). */
+/** Apply funding from verified webhook (source of truth). Never transfers on PROTECTED fund. */
 export async function markTxnFundedFromWebhook(opts: {
   paymentIntentId: string;
   chargeId?: string;
@@ -127,6 +216,38 @@ export async function markTxnFundedFromWebhook(opts: {
 
   if (txn.status === "FUNDED" || txn.fundedAt) {
     return { handled: true, reason: "already_funded" };
+  }
+
+  if (txn.status === "CANCELLED") {
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      action: "FUNDING_REJECTED_CANCELLED",
+      meta: { eventId: opts.eventId, paymentIntentId: opts.paymentIntentId },
+    });
+    return { handled: false, reason: "txn_cancelled" };
+  }
+
+  // Parties must still be allowlisted at fund time (fail closed).
+  const buyer = await prisma.user.findUnique({
+    where: { id: txn.buyerId },
+    select: { id: true, email: true },
+  });
+  const seller = await prisma.user.findUnique({
+    where: { id: txn.sellerId },
+    select: { id: true, email: true },
+  });
+  if (!buyer || !seller) {
+    return { handled: false, reason: "party_missing" };
+  }
+  try {
+    assertPaymentsTestAllowlisted([buyer, seller], { action: "fund protected transaction" });
+  } catch {
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      action: "FUNDING_REJECTED_ALLOWLIST",
+      meta: { eventId: opts.eventId },
+    });
+    return { handled: false, reason: "allowlist" };
   }
 
   if (opts.amountMinor !== txn.totalChargeMinor) {
@@ -167,7 +288,11 @@ export async function markTxnFundedFromWebhook(opts: {
   await recordAuditEvent({
     protectedTxnId: txn.id,
     action: "MARK_FUNDED",
-    meta: { eventId: opts.eventId },
+    meta: {
+      eventId: opts.eventId,
+      releaseStrategy: "KEEP_ALL_PROTECTED",
+      transferOnFund: false,
+    },
   });
 
   await prisma.paymentTicket.updateMany({
@@ -175,7 +300,8 @@ export async function markTxnFundedFromWebhook(opts: {
     data: { status: "FUNDED" },
   });
 
-  // Instant = same charge model + prompt transfer after funding success
+  // KEEP_ALL_PROTECTED (this TEST ramp): no seller transfer on fund.
+  // Instant / procurement only when those flags are deliberately on (not this phase).
   if (updated.paymentOption === "INSTANT" && isInstantPaymentsEnabled()) {
     try {
       await releaseFinal({ protectedTxnId: updated.id, actorUserId: null });
@@ -205,6 +331,7 @@ export async function markTxnFundedFromWebhook(opts: {
       });
     }
   }
+  // PROTECTED + PROCUREMENT off + INSTANT off → funds stay on platform until delivery release.
 
   return { handled: true, reason: "funded", txn: updated };
 }

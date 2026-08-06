@@ -10,6 +10,7 @@ import {
   isProcurementEligible,
   type PartyUser,
 } from "@/lib/payments/eligibility";
+import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   getStripeMode,
   isInstantPaymentsEnabled,
@@ -115,11 +116,14 @@ function mapTicket(t: {
 
 export { mapTicket };
 
-async function loadParty(userId: string): Promise<PartyUser> {
+type PartyWithEmail = PartyUser & { email: string };
+
+async function loadParty(userId: string): Promise<PartyWithEmail> {
   const u = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
     select: {
       id: true,
+      email: true,
       isDemo: true,
       isTestAccount: true,
       isAdmin: true,
@@ -203,6 +207,15 @@ export async function createOrRevisePaymentTicket(opts: {
   const seller = await loadParty(opts.sellerId);
   assertEligiblePaymentParty(buyer, "buyer");
   assertEligiblePaymentParty(seller, "seller");
+  // Controlled TEST ramp — empty allowlist = deny; both parties must match.
+  assertPaymentsTestAllowlisted([buyer, seller], {
+    action: "create Payment Ticket",
+  });
+  if (opts.actorId !== buyer.id && opts.actorId !== seller.id) {
+    throw Object.assign(new Error("Only buyer or seller can propose terms"), {
+      status: 403,
+    });
+  }
 
   const conversation = await prisma.conversation.findUnique({
     where: { id: opts.conversationId },
@@ -257,6 +270,22 @@ export async function createOrRevisePaymentTicket(opts: {
         where: { id: open.id },
         data: { status: "SUPERSEDED" },
       });
+      // Outdated revisions cannot fund — cancel any unfunded protected txn.
+      if (open.protectedTransactionId) {
+        const prior = await tx.protectedTransaction.findUnique({
+          where: { id: open.protectedTransactionId },
+        });
+        if (
+          prior &&
+          !prior.fundedAt &&
+          ["ACCEPTED", "AWAITING_PAYMENT"].includes(prior.status)
+        ) {
+          await tx.protectedTransaction.update({
+            where: { id: prior.id },
+            data: { status: "CANCELLED" },
+          });
+        }
+      }
     }
     const ticket = await tx.paymentTicket.create({
       data: {
@@ -337,6 +366,27 @@ export async function respondToPaymentTicket(opts: {
   }
   if (opts.actorId !== ticket.buyerId && opts.actorId !== ticket.sellerId) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
+  }
+
+  if (opts.action === "accept") {
+    if (!isProtectedPaymentsEnabled() && ticket.paymentOption === "PROTECTED") {
+      throw Object.assign(new Error("Protected Payments are not enabled"), {
+        status: 503,
+        code: "PROTECTED_DISABLED",
+      });
+    }
+    if (!isInstantPaymentsEnabled() && ticket.paymentOption === "INSTANT") {
+      throw Object.assign(new Error("Instant payments are not enabled"), {
+        status: 503,
+        code: "INSTANT_DISABLED",
+      });
+    }
+    const buyer = await loadParty(ticket.buyerId);
+    const seller = await loadParty(ticket.sellerId);
+    const actor = opts.actorId === buyer.id ? buyer : seller;
+    assertPaymentsTestAllowlisted([buyer, seller, actor], {
+      action: "accept Payment Ticket",
+    });
   }
 
   if (opts.action === "decline") {

@@ -14,7 +14,31 @@
 - `PROCUREMENT_ADVANCES_ENABLED`
 - `TRACKING_AUTOMATION_ENABLED`
 - `LIVE_PAYMENTS_ENABLED` — **must stay false**; code forces TEST mode even if set
+- `PAYMENTS_TEST_ALLOWLIST` — comma/space/semicolon-separated user IDs (cuid) or emails. **Empty = deny all money-path actions** even when flags are on.
 
+### Controlled TEST ramp (dual-account)
+| Env | Value for Protected Payment TEST |
+|-----|----------------------------------|
+| `PAYMENTS_ENABLED` | `true` |
+| `PROTECTED_PAYMENTS_ENABLED` | `true` |
+| `CONNECT_ONBOARDING_ENABLED` | `true` |
+| `INSTANT_PAYMENTS_ENABLED` | `false` |
+| `PROCUREMENT_ADVANCES_ENABLED` | `false` |
+| `LIVE_PAYMENTS_ENABLED` | `false` |
+| `PAYMENTS_TEST_ALLOWLIST` | `userId1,userId2` (or emails) — **required non-empty** |
+
+Release strategy for this phase: **KEEP_ALL_PROTECTED** — no seller transfer on fund. Funds remain on the platform until a separate delivery/release path runs.
+
+Allowlist format examples:
+```
+clabc123buyerid,cldef456sellerid
+buyer@example.com, seller@example.com
+clabc123buyerid buyer@example.com
+```
+
+Find user IDs: Prisma `User.id` (cuid), session / admin tools, or database. Emails must match `User.email` exactly (case-insensitive).
+
+Server gates (hard fail): ticket create, ticket accept, checkout/PI, webhook fund. UI hides Create Payment Ticket / Pay for non-allowlisted users.
 ### Connect onboarding without payments (TEST)
 Set `CONNECT_ONBOARDING_ENABLED=true` in **Production and Preview** when Stripe **TEST** keys are loaded. Leave `PAYMENTS_ENABLED`, `PROTECTED_PAYMENTS_ENABLED`, `INSTANT_PAYMENTS_ENABLED`, `PROCUREMENT_ADVANCES_ENABLED`, and `LIVE_PAYMENTS_ENABLED` at `false` until deliberately enabling checkout.
 

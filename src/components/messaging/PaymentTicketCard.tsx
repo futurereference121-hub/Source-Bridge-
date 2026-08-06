@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
+import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 
 export type PaymentTicketView = {
   id: string;
@@ -46,6 +47,13 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [payNotice, setPayNotice] = useState("");
+  const [checkout, setCheckout] = useState<{
+    clientSecret: string;
+    publishableKey: string;
+    amountMinor: number;
+    currency: string;
+  } | null>(null);
+  const [paymentsAccess, setPaymentsAccess] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,6 +80,38 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    void fetch("/api/payments/connect")
+      .then((r) => r.json())
+      .then(
+        (j: {
+          paymentsAccess?: { testAccessAllowed?: boolean };
+          flags?: { PAYMENTS_ENABLED?: boolean };
+        }) => {
+          setPaymentsAccess(
+            Boolean(
+              j.flags?.PAYMENTS_ENABLED && j.paymentsAccess?.testAccessAllowed,
+            ),
+          );
+        },
+      )
+      .catch(() => setPaymentsAccess(false));
+  }, []);
+
+  // After return from 3DS: poll — funding only when webhook sets FUNDED.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") !== "return") return;
+    let n = 0;
+    const id = window.setInterval(() => {
+      n += 1;
+      void load();
+      if (n >= 12) window.clearInterval(id);
+    }, 2500);
+    return () => window.clearInterval(id);
   }, [load]);
 
   async function respond(action: "accept" | "decline") {
@@ -106,6 +146,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     setBusy(true);
     setPayNotice("");
     setError("");
+    setCheckout(null);
     try {
       const res = await fetch("/api/payments/checkout", {
         method: "POST",
@@ -119,15 +160,24 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
         ok?: boolean;
         error?: string;
         clientSecret?: string;
+        publishableKey?: string;
+        amountMinor?: number;
+        currency?: string;
       };
       if (!res.ok) {
         setError(json.error || "Checkout unavailable");
-      } else if (json.clientSecret) {
+      } else if (json.clientSecret && json.publishableKey) {
+        setCheckout({
+          clientSecret: json.clientSecret,
+          publishableKey: json.publishableKey,
+          amountMinor: json.amountMinor ?? ticket.totalChargeMinor,
+          currency: json.currency ?? ticket.currency,
+        });
         setPayNotice(
-          "Payment Intent created in TEST mode. Complete payment via Stripe Payment Element (checkout UI wiring follows when STRIPE keys + PAYMENTS_ENABLED are set).",
+          "Complete payment below. Status becomes FUNDED only after Stripe confirms (not from this page alone).",
         );
       } else {
-        setPayNotice("Checkout started.");
+        setError("Checkout did not return a payment form");
       }
     } catch {
       setError("Checkout failed");
@@ -162,6 +212,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
   const open = ticket.status === "PROPOSED" || ticket.status === "ACCEPTED";
   const canRespond = open && ticket.status === "PROPOSED" && !myApproved;
   const canPay =
+    paymentsAccess &&
     iAmBuyer &&
     ticket.status === "ACCEPTED" &&
     Boolean(ticket.protectedTransactionId);
@@ -199,6 +250,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
       <p className="mt-2 text-xs text-white/45">
         Protected by Source Bridge ·{" "}
         {ticket.paymentOption === "INSTANT" ? "Instant" : "Protected"} Transaction
+        · funds held until delivery
       </p>
 
       <dl className="mt-4 space-y-1.5 text-sm">
@@ -226,8 +278,17 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
         </p>
       ) : null}
 
+      {ticket.status === "FUNDED" ? (
+        <p className="mt-3 text-xs text-emerald-300/90">
+          Funded and protected. Seller payout waits until delivery/release (not
+          on fund).
+        </p>
+      ) : null}
+
       {error ? <p className="mt-3 text-xs text-amber-300">{error}</p> : null}
-      {payNotice ? <p className="mt-3 text-xs text-electric">{payNotice}</p> : null}
+      {payNotice && !checkout ? (
+        <p className="mt-3 text-xs text-electric">{payNotice}</p>
+      ) : null}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {canRespond ? (
@@ -253,7 +314,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
         {ticket.status === "PROPOSED" && myApproved ? (
           <p className="text-xs text-white/45">Waiting for the other party…</p>
         ) : null}
-        {canPay ? (
+        {canPay && !checkout ? (
           <button
             type="button"
             disabled={busy}
@@ -264,6 +325,31 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           </button>
         ) : null}
       </div>
+
+      {checkout ? (
+        <ProtectedPaymentCheckout
+          clientSecret={checkout.clientSecret}
+          publishableKey={checkout.publishableKey}
+          amountMinor={checkout.amountMinor}
+          currency={checkout.currency}
+          returnPath="/messages?payment=return"
+          onDismiss={() => setCheckout(null)}
+          onPaymentSubmitted={() => {
+            setPayNotice(
+              "Payment submitted. Waiting for confirmation — FUNDED appears after webhook (refresh if needed).",
+            );
+            setCheckout(null);
+            void load();
+            onChanged?.();
+            let n = 0;
+            const id = window.setInterval(() => {
+              n += 1;
+              void load();
+              if (n >= 10) window.clearInterval(id);
+            }, 2000);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
