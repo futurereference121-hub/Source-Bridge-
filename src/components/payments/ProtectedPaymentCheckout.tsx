@@ -122,7 +122,7 @@ export function ProtectedPaymentCheckout({
   publishableKey,
   amountMinor,
   currency,
-  returnPath = "/messages?payment=return",
+  returnPath = "/inbox?payment=return",
   onDismiss,
   onPaymentSubmitted,
 }: ProtectedPaymentCheckoutProps) {

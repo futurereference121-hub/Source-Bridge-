@@ -332,7 +332,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           publishableKey={checkout.publishableKey}
           amountMinor={checkout.amountMinor}
           currency={checkout.currency}
-          returnPath="/messages?payment=return"
+          returnPath="/inbox?payment=return"
           onDismiss={() => setCheckout(null)}
           onPaymentSubmitted={() => {
             setPayNotice(
