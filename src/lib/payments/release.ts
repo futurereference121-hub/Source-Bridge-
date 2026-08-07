@@ -91,20 +91,43 @@ export async function releaseProcurement(opts: {
 
   const stripe = getStripe();
   try {
-    const transfer = await stripe.transfers.create(
-      {
-        amount,
-        currency: txn.currency.toLowerCase(),
-        destination: connect.stripeAccountId,
-        transfer_group: txn.id,
-        metadata: {
-          protectedTxnId: txn.id,
-          kind: "PROCUREMENT",
-          chargeModel: CHARGE_MODEL,
-        },
+    let sourceTransaction = (txn.stripeChargeId || "").trim();
+    if (!sourceTransaction && txn.stripePaymentIntentId) {
+      const pi = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
+      const lc = pi.latest_charge;
+      sourceTransaction =
+        typeof lc === "string" ? lc : lc && typeof lc === "object" ? lc.id : "";
+    }
+
+    const transferParams: {
+      amount: number;
+      currency: string;
+      destination: string;
+      transfer_group: string;
+      metadata: Record<string, string>;
+      source_transaction?: string;
+    } = {
+      amount,
+      currency: txn.currency.toLowerCase(),
+      destination: connect.stripeAccountId,
+      transfer_group: txn.id,
+      metadata: {
+        protectedTxnId: txn.id,
+        kind: "PROCUREMENT",
+        chargeModel: CHARGE_MODEL,
       },
-      { idempotencyKey },
-    );
+    };
+    if (sourceTransaction) {
+      transferParams.source_transaction = sourceTransaction;
+    }
+
+    const stripeIdempotencyKey = sourceTransaction
+      ? `${idempotencyKey}_src`
+      : idempotencyKey;
+
+    const transfer = await stripe.transfers.create(transferParams, {
+      idempotencyKey: stripeIdempotencyKey,
+    });
 
     const next = nextStatus(status, "RELEASE_PROCUREMENT");
     const updated = await prisma.$transaction(async (tx) => {
@@ -264,7 +287,7 @@ export async function releaseFinal(opts: {
         status: "PENDING",
       },
     }));
-  // Reopen FAILED for retry (same Stripe idempotency key prevents double credit).
+  // Reopen FAILED for retry (new Stripe idempotency key when params evolve).
   if (existingAttempt && existingAttempt.status === "FAILED") {
     await prisma.transferAttempt.update({
       where: { id: existingAttempt.id },
@@ -274,20 +297,54 @@ export async function releaseFinal(opts: {
 
   const stripe = getStripe();
   try {
-    const transfer = await stripe.transfers.create(
-      {
-        amount,
-        currency: txn.currency.toLowerCase(),
-        destination: connect.stripeAccountId,
-        transfer_group: txn.id,
-        metadata: {
-          protectedTxnId: txn.id,
-          kind: "FINAL",
-          chargeModel: CHARGE_MODEL,
-        },
+    // Prefer charge id; fall back to PaymentIntent.latest_charge.
+    let sourceTransaction = (txn.stripeChargeId || "").trim();
+    if (!sourceTransaction && txn.stripePaymentIntentId) {
+      const pi = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
+      const lc = pi.latest_charge;
+      sourceTransaction =
+        typeof lc === "string" ? lc : lc && typeof lc === "object" ? lc.id : "";
+    }
+
+    // UK/EUR platforms settle to local currency. Tying the Transfer to the
+    // original charge (source_transaction) is required so SCT can pull the
+    // charge funds without a same-currency platform available balance.
+    const transferParams: {
+      amount: number;
+      currency: string;
+      destination: string;
+      transfer_group: string;
+      metadata: Record<string, string>;
+      source_transaction?: string;
+    } = {
+      amount,
+      currency: txn.currency.toLowerCase(),
+      destination: connect.stripeAccountId,
+      transfer_group: txn.id,
+      metadata: {
+        protectedTxnId: txn.id,
+        kind: "FINAL",
+        chargeModel: CHARGE_MODEL,
       },
-      { idempotencyKey },
-    );
+    };
+    if (sourceTransaction) {
+      transferParams.source_transaction = sourceTransaction;
+    }
+
+    // When prior attempt failed without source_transaction, Stripe idempotency
+    // forbids changing params under the same key — bump for failed retries.
+    const stripeIdempotencyKey =
+      existingAttempt &&
+      (existingAttempt.status === "FAILED" || existingAttempt.status === "PENDING") &&
+      existingAttempt.attemptCount > 0
+        ? `${idempotencyKey}_src_a${existingAttempt.attemptCount}`
+        : sourceTransaction
+          ? `${idempotencyKey}_src`
+          : idempotencyKey;
+
+    const transfer = await stripe.transfers.create(transferParams, {
+      idempotencyKey: stripeIdempotencyKey,
+    });
 
     const next = nextStatus(status, action);
     const updated = await prisma.$transaction(async (tx) => {
@@ -325,7 +382,11 @@ export async function releaseFinal(opts: {
       protectedTxnId: txn.id,
       actorUserId: opts.actorUserId,
       action: "RELEASE_FINAL",
-      meta: { transferId: transfer.id, amountMinor: amount },
+      meta: {
+        transferId: transfer.id,
+        amountMinor: amount,
+        sourceTransaction: sourceTransaction || null,
+      },
     });
 
     await markListingSoldIfLinked(txn.listingId);
