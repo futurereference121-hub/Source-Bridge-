@@ -76,6 +76,10 @@ export async function POST(req: NextRequest) {
     assertListingCheckoutOption({
       listingOption: option,
       selected: parsed.data.paymentOption,
+      // CONTACT_ONLY catalogue entries still reach Protected Payment for TEST
+      // allowlisted parties after gates below (Connect + flags + allowlist).
+      allowContactOnlyAsProtected:
+        parsed.data.paymentOption === "PROTECTED",
     });
 
     if (parsed.data.paymentOption === "PROTECTED" && !isProtectedPaymentsEnabled()) {

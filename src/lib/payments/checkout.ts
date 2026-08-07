@@ -85,21 +85,23 @@ export async function createPaymentIntentForTxn(opts: {
     });
   }
 
-  // Refuse stale terms: ticket must still match active open ticket
-  const ticket = await prisma.paymentTicket.findFirst({
-    where: { protectedTransactionId: txn.id },
-  });
-  if (!ticket || ticket.status === "SUPERSEDED" || ticket.status === "DECLINED") {
-    throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
-      status: 409,
-      code: "STALE_TERMS",
+  // Chat tickets: refuse stale terms. Product listing checkout has no ticket.
+  if (txn.origin !== "PRODUCT_CHECKOUT") {
+    const ticket = await prisma.paymentTicket.findFirst({
+      where: { protectedTransactionId: txn.id },
     });
-  }
-  if (ticket.termsHash !== txn.termsHash) {
-    throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
-      status: 409,
-      code: "STALE_TERMS",
-    });
+    if (!ticket || ticket.status === "SUPERSEDED" || ticket.status === "DECLINED") {
+      throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
+        status: 409,
+        code: "STALE_TERMS",
+      });
+    }
+    if (ticket.termsHash !== txn.termsHash) {
+      throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
+        status: 409,
+        code: "STALE_TERMS",
+      });
+    }
   }
 
   const stripe = getStripe();

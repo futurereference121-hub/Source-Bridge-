@@ -41,6 +41,11 @@ export function listingAllowsContact(option: ListingPaymentOption): boolean {
 export function assertListingCheckoutOption(opts: {
   listingOption: string;
   selected: "contact" | "crypto" | "PROTECTED" | "INSTANT";
+  /**
+   * When true, CONTACT_ONLY listings may still start a allowlisted TEST
+   * Protected Payment (listing card path). Instant remains blocked.
+   */
+  allowContactOnlyAsProtected?: boolean;
 }): void {
   const option = parseListingPaymentOptions(opts.listingOption);
   if (opts.selected === "contact" || opts.selected === "crypto") {
@@ -56,10 +61,14 @@ export function assertListingCheckoutOption(opts: {
     return;
   }
   if (opts.selected === "PROTECTED" && !listingAllowsProtected(option)) {
-    throw Object.assign(
-      new Error("Protected Payment is not enabled for this listing"),
-      { status: 400, code: "PAYMENT_OPTION_NOT_ALLOWED" },
-    );
+    // TEST ramp: CONTACT_ONLY real listings may still use Protected Payment when
+    // the server has already enforced allowlist + Connect + feature flags.
+    if (!(opts.allowContactOnlyAsProtected && option === "CONTACT_ONLY")) {
+      throw Object.assign(
+        new Error("Protected Payment is not enabled for this listing"),
+        { status: 400, code: "PAYMENT_OPTION_NOT_ALLOWED" },
+      );
+    }
   }
   if (opts.selected === "INSTANT" && !listingAllowsInstant(option)) {
     throw Object.assign(

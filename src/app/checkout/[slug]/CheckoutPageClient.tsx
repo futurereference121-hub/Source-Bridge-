@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import type { Listing } from "@/lib/types";
 import { formatPrice } from "@/lib/listings-service";
 
@@ -32,6 +33,9 @@ type CheckoutBootstrap = {
   seller: SellerInfo;
   cryptoPaymentMethods: CryptoMethod[];
   stripeConfigured: boolean;
+  canStripeCardCheckout?: boolean;
+  cardCheckoutBlockedReason?: string | null;
+  sellerConnectReady?: boolean;
   isDemo?: boolean;
   message?: string | null;
 };
@@ -61,6 +65,14 @@ export function CheckoutPageClient({ slug }: Props) {
   const [hashSubmitted, setHashSubmitted] = useState(false);
   const [isDemo, setIsDemo] = useState(false);
   const [demoPreviewDone, setDemoPreviewDone] = useState(false);
+  const [stripePay, setStripePay] = useState<{
+    clientSecret: string;
+    publishableKey: string;
+    amountMinor: number;
+    currency: string;
+    protectedTxnId: string;
+  } | null>(null);
+  const [paymentSubmitted, setPaymentSubmitted] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,8 +96,9 @@ export function CheckoutPageClient({ slug }: Props) {
   }, [slug]);
 
   useEffect(() => {
+    if (!authReady) return;
     void load();
-  }, [load]);
+  }, [load, authReady, account?.id]);
 
   const selectedCrypto = useMemo(
     () =>
@@ -102,6 +115,75 @@ export function CheckoutPageClient({ slug }: Props) {
     }
   }
 
+  /** Allowlisted TEST Protected Payment → PaymentIntent + Payment Element. */
+  async function startStripeProtectedCardCheckout() {
+    if (!requireAuth("complete checkout")) return;
+    if (!data) return;
+    if (account?.id === data.seller.id) {
+      showToast("You cannot buy your own listing");
+      return;
+    }
+    if (!data.canStripeCardCheckout) {
+      showToast(
+        data.cardCheckoutBlockedReason ||
+          "Card checkout is not available for this account",
+      );
+      return;
+    }
+
+    setBusy(true);
+    setStripePay(null);
+    setPaymentSubmitted(false);
+    try {
+      const createRes = await fetch("/api/payments/product-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listingId: data.listing.id,
+          paymentOption: "PROTECTED",
+          selectedSize: sizeFromQuery || undefined,
+        }),
+      });
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        throw new Error(created.error || "Could not start Protected Payment");
+      }
+      const protectedTxnId = String(created.protectedTxnId || "");
+      if (!protectedTxnId) {
+        throw new Error("Missing protected transaction id");
+      }
+
+      const piRes = await fetch("/api/payments/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protectedTxnId,
+          idempotencyKey: `product-checkout:${protectedTxnId}:v1`,
+        }),
+      });
+      const pi = await piRes.json().catch(() => ({}));
+      if (!piRes.ok) {
+        throw new Error(pi.error || "Could not create payment");
+      }
+      if (!pi.clientSecret || !pi.publishableKey) {
+        throw new Error("Payment form unavailable");
+      }
+      setStripePay({
+        clientSecret: String(pi.clientSecret),
+        publishableKey: String(pi.publishableKey),
+        amountMinor: Number(pi.amountMinor) || Number(created.amountMinor) || 0,
+        currency: String(pi.currency || created.currency || "usd"),
+        protectedTxnId,
+      });
+      showToast("Enter your card details to fund the Protected Payment (TEST)");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Checkout failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Legacy unpaid placeholder order (non-allowlist / crypto / demos). */
   async function createPendingCheckout() {
     if (!requireAuth("complete checkout")) return;
     if (!data) return;
@@ -269,61 +351,107 @@ export function CheckoutPageClient({ slug }: Props) {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
               Pay by card
             </h2>
-            <p className="mt-3 text-sm leading-relaxed text-white/70">
-              Card checkout is not yet activated. Stripe Connect marketplace
-              payouts are not configured for Source Bridge. No payment will be
-              taken.
-            </p>
-            {checkoutMessage ? (
-              <p className="mt-3 text-sm text-amber-200/90">{checkoutMessage}</p>
-            ) : null}
-            {isDemo ? (
-              <p className="mt-3 text-sm text-white/55">
-                Demo listing — checkout options are available for review. No live
-                marketplace transaction is created.
-              </p>
-            ) : null}
-            {transactionId || demoPreviewDone ? (
-              <div className="mt-5 space-y-3">
-                {transactionId ? (
-                  <p className="text-sm text-white/55">
-                    Pending unpaid order created. Reference:{" "}
-                    <span className="font-mono text-white/80">{transactionId}</span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-white/55">
-                    Demo preview recorded. No payment was taken and no pending
-                    database order was created.
-                  </p>
-                )}
-                <p className="text-xs text-white/40">
-                  This is not a successful payment. Contact the seller or wait
-                  until card checkout is enabled.
+            {data.canStripeCardCheckout ? (
+              <>
+                <p className="mt-3 text-sm leading-relaxed text-white/70">
+                  Protected by Source Bridge (Stripe TEST). Your payment is held
+                  on the platform; the seller is not paid until protected release
+                  rules are met. Completing the form does not confirm funding
+                  until Stripe confirms the payment.
                 </p>
-                <PrimaryButton
-                  href="/inbox"
-                  showArrow={false}
-                  className="rounded-lg"
-                >
-                  Open inbox
-                </PrimaryButton>
-              </div>
+                {paymentSubmitted ? (
+                  <p className="mt-4 text-sm text-white/60">
+                    Payment submitted. Status updates when Stripe confirms
+                    (usually a few seconds). You can refresh this page or open
+                    Transactions / inbox later — the success redirect alone does
+                    not mark the order funded.
+                  </p>
+                ) : null}
+                {stripePay ? (
+                  <ProtectedPaymentCheckout
+                    clientSecret={stripePay.clientSecret}
+                    publishableKey={stripePay.publishableKey}
+                    amountMinor={stripePay.amountMinor}
+                    currency={stripePay.currency}
+                    returnPath={`/checkout/${encodeURIComponent(slug)}?method=card&payment=return`}
+                    onDismiss={() => setStripePay(null)}
+                    onPaymentSubmitted={() => {
+                      setPaymentSubmitted(true);
+                      showToast(
+                        "Payment submitted — waiting for Stripe confirmation",
+                      );
+                    }}
+                  />
+                ) : !paymentSubmitted ? (
+                  <div className="mt-5">
+                    <PrimaryButton
+                      type="button"
+                      showArrow={false}
+                      disabled={busy || !authReady || !account}
+                      onClick={() => void startStripeProtectedCardCheckout()}
+                      className="rounded-lg"
+                    >
+                      {busy ? "Starting checkout…" : "Pay with card (TEST)"}
+                    </PrimaryButton>
+                  </div>
+                ) : null}
+              </>
             ) : (
-              <div className="mt-5">
-                <PrimaryButton
-                  type="button"
-                  showArrow={false}
-                  disabled={busy}
-                  onClick={() => void createPendingCheckout()}
-                  className="rounded-lg"
-                >
-                  {busy
-                    ? "Creating…"
-                    : isDemo
-                      ? "Preview pending order"
-                      : "Create pending order"}
-                </PrimaryButton>
-              </div>
+              <>
+                <p className="mt-3 text-sm leading-relaxed text-white/70">
+                  {isDemo
+                    ? "Demo listing — no live card charge is available."
+                    : data.cardCheckoutBlockedReason ||
+                      "Card checkout is not available for this listing or account."}
+                </p>
+                {checkoutMessage ? (
+                  <p className="mt-3 text-sm text-amber-200/90">
+                    {checkoutMessage}
+                  </p>
+                ) : null}
+                {isDemo ? (
+                  <p className="mt-3 text-sm text-white/55">
+                    Demo listing — checkout options are available for review. No
+                    live marketplace transaction is created.
+                  </p>
+                ) : null}
+                {transactionId || demoPreviewDone ? (
+                  <div className="mt-5 space-y-3">
+                    {transactionId ? (
+                      <p className="text-sm text-white/55">
+                        Pending unpaid order created. Reference:{" "}
+                        <span className="font-mono text-white/80">
+                          {transactionId}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="text-sm text-white/55">
+                        Demo preview recorded. No payment was taken and no pending
+                        database order was created.
+                      </p>
+                    )}
+                    <PrimaryButton
+                      href="/inbox"
+                      showArrow={false}
+                      className="rounded-lg"
+                    >
+                      Open inbox
+                    </PrimaryButton>
+                  </div>
+                ) : isDemo ? (
+                  <div className="mt-5">
+                    <PrimaryButton
+                      type="button"
+                      showArrow={false}
+                      disabled={busy}
+                      onClick={() => void createPendingCheckout()}
+                      className="rounded-lg"
+                    >
+                      {busy ? "Creating…" : "Preview pending order"}
+                    </PrimaryButton>
+                  </div>
+                ) : null}
+              </>
             )}
           </section>
         ) : null}
