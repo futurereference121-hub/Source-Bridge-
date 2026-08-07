@@ -1,20 +1,41 @@
 import { processInspectionReleases } from "@/lib/payments/release";
+import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Cron: complete inspection windows and release final transfers.
- * Protect with CRON_SECRET header (Vercel cron).
+ * Cron: complete expired inspection windows and release final transfers.
+ * Protect with CRON_SECRET (required — never open anonymously):
+ *   Authorization: Bearer $CRON_SECRET
+ * Vercel Cron injects this header when CRON_SECRET is set on the project.
  */
-export async function GET(req: Request) {
+function assertCronAuthorized(req: Request): Response | null {
   const secret = (process.env.CRON_SECRET || "").trim();
-  const auth = req.headers.get("authorization") || "";
-  if (secret && auth !== `Bearer ${secret}`) {
-    return new Response("Unauthorized", { status: 401 });
+  if (!secret) {
+    return jsonError("Cron not configured", 503);
   }
+  const auth = req.headers.get("authorization") || "";
+  if (auth !== `Bearer ${secret}`) {
+    return jsonError("Unauthorized", 401);
+  }
+  return null;
+}
 
-  const results = await processInspectionReleases(50);
-  return Response.json({ ok: true, results });
+export async function POST(req: Request) {
+  try {
+    const denied = assertCronAuthorized(req);
+    if (denied) return denied;
+
+    const results = await processInspectionReleases(50);
+    return Response.json({ ok: true, results });
+  } catch (err) {
+    console.error("[payments-release]", err);
+    return jsonError("Payments release failed", 500);
+  }
+}
+
+export async function GET(req: Request) {
+  return POST(req);
 }

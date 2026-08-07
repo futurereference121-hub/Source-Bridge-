@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/stories-expire",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/payments-release",
+      "schedule": "0 * * * *"
     }
   ]
 }

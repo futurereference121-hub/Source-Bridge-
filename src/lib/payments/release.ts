@@ -228,8 +228,27 @@ export async function releaseFinal(opts: {
   const existingAttempt = await prisma.transferAttempt.findUnique({
     where: { idempotencyKey },
   });
+  // Stripe already paid — reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
   if (existingAttempt?.status === "SUCCEEDED") {
-    return { alreadyReleased: true, txn };
+    if (status === "RELEASED") {
+      return { alreadyReleased: true, txn };
+    }
+    const next = nextStatus(status, action);
+    const updated = await prisma.protectedTransaction.update({
+      where: { id: txn.id },
+      data: {
+        status: next,
+        finalTransferredMinor: Math.max(
+          txn.finalTransferredMinor,
+          existingAttempt.amountMinor,
+        ),
+        releasedAt: txn.releasedAt ?? existingAttempt.succeededAt ?? new Date(),
+        sellerConnectAccountId:
+          txn.sellerConnectAccountId || connect.stripeAccountId,
+      },
+    });
+    await markListingSoldIfLinked(txn.listingId);
+    return { alreadyReleased: true, txn: updated, transferId: existingAttempt.stripeTransferId };
   }
 
   const attempt =
@@ -245,6 +264,13 @@ export async function releaseFinal(opts: {
         status: "PENDING",
       },
     }));
+  // Reopen FAILED for retry (same Stripe idempotency key prevents double credit).
+  if (existingAttempt && existingAttempt.status === "FAILED") {
+    await prisma.transferAttempt.update({
+      where: { id: existingAttempt.id },
+      data: { status: "PENDING", lastAttemptAt: new Date() },
+    });
+  }
 
   const stripe = getStripe();
   try {
@@ -320,10 +346,19 @@ export async function releaseFinal(opts: {
   }
 }
 
-/** Cron/job entry: release READY_TO_RELEASE txns whose inspection window ended. */
+/**
+ * Cron/job entry:
+ * 1) IN_INSPECTION with inspectionEndsAt <= now → READY_TO_RELEASE → releaseFinal
+ * 2) Recover stuck READY_TO_RELEASE (e.g. prior transfer failure) → releaseFinal only
+ *
+ * Duplicate runs are safe: releaseFinal is idempotent via transferAttempt + Stripe keys.
+ */
 export async function processInspectionReleases(limit = 25) {
   const now = new Date();
-  const due = await prisma.protectedTransaction.findMany({
+  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+  const seen = new Set<string>();
+
+  const inspectionDue = await prisma.protectedTransaction.findMany({
     where: {
       status: "IN_INSPECTION",
       inspectionEndsAt: { lte: now },
@@ -332,8 +367,8 @@ export async function processInspectionReleases(limit = 25) {
     orderBy: { inspectionEndsAt: "asc" },
   });
 
-  const results: Array<{ id: string; ok: boolean; error?: string }> = [];
-  for (const txn of due) {
+  for (const txn of inspectionDue) {
+    seen.add(txn.id);
     try {
       // Recheck state before money movement
       const fresh = await prisma.protectedTransaction.findUnique({
@@ -361,5 +396,41 @@ export async function processInspectionReleases(limit = 25) {
       });
     }
   }
+
+  // Retry READY_TO_RELEASE left behind after a failed releaseFinal (or partial success).
+  const remaining = Math.max(0, limit - results.filter((r) => r.ok).length);
+  if (remaining > 0) {
+    const stuckReady = await prisma.protectedTransaction.findMany({
+      where: {
+        status: "READY_TO_RELEASE",
+        ...(seen.size
+          ? { id: { notIn: Array.from(seen) } }
+          : {}),
+      },
+      take: remaining,
+      orderBy: { updatedAt: "asc" },
+    });
+
+    for (const txn of stuckReady) {
+      try {
+        const fresh = await prisma.protectedTransaction.findUnique({
+          where: { id: txn.id },
+        });
+        if (!fresh || fresh.status !== "READY_TO_RELEASE") {
+          results.push({ id: txn.id, ok: false, error: "state_changed" });
+          continue;
+        }
+        await releaseFinal({ protectedTxnId: fresh.id, actorUserId: null });
+        results.push({ id: txn.id, ok: true });
+      } catch (err) {
+        results.push({
+          id: txn.id,
+          ok: false,
+          error: err instanceof Error ? err.message : "error",
+        });
+      }
+    }
+  }
+
   return results;
 }
