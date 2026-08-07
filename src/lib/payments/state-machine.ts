@@ -36,6 +36,7 @@ export type DomainAction =
   | "TRACKING_IN_TRANSIT"
   | "TRACKING_DELIVERED"
   | "START_INSPECTION"
+  | "CONFIRM_RECEIPT"
   | "COMPLETE_INSPECTION"
   | "RELEASE_FINAL"
   | "OPEN_DISPUTE"
@@ -86,13 +87,26 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
   START_INSPECTION: {
     DELIVERED: "IN_INSPECTION",
   },
+  /**
+   * Buyer manual “Confirm item received” after seller shipped.
+   * Never from FUNDED without shipment. Never jumps to RELEASED.
+   */
+  CONFIRM_RECEIPT: {
+    AWAITING_SHIPMENT: "IN_INSPECTION",
+    IN_TRANSIT: "IN_INSPECTION",
+    DELIVERED: "IN_INSPECTION",
+  },
   COMPLETE_INSPECTION: {
     IN_INSPECTION: "READY_TO_RELEASE",
     DELIVERED: "READY_TO_RELEASE",
   },
   RELEASE_FINAL: {
+    /** Protected: only after inspection window / READY_TO_RELEASE. */
     READY_TO_RELEASE: "RELEASED",
-    // Instant path: release promptly after funding when no protection hold.
+    /**
+     * Instant path only is allowed to release from FUNDED.
+     * releaseFinal() still blocks PROTECTED + FUNDED explicitly.
+     */
     FUNDED: "RELEASED",
     PROCUREMENT_RELEASED: "RELEASED",
   },

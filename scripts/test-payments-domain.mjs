@@ -27,6 +27,18 @@ function totalChargeMinor(b) {
 
 const TRANSITIONS = {
   MARK_FUNDED: { AWAITING_PAYMENT: "FUNDED", ACCEPTED: "FUNDED" },
+  ADD_TRACKING: {
+    FUNDED: "AWAITING_SHIPMENT",
+    PROCUREMENT_RELEASED: "AWAITING_SHIPMENT",
+  },
+  CONFIRM_RECEIPT: {
+    AWAITING_SHIPMENT: "IN_INSPECTION",
+    IN_TRANSIT: "IN_INSPECTION",
+    DELIVERED: "IN_INSPECTION",
+  },
+  COMPLETE_INSPECTION: {
+    IN_INSPECTION: "READY_TO_RELEASE",
+  },
   RELEASE_FINAL: {
     READY_TO_RELEASE: "RELEASED",
     FUNDED: "RELEASED",
@@ -90,6 +102,10 @@ assert.equal(canTransition("DRAFT", "MARK_FUNDED"), false);
 assert.equal(canTransition("FUNDED", "RELEASE_FINAL"), true);
 assert.equal(canTransition("IN_TRANSIT", "TRACKING_DELIVERED"), true);
 assert.equal(canTransition("FUNDED", "OPEN_DISPUTE"), true);
+assert.equal(canTransition("FUNDED", "ADD_TRACKING"), true);
+assert.equal(canTransition("FUNDED", "CONFIRM_RECEIPT"), false);
+assert.equal(canTransition("AWAITING_SHIPMENT", "CONFIRM_RECEIPT"), true);
+assert.equal(canTransition("IN_INSPECTION", "COMPLETE_INSPECTION"), true);
 
 // ── Tracking normalize
 assert.equal(normalizeTrackingStatus("Delivered"), "DELIVERED");

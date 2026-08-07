@@ -12,6 +12,7 @@ import {
   type DomainAction,
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
+import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -190,9 +191,11 @@ export async function releaseFinal(opts: {
     );
   }
 
-  if (txn.paymentOption === "PROTECTED" && status === "FUNDED") {
+  if (txn.paymentOption === "PROTECTED" && status !== "READY_TO_RELEASE") {
     throw Object.assign(
-      new Error("Protected transactions require delivery/inspection before final release"),
+      new Error(
+        "Protected transactions require READY_TO_RELEASE (after delivery/inspection) before final release",
+      ),
       { status: 409, code: "INSPECTION_REQUIRED" },
     );
   }
@@ -217,6 +220,7 @@ export async function releaseFinal(opts: {
       where: { id: txn.id },
       data: { status: next, releasedAt: new Date() },
     });
+    await markListingSoldIfLinked(txn.listingId);
     return { alreadyReleased: true, txn: updated };
   }
 
@@ -297,6 +301,8 @@ export async function releaseFinal(opts: {
       action: "RELEASE_FINAL",
       meta: { transferId: transfer.id, amountMinor: amount },
     });
+
+    await markListingSoldIfLinked(txn.listingId);
 
     return { alreadyReleased: false, txn: updated, transferId: transfer.id };
   } catch (err) {

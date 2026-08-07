@@ -168,13 +168,27 @@ export default function AccountSettingsPage() {
             Set up Stripe Connect to receive Protected Payments. Source Bridge
             controls release timing; Stripe processes the charge.
           </p>
-          <div className="mt-4">
+          <div className="mt-4 flex flex-wrap gap-3">
             <PrimaryButton
               href="/profile/settings/payments"
               showArrow={false}
               className="rounded-lg"
             >
               Open Payments & Payouts
+            </PrimaryButton>
+            <PrimaryButton
+              href="/profile/sales"
+              showArrow={false}
+              className="rounded-lg"
+            >
+              Sales & Fulfilment
+            </PrimaryButton>
+            <PrimaryButton
+              href="/profile/purchases"
+              showArrow={false}
+              className="rounded-lg"
+            >
+              Purchases
             </PrimaryButton>
           </div>
         </section>

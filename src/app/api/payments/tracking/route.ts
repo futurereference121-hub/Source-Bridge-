@@ -14,7 +14,12 @@ import {
   nextStatus,
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
-import { isTrackingAutomationEnabled } from "@/lib/payments/flags";
+import {
+  isPaymentsEnabled,
+  isProtectedPaymentsEnabled,
+  isTrackingAutomationEnabled,
+} from "@/lib/payments/flags";
+import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 
 export const runtime = "nodejs";
 
@@ -24,9 +29,35 @@ const addSchema = z.object({
   carrier: z.string().trim().max(64).optional(),
 });
 
+async function assertTestPartyGate(
+  buyerId: string,
+  sellerId: string,
+  action: string,
+) {
+  if (!isPaymentsEnabled() || !isProtectedPaymentsEnabled()) {
+    throw Object.assign(new Error("Protected Payments are not enabled"), {
+      status: 503,
+    });
+  }
+  const buyer = await prisma.user.findUnique({
+    where: { id: buyerId },
+    select: { id: true, email: true },
+  });
+  const seller = await prisma.user.findUnique({
+    where: { id: sellerId },
+    select: { id: true, email: true },
+  });
+  if (!buyer || !seller) {
+    throw Object.assign(new Error("Party not found"), { status: 404 });
+  }
+  assertPaymentsTestAllowlisted([buyer, seller], {
+    action,
+    labels: ["buyer", "seller"],
+  });
+}
+
 /**
- * Seller adds tracking. Cannot self-declare DELIVERED for tracked shipments —
- * delivery comes from provider (or mock) / admin only.
+ * Seller adds tracking. Cannot self-declare DELIVERED.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -44,6 +75,7 @@ export async function POST(req: NextRequest) {
     if (txn.sellerId !== user.id) {
       return jsonError("Only the seller can add tracking", 403);
     }
+    await assertTestPartyGate(txn.buyerId, txn.sellerId, "add tracking");
 
     const status = txn.status as ProtectedStatus;
     if (!canTransition(status, "ADD_TRACKING")) {
@@ -61,7 +93,6 @@ export async function POST(req: NextRequest) {
       );
       normalized = result.normalizedStatus;
       providerStatus = result.providerStatus;
-      // Seller path: never accept DELIVERED from this endpoint even if mock returns it
       if (normalized === "DELIVERED") {
         normalized = "IN_TRANSIT";
         providerStatus = "in_transit_pending_provider";
@@ -120,9 +151,11 @@ export async function POST(req: NextRequest) {
         status: updated.status,
         trackingStatus: updated.trackingStatus,
         trackingNumber: updated.trackingNumber,
+        trackingCarrier: updated.trackingCarrier,
+        shippedAt: updated.shippedAt?.toISOString() ?? null,
       },
       notice:
-        "Delivery confirmation requires tracking provider updates. Sellers cannot self-declare delivered on tracked shipments.",
+        "Delivery confirmation requires tracking provider updates or buyer receipt confirmation. Sellers cannot self-declare delivered.",
     });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
@@ -134,7 +167,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Provider/webhook-style refresh — marks DELIVERED only via provider normalize. */
+/** Provider refresh — DELIVERED enters inspection only, no transfer. */
 export async function PATCH(req: NextRequest) {
   try {
     const user = await requireSessionUser();
@@ -148,14 +181,13 @@ export async function PATCH(req: NextRequest) {
     if (txn.buyerId !== user.id && txn.sellerId !== user.id) {
       return jsonError("Not a party", 403);
     }
+    await assertTestPartyGate(txn.buyerId, txn.sellerId, "refresh tracking");
     if (!txn.trackingNumber) return jsonError("No tracking number", 400);
 
     const provider = getTrackingProvider();
     const result = await provider.track(txn.trackingNumber, txn.trackingCarrier);
     const normalized = normalizeTrackingStatus(result.providerStatus);
 
-    // Sellers refreshing cannot force DELIVERED — only provider result can.
-    // (Mock ending in 9 simulates provider delivery.)
     let status = txn.status as ProtectedStatus;
     const updates: Record<string, unknown> = {
       trackingStatus: normalized,
@@ -200,7 +232,7 @@ export async function PATCH(req: NextRequest) {
       protectedTxnId: txn.id,
       actorUserId: user.id,
       action: "TRACKING_REFRESH",
-      meta: { normalizedStatus: normalized },
+      meta: { normalizedStatus: normalized, transferTriggered: false },
     });
 
     return Response.json({

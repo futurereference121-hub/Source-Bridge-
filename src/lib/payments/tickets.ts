@@ -20,6 +20,7 @@ import {
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
+import { releaseListingReservation } from "@/lib/payments/listing-lifecycle";
 
 export type TicketAmountsInput = {
   itemCostMinor: number;
@@ -264,6 +265,11 @@ export async function createOrRevisePaymentTicket(opts: {
   };
   const termsHash = hashTerms(terms);
 
+  const deferredListingReleases: Array<{
+    listingId: string;
+    buyerId: string;
+  }> = [];
+
   const result = await prisma.$transaction(async (tx) => {
     if (open && open.status !== "FUNDED") {
       await tx.paymentTicket.update({
@@ -284,6 +290,12 @@ export async function createOrRevisePaymentTicket(opts: {
             where: { id: prior.id },
             data: { status: "CANCELLED" },
           });
+          if (prior.listingId) {
+            deferredListingReleases.push({
+              listingId: prior.listingId,
+              buyerId: prior.buyerId,
+            });
+          }
         }
       }
     }
@@ -337,6 +349,9 @@ export async function createOrRevisePaymentTicket(opts: {
     return ticket;
   });
 
+  for (const item of deferredListingReleases) {
+    await releaseListingReservation(item.listingId, item.buyerId);
+  }
   await recordAuditEvent({
     actorUserId: opts.actorId,
     action: "PAYMENT_TICKET_PROPOSED",
