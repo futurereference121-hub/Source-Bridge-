@@ -11,12 +11,22 @@ export type AllowlistIdentity = {
   email?: string | null;
 };
 
+/** Normalize one allowlist token (trim, strip accidental quotes/BOM, lowercase). */
+export function normalizeAllowlistToken(raw: string): string {
+  return raw
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
 function parseAllowlistRaw(): string[] {
-  const raw = (process.env.PAYMENTS_TEST_ALLOWLIST || "").trim();
+  const raw = (process.env.PAYMENTS_TEST_ALLOWLIST || "").replace(/^\uFEFF/, "").trim();
   if (!raw) return [];
   return raw
     .split(/[,;\s]+/)
-    .map((s) => s.trim().toLowerCase())
+    .map(normalizeAllowlistToken)
     .filter(Boolean);
 }
 
@@ -29,11 +39,15 @@ export function getPaymentsTestAllowlistEntries(): string[] {
   return parseAllowlistRaw();
 }
 
+export function getPaymentsTestAllowlistEntryCount(): number {
+  return parseAllowlistRaw().length;
+}
+
 export function userMatchesPaymentsAllowlist(user: AllowlistIdentity): boolean {
   const list = parseAllowlistRaw();
   if (!list.length) return false;
-  const id = (user.id || "").trim().toLowerCase();
-  const email = (user.email || "").trim().toLowerCase();
+  const id = normalizeAllowlistToken(user.id || "");
+  const email = normalizeAllowlistToken(user.email || "");
   if (id && list.includes(id)) return true;
   if (email && list.includes(email)) return true;
   return false;
@@ -42,10 +56,11 @@ export function userMatchesPaymentsAllowlist(user: AllowlistIdentity): boolean {
 /**
  * Hard gate for money-path operations. Fail closed.
  * Requires a non-empty allowlist AND every provided identity to match.
+ * Error message indicates which identity failed when possible.
  */
 export function assertPaymentsTestAllowlisted(
   users: AllowlistIdentity | AllowlistIdentity[],
-  opts?: { action?: string },
+  opts?: { action?: string; labels?: string[] },
 ): void {
   const list = Array.isArray(users) ? users : [users];
   if (!isPaymentsTestAllowlistConfigured()) {
@@ -56,15 +71,21 @@ export function assertPaymentsTestAllowlisted(
       { status: 403, code: "PAYMENTS_ALLOWLIST_EMPTY" },
     );
   }
-  for (const u of list) {
+  for (let i = 0; i < list.length; i++) {
+    const u = list[i];
     if (!userMatchesPaymentsAllowlist(u)) {
+      const label = opts?.labels?.[i] || `party ${i + 1}`;
       throw Object.assign(
         new Error(
           opts?.action
-            ? `Not allowed to ${opts.action} — account is not on the payments test allowlist.`
-            : "Account is not on the Protected Payments test allowlist.",
+            ? `Not allowed to ${opts.action} — ${label} is not on the payments test allowlist.`
+            : `${label} is not on the Protected Payments test allowlist.`,
         ),
-        { status: 403, code: "PAYMENTS_ALLOWLIST_DENIED" },
+        {
+          status: 403,
+          code: "PAYMENTS_ALLOWLIST_DENIED",
+          allowlistParty: label,
+        },
       );
     }
   }
@@ -75,6 +96,7 @@ export function paymentsAllowlistGateSnapshot(user?: AllowlistIdentity | null) {
   const configured = isPaymentsTestAllowlistConfigured();
   return {
     allowlistConfigured: configured,
+    allowlistEntryCount: getPaymentsTestAllowlistEntryCount(),
     /** Current session may create/accept tickets and fund when payments flags are on. */
     testAccessAllowed: Boolean(user && configured && userMatchesPaymentsAllowlist(user)),
   };

@@ -14,6 +14,7 @@ import {
 } from "@/lib/payments/listing-options";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
 import {
+  getPaymentsTestAllowlistEntryCount,
   isPaymentsTestAllowlistConfigured,
   userMatchesPaymentsAllowlist,
 } from "@/lib/payments/allowlist";
@@ -59,6 +60,8 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     let paymentOptions = "CONTACT_ONLY";
     let sellerConnectReady = false;
+    /** Always the stock listing owner User.id when DB listing — for allowlist. */
+    let sellerUserId = listing.memberId;
     let sellerEmail: string | null = null;
 
     if (listing.isDbListing) {
@@ -81,13 +84,16 @@ export async function GET(_req: Request, ctx: Ctx) {
       const row = await prisma.stockListing.findUnique({
         where: { id: listing.id },
         select: {
+          userId: true,
           paymentOptions: true,
-          user: { select: { email: true } },
+          user: { select: { id: true, email: true } },
         },
       });
       paymentOptions = parseListingPaymentOptions(row?.paymentOptions);
+      if (row?.userId) sellerUserId = row.userId;
+      if (row?.user?.id) sellerUserId = row.user.id;
       sellerEmail = row?.user?.email ?? null;
-      const connect = await getConnectStatus(listing.memberId);
+      const connect = await getConnectStatus(sellerUserId);
       sellerConnectReady = connect.canReceiveProtectedPayments;
     }
 
@@ -95,17 +101,29 @@ export async function GET(_req: Request, ctx: Ctx) {
     const flags = paymentFlagsSnapshot();
     const session = await getSessionUser();
 
+    const allowlistConfigured = isPaymentsTestAllowlistConfigured();
+    const allowlistEntryCount = getPaymentsTestAllowlistEntryCount();
+
+    const buyerIdentity = session
+      ? { id: session.id, email: session.email }
+      : null;
+    const sellerIdentity = {
+      id: sellerUserId,
+      email: sellerEmail,
+    };
+
+    const buyerAllowlisted = buyerIdentity
+      ? userMatchesPaymentsAllowlist(buyerIdentity)
+      : false;
+    const sellerAllowlisted = listing.isDbListing
+      ? userMatchesPaymentsAllowlist(sellerIdentity)
+      : false;
+
     const allowlistOk =
-      isPaymentsTestAllowlistConfigured() &&
+      allowlistConfigured &&
       Boolean(session) &&
-      userMatchesPaymentsAllowlist({
-        id: session!.id,
-        email: session!.email,
-      }) &&
-      userMatchesPaymentsAllowlist({
-        id: seller.id,
-        email: sellerEmail,
-      });
+      buyerAllowlisted &&
+      sellerAllowlisted;
 
     const listingProtectedOk =
       listingAllowsProtected(parseListingPaymentOptions(paymentOptions)) ||
@@ -123,7 +141,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         allowlistOk &&
         listingProtectedOk &&
         session &&
-        session.id !== seller.id,
+        session.id !== sellerUserId,
     );
 
     let cardCheckoutBlockedReason: string | null = null;
@@ -131,16 +149,25 @@ export async function GET(_req: Request, ctx: Ctx) {
       if (!isStripeConfigured() || !isProtectedPaymentsEnabled()) {
         cardCheckoutBlockedReason =
           "Protected card checkout is not enabled for this environment.";
+      } else if (!session) {
+        cardCheckoutBlockedReason = "Sign in to pay by card.";
       } else if (!sellerConnectReady) {
         cardCheckoutBlockedReason =
           "Seller must complete Payments & Payouts before card checkout.";
-      } else if (!isPaymentsTestAllowlistConfigured() || !allowlistOk) {
+      } else if (!allowlistConfigured || allowlistEntryCount === 0) {
         cardCheckoutBlockedReason =
-          "Card checkout is limited to approved test accounts.";
-      } else if (session && session.id === seller.id) {
+          "Card checkout test allowlist is empty on this server.";
+      } else if (!buyerAllowlisted && !sellerAllowlisted) {
+        cardCheckoutBlockedReason =
+          "Card checkout is limited to approved test accounts (buyer and seller are not on the allowlist).";
+      } else if (!buyerAllowlisted) {
+        cardCheckoutBlockedReason =
+          "Card checkout is limited to approved test accounts (your buyer account is not on the allowlist).";
+      } else if (!sellerAllowlisted) {
+        cardCheckoutBlockedReason =
+          "Card checkout is limited to approved test accounts (the seller of this listing is not on the allowlist).";
+      } else if (session.id === sellerUserId) {
         cardCheckoutBlockedReason = "You cannot buy your own listing.";
-      } else if (!session) {
-        cardCheckoutBlockedReason = "Sign in to pay by card.";
       } else {
         cardCheckoutBlockedReason =
           "Card checkout is unavailable for this listing.";
@@ -149,12 +176,25 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     return Response.json({
       listing,
-      seller,
+      seller: {
+        ...seller,
+        // Ensure public seller id matches owner used for Connect/allowlist.
+        id: listing.isDbListing ? sellerUserId : seller.id,
+      },
       cryptoPaymentMethods: methods,
       paymentOptions,
       sellerConnectReady,
       canStripeCardCheckout,
       cardCheckoutBlockedReason,
+      /** Safe allowlist diagnostics — never includes tokens/emails/ids from env. */
+      allowlistGate: {
+        configured: allowlistConfigured,
+        entryCount: allowlistEntryCount,
+        sessionPresent: Boolean(session),
+        buyerAllowlisted: session ? buyerAllowlisted : null,
+        sellerAllowlisted: listing.isDbListing ? sellerAllowlisted : null,
+        comparisonFields: ["User.id", "User.email"],
+      },
       flags,
       stripeConfigured: stripe.stripeConfigured,
       stripeMode: stripe.stripeMode,

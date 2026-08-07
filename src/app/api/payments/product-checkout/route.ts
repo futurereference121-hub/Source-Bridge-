@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
     assertEligiblePaymentParty(listing.user, "seller");
     assertPaymentsTestAllowlisted([buyer, listing.user], {
       action: "start product checkout",
+      labels: ["buyer", "seller"],
     });
 
     const connect = await getConnectStatus(listing.userId);
