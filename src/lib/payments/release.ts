@@ -306,9 +306,40 @@ export async function releaseFinal(opts: {
         typeof lc === "string" ? lc : lc && typeof lc === "object" ? lc.id : "";
     }
 
-    // UK/EUR platforms settle to local currency. Tying the Transfer to the
-    // original charge (source_transaction) is required so SCT can pull the
-    // charge funds without a same-currency platform available balance.
+    const presentmentCurrency = txn.currency.toLowerCase();
+    let transferCurrency = presentmentCurrency;
+    let transferAmountMinor = amount;
+
+    // UK/EUR platforms often settle non-local charges into local currency.
+    // source_transaction + matching settle currency is required for SCT releases.
+    if (sourceTransaction) {
+      const charge = await stripe.charges.retrieve(sourceTransaction, {
+        expand: ["balance_transaction"],
+      });
+      const bt =
+        charge.balance_transaction &&
+        typeof charge.balance_transaction === "object"
+          ? charge.balance_transaction
+          : null;
+      const settleCurrency = (bt?.currency || charge.currency || "").toLowerCase();
+      if (settleCurrency && settleCurrency !== presentmentCurrency) {
+        if (!bt || !charge.amount) {
+          throw Object.assign(
+            new Error(
+              `Cannot convert final transfer ${presentmentCurrency}→${settleCurrency}: missing balance transaction`,
+            ),
+            { status: 409, code: "SETTLEMENT_FX_MISSING" },
+          );
+        }
+        // Pro-rate seller presentment share into settlement currency.
+        transferCurrency = settleCurrency;
+        transferAmountMinor = Math.max(
+          1,
+          Math.floor((amount * bt.amount) / charge.amount),
+        );
+      }
+    }
+
     const transferParams: {
       amount: number;
       currency: string;
@@ -317,29 +348,33 @@ export async function releaseFinal(opts: {
       metadata: Record<string, string>;
       source_transaction?: string;
     } = {
-      amount,
-      currency: txn.currency.toLowerCase(),
+      amount: transferAmountMinor,
+      currency: transferCurrency,
       destination: connect.stripeAccountId,
       transfer_group: txn.id,
       metadata: {
         protectedTxnId: txn.id,
         kind: "FINAL",
         chargeModel: CHARGE_MODEL,
+        presentmentCurrency,
+        presentmentAmountMinor: String(amount),
+        settleCurrency: transferCurrency,
+        settleAmountMinor: String(transferAmountMinor),
       },
     };
     if (sourceTransaction) {
       transferParams.source_transaction = sourceTransaction;
     }
 
-    // When prior attempt failed without source_transaction, Stripe idempotency
-    // forbids changing params under the same key — bump for failed retries.
+    // When prior attempt failed without source_transaction / FX, Stripe
+    // idempotency forbids changing params under the same key — bump retries.
     const stripeIdempotencyKey =
       existingAttempt &&
       (existingAttempt.status === "FAILED" || existingAttempt.status === "PENDING") &&
       existingAttempt.attemptCount > 0
-        ? `${idempotencyKey}_src_a${existingAttempt.attemptCount}`
+        ? `${idempotencyKey}_srcfx_a${existingAttempt.attemptCount}`
         : sourceTransaction
-          ? `${idempotencyKey}_src`
+          ? `${idempotencyKey}_srcfx`
           : idempotencyKey;
 
     const transfer = await stripe.transfers.create(transferParams, {
@@ -352,6 +387,8 @@ export async function releaseFinal(opts: {
         where: { id: attempt.id },
         data: {
           status: "SUCCEEDED",
+          // Keep presentment amount on the attempt for product accounting.
+          amountMinor: amount,
           stripeTransferId: transfer.id,
           succeededAt: new Date(),
           lastAttemptAt: new Date(),
@@ -361,6 +398,7 @@ export async function releaseFinal(opts: {
         where: { id: txn.id },
         data: {
           status: next,
+          // Domain books stay in presentment currency (item share).
           finalTransferredMinor: txn.finalTransferredMinor + amount,
           releasedAt: new Date(),
           sellerConnectAccountId: connect.stripeAccountId,
@@ -377,6 +415,11 @@ export async function releaseFinal(opts: {
       idempotencyKey: `ledger_${idempotencyKey}`,
       stripeObjectId: transfer.id,
       stripeObjectType: "transfer",
+      meta: {
+        settleCurrency: transferCurrency,
+        settleAmountMinor: transferAmountMinor,
+        sourceTransaction: sourceTransaction || null,
+      },
     });
     await recordAuditEvent({
       protectedTxnId: txn.id,
@@ -385,6 +428,9 @@ export async function releaseFinal(opts: {
       meta: {
         transferId: transfer.id,
         amountMinor: amount,
+        presentmentCurrency,
+        settleCurrency: transferCurrency,
+        settleAmountMinor: transferAmountMinor,
         sourceTransaction: sourceTransaction || null,
       },
     });
