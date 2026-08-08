@@ -573,6 +573,8 @@ model SourcingRequest {
   updatedAt       DateTime      @updatedAt
   conversation    Conversation?
   transactions    Transaction[]
+  paymentTickets  PaymentTicket[]
+  protectedTxns   ProtectedTransaction[]
 
   @@index([fromUserId, toUserId])
   @@index([toUserId, createdAt])
@@ -796,6 +798,9 @@ model PaymentTicket {
   buyerId               String
   sellerId              String
   listingId             String?
+  /// Optional link to sourcing flow (one active agreement at a time per request).
+  sourcingRequestId     String?
+  sourcingRequest       SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
   /// DRAFT | PROPOSED | ACCEPTED | DECLINED | SUPERSEDED | CANCELLED | FUNDED
   status                String    @default("DRAFT")
   revision              Int       @default(1)
@@ -833,6 +838,7 @@ model PaymentTicket {
   @@index([sellerId, status])
   @@index([status, updatedAt])
   @@index([termsHash])
+  @@index([sourcingRequestId, status])
 }
 
 /// Source Bridge–controlled protected transaction (Stripe is processor only).
@@ -856,6 +862,9 @@ model ProtectedTransaction {
   conversation             Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   listingId                String?
   listing                  StockListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  /// Optional link to sourcing request (for ticket / procurement flows).
+  sourcingRequestId        String?
+  sourcingRequest          SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
   paymentTicket            PaymentTicket?
   title                    String    @default("")
   currency                 String    @default("USD")
@@ -908,6 +917,7 @@ model ProtectedTransaction {
   @@index([conversationId])
   @@index([listingId, status])
   @@index([inspectionEndsAt])
+  @@index([sourcingRequestId, status])
 }
 
 /// Immutable financial ledger — never update amounts; append only.

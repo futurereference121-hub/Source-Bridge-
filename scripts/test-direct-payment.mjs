@@ -154,6 +154,14 @@ const protFund = fundWebhookPath("PROTECTED", false);
 assert.equal(protFund.callTransfersCreate, false);
 assert.equal(protFund.destinationRelease, false);
 
+// Direct never buys procurement partial-release
+function canBuyerProc(paymentOption) {
+  return !isDirectPaymentOption(paymentOption);
+}
+assert.equal(canBuyerProc("DIRECT"), false);
+assert.equal(canBuyerProc("INSTANT"), false);
+assert.equal(canBuyerProc("PROTECTED"), true);
+
 assert.equal(canReleaseFinalPlatformTransfer("FUNDED", "INSTANT"), false);
 assert.equal(canReleaseFinalPlatformTransfer("FUNDED", "PROTECTED"), false);
 assert.equal(canReleaseFinalPlatformTransfer("READY_TO_RELEASE", "PROTECTED"), true);

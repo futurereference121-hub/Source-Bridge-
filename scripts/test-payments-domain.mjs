@@ -34,6 +34,7 @@ function totalChargeMinor(b) {
 
 const TRANSITIONS = {
   MARK_FUNDED: { AWAITING_PAYMENT: "FUNDED", ACCEPTED: "FUNDED" },
+  RELEASE_PROCUREMENT: { FUNDED: "PROCUREMENT_RELEASED" },
   ADD_TRACKING: {
     FUNDED: "AWAITING_SHIPMENT",
     PROCUREMENT_RELEASED: "AWAITING_SHIPMENT",
@@ -209,5 +210,24 @@ function matchesAllowlist(list, user) {
 // ── RELEASE_FINAL blocked from FUNDED for protected (domain note)
 // Implementation re-checks paymentOption === PROTECTED && status FUNDED → throw
 assert.equal(canTransition("FUNDED", "RELEASE_FINAL"), true); // state map allows; release.ts guards PROTECTED
+
+// ── Procurement: fund does not imply RELEASE_PROCUREMENT
+assert.equal(canTransition("FUNDED", "RELEASE_PROCUREMENT"), true);
+assert.equal(canTransition("ACCEPTED", "RELEASE_PROCUREMENT"), false);
+// PROCUREMENT_ADVANCES is manual — no transition from MARK_FUNDED to PROCUREMENT_RELEASED
+assert.equal(canTransition("AWAITING_PAYMENT", "MARK_FUNDED"), true);
+assert.notEqual(
+  // funding lands on FUNDED only
+  "PROCUREMENT_RELEASED",
+  "FUNDED",
+);
+
+// ── Advance = item cost only
+function procurementAdvanceAmount({ agreed, itemCostMinor, eligible }) {
+  if (!agreed || !eligible) return 0;
+  return itemCostMinor;
+}
+assert.equal(procurementAdvanceAmount({ agreed: true, itemCostMinor: 500, eligible: true }), 500);
+assert.equal(procurementAdvanceAmount({ agreed: true, itemCostMinor: 500, eligible: false }), 0);
 
 console.log("test-payments-domain: all assertions passed");

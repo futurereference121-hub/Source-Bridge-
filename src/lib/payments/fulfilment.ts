@@ -5,6 +5,7 @@ import {
   isPaymentsEnabled,
   isProtectedPaymentsEnabled,
   isDirectPaymentsEnabled,
+  isProcurementAdvancesEnabled,
 } from "@/lib/payments/flags";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import {
@@ -13,6 +14,7 @@ import {
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 
 export type ProtectedTxnListRole = "buyer" | "seller";
 
@@ -41,8 +43,14 @@ export function mapProtectedTxnSummary(
     itemCostMinor: number;
     shippingMinor: number;
     sellerServiceFeeMinor: number;
+    procurementAdvanceAgreed?: boolean;
+    procurementAdvanceMinor?: number;
+    procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
+    refundedMinor?: number;
     stripeMode: string;
     fundedAt: Date | null;
+    procurementReleasedAt?: Date | null;
     shippedAt: Date | null;
     deliveredAt: Date | null;
     inspectionEndsAt: Date | null;
@@ -72,8 +80,30 @@ export function mapProtectedTxnSummary(
     } | null;
   },
   viewerRole: ProtectedTxnListRole,
+  opts?: { procurementFlagOn?: boolean },
 ) {
   const shipped = Boolean(t.shippedAt || t.trackingNumber);
+  const books = computeProtectedFinancials({
+    itemCostMinor: t.itemCostMinor,
+    shippingMinor: t.shippingMinor,
+    sellerServiceFeeMinor: t.sellerServiceFeeMinor,
+    protectionFeeMinor: t.protectionFeeMinor,
+    totalChargeMinor: t.totalChargeMinor,
+    procurementAdvanceAgreed: t.procurementAdvanceAgreed,
+    procurementAdvanceMinor: t.procurementAdvanceMinor,
+    procurementTransferredMinor: t.procurementTransferredMinor,
+    finalTransferredMinor: t.finalTransferredMinor,
+    refundedMinor: t.refundedMinor,
+  });
+  const canReleaseProcurement =
+    Boolean(opts?.procurementFlagOn) &&
+    viewerRole === "buyer" &&
+    !isDirectPaymentOption(t.paymentOption) &&
+    t.status === "FUNDED" &&
+    Boolean(t.procurementAdvanceAgreed) &&
+    (t.procurementAdvanceMinor ?? 0) > 0 &&
+    (t.procurementTransferredMinor ?? 0) === 0;
+
   return {
     id: t.id,
     status: t.status,
@@ -86,8 +116,13 @@ export function mapProtectedTxnSummary(
     itemCostMinor: t.itemCostMinor,
     shippingMinor: t.shippingMinor,
     sellerServiceFeeMinor: t.sellerServiceFeeMinor,
+    procurementAdvanceAgreed: Boolean(t.procurementAdvanceAgreed),
+    procurementAdvanceMinor: t.procurementAdvanceMinor ?? 0,
+    procurementTransferredMinor: t.procurementTransferredMinor ?? 0,
+    books,
     stripeMode: t.stripeMode,
     fundedAt: t.fundedAt?.toISOString() ?? null,
+    procurementReleasedAt: t.procurementReleasedAt?.toISOString() ?? null,
     shippedAt: t.shippedAt?.toISOString() ?? null,
     deliveredAt: t.deliveredAt?.toISOString() ?? null,
     inspectionEndsAt: t.inspectionEndsAt?.toISOString() ?? null,
@@ -125,7 +160,11 @@ export function mapProtectedTxnSummary(
             }
           : null,
     labels: {
-      payment: paymentLabel(t.status, t.paymentOption),
+      payment: paymentLabel(
+        t.status,
+        t.paymentOption,
+        Boolean(t.procurementAdvanceAgreed && (t.procurementTransferredMinor ?? 0) > 0),
+      ),
       shipping: shippingLabel(t.status, shipped, t.paymentOption),
       delivery: deliveryLabel(t.status, t.paymentOption),
     },
@@ -147,11 +186,14 @@ export function mapProtectedTxnSummary(
         !isDirectPaymentOption(t.paymentOption) &&
         shipped &&
         ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(t.status),
+      canReleaseProcurement,
+      /** Sourcer/seller never releases item funds. */
+      canSellerReleaseProcurement: false,
     },
   };
 }
 
-function paymentLabel(status: string, option: string) {
+function paymentLabel(status: string, option: string, procReleased = false) {
   if (isDirectPaymentOption(option)) {
     if (status === "RELEASED") return "Direct Payment — completed";
     if (status === "FUNDED") {
@@ -164,11 +206,25 @@ function paymentLabel(status: string, option: string) {
     if (status === "DISPUTED") return "Disputed";
     return `Direct Payment — ${status}`;
   }
+  if (status === "FUNDED" && !procReleased) {
+    return "Funded — held protected (buyer has not released item funds)";
+  }
+  if (status === "PROCUREMENT_RELEASED" || procReleased) {
+    if (status === "PROCUREMENT_RELEASED") {
+      return "Item funds released — remaining amount still protected";
+    }
+    // Later statuses after early procurement
+    if (["AWAITING_SHIPMENT", "IN_TRANSIT", "FUNDED"].includes(status)) {
+      return "Partially protected — item funds already released to sourcer";
+    }
+  }
   if (status === "FUNDED" || status === "AWAITING_SHIPMENT" || status === "IN_TRANSIT") {
-    return "Funded / Protected";
+    return procReleased
+      ? "Partially protected — item funds already released to sourcer"
+      : "Funded / Protected";
   }
   if (status === "IN_INSPECTION") return "Funded — inspection active";
-  if (status === "READY_TO_RELEASE") return "Ready to release";
+  if (status === "READY_TO_RELEASE") return "Ready to release residual";
   if (status === "RELEASED") return "Released to seller";
   if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "Refunded";
   if (status === "DISPUTED") return "Disputed";
@@ -248,7 +304,11 @@ export async function listProtectedOrdersForUser(opts: {
     },
   });
 
-  return rows.map((t) => mapProtectedTxnSummary(t, opts.role));
+  return rows.map((t) =>
+    mapProtectedTxnSummary(t, opts.role, {
+      procurementFlagOn: isProcurementAdvancesEnabled(),
+    }),
+  );
 }
 
 /**

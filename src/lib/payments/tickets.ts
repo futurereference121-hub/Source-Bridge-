@@ -26,6 +26,26 @@ import {
   normalizeTxnPaymentOption,
   type TxnPaymentOptionInput,
 } from "@/lib/payments/payment-option";
+import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+
+/** Ticket statuses that block a second concurrent agreement on the same sourcing request. */
+const ACTIVE_TICKET_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"] as const;
+
+/** Protected txn statuses still in flight (historical RELEASED/REFUNDED/CANCELLED OK). */
+const ACTIVE_TXN_STATUSES = [
+  "DRAFT",
+  "AWAITING_ACCEPTANCE",
+  "ACCEPTED",
+  "AWAITING_PAYMENT",
+  "FUNDED",
+  "PROCUREMENT_RELEASED",
+  "AWAITING_SHIPMENT",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "IN_INSPECTION",
+  "READY_TO_RELEASE",
+  "DISPUTED",
+] as const;
 
 export type TicketAmountsInput = {
   itemCostMinor: number;
@@ -40,39 +60,73 @@ export type TicketAmountsInput = {
   currency?: string;
 };
 
-function mapTicket(t: {
-  id: string;
-  conversationId: string;
-  createdById: string;
-  buyerId: string;
-  sellerId: string;
-  listingId: string | null;
-  status: string;
-  revision: number;
-  termsHash: string;
-  title: string;
-  currency: string;
-  itemCostMinor: number;
-  shippingMinor: number;
-  sellerServiceFeeMinor: number;
-  protectionFeeMinor: number;
-  totalChargeMinor: number;
-  paymentOption: string;
-  procurementAdvanceAgreed: boolean;
-  procurementAdvanceMinor: number;
-  notes: string;
-  buyerApprovedRevision: number | null;
-  sellerApprovedRevision: number | null;
-  buyerApprovedAt: Date | null;
-  sellerApprovedAt: Date | null;
-  declinedById: string | null;
-  declinedAt: Date | null;
-  declineReason: string;
-  protectedTransactionId: string | null;
-  stripeMode: string;
-  createdAt: Date;
-  updatedAt: Date;
-}) {
+function mapTicket(
+  t: {
+    id: string;
+    conversationId: string;
+    createdById: string;
+    buyerId: string;
+    sellerId: string;
+    listingId: string | null;
+    sourcingRequestId?: string | null;
+    status: string;
+    revision: number;
+    termsHash: string;
+    title: string;
+    currency: string;
+    itemCostMinor: number;
+    shippingMinor: number;
+    sellerServiceFeeMinor: number;
+    protectionFeeMinor: number;
+    totalChargeMinor: number;
+    paymentOption: string;
+    procurementAdvanceAgreed: boolean;
+    procurementAdvanceMinor: number;
+    notes: string;
+    buyerApprovedRevision: number | null;
+    sellerApprovedRevision: number | null;
+    buyerApprovedAt: Date | null;
+    sellerApprovedAt: Date | null;
+    declinedById: string | null;
+    declinedAt: Date | null;
+    declineReason: string;
+    protectedTransactionId: string | null;
+    stripeMode: string;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  extras?: {
+    protectedTxnStatus?: string | null;
+    procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
+    refundedMinor?: number;
+    procurementAdvancesFlag?: boolean;
+  },
+) {
+  const books = computeProtectedFinancials({
+    itemCostMinor: t.itemCostMinor,
+    shippingMinor: t.shippingMinor,
+    sellerServiceFeeMinor: t.sellerServiceFeeMinor,
+    protectionFeeMinor: t.protectionFeeMinor,
+    totalChargeMinor: t.totalChargeMinor,
+    procurementAdvanceAgreed: t.procurementAdvanceAgreed,
+    procurementAdvanceMinor: t.procurementAdvanceMinor,
+    procurementTransferredMinor: extras?.procurementTransferredMinor ?? 0,
+    finalTransferredMinor: extras?.finalTransferredMinor ?? 0,
+    refundedMinor: extras?.refundedMinor ?? 0,
+  });
+  const protectedStatus = extras?.protectedTxnStatus ?? null;
+  const procPending =
+    Boolean(extras?.procurementAdvancesFlag) &&
+    t.procurementAdvanceAgreed &&
+    t.procurementAdvanceMinor > 0 &&
+    t.paymentOption === "PROTECTED" &&
+    (t.status === "FUNDED" || protectedStatus === "FUNDED") &&
+    (extras?.procurementTransferredMinor ?? 0) === 0;
+  const procReleased =
+    (extras?.procurementTransferredMinor ?? 0) > 0 ||
+    protectedStatus === "PROCUREMENT_RELEASED";
+
   return {
     id: t.id,
     conversationId: t.conversationId,
@@ -80,6 +134,7 @@ function mapTicket(t: {
     buyerId: t.buyerId,
     sellerId: t.sellerId,
     listingId: t.listingId,
+    sourcingRequestId: t.sourcingRequestId ?? null,
     status: t.status,
     revision: t.revision,
     termsHash: t.termsHash,
@@ -102,9 +157,17 @@ function mapTicket(t: {
     declinedAt: t.declinedAt?.toISOString() ?? null,
     declineReason: t.declineReason,
     protectedTransactionId: t.protectedTransactionId,
+    protectedTxnStatus: protectedStatus,
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
+    lifecycleStage: resolveLifecycleStage(t.status, protectedStatus, procReleased),
+    books,
+    actions: {
+      canReleaseProcurement: procPending,
+      canPay:
+        t.status === "ACCEPTED" && Boolean(t.protectedTransactionId),
+    },
     breakdown: {
       itemCost: t.itemCostMinor,
       shipping: t.shippingMinor,
@@ -112,13 +175,86 @@ function mapTicket(t: {
       sourceBridgeProtectionFee: t.protectionFeeMinor,
       total: t.totalChargeMinor,
       labels: {
-        itemCost: "Item Cost",
-        shipping: "Shipping",
-        sellerServiceFee: "Seller Service Fee",
-        sourceBridgeProtectionFee: "Source Bridge Protection Fee",
+        itemCost: books.labels.itemCost,
+        shipping: books.labels.shipping,
+        sellerServiceFee: books.labels.sellerServiceFee,
+        sourceBridgeProtectionFee: books.labels.platformFee,
       },
+      /** Shown before accept when procurement advance is agreed. */
+      releaseStructure:
+        t.procurementAdvanceAgreed && books.procurementAdvanceMinor > 0
+          ? {
+              itemFundsReleasedEarlyMinor: books.itemFundsReleasedEarlyMinor,
+              remainingProtectedSellerShareMinor:
+                books.remainingProtectedSellerShareMinor,
+              platformFeeHeldMinor: books.platformFeeMinor,
+              note: "Item funds may be released early after the buyer authorizes release. Shipping, sourcer fee, and Source Bridge fee stay protected.",
+            }
+          : null,
     },
   };
+}
+
+function resolveLifecycleStage(
+  ticketStatus: string,
+  protectedStatus: string | null,
+  procReleased: boolean,
+): string {
+  if (ticketStatus === "DECLINED" || ticketStatus === "SUPERSEDED" || ticketStatus === "CANCELLED") {
+    return ticketStatus;
+  }
+  const st = protectedStatus || ticketStatus;
+  if (st === "RELEASED") return "RELEASED";
+  if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
+  if (st === "DISPUTED") return "DISPUTED";
+  if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
+  if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
+  if (procReleased || st === "PROCUREMENT_RELEASED") return "PROCUREMENT_RELEASED";
+  if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
+  if (st === "AWAITING_PAYMENT") return "AWAITING_PAYMENT";
+  if (ticketStatus === "ACCEPTED") return "ACCEPTED";
+  if (ticketStatus === "PROPOSED") return "PROPOSED";
+  return ticketStatus;
+}
+
+async function assertNoConcurrentSourcingAgreement(opts: {
+  sourcingRequestId: string;
+  conversationId: string;
+  excludeTicketId?: string | null;
+}) {
+  const activeTicket = await prisma.paymentTicket.findFirst({
+    where: {
+      sourcingRequestId: opts.sourcingRequestId,
+      status: { in: [...ACTIVE_TICKET_STATUSES] },
+      ...(opts.excludeTicketId ? { id: { not: opts.excludeTicketId } } : {}),
+      // Same conversation supersede is handled separately; block other threads.
+      conversationId: { not: opts.conversationId },
+    },
+    select: { id: true },
+  });
+  if (activeTicket) {
+    throw Object.assign(
+      new Error(
+        "This sourcing request already has an active Payment Ticket agreement",
+      ),
+      { status: 409, code: "SOURCING_TICKET_ACTIVE" },
+    );
+  }
+  const activeTxn = await prisma.protectedTransaction.findFirst({
+    where: {
+      sourcingRequestId: opts.sourcingRequestId,
+      status: { in: [...ACTIVE_TXN_STATUSES] },
+    },
+    select: { id: true },
+  });
+  if (activeTxn) {
+    throw Object.assign(
+      new Error(
+        "This sourcing request already has an active funded or open protected payment",
+      ),
+      { status: 409, code: "SOURCING_TXN_ACTIVE" },
+    );
+  }
 }
 
 export { mapTicket };
@@ -233,6 +369,14 @@ export async function createOrRevisePaymentTicket(opts: {
     throw Object.assign(new Error("Not a participant"), { status: 403 });
   }
 
+  const sourcingRequestId = conversation.sourcingRequestId ?? null;
+  if (sourcingRequestId) {
+    await assertNoConcurrentSourcingAgreement({
+      sourcingRequestId,
+      conversationId: opts.conversationId,
+    });
+  }
+
   const { fees, currency, procurementMinor, total } = await resolveAmounts(
     opts.amounts,
     seller,
@@ -246,6 +390,27 @@ export async function createOrRevisePaymentTicket(opts: {
     },
     orderBy: { createdAt: "desc" },
   });
+
+  // Same conversation supersede — still block if another ticket for this
+  // sourcing request is already FUNDED.
+  if (sourcingRequestId) {
+    const fundedElsewhere = await prisma.paymentTicket.findFirst({
+      where: {
+        sourcingRequestId,
+        status: "FUNDED",
+        ...(open ? { id: { not: open.id } } : {}),
+      },
+      select: { id: true },
+    });
+    if (fundedElsewhere) {
+      throw Object.assign(
+        new Error(
+          "This sourcing request already has a funded Payment Ticket",
+        ),
+        { status: 409, code: "SOURCING_FUNDED_TICKET" },
+      );
+    }
+  }
 
   const revision = open ? open.revision + 1 : 1;
   const title = (opts.amounts.title || open?.title || "Protected Payment").trim();
@@ -309,6 +474,7 @@ export async function createOrRevisePaymentTicket(opts: {
         buyerId: opts.buyerId,
         sellerId: opts.sellerId,
         listingId: terms.listingId,
+        sourcingRequestId,
         status: "PROPOSED",
         revision,
         termsHash,
@@ -358,10 +524,12 @@ export async function createOrRevisePaymentTicket(opts: {
   await recordAuditEvent({
     actorUserId: opts.actorId,
     action: "PAYMENT_TICKET_PROPOSED",
-    meta: { ticketId: result.id, revision, termsHash },
+    meta: { ticketId: result.id, revision, termsHash, sourcingRequestId },
   });
 
-  return mapTicket(result);
+  return mapTicket(result, {
+    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+  });
 }
 
 export async function respondToPaymentTicket(opts: {
@@ -460,6 +628,15 @@ export async function respondToPaymentTicket(opts: {
       ? ticket.sellerApprovedRevision === ticket.revision
       : ticket.buyerApprovedRevision === ticket.revision);
 
+  // Block dual-accept if another active funded agreement exists for this sourcing request.
+  if (bothWillApprove && ticket.sourcingRequestId) {
+    await assertNoConcurrentSourcingAgreement({
+      sourcingRequestId: ticket.sourcingRequestId,
+      conversationId: ticket.conversationId,
+      excludeTicketId: ticket.id,
+    });
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     let row = await tx.paymentTicket.update({
       where: { id: ticket.id },
@@ -494,6 +671,7 @@ export async function respondToPaymentTicket(opts: {
           sellerId: ticket.sellerId,
           conversationId: ticket.conversationId,
           listingId: ticket.listingId,
+          sourcingRequestId: ticket.sourcingRequestId,
           title: ticket.title,
           currency: ticket.currency,
           stripeMode: getStripeMode(),
@@ -529,12 +707,25 @@ export async function respondToPaymentTicket(opts: {
     meta: { ticketId: ticket.id, revision: ticket.revision },
   });
 
-  return mapTicket(updated);
+  return mapTicket(updated, {
+    protectedTxnStatus: bothWillApprove ? "ACCEPTED" : null,
+    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+  });
 }
 
 export async function getPaymentTicket(ticketId: string, viewerId: string) {
   const ticket = await prisma.paymentTicket.findUnique({
     where: { id: ticketId },
+    include: {
+      protectedTransaction: {
+        select: {
+          status: true,
+          procurementTransferredMinor: true,
+          finalTransferredMinor: true,
+          refundedMinor: true,
+        },
+      },
+    },
   });
   if (!ticket) {
     throw Object.assign(new Error("Ticket not found"), { status: 404 });
@@ -542,5 +733,12 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
   if (viewerId !== ticket.buyerId && viewerId !== ticket.sellerId) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
   }
-  return mapTicket(ticket);
+  const pt = ticket.protectedTransaction;
+  return mapTicket(ticket, {
+    protectedTxnStatus: pt?.status ?? null,
+    procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
+    finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
+    refundedMinor: pt?.refundedMinor ?? 0,
+    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+  });
 }

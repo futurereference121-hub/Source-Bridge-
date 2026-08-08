@@ -14,10 +14,18 @@ import {
 } from "@/lib/payments/state-machine";
 import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import {
+  assertFinalReleaseInvariants,
+  assertProcurementReleaseInvariants,
+  computeProtectedFinancials,
+} from "@/lib/payments/breakdown";
 
 /**
  * Release engine — Separate Charges and Transfers.
  * Rechecks domain state before every money movement.
+ *
+ * Procurement is buyer-authorized only (never auto from fund webhook).
+ * Final residual only: procurementTransferred + finalTransferred <= sellerEntitled.
  */
 export async function releaseProcurement(opts: {
   protectedTxnId: string;
@@ -38,11 +46,25 @@ export async function releaseProcurement(opts: {
   }
   assertStripeModeCompatible(txn.stripeMode);
 
+  // Direct uses Destination Charges only — never platform procurement transfer.
+  if (isDirectPaymentOption(txn.paymentOption)) {
+    throw Object.assign(
+      new Error("Procurement release is not available for Direct Payment"),
+      { status: 409, code: "DIRECT_NO_PROCUREMENT" },
+    );
+  }
+
   if (!txn.procurementAdvanceAgreed || txn.procurementAdvanceMinor <= 0) {
     throw Object.assign(new Error("No procurement advance on this transaction"), {
       status: 400,
       code: "NO_PROCUREMENT",
     });
+  }
+  if (txn.refundedMinor > 0 || ["REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED", "DISPUTED", "RELEASED"].includes(txn.status)) {
+    throw Object.assign(
+      new Error(`Cannot release procurement from status ${txn.status}`),
+      { status: 409, code: "INVALID_STATUS" },
+    );
   }
   if (txn.procurementTransferredMinor >= txn.procurementAdvanceMinor) {
     return { alreadyReleased: true, txn };
@@ -66,7 +88,26 @@ export async function releaseProcurement(opts: {
     });
   }
 
-  const amount = txn.procurementAdvanceMinor - txn.procurementTransferredMinor;
+  const books = computeProtectedFinancials(txn);
+  const amount = books.procurementAdvanceMinor - books.procurementTransferredMinor;
+  // Cap must be item cost only (helper already caps advance at itemCost).
+  if (amount <= 0) {
+    return { alreadyReleased: true, txn };
+  }
+  if (amount > books.itemCostMinor) {
+    throw Object.assign(
+      new Error("Procurement advance cannot include shipping or fees"),
+      { status: 409, code: "PROCUREMENT_NOT_ITEM_ONLY" },
+    );
+  }
+  assertProcurementReleaseInvariants({
+    sellerEntitledMinor: books.sellerEntitledMinor,
+    procurementAdvanceMinor: books.procurementAdvanceMinor,
+    procurementTransferredMinor: books.procurementTransferredMinor,
+    finalTransferredMinor: books.finalTransferredMinor,
+    nextProcurementDelta: amount,
+  });
+
   const idempotencyKey = `proc_xfer_${txn.id}_${txn.termsHash}`;
 
   const existingAttempt = await prisma.transferAttempt.findUnique({
@@ -248,10 +289,8 @@ export async function releaseFinal(opts: {
     });
   }
 
-  const sellerShare =
-    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
-  const already = txn.procurementTransferredMinor + txn.finalTransferredMinor;
-  const amount = Math.max(0, sellerShare - already);
+  const books = computeProtectedFinancials(txn);
+  const amount = books.finalResidualMinor;
   if (amount <= 0) {
     const next = nextStatus(status, action);
     const updated = await prisma.protectedTransaction.update({
@@ -261,6 +300,13 @@ export async function releaseFinal(opts: {
     await markListingSoldIfLinked(txn.listingId);
     return { alreadyReleased: true, txn: updated };
   }
+
+  assertFinalReleaseInvariants({
+    sellerEntitledMinor: books.sellerEntitledMinor,
+    procurementTransferredMinor: books.procurementTransferredMinor,
+    finalTransferredMinor: books.finalTransferredMinor,
+    nextFinalDelta: amount,
+  });
 
   const idempotencyKey = `final_xfer_${txn.id}_${txn.termsHash}`;
   const existingAttempt = await prisma.transferAttempt.findUnique({

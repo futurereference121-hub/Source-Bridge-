@@ -198,6 +198,22 @@ export default function SalesFulfilmentPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
+                  {o.status === "FUNDED" && o.labels.payment.includes("not released") ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Buyer authorizes item fund release. Sourcers cannot
+                        release funds.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "PROCUREMENT_RELEASED" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Item funds released. Ship when ready; residual pays after
+                        delivery/inspection.
+                      </p>
+                    </div>
+                  ) : null}
                   {o.listing?.slug ? (
                     <div>
                       <dt className="text-white/40">Listing</dt>

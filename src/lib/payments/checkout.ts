@@ -6,7 +6,6 @@ import {
   isDirectPaymentsEnabled,
   isPaymentsEnabled,
   isProtectedPaymentsEnabled,
-  isProcurementAdvancesEnabled,
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
@@ -17,7 +16,6 @@ import {
   isStripeConfigured,
 } from "@/lib/payments/stripe/client";
 import { nextStatus, type ProtectedStatus } from "@/lib/payments/state-machine";
-import { releaseProcurement } from "@/lib/payments/release";
 import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
@@ -425,26 +423,9 @@ export async function markTxnFundedFromWebhook(opts: {
     return { handled: true, reason: "funded", txn: updated, direct: release };
   }
 
-  // PROTECTED procurement advance (SCT transfer) when agreed — never on Direct.
-  if (
-    !isDirectPaymentOption(updated.paymentOption) &&
-    updated.procurementAdvanceAgreed &&
-    updated.procurementAdvanceMinor > 0 &&
-    isProcurementAdvancesEnabled()
-  ) {
-    try {
-      await releaseProcurement({ protectedTxnId: updated.id, actorUserId: null });
-    } catch (err) {
-      await recordAuditEvent({
-        protectedTxnId: updated.id,
-        action: "PROCUREMENT_RELEASE_FAILED",
-        meta: {
-          error: err instanceof Error ? err.message : "unknown",
-        },
-      });
-    }
-  }
-  // PROTECTED (no procurement) → funds stay on platform until delivery/inspection release.
+  // PROTECTED: MARK_FUNDED only. Never auto releaseProcurement on fund.
+  // PROCUREMENT_ADVANCES_ENABLED means buyer-authorized Release Item Funds is available —
+  // not automatic transfer after funding. Residual release remains post-inspection.
 
   return { handled: true, reason: "funded", txn: updated };
 }

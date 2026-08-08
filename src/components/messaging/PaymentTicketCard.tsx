@@ -25,6 +25,18 @@ export type PaymentTicketView = {
   buyerApprovedRevision: number | null;
   sellerApprovedRevision: number | null;
   protectedTransactionId: string | null;
+  protectedTxnStatus?: string | null;
+  lifecycleStage?: string;
+  actions?: {
+    canReleaseProcurement?: boolean;
+    canPay?: boolean;
+  };
+  books?: {
+    itemFundsReleasedEarlyMinor: number;
+    remainingProtectedSellerShareMinor: number;
+    platformFeeMinor: number;
+    procurementTransferredMinor: number;
+  };
   breakdown: {
     labels: {
       itemCost: string;
@@ -32,6 +44,12 @@ export type PaymentTicketView = {
       sellerServiceFee: string;
       sourceBridgeProtectionFee: string;
     };
+    releaseStructure?: {
+      itemFundsReleasedEarlyMinor: number;
+      remainingProtectedSellerShareMinor: number;
+      platformFeeHeldMinor: number;
+      note: string;
+    } | null;
   };
 };
 
@@ -47,6 +65,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [payNotice, setPayNotice] = useState("");
+  const [confirmRelease, setConfirmRelease] = useState(false);
   const [checkout, setCheckout] = useState<{
     clientSecret: string;
     publishableKey: string;
@@ -188,6 +207,47 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     }
   }
 
+  async function releaseItemFunds() {
+    if (!ticket?.protectedTransactionId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/payments/release-procurement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protectedTxnId: ticket.protectedTransactionId,
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        alreadyReleased?: boolean;
+      };
+      if (!res.ok) {
+        setError(
+          json.error ||
+            "Could not release item funds. Payment remains on the platform.",
+        );
+      } else {
+        setPayNotice(
+          json.message ||
+            "Item funds released. Shipping and remaining amount stay protected.",
+        );
+        setConfirmRelease(false);
+        await load();
+        onChanged?.();
+      }
+    } catch {
+      setError(
+        "Could not release item funds. Payment remains on the platform.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/50">
@@ -218,6 +278,17 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     iAmBuyer &&
     ticket.status === "ACCEPTED" &&
     Boolean(ticket.protectedTransactionId);
+  const canRelease =
+    paymentsAccess &&
+    iAmBuyer &&
+    Boolean(ticket.actions?.canReleaseProcurement) &&
+    Boolean(ticket.protectedTransactionId);
+  const isDirect =
+    ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
+  const stage = ticket.lifecycleStage || ticket.status;
+  const procAgreed =
+    ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0;
+  const procTransferred = (ticket.books?.procurementTransferredMinor ?? 0) > 0;
 
   const cur = ticket.currency;
   const rows = [
@@ -245,22 +316,25 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           </div>
         </div>
         <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
-          {ticket.status}
+          {stage}
         </span>
       </div>
 
       <p className="mt-2 text-xs text-white/45">
         Protected by Source Bridge ·{" "}
-        {ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT"
-          ? "Direct Payment"
-          : "Protected"}{" "}
-        Transaction
-        · funds held until delivery
+        {isDirect ? "Direct Payment" : "Protected"} Transaction
+        {isDirect
+          ? " · funds route on fund"
+          : procTransferred
+            ? " · item funds released; remainder held until delivery"
+            : " · funds held until release / delivery"}
       </p>
 
       <dl className="mt-4 space-y-1.5 text-sm">
         {rows.map(([label, amount]) =>
-          amount > 0 || label.includes("Protection") ? (
+          amount > 0 ||
+          label.toLowerCase().includes("protection") ||
+          label.toLowerCase().includes("source bridge") ? (
             <div key={label} className="flex justify-between gap-3 text-white/75">
               <dt>{label}</dt>
               <dd className="tabular-nums text-white">{formatMinor(amount, cur)}</dd>
@@ -275,18 +349,64 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
         </div>
       </dl>
 
-      {ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0 ? (
+      {procAgreed && ticket.breakdown.releaseStructure && !procTransferred ? (
+        <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
+          <p className="font-medium text-white/70">Release structure</p>
+          <p>
+            {ticket.breakdown.releaseStructure
+              ? "Item funds released early"
+              : "Item funds"}
+            :{" "}
+            {formatMinor(
+              ticket.breakdown.releaseStructure.itemFundsReleasedEarlyMinor,
+              cur,
+            )}{" "}
+            (after buyer authorizes — not on fund)
+          </p>
+          <p>
+            Remaining protected:{" "}
+            {formatMinor(
+              ticket.breakdown.releaseStructure
+                .remainingProtectedSellerShareMinor +
+                ticket.breakdown.releaseStructure.platformFeeHeldMinor,
+              cur,
+            )}{" "}
+            (shipping, sourcer fee, SB fee)
+          </p>
+          <p className="text-white/40">
+            Shipping is never released early. Buyer must authorize item funds
+            after funding.
+          </p>
+        </div>
+      ) : null}
+
+      {procAgreed && ticket.status !== "FUNDED" && !procTransferred && !ticket.breakdown.releaseStructure ? (
         <p className="mt-3 text-xs text-white/50">
-          Procurement advance (Item Cost):{" "}
-          {formatMinor(ticket.procurementAdvanceMinor, cur)} after funding when
-          eligible.
+          Item funds advance: {formatMinor(ticket.procurementAdvanceMinor, cur)}{" "}
+          — buyer-authorized after funding (not automatic).
         </p>
       ) : null}
 
-      {ticket.status === "FUNDED" ? (
+      {ticket.status === "FUNDED" && !procTransferred ? (
         <p className="mt-3 text-xs text-emerald-300/90">
-          Funded and protected. Seller payout waits until delivery/release (not
-          on fund).
+          Funded and held on platform. No transfer yet
+          {procAgreed
+            ? " — release item funds when ready to authorize procurement."
+            : " — seller payout waits until delivery/inspection."}
+        </p>
+      ) : null}
+
+      {procTransferred ? (
+        <p className="mt-3 text-xs text-amber-200/80">
+          Item funds released to sourcer. Remaining amount stays protected until
+          delivery — this is not full protection on the full total.
+        </p>
+      ) : null}
+
+      {iAmSeller && ticket.status === "FUNDED" && procAgreed && !procTransferred ? (
+        <p className="mt-3 text-xs text-white/45">
+          Waiting for buyer to release item funds. Sourcers cannot authorize
+          release.
         </p>
       ) : null}
 
@@ -329,7 +449,46 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
             Pay securely
           </button>
         ) : null}
+        {canRelease && !confirmRelease ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setConfirmRelease(true)}
+            className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+          >
+            Release Item Funds
+          </button>
+        ) : null}
       </div>
+
+      {confirmRelease ? (
+        <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-3 text-xs text-white/80">
+          <p>
+            Release{" "}
+            {formatMinor(ticket.procurementAdvanceMinor, cur)} item funds to the
+            sourcer now? Shipping and remaining amounts stay protected. This
+            cannot be silently reversed.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void releaseItemFunds()}
+              className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+            >
+              {busy ? "Releasing…" : "Confirm release"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmRelease(false)}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {checkout ? (
         <ProtectedPaymentCheckout
@@ -337,18 +496,14 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           publishableKey={checkout.publishableKey}
           amountMinor={checkout.amountMinor}
           currency={checkout.currency}
-          paymentMode={
-            ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT"
-              ? "direct"
-              : "protected"
-          }
+          paymentMode={isDirect ? "direct" : "protected"}
           protectedTxnId={ticket.protectedTransactionId || undefined}
           ordersHref="/profile/purchases"
           returnPath="/inbox?payment=return"
           onDismiss={() => setCheckout(null)}
           onPaymentSubmitted={() => {
             setPayNotice(
-              "Payment received. Seller payout is being processed. Do not pay again.",
+              "Payment received. Funds stay on the platform until release rules. Do not pay again.",
             );
             void load();
             onChanged?.();

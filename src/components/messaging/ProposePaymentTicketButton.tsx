@@ -180,13 +180,17 @@ export function ProposePaymentTicketButton({
             />
           </label>
           {procurementFlag ? (
-            <label className="mt-3 flex items-center gap-2 text-[11px] text-white/60">
+            <label className="mt-3 flex items-start gap-2 text-[11px] text-white/60">
               <input
                 type="checkbox"
+                className="mt-0.5"
                 checked={procurement}
                 onChange={(e) => setProcurement(e.target.checked)}
               />
-              Request procurement advance (Item Cost, if eligible)
+              <span>
+                Request procurement advance (item cost only). Buyer authorizes
+                Release Item Funds after funding — never shipping.
+              </span>
             </label>
           ) : null}
           {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}

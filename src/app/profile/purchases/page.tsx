@@ -32,7 +32,10 @@ type Order = {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
     canConfirmReceipt: boolean;
+    canReleaseProcurement?: boolean;
   };
+  procurementAdvanceMinor?: number;
+  procurementTransferredMinor?: number;
 };
 
 function fmtDate(iso: string | null) {
@@ -91,6 +94,35 @@ export default function PurchasesPage() {
         data.alreadyConfirmed
           ? "Already confirmed — inspection period active"
           : "Receipt confirmed — inspection period started (no funds released yet)",
+      );
+      await load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function releaseItemFunds(orderId: string, amountLabel: string) {
+    if (
+      !window.confirm(
+        `Release ${amountLabel} item funds to the sourcer? Shipping and remaining amounts stay protected. This cannot be silently reversed.`,
+      )
+    ) {
+      return;
+    }
+    setBusyId(orderId);
+    try {
+      const res = await fetch("/api/payments/release-procurement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ protectedTxnId: orderId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not release item funds");
+      showToast(
+        data.message ||
+          "Item funds released. Remaining amount stays protected.",
       );
       await load();
     } catch (err) {
@@ -220,6 +252,29 @@ export default function PurchasesPage() {
                     </div>
                   ) : null}
                 </dl>
+
+                {o.actions.canReleaseProcurement ? (
+                  <div className="mt-5 border-t border-white/10 pt-4">
+                    <PrimaryButton
+                      type="button"
+                      showArrow={false}
+                      disabled={busyId === o.id}
+                      className="rounded-lg"
+                      onClick={() =>
+                        void releaseItemFunds(
+                          o.id,
+                          formatMinor(o.procurementAdvanceMinor ?? 0, o.currency),
+                        )
+                      }
+                    >
+                      {busyId === o.id ? "Releasing…" : "Release Item Funds"}
+                    </PrimaryButton>
+                    <p className="mt-2 text-xs text-white/40">
+                      Authorizes early transfer of item cost only. Shipping and
+                      remaining amounts stay protected until delivery.
+                    </p>
+                  </div>
+                ) : null}
 
                 {o.actions.canConfirmReceipt ? (
                   <div className="mt-5 border-t border-white/10 pt-4">

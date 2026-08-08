@@ -12,6 +12,7 @@ import {
 import { getStripe, isStripeConfigured } from "@/lib/payments/stripe/client";
 import { appendLedgerEntry } from "@/lib/payments/ledger";
 import { isPaymentsEnabled } from "@/lib/payments/flags";
+import { planProtectedRefund } from "@/lib/payments/refunds";
 
 export const runtime = "nodejs";
 
@@ -117,20 +118,43 @@ export async function PATCH(req: NextRequest) {
       if (!isStripeConfigured() || !txn.stripePaymentIntentId) {
         return jsonError("Cannot refund without Stripe payment", 409);
       }
+      const plan = planProtectedRefund({
+        ...txn,
+        status: txn.status,
+        requestedMinor: parsed.data.refundMinor,
+      });
+      if (plan.amountMinor <= 0) {
+        return jsonError(
+          plan.blockedReason ||
+            "No safe refundable amount (seller transfers already released)",
+          409,
+          { code: "REFUND_NOT_SAFE", refundableMinor: plan.refundableMinor },
+        );
+      }
+      if (parsed.data.refundMinor > plan.refundableMinor) {
+        return jsonError(
+          `Refund capped at platform remainder (${plan.refundableMinor} minor units); cannot reverse seller transfers automatically`,
+          409,
+          {
+            code: "REFUND_EXCEEDS_PLATFORM",
+            refundableMinor: plan.refundableMinor,
+          },
+        );
+      }
       const stripe = getStripe();
       const refund = await stripe.refunds.create(
         {
           payment_intent: txn.stripePaymentIntentId,
-          amount: parsed.data.refundMinor,
+          amount: plan.amountMinor,
           metadata: { disputeId: dispute.id, protectedTxnId: txn.id },
         },
-        { idempotencyKey: `refund_${dispute.id}_${parsed.data.refundMinor}` },
+        { idempotencyKey: `refund_${dispute.id}_${plan.amountMinor}` },
       );
       await appendLedgerEntry({
         protectedTxnId: txn.id,
         entryType: "REFUND",
         direction: "DEBIT",
-        amountMinor: parsed.data.refundMinor,
+        amountMinor: plan.amountMinor,
         currency: txn.currency,
         idempotencyKey: `ledger_refund_${refund.id}`,
         stripeObjectId: refund.id,
@@ -139,11 +163,8 @@ export async function PATCH(req: NextRequest) {
       await prisma.protectedTransaction.update({
         where: { id: txn.id },
         data: {
-          refundedMinor: txn.refundedMinor + parsed.data.refundMinor,
-          status:
-            parsed.data.refundMinor >= txn.totalChargeMinor
-              ? "REFUNDED"
-              : "PARTIALLY_REFUNDED",
+          refundedMinor: txn.refundedMinor + plan.amountMinor,
+          status: plan.nextStatus,
         },
       });
     } else if (canTransition(status, "RESOLVE_DISPUTE")) {

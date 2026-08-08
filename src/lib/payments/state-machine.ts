@@ -123,14 +123,16 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
     DISPUTED: "READY_TO_RELEASE",
   },
   REFUND: {
+    /** Full refund only safe before any seller transfer; books may still mark PARTIAL. */
     FUNDED: "REFUNDED",
     PROCUREMENT_RELEASED: "PARTIALLY_REFUNDED",
-    AWAITING_SHIPMENT: "REFUNDED",
-    IN_TRANSIT: "REFUNDED",
-    DELIVERED: "REFUNDED",
-    IN_INSPECTION: "REFUNDED",
-    READY_TO_RELEASE: "REFUNDED",
-    DISPUTED: "REFUNDED",
+    /** If procurement already left, refund path sets PARTIALLY_REFUNDED via books. */
+    AWAITING_SHIPMENT: "PARTIALLY_REFUNDED",
+    IN_TRANSIT: "PARTIALLY_REFUNDED",
+    DELIVERED: "PARTIALLY_REFUNDED",
+    IN_INSPECTION: "PARTIALLY_REFUNDED",
+    READY_TO_RELEASE: "PARTIALLY_REFUNDED",
+    DISPUTED: "PARTIALLY_REFUNDED",
     AWAITING_PAYMENT: "CANCELLED",
   },
   CANCEL: {
