@@ -8,8 +8,26 @@ import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 import { buildListingSlug } from "@/lib/listings-service";
 import { syncListingImages } from "@/lib/listing-images";
+import {
+  encodeListingPaymentOptions,
+  DEFAULT_LISTING_PAYMENT_OPTION,
+} from "@/lib/payments/listing-options";
 
 type StockInput = z.infer<typeof stockSchema>;
+
+function resolvePaymentOptions(data: StockInput): string {
+  if (
+    data.protectedPaymentEnabled !== undefined ||
+    data.directPaymentEnabled !== undefined
+  ) {
+    return encodeListingPaymentOptions({
+      protectedPaymentEnabled: Boolean(data.protectedPaymentEnabled),
+      directPaymentEnabled: Boolean(data.directPaymentEnabled),
+    });
+  }
+  if (data.paymentOptions) return data.paymentOptions;
+  return DEFAULT_LISTING_PAYMENT_OPTION;
+}
 
 function stockCreateData(userId: string, data: StockInput, slug: string) {
   const shipLabel = `${data.shipFromCity}, ${data.shipFromCountry}`;
@@ -39,6 +57,7 @@ function stockCreateData(userId: string, data: StockInput, slug: string) {
     shippingAvailable: data.shippingAvailable,
     price: data.price,
     currency: data.currency || "USD",
+    paymentOptions: resolvePaymentOptions(data),
   };
 }
 
@@ -98,6 +117,14 @@ export async function POST(req: NextRequest) {
       !(parsed.data.sizes && parsed.data.sizes.length)
     ) {
       return jsonError("Select at least one size", 400);
+    }
+
+    try {
+      resolvePaymentOptions(parsed.data);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Choose at least one payment option.";
+      return jsonError(message, 400);
     }
 
     const existing = await prisma.stockListing.findMany({

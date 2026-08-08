@@ -10,6 +10,7 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import type { Listing } from "@/lib/types";
 import { formatPrice } from "@/lib/listings-service";
+import { formatMinor } from "@/lib/payments/money";
 
 type SellerInfo = {
   id: string;
@@ -34,11 +35,21 @@ type CheckoutBootstrap = {
   cryptoPaymentMethods: CryptoMethod[];
   stripeConfigured: boolean;
   canStripeCardCheckout?: boolean;
+  canProtectedCheckout?: boolean;
+  canDirectCheckout?: boolean;
   cardCheckoutBlockedReason?: string | null;
+  protectedBlockedReason?: string | null;
+  directBlockedReason?: string | null;
+  paymentFlags?: {
+    protectedPaymentEnabled?: boolean;
+    directPaymentEnabled?: boolean;
+  };
   sellerConnectReady?: boolean;
   isDemo?: boolean;
   message?: string | null;
 };
+
+type PayMode = "protected" | "direct";
 
 type Props = {
   slug: string;
@@ -51,6 +62,7 @@ export function CheckoutPageClient({ slug }: Props) {
     | "card"
     | "crypto"
     | "contact";
+  const payFromQuery = (searchParams.get("pay") || "").toLowerCase();
   const sizeFromQuery = searchParams.get("size") || "";
 
   const { account, authReady, requireAuth, showToast } = useAppUi();
@@ -65,12 +77,22 @@ export function CheckoutPageClient({ slug }: Props) {
   const [hashSubmitted, setHashSubmitted] = useState(false);
   const [isDemo, setIsDemo] = useState(false);
   const [demoPreviewDone, setDemoPreviewDone] = useState(false);
+  const [payMode, setPayMode] = useState<PayMode | null>(null);
+  const [feeBreakdown, setFeeBreakdown] = useState<{
+    itemCost: number;
+    shipping: number;
+    platformFee: number;
+    total: number;
+    platformFeeLabel: string;
+    currency: string;
+  } | null>(null);
   const [stripePay, setStripePay] = useState<{
     clientSecret: string;
     publishableKey: string;
     amountMinor: number;
     currency: string;
     protectedTxnId: string;
+    mode: PayMode;
   } | null>(null);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
 
@@ -88,12 +110,22 @@ export function CheckoutPageClient({ slug }: Props) {
       }
       const methods = (json as CheckoutBootstrap).cryptoPaymentMethods || [];
       if (methods.length) setSelectedMethodId(methods[0].id);
+      const boot = json as CheckoutBootstrap;
+      const canP = Boolean(boot.canProtectedCheckout);
+      const canD = Boolean(boot.canDirectCheckout);
+      if (payFromQuery === "direct") setPayMode("direct");
+      else if (payFromQuery === "protected") setPayMode("protected");
+      else if (canP && !canD) setPayMode("protected");
+      else if (canD && !canP) setPayMode("direct");
+      else if (canP) setPayMode("protected");
+      else if (canD) setPayMode("direct");
+      else setPayMode(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, payFromQuery]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -115,18 +147,24 @@ export function CheckoutPageClient({ slug }: Props) {
     }
   }
 
-  /** Allowlisted TEST Protected Payment → PaymentIntent + Payment Element. */
-  async function startStripeProtectedCardCheckout() {
+  async function startStripeCheckout(mode: PayMode) {
     if (!requireAuth("complete checkout")) return;
     if (!data) return;
     if (account?.id === data.seller.id) {
       showToast("You cannot buy your own listing");
       return;
     }
-    if (!data.canStripeCardCheckout) {
+    if (mode === "protected" && !data.canProtectedCheckout) {
       showToast(
-        data.cardCheckoutBlockedReason ||
-          "Card checkout is not available for this account",
+        data.protectedBlockedReason ||
+          "This item is available for Direct Payment only.",
+      );
+      return;
+    }
+    if (mode === "direct" && !data.canDirectCheckout) {
+      showToast(
+        data.directBlockedReason ||
+          "This item is available for Protected Payment only.",
       );
       return;
     }
@@ -134,24 +172,46 @@ export function CheckoutPageClient({ slug }: Props) {
     setBusy(true);
     setStripePay(null);
     setPaymentSubmitted(false);
+    setFeeBreakdown(null);
     try {
       const createRes = await fetch("/api/payments/product-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listingId: data.listing.id,
-          paymentOption: "PROTECTED",
+          paymentOption: mode === "direct" ? "DIRECT" : "PROTECTED",
           selectedSize: sizeFromQuery || undefined,
         }),
       });
       const created = await createRes.json().catch(() => ({}));
       if (!createRes.ok) {
-        throw new Error(created.error || "Could not start Protected Payment");
+        throw new Error(
+          created.error ||
+            (mode === "direct"
+              ? "Could not start Direct Payment"
+              : "Could not start Protected Payment"),
+        );
       }
       const protectedTxnId = String(created.protectedTxnId || "");
       if (!protectedTxnId) {
         throw new Error("Missing protected transaction id");
       }
+
+      const bd = created.breakdown || {};
+      const currency = String(created.currency || data.listing.currency || "USD");
+      setFeeBreakdown({
+        itemCost: Number(bd.itemCost) || 0,
+        shipping: Number(bd.shipping) || 0,
+        platformFee: Number(bd.platformFee ?? bd.sourceBridgeProtectionFee) || 0,
+        total: Number(created.amountMinor) || 0,
+        platformFeeLabel:
+          bd.labels?.platformFee ||
+          bd.labels?.sourceBridgeProtectionFee ||
+          (mode === "direct"
+            ? "Source Bridge service fee"
+            : "Source Bridge Protection Fee"),
+        currency,
+      });
 
       const piRes = await fetch("/api/payments/checkout", {
         method: "POST",
@@ -168,14 +228,20 @@ export function CheckoutPageClient({ slug }: Props) {
       if (!pi.clientSecret || !pi.publishableKey) {
         throw new Error("Payment form unavailable");
       }
+      setPayMode(mode);
       setStripePay({
         clientSecret: String(pi.clientSecret),
         publishableKey: String(pi.publishableKey),
         amountMinor: Number(pi.amountMinor) || Number(created.amountMinor) || 0,
         currency: String(pi.currency || created.currency || "usd"),
         protectedTxnId,
+        mode,
       });
-      showToast("Enter your card details to fund the Protected Payment (TEST)");
+      showToast(
+        mode === "direct"
+          ? "Enter card details for Direct Payment (TEST)"
+          : "Enter your card details to fund the Protected Payment (TEST)",
+      );
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Checkout failed");
     } finally {
@@ -287,6 +353,11 @@ export function CheckoutPageClient({ slug }: Props) {
   }
 
   const { listing, seller } = data;
+  const canP = Boolean(data.canProtectedCheckout);
+  const canD = Boolean(data.canDirectCheckout);
+  const bothAvailable = canP && canD;
+  const activeMode: PayMode | null =
+    payMode || (canP ? "protected" : canD ? "direct" : null);
   const cover = listing.images[0] || "";
   const shippedFrom =
     listing.shipFromCity && listing.shipFromCountry
@@ -338,12 +409,41 @@ export function CheckoutPageClient({ slug }: Props) {
             <dt className="text-white/45">Shipped from</dt>
             <dd className="text-right text-white/85">{shippedFrom}</dd>
           </div>
-          <div className="flex justify-between gap-4 border-t border-white/10 pt-3">
-            <dt className="text-white/45">Total</dt>
-            <dd className="font-medium text-white">
-              {formatPrice(listing.price, listing.currency)}
-            </dd>
-          </div>
+          {feeBreakdown ? (
+            <>
+              <div className="flex justify-between gap-4">
+                <dt className="text-white/45">Item</dt>
+                <dd className="text-white/85">
+                  {formatMinor(feeBreakdown.itemCost, feeBreakdown.currency)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-white/45">Shipping</dt>
+                <dd className="text-white/85">
+                  {formatMinor(feeBreakdown.shipping, feeBreakdown.currency)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-white/45">{feeBreakdown.platformFeeLabel}</dt>
+                <dd className="text-white/85">
+                  {formatMinor(feeBreakdown.platformFee, feeBreakdown.currency)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4 border-t border-white/10 pt-3">
+                <dt className="text-white/45">Total</dt>
+                <dd className="font-medium text-white">
+                  {formatMinor(feeBreakdown.total, feeBreakdown.currency)}
+                </dd>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between gap-4 border-t border-white/10 pt-3">
+              <dt className="text-white/45">Item price</dt>
+              <dd className="font-medium text-white">
+                {formatPrice(listing.price, listing.currency)}
+              </dd>
+            </div>
+          )}
         </dl>
 
         {method === "card" ? (
@@ -351,14 +451,47 @@ export function CheckoutPageClient({ slug }: Props) {
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
               Pay by card
             </h2>
-            {data.canStripeCardCheckout ? (
+            {(canP || canD) ? (
               <>
+                {bothAvailable && !stripePay ? (
+                  <div className="mt-4 space-y-3">
+                    <p className="text-sm text-white/65">
+                      This listing accepts both methods. Choose one — no automatic
+                      fallback.
+                    </p>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button type="button" onClick={() => setPayMode("protected")}
+                        className={`rounded-lg border px-4 py-3 text-left text-sm ${
+                          activeMode === "protected"
+                            ? "border-electric/50 bg-electric/15 text-white"
+                            : "border-white/15 text-white/70 hover:border-white/30"
+                        }`}>
+                        <span className="font-medium">Protected Payment</span>
+                        <span className="mt-1 block text-xs text-white/45">Protection until delivery / inspection</span>
+                      </button>
+                      <button type="button" onClick={() => setPayMode("direct")}
+                        className={`rounded-lg border px-4 py-3 text-left text-sm ${
+                          activeMode === "direct"
+                            ? "border-electric/50 bg-electric/15 text-white"
+                            : "border-white/15 text-white/70 hover:border-white/30"
+                        }`}>
+                        <span className="font-medium">Direct Payment</span>
+                        <span className="mt-1 block text-xs text-white/45">Released after Stripe confirms · no SB protection</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 <p className="mt-3 text-sm leading-relaxed text-white/70">
-                  Protected by Source Bridge (Stripe TEST). Your payment is held
-                  on the platform; the seller is not paid until protected release
-                  rules are met. Completing the form does not confirm funding
-                  until Stripe confirms the payment.
+                  {activeMode === "direct"
+                    ? "Direct Payment (Stripe TEST). After Stripe confirms, funds are released to the seller. No Source Bridge inspection hold."
+                    : "Protected by Source Bridge (Stripe TEST). Payment is held until protected release rules are met."}
                 </p>
+                {activeMode ? (
+                  <p className="mt-2 text-xs uppercase tracking-[0.14em] text-electric/80">
+                    Payment type:{" "}
+                    {activeMode === "direct" ? "Direct Payment" : "Protected Payment"}
+                  </p>
+                ) : null}
                 {paymentSubmitted ? (
                   <p className="mt-4 text-sm text-white/60">
                     Payment submitted. Status updates when Stripe confirms
@@ -373,8 +506,12 @@ export function CheckoutPageClient({ slug }: Props) {
                     publishableKey={stripePay.publishableKey}
                     amountMinor={stripePay.amountMinor}
                     currency={stripePay.currency}
-                    returnPath={`/checkout/${encodeURIComponent(slug)}?method=card&payment=return`}
-                    onDismiss={() => setStripePay(null)}
+                    paymentMode={stripePay.mode}
+                    returnPath={`/checkout/${encodeURIComponent(slug)}?method=card&pay=${stripePay.mode}&payment=return`}
+                    onDismiss={() => {
+                      setStripePay(null);
+                      setFeeBreakdown(null);
+                    }}
                     onPaymentSubmitted={() => {
                       setPaymentSubmitted(true);
                       showToast(
@@ -387,11 +524,11 @@ export function CheckoutPageClient({ slug }: Props) {
                     <PrimaryButton
                       type="button"
                       showArrow={false}
-                      disabled={busy || !authReady || !account}
-                      onClick={() => void startStripeProtectedCardCheckout()}
+                      disabled={busy || !authReady || !account || !activeMode}
+                      onClick={() => activeMode && void startStripeCheckout(activeMode)}
                       className="rounded-lg"
                     >
-                      {busy ? "Starting checkout…" : "Pay with card (TEST)"}
+                      {busy ? "Starting checkout…" : activeMode === "direct" ? "Continue with Direct Payment (TEST)" : "Continue with Protected Payment (TEST)"}
                     </PrimaryButton>
                   </div>
                 ) : null}

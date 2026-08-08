@@ -118,9 +118,9 @@ export default function PurchasesPage() {
         </p>
         <h1 className="mt-2 font-display text-4xl">Purchases</h1>
         <p className="mt-2 max-w-xl text-sm text-white/55">
-          Protected Payments you funded. Tracking appears after the seller ships.
-          Confirming receipt starts the inspection period — it does not pay the
-          seller immediately.
+          Card payments you funded on Source Bridge. Protected Payment holds
+          funds until delivery rules; Direct Payment shows as completed once
+          Stripe has released funds to the seller.
         </p>
         <div className="mt-4 flex flex-wrap gap-3 text-sm">
           <Link
@@ -143,7 +143,7 @@ export default function PurchasesPage() {
           <p className="mt-10 text-sm text-amber-200/90">{error}</p>
         ) : !orders.length ? (
           <p className="mt-10 text-sm text-white/55">
-            No protected purchases yet.
+            No purchases yet.
           </p>
         ) : (
           <ul className="mt-10 space-y-4">
@@ -167,7 +167,9 @@ export default function PurchasesPage() {
                       {formatMinor(o.totalChargeMinor, o.currency)}
                     </p>
                     <p className="text-white/45">
-                      Protection fee{" "}
+                      {o.labels.payment.includes("Direct")
+                        ? "Service fee"
+                        : "Protection fee"}{" "}
                       {formatMinor(o.protectionFeeMinor, o.currency)}
                     </p>
                   </div>

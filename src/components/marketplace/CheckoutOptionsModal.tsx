@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -21,6 +21,9 @@ type Props = {
   listingCover?: string;
   listingPriceLabel?: string;
   isDemo?: boolean;
+  /** When set on listing detail, restricts SB methods shown. */
+  protectedPaymentEnabled?: boolean;
+  directPaymentEnabled?: boolean;
 };
 
 export function CheckoutOptionsModal({
@@ -38,6 +41,8 @@ export function CheckoutOptionsModal({
   listingCover,
   listingPriceLabel,
   isDemo = false,
+  protectedPaymentEnabled = true,
+  directPaymentEnabled = false,
 }: Props) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -50,8 +55,14 @@ export function CheckoutOptionsModal({
     if (!open && el.open) el.close();
   }, [open]);
 
-  function go(method: "card" | "crypto") {
-    const params = new URLSearchParams({ method });
+  function go(method: "card" | "crypto" | "protected" | "direct") {
+    const params = new URLSearchParams();
+    if (method === "protected" || method === "direct") {
+      params.set("method", "card");
+      params.set("pay", method);
+    } else {
+      params.set("method", method);
+    }
     if (selectedSize) params.set("size", selectedSize);
     onClose();
     router.push(`/checkout/${listingSlug}?${params.toString()}`);
@@ -66,6 +77,10 @@ export function CheckoutOptionsModal({
   }
 
   if (!open) return null;
+
+  const showProtected = protectedPaymentEnabled;
+  const showDirect = directPaymentEnabled;
+  const showSbMethods = showProtected || showDirect;
 
   return (
     <dialog
@@ -96,14 +111,35 @@ export function CheckoutOptionsModal({
         </div>
 
         <div className="mt-6 space-y-3">
-          <PrimaryButton
-            type="button"
-            showArrow={false}
-            className="w-full rounded-lg"
-            onClick={() => go("card")}
-          >
-            Pay by Card
-          </PrimaryButton>
+          {showProtected ? (
+            <PrimaryButton
+              type="button"
+              showArrow={false}
+              className="w-full rounded-lg"
+              onClick={() => go("protected")}
+            >
+              Protected Payment
+            </PrimaryButton>
+          ) : null}
+          {showDirect ? (
+            <button
+              type="button"
+              onClick={() => go("direct")}
+              className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-electric/40 bg-electric/10 px-5 text-sm font-semibold uppercase tracking-[0.1em] text-white transition-colors hover:border-electric/60 hover:bg-electric/15"
+            >
+              Direct Payment
+            </button>
+          ) : null}
+          {!showSbMethods ? (
+            <PrimaryButton
+              type="button"
+              showArrow={false}
+              className="w-full rounded-lg"
+              onClick={() => go("card")}
+            >
+              Pay by Card
+            </PrimaryButton>
+          ) : null}
           <button
             type="button"
             onClick={() => go("crypto")}
@@ -138,10 +174,13 @@ export function CheckoutOptionsModal({
         </div>
 
         <p className="mt-5 text-xs leading-relaxed text-white/45">
-          Card marketplace payments are not activated yet (Stripe Connect). The
-          Buy interface stays available for future Stripe Connect and escrow
-          integration. Crypto and contact options create pending transactions
-          only — Source Bridge never auto-marks payment as paid.
+          {showProtected && showDirect
+            ? "Protected Payment holds funds until delivery rules are met. Direct Payment releases after Stripe confirms — no Source Bridge protection."
+            : showProtected
+              ? "Protected Payment holds funds on Source Bridge until delivery and inspection rules are met."
+              : showDirect
+                ? "Direct Payment is released to the seller after Stripe confirms — no Source Bridge protection or inspection hold."
+                : "Card marketplace payments require seller Payments & Payouts. Crypto and contact create pending transactions only."}
         </p>
       </div>
     </dialog>

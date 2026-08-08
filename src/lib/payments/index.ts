@@ -3,6 +3,7 @@ export {
   isPaymentsEnabled,
   isConnectOnboardingEnabled,
   isProtectedPaymentsEnabled,
+  isDirectPaymentsEnabled,
   isInstantPaymentsEnabled,
   isProcurementAdvancesEnabled,
   isTrackingAutomationEnabled,

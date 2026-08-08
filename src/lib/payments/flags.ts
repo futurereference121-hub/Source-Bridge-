@@ -42,8 +42,19 @@ export function isProtectedPaymentsEnabled(): boolean {
   return isPaymentsEnabled() && envBool("PROTECTED_PAYMENTS_ENABLED", false);
 }
 
+/**
+ * Direct Payment (product name). Storage/legacy flag: INSTANT_PAYMENTS_ENABLED.
+ * Prefer DIRECT_PAYMENTS_ENABLED; INSTANT_PAYMENTS_ENABLED remains an alias.
+ */
+export function isDirectPaymentsEnabled(): boolean {
+  if (!isPaymentsEnabled()) return false;
+  if (envBool("DIRECT_PAYMENTS_ENABLED", false)) return true;
+  return envBool("INSTANT_PAYMENTS_ENABLED", false);
+}
+
+/** @deprecated Prefer isDirectPaymentsEnabled — Instant is legacy flag name. */
 export function isInstantPaymentsEnabled(): boolean {
-  return isPaymentsEnabled() && envBool("INSTANT_PAYMENTS_ENABLED", false);
+  return isDirectPaymentsEnabled();
 }
 
 export function isProcurementAdvancesEnabled(): boolean {
@@ -82,7 +93,10 @@ export function paymentFlagsSnapshot() {
     PAYMENTS_ENABLED: isPaymentsEnabled(),
     CONNECT_ONBOARDING_ENABLED: isConnectOnboardingEnabled(),
     PROTECTED_PAYMENTS_ENABLED: isProtectedPaymentsEnabled(),
-    INSTANT_PAYMENTS_ENABLED: isInstantPaymentsEnabled(),
+    /** Product: Direct Payment. True when DIRECT_ or INSTANT_ flag is on. */
+    DIRECT_PAYMENTS_ENABLED: isDirectPaymentsEnabled(),
+    /** Legacy alias of DIRECT_PAYMENTS_ENABLED (UI should prefer Direct). */
+    INSTANT_PAYMENTS_ENABLED: isDirectPaymentsEnabled(),
     PROCUREMENT_ADVANCES_ENABLED: isProcurementAdvancesEnabled(),
     TRACKING_AUTOMATION_ENABLED: isTrackingAutomationEnabled(),
     /** Hard-coded off while activation checklist incomplete (matches getStripeMode). */

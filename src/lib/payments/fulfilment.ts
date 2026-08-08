@@ -4,6 +4,7 @@ import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   isPaymentsEnabled,
   isProtectedPaymentsEnabled,
+  isDirectPaymentsEnabled,
 } from "@/lib/payments/flags";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import {
@@ -11,14 +12,18 @@ import {
   nextStatus,
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
+import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
 export type ProtectedTxnListRole = "buyer" | "seller";
 
 function assertFulfilmentAccess() {
-  if (!isPaymentsEnabled() || !isProtectedPaymentsEnabled()) {
-    throw Object.assign(new Error("Protected Payments are not enabled"), {
+  if (
+    !isPaymentsEnabled() ||
+    (!isProtectedPaymentsEnabled() && !isDirectPaymentsEnabled())
+  ) {
+    throw Object.assign(new Error("Payments are not enabled"), {
       status: 503,
-      code: "PROTECTED_DISABLED",
+      code: "PAYMENTS_DISABLED",
     });
   }
 }
@@ -121,22 +126,25 @@ export function mapProtectedTxnSummary(
           : null,
     labels: {
       payment: paymentLabel(t.status, t.paymentOption),
-      shipping: shippingLabel(t.status, shipped),
-      delivery: deliveryLabel(t.status),
+      shipping: shippingLabel(t.status, shipped, t.paymentOption),
+      delivery: deliveryLabel(t.status, t.paymentOption),
     },
     actions: {
       canAddTracking:
         viewerRole === "seller" &&
+        !isDirectPaymentOption(t.paymentOption) &&
         ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(
           t.status,
         ) &&
         !t.trackingNumber,
       canRefreshTracking:
+        !isDirectPaymentOption(t.paymentOption) &&
         shipped &&
         t.trackingNumber &&
         !["RELEASED", "REFUNDED", "CANCELLED"].includes(t.status),
       canConfirmReceipt:
         viewerRole === "buyer" &&
+        !isDirectPaymentOption(t.paymentOption) &&
         shipped &&
         ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(t.status),
     },
@@ -144,8 +152,18 @@ export function mapProtectedTxnSummary(
 }
 
 function paymentLabel(status: string, option: string) {
+  if (isDirectPaymentOption(option)) {
+    if (status === "RELEASED") return "Direct Payment — completed";
+    if (status === "FUNDED") return "Direct Payment — released to seller";
+    if (status === "AWAITING_PAYMENT" || status === "ACCEPTED") {
+      return "Direct Payment — awaiting payment";
+    }
+    if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "Refunded";
+    if (status === "DISPUTED") return "Disputed";
+    return `Direct Payment — ${status}`;
+  }
   if (status === "FUNDED" || status === "AWAITING_SHIPMENT" || status === "IN_TRANSIT") {
-    return option === "PROTECTED" ? "Funded / Protected" : "Funded";
+    return "Funded / Protected";
   }
   if (status === "IN_INSPECTION") return "Funded — inspection active";
   if (status === "READY_TO_RELEASE") return "Ready to release";
@@ -155,7 +173,13 @@ function paymentLabel(status: string, option: string) {
   return status;
 }
 
-function shippingLabel(status: string, shipped: boolean) {
+function shippingLabel(status: string, shipped: boolean, option: string) {
+  if (isDirectPaymentOption(option)) {
+    if (status === "RELEASED" || status === "FUNDED") {
+      return shipped ? "Tracking optional" : "No inspection hold";
+    }
+    return shipped ? "Shipped" : "Not required for release";
+  }
   if (!shipped && (status === "FUNDED" || status === "ACCEPTED" || status === "AWAITING_PAYMENT")) {
     return "Waiting for seller to ship";
   }
@@ -169,7 +193,13 @@ function shippingLabel(status: string, shipped: boolean) {
   return shipped ? "Shipped" : "Not shipped";
 }
 
-function deliveryLabel(status: string) {
+function deliveryLabel(status: string, option: string) {
+  if (isDirectPaymentOption(option)) {
+    if (status === "RELEASED" || status === "FUNDED") {
+      return "Funds released after Stripe confirmation (no Source Bridge protection)";
+    }
+    return "Direct Payment — no inspection period";
+  }
   if (status === "IN_INSPECTION") {
     return "Delivery confirmed — inspection period active";
   }

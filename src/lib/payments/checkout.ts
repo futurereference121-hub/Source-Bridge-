@@ -3,7 +3,7 @@ import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
   assertStripeModeCompatible,
   getStripeMode,
-  isInstantPaymentsEnabled,
+  isDirectPaymentsEnabled,
   isPaymentsEnabled,
   isProtectedPaymentsEnabled,
   isProcurementAdvancesEnabled,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/payments/stripe/client";
 import { nextStatus, type ProtectedStatus } from "@/lib/payments/state-machine";
 import { releaseFinal, releaseProcurement } from "@/lib/payments/release";
+import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
 /**
  * Create a platform PaymentIntent (Separate Charges and Transfers).
@@ -46,11 +47,11 @@ export async function createPaymentIntentForTxn(opts: {
   }
   assertStripeModeCompatible(txn.stripeMode);
 
-  if (txn.paymentOption === "PROTECTED" && !isProtectedPaymentsEnabled()) {
+  if (!isDirectPaymentOption(txn.paymentOption) && !isProtectedPaymentsEnabled()) {
     throw Object.assign(new Error("Protected Payments disabled"), { status: 503 });
   }
-  if (txn.paymentOption === "INSTANT" && !isInstantPaymentsEnabled()) {
-    throw Object.assign(new Error("Instant payments disabled"), { status: 503 });
+  if (isDirectPaymentOption(txn.paymentOption) && !isDirectPaymentsEnabled()) {
+    throw Object.assign(new Error("Direct Payment is not enabled"), { status: 503 });
   }
 
   const buyer = await prisma.user.findUniqueOrThrow({
@@ -287,13 +288,17 @@ export async function markTxnFundedFromWebhook(opts: {
     meta: { eventId: opts.eventId, chargeId: opts.chargeId },
   });
 
+  const directPath =
+    isDirectPaymentOption(updated.paymentOption) && isDirectPaymentsEnabled();
+
   await recordAuditEvent({
     protectedTxnId: txn.id,
     action: "MARK_FUNDED",
     meta: {
       eventId: opts.eventId,
-      releaseStrategy: "KEEP_ALL_PROTECTED",
-      transferOnFund: false,
+      paymentOption: updated.paymentOption,
+      releaseStrategy: directPath ? "TRANSFER_ON_FUND" : "KEEP_ALL_PROTECTED",
+      transferOnFund: directPath,
     },
   });
 
@@ -302,21 +307,24 @@ export async function markTxnFundedFromWebhook(opts: {
     data: { status: "FUNDED" },
   });
 
-  // KEEP_ALL_PROTECTED (this TEST ramp): no seller transfer on fund.
-  // Instant / procurement only when those flags are deliberately on (not this phase).
-  if (updated.paymentOption === "INSTANT" && isInstantPaymentsEnabled()) {
+  // CRITICAL: PROTECTED never transfers on FUND. Direct/INSTANT only.
+  if (directPath) {
     try {
+      // Idempotent via transferAttempt final_xfer_* keys inside releaseFinal.
       await releaseFinal({ protectedTxnId: updated.id, actorUserId: null });
     } catch (err) {
+      // Charge stays FUNDED; transfer can retry. Never re-charge.
       await recordAuditEvent({
         protectedTxnId: updated.id,
-        action: "INSTANT_RELEASE_FAILED",
+        action: "DIRECT_RELEASE_FAILED",
         meta: {
           error: err instanceof Error ? err.message : "unknown",
+          legacyActionAlias: "INSTANT_RELEASE_FAILED",
         },
       });
     }
   } else if (
+    !isDirectPaymentOption(updated.paymentOption) &&
     updated.procurementAdvanceAgreed &&
     updated.procurementAdvanceMinor > 0 &&
     isProcurementAdvancesEnabled()
@@ -333,7 +341,7 @@ export async function markTxnFundedFromWebhook(opts: {
       });
     }
   }
-  // PROTECTED + PROCUREMENT off + INSTANT off → funds stay on platform until delivery release.
+  // PROTECTED (no procurement) → funds stay on platform until delivery/inspection release.
 
   return { handled: true, reason: "funded", txn: updated };
 }

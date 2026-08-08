@@ -341,6 +341,23 @@ export function dbStockToListing(row: DbStock & { listingImages?: ListingImage[]
         ? `Local arrangement · ${locationLabel}`
         : undefined,
     isDbListing: true,
+    ...(() => {
+      const raw =
+        "paymentOptions" in row && typeof row.paymentOptions === "string"
+          ? row.paymentOptions
+          : "PROTECTED_ONLY";
+      const option = raw.toUpperCase();
+      const protectedOn =
+        option === "PROTECTED_ONLY" ||
+        option === "BOTH" ||
+        option === "CONTACT_ONLY";
+      const directOn = option === "INSTANT_ONLY" || option === "BOTH";
+      return {
+        paymentOptions: option,
+        protectedPaymentEnabled: protectedOn,
+        directPaymentEnabled: directOn,
+      };
+    })(),
   };
 }
 

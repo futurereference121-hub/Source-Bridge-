@@ -125,8 +125,9 @@ export default function SalesFulfilmentPage() {
         </p>
         <h1 className="mt-2 font-display text-4xl">Sales & Fulfilment</h1>
         <p className="mt-2 max-w-xl text-sm text-white/55">
-          Protected Payment sales where you are the seller. Add carrier tracking
-          after funding — you cannot mark items delivered yourself.
+          Sales where you are the seller. Protected Payment requires shipping
+          and inspection before release. Direct Payment is released after Stripe
+          confirms — tracking is optional and does not control release.
         </p>
         <div className="mt-4 flex flex-wrap gap-3 text-sm">
           <Link
@@ -149,8 +150,7 @@ export default function SalesFulfilmentPage() {
           <p className="mt-10 text-sm text-amber-200/90">{error}</p>
         ) : !orders.length ? (
           <p className="mt-10 text-sm text-white/55">
-            No protected sales yet. When a buyer funds a Protected Payment to you,
-            it will appear here.
+            No sales yet. Funded Protected or Direct Payment orders appear here.
           </p>
         ) : (
           <ul className="mt-10 space-y-4">
@@ -174,7 +174,9 @@ export default function SalesFulfilmentPage() {
                       {formatMinor(o.totalChargeMinor, o.currency)}
                     </p>
                     <p className="text-white/45">
-                      Protection fee{" "}
+                      {o.labels.payment.includes("Direct")
+                        ? "Service fee"
+                        : "Protection fee"}{" "}
                       {formatMinor(o.protectionFeeMinor, o.currency)}
                     </p>
                   </div>

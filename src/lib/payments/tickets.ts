@@ -13,7 +13,7 @@ import {
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   getStripeMode,
-  isInstantPaymentsEnabled,
+  isDirectPaymentsEnabled,
   isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
@@ -21,6 +21,11 @@ import { recordAuditEvent } from "@/lib/payments/ledger";
 import { normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { releaseListingReservation } from "@/lib/payments/listing-lifecycle";
+import {
+  isDirectPaymentOption,
+  normalizeTxnPaymentOption,
+  type TxnPaymentOptionInput,
+} from "@/lib/payments/payment-option";
 
 export type TicketAmountsInput = {
   itemCostMinor: number;
@@ -28,7 +33,8 @@ export type TicketAmountsInput = {
   sellerServiceFeeMinor?: number;
   title?: string;
   notes?: string;
-  paymentOption?: "PROTECTED" | "INSTANT";
+  /** PROTECTED | INSTANT | DIRECT (DIRECT stores as INSTANT). */
+  paymentOption?: TxnPaymentOptionInput;
   procurementAdvanceAgreed?: boolean;
   listingId?: string | null;
   currency?: string;
@@ -151,6 +157,7 @@ async function resolveAmounts(
     itemCostMinor: input.itemCostMinor,
     shippingMinor: input.shippingMinor ?? 0,
     config,
+    paymentOption,
     sellerServiceFeeMinorOverride: input.sellerServiceFeeMinor,
   });
   const agreed = Boolean(input.procurementAdvanceAgreed);
@@ -178,22 +185,18 @@ export async function createOrRevisePaymentTicket(opts: {
   sellerId: string;
   amounts: TicketAmountsInput;
 }) {
-  if (!isProtectedPaymentsEnabled() && opts.amounts.paymentOption !== "INSTANT") {
-    // Allow ticket creation when protected flag on; instant needs its flag.
-  }
-  if (!isProtectedPaymentsEnabled() && !isInstantPaymentsEnabled()) {
+  if (!isProtectedPaymentsEnabled() && !isDirectPaymentsEnabled()) {
     throw Object.assign(new Error("Protected Payments are not enabled"), {
       status: 503,
       code: "PAYMENTS_DISABLED",
     });
   }
 
-  const paymentOption =
-    opts.amounts.paymentOption === "INSTANT" ? "INSTANT" : "PROTECTED";
-  if (paymentOption === "INSTANT" && !isInstantPaymentsEnabled()) {
-    throw Object.assign(new Error("Instant payments are not enabled"), {
+  const paymentOption = normalizeTxnPaymentOption(opts.amounts.paymentOption);
+  if (paymentOption === "INSTANT" && !isDirectPaymentsEnabled()) {
+    throw Object.assign(new Error("Direct Payment is not enabled"), {
       status: 503,
-      code: "INSTANT_DISABLED",
+      code: "DIRECT_DISABLED",
     });
   }
   if (paymentOption === "PROTECTED" && !isProtectedPaymentsEnabled()) {
@@ -390,10 +393,10 @@ export async function respondToPaymentTicket(opts: {
         code: "PROTECTED_DISABLED",
       });
     }
-    if (!isInstantPaymentsEnabled() && ticket.paymentOption === "INSTANT") {
-      throw Object.assign(new Error("Instant payments are not enabled"), {
+    if (!isDirectPaymentsEnabled() && isDirectPaymentOption(ticket.paymentOption)) {
+      throw Object.assign(new Error("Direct Payment is not enabled"), {
         status: 503,
-        code: "INSTANT_DISABLED",
+        code: "DIRECT_DISABLED",
       });
     }
     const buyer = await loadParty(ticket.buyerId);

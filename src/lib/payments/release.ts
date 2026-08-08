@@ -13,6 +13,7 @@ import {
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
 import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
+import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -205,7 +206,7 @@ export async function releaseFinal(opts: {
   assertStripeModeCompatible(txn.stripeMode);
 
   const status = txn.status as ProtectedStatus;
-  // Instant: allow release from FUNDED. Protected: READY_TO_RELEASE (or FUNDED for instant option).
+  // Direct: allow release from FUNDED. Protected: READY_TO_RELEASE.
   const action: DomainAction = "RELEASE_FINAL";
   if (!canTransition(status, action)) {
     throw Object.assign(
@@ -214,7 +215,9 @@ export async function releaseFinal(opts: {
     );
   }
 
-  if (txn.paymentOption === "PROTECTED" && status !== "READY_TO_RELEASE") {
+  // PROTECTED holds until READY_TO_RELEASE. Direct/INSTANT may release from FUNDED.
+  const isDirect = isDirectPaymentOption(txn.paymentOption);
+  if (!isDirect && status !== "READY_TO_RELEASE") {
     throw Object.assign(
       new Error(
         "Protected transactions require READY_TO_RELEASE (after delivery/inspection) before final release",

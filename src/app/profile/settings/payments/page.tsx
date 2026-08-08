@@ -28,6 +28,7 @@ type Flags = {
   PAYMENTS_ENABLED: boolean;
   CONNECT_ONBOARDING_ENABLED: boolean;
   PROTECTED_PAYMENTS_ENABLED: boolean;
+  DIRECT_PAYMENTS_ENABLED?: boolean;
   INSTANT_PAYMENTS_ENABLED: boolean;
   LIVE_PAYMENTS_ENABLED: boolean;
   stripeMode: string;
@@ -142,7 +143,9 @@ function PaymentsSettingsInner() {
   const helpCopy = payoutsHelpCopy(connect, flags);
   // Money-moving product surfaces stay off when payments flags are false.
   const showProtectedProduct = Boolean(flags?.PROTECTED_PAYMENTS_ENABLED);
-  const showInstantProduct = Boolean(flags?.INSTANT_PAYMENTS_ENABLED);
+  const showDirectProduct = Boolean(
+    flags?.DIRECT_PAYMENTS_ENABLED || flags?.INSTANT_PAYMENTS_ENABLED,
+  );
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -196,10 +199,13 @@ function PaymentsSettingsInner() {
                     {flags?.PROTECTED_PAYMENTS_ENABLED ? "On" : "Off"}
                   </li>
                 ) : null}
-                {showInstantProduct ? (
+                {showDirectProduct ? (
                   <li>
-                    Instant Payments:{" "}
-                    {flags?.INSTANT_PAYMENTS_ENABLED ? "On" : "Off"}
+                    Direct Payment:{" "}
+                    {flags?.DIRECT_PAYMENTS_ENABLED ||
+                    flags?.INSTANT_PAYMENTS_ENABLED
+                      ? "On"
+                      : "Off"}
                   </li>
                 ) : null}
                 <li>
@@ -239,8 +245,8 @@ function PaymentsSettingsInner() {
               </p>
               <p className="mt-2 text-sm text-white/55">
                 Complete onboarding so Source Bridge can transfer your share
-                after delivery and inspection (or promptly for Instant). Source
-                Bridge never stores your bank or card details.
+                after delivery and inspection (or promptly for Direct Payment).
+                Source Bridge never stores your bank or card details.
               </p>
               <div className="mt-5 flex flex-wrap gap-3">
                 <PrimaryButton

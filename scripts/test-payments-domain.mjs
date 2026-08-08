@@ -7,12 +7,19 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 // Inline mirrors of pure helpers so this script runs without ts-node.
-function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeMinorOverride }) {
+function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeMinorOverride, paymentOption }) {
   const base = itemCostMinor + shippingMinor;
-  const protectionRaw = Math.ceil((base * Math.max(0, config.protectionFeeBps)) / 10_000);
+  const direct = paymentOption === "INSTANT" || paymentOption === "DIRECT";
+  const bps = direct
+    ? (config.directServiceFeeBps ?? config.protectionFeeBps)
+    : config.protectionFeeBps;
+  const floor = direct
+    ? (config.directServiceFeeFloorMinor ?? config.protectionFeeFloorMinor)
+    : config.protectionFeeFloorMinor;
+  const protectionRaw = Math.ceil((base * Math.max(0, bps)) / 10_000);
   const protectionFeeMinor = Math.max(
     protectionRaw,
-    base > 0 ? Math.max(0, config.protectionFeeFloorMinor) : 0,
+    base > 0 ? Math.max(0, floor) : 0,
   );
   const sellerServiceFeeMinor =
     sellerServiceFeeMinorOverride !== undefined

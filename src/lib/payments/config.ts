@@ -13,6 +13,10 @@ const DEFAULTS: PlatformConfig = {
   protectionFeeBps: 350,
   protectionFeeFloorMinor: 50,
   sellerServiceFeeBps: 0,
+  // Separate Direct service fee (not Protection Fee). Defaults match protection rates;
+  // admin/config can diverge later without hardcoding checkout amounts.
+  directServiceFeeBps: 350,
+  directServiceFeeFloorMinor: 50,
   inspectionHours: 48,
   procurementMinTrustLevel: 2,
   procurementAdvancesGloballyOn: true,
@@ -39,16 +43,43 @@ export async function getPlatformPaymentConfig(): Promise<PlatformConfig> {
   const merged = Array.from(
     new Set([...(allowed.length ? allowed : ["USD"]), "USD", "GBP"].map((c) => c.toUpperCase())),
   );
+  // Prefer DB columns when present (migration added); else env overrides; else DEFAULTS.
+  // Avoid hardcoding 70¢ checkout amounts — floors come from config.
+  const directBps = readOptionalInt(
+    (row as { directServiceFeeBps?: number }).directServiceFeeBps,
+    envInt("DIRECT_SERVICE_FEE_BPS", DEFAULTS.directServiceFeeBps),
+  );
+  const directFloor = readOptionalInt(
+    (row as { directServiceFeeFloorMinor?: number }).directServiceFeeFloorMinor,
+    envInt("DIRECT_SERVICE_FEE_FLOOR_MINOR", DEFAULTS.directServiceFeeFloorMinor),
+  );
   return {
     protectionFeeBps: row.protectionFeeBps,
     protectionFeeFloorMinor: row.protectionFeeFloorMinor,
     sellerServiceFeeBps: row.sellerServiceFeeBps,
+    directServiceFeeBps: directBps,
+    directServiceFeeFloorMinor: directFloor,
     inspectionHours: row.inspectionHours,
     procurementMinTrustLevel: row.procurementMinTrustLevel,
     procurementAdvancesGloballyOn: row.procurementAdvancesGloballyOn,
     allowedCurrencies: merged,
     stripePlatformCountry: row.stripePlatformCountry || "",
   };
+}
+
+function readOptionalInt(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+  return fallback;
+}
+
+function envInt(name: string, fallback: number): number {
+  const raw = (process.env[name] || "").trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.floor(n);
 }
 
 export function assertCurrencyAllowed(

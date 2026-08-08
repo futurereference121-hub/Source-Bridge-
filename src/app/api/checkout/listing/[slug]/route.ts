@@ -5,11 +5,14 @@ import { getSessionUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { checkoutPublicConfig } from "@/lib/payments/checkout";
 import {
+  isDirectPaymentsEnabled,
   isProtectedPaymentsEnabled,
   paymentFlagsSnapshot,
 } from "@/lib/payments/flags";
 import {
+  listingAllowsDirect,
   listingAllowsProtected,
+  listingPaymentFlags,
   parseListingPaymentOptions,
 } from "@/lib/payments/listing-options";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
@@ -100,6 +103,8 @@ export async function GET(_req: Request, ctx: Ctx) {
     const stripe = checkoutPublicConfig();
     const flags = paymentFlagsSnapshot();
     const session = await getSessionUser();
+    const optionEnum = parseListingPaymentOptions(paymentOptions);
+    const paymentFlags = listingPaymentFlags(paymentOptions);
 
     const allowlistConfigured = isPaymentsTestAllowlistConfigured();
     const allowlistEntryCount = getPaymentsTestAllowlistEntryCount();
@@ -125,30 +130,36 @@ export async function GET(_req: Request, ctx: Ctx) {
       buyerAllowlisted &&
       sellerAllowlisted;
 
-    const listingProtectedOk =
-      listingAllowsProtected(parseListingPaymentOptions(paymentOptions)) ||
-      paymentOptions === "CONTACT_ONLY";
-
-    /**
-     * Stripe Payment Element path for allowlisted TEST Protected Payment.
-     * Independent of the legacy "create pending order" card path.
-     */
-    const canStripeCardCheckout = Boolean(
+    const notSelf = Boolean(session && session.id !== sellerUserId);
+    const baseStripeGates =
       listing.isDbListing &&
-        isStripeConfigured() &&
-        isProtectedPaymentsEnabled() &&
-        sellerConnectReady &&
-        allowlistOk &&
-        listingProtectedOk &&
-        session &&
-        session.id !== sellerUserId,
+      isStripeConfigured() &&
+      sellerConnectReady &&
+      allowlistOk &&
+      notSelf &&
+      Boolean(session);
+
+    const listingProtectedOk = listingAllowsProtected(optionEnum);
+    const listingDirectOk = listingAllowsDirect(optionEnum);
+
+    const canProtectedCheckout = Boolean(
+      baseStripeGates && isProtectedPaymentsEnabled() && listingProtectedOk,
     );
+    const canDirectCheckout = Boolean(
+      baseStripeGates && isDirectPaymentsEnabled() && listingDirectOk,
+    );
+
+    /** Back-compat alias for older clients (Protected card path). */
+    const canStripeCardCheckout = canProtectedCheckout || canDirectCheckout;
 
     let cardCheckoutBlockedReason: string | null = null;
     if (listing.isDbListing && !canStripeCardCheckout) {
-      if (!isStripeConfigured() || !isProtectedPaymentsEnabled()) {
+      if (!isStripeConfigured()) {
         cardCheckoutBlockedReason =
-          "Protected card checkout is not enabled for this environment.";
+          "Card checkout is not enabled for this environment.";
+      } else if (!isProtectedPaymentsEnabled() && !isDirectPaymentsEnabled()) {
+        cardCheckoutBlockedReason =
+          "Source Bridge payments are not enabled for this environment.";
       } else if (!session) {
         cardCheckoutBlockedReason = "Sign in to pay by card.";
       } else if (!sellerConnectReady) {
@@ -168,9 +179,47 @@ export async function GET(_req: Request, ctx: Ctx) {
           "Card checkout is limited to approved test accounts (the seller of this listing is not on the allowlist).";
       } else if (session.id === sellerUserId) {
         cardCheckoutBlockedReason = "You cannot buy your own listing.";
+      } else if (!listingProtectedOk && !listingDirectOk) {
+        cardCheckoutBlockedReason =
+          "This listing does not accept card payments.";
       } else {
         cardCheckoutBlockedReason =
           "Card checkout is unavailable for this listing.";
+      }
+    }
+
+    let protectedBlockedReason: string | null = null;
+    let directBlockedReason: string | null = null;
+    if (listing.isDbListing) {
+      if (!listingProtectedOk) {
+        protectedBlockedReason =
+          "This item is available for Direct Payment only.";
+      } else if (!canProtectedCheckout) {
+        if (!isProtectedPaymentsEnabled()) {
+          protectedBlockedReason = "Protected Payment is not enabled.";
+        } else if (!sellerConnectReady) {
+          protectedBlockedReason =
+            "Seller must complete Payments & Payouts before Protected Payment.";
+        } else if (!allowlistOk) {
+          protectedBlockedReason =
+            cardCheckoutBlockedReason ||
+            "Protected Payment is limited to approved test accounts.";
+        }
+      }
+      if (!listingDirectOk) {
+        directBlockedReason =
+          "This item is available for Protected Payment only.";
+      } else if (!canDirectCheckout) {
+        if (!isDirectPaymentsEnabled()) {
+          directBlockedReason = "Direct Payment is not enabled.";
+        } else if (!sellerConnectReady) {
+          directBlockedReason =
+            "Seller must complete Payments & Payouts before Direct Payment.";
+        } else if (!allowlistOk) {
+          directBlockedReason =
+            cardCheckoutBlockedReason ||
+            "Direct Payment is limited to approved test accounts.";
+        }
       }
     }
 
@@ -178,15 +227,22 @@ export async function GET(_req: Request, ctx: Ctx) {
       listing,
       seller: {
         ...seller,
-        // Ensure public seller id matches owner used for Connect/allowlist.
         id: listing.isDbListing ? sellerUserId : seller.id,
       },
       cryptoPaymentMethods: methods,
       paymentOptions,
+      paymentFlags,
+      availablePaymentMethods: {
+        protected: canProtectedCheckout,
+        direct: canDirectCheckout,
+      },
+      protectedBlockedReason,
+      directBlockedReason,
       sellerConnectReady,
       canStripeCardCheckout,
+      canProtectedCheckout,
+      canDirectCheckout,
       cardCheckoutBlockedReason,
-      /** Safe allowlist diagnostics — never includes tokens/emails/ids from env. */
       allowlistGate: {
         configured: allowlistConfigured,
         entryCount: allowlistEntryCount,

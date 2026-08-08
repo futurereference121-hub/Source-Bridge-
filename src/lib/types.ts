@@ -163,6 +163,14 @@ export interface Listing {
   shipFromCountry?: string;
   /** True when sourced from PostgreSQL rather than seed catalogue. */
   isDbListing?: boolean;
+  /**
+   * Listing payment options enum:
+   * CONTACT_ONLY | PROTECTED_ONLY | INSTANT_ONLY | BOTH
+   * INSTANT_* = Direct Payment product path.
+   */
+  paymentOptions?: string;
+  protectedPaymentEnabled?: boolean;
+  directPaymentEnabled?: boolean;
 }
 
 export interface Review {

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Stripe Payment Element for Protected Payment TEST checkout.
- * Browser success alone never marks FUNDED — funding is webhook-only.
+ * Browser success alone never marks FUNDED - funding is webhook-only.
+ * Browser success alone never marks FUNDED - funding is webhook-only.
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -22,6 +22,7 @@ type CheckoutInnerProps = {
   returnPath: string;
   onDismiss: () => void;
   onSubmitted: () => void;
+  paymentMode?: "protected" | "direct";
 };
 
 function CheckoutForm({
@@ -30,6 +31,7 @@ function CheckoutForm({
   returnPath,
   onDismiss,
   onSubmitted,
+  paymentMode = "protected",
 }: CheckoutInnerProps) {
   const stripe = useStripe();
   const elements = useElements();
@@ -73,8 +75,9 @@ function CheckoutForm({
         </span>
       </p>
       <p className="text-[11px] text-white/40">
-        Protected by Source Bridge · TEST mode · Funds stay protected until
-        delivery (no seller transfer on payment).
+        {paymentMode === "direct"
+          ? "Direct Payment · TEST mode · Released to seller after Stripe confirms (no Source Bridge protection hold)."
+          : "Protected by Source Bridge · TEST mode · Funds stay protected until delivery (no seller transfer on payment)."}
       </p>
       <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
         <PaymentElement
@@ -111,8 +114,9 @@ export type ProtectedPaymentCheckoutProps = {
   publishableKey: string;
   amountMinor: number;
   currency: string;
-  /** Where Stripe may redirect after 3DS — must not be treated as FUNDED. */
+  /** Where Stripe may redirect after 3DS â€” must not be treated as FUNDED. */
   returnPath?: string;
+  paymentMode?: "protected" | "direct";
   onDismiss: () => void;
   onPaymentSubmitted: () => void;
 };
@@ -123,6 +127,7 @@ export function ProtectedPaymentCheckout({
   amountMinor,
   currency,
   returnPath = "/inbox?payment=return",
+  paymentMode = "protected",
   onDismiss,
   onPaymentSubmitted,
 }: ProtectedPaymentCheckoutProps) {
@@ -157,7 +162,7 @@ export function ProtectedPaymentCheckout({
   if (!publishableKey.startsWith("pk_test_")) {
     return (
       <p className="text-xs text-amber-300">
-        Stripe TEST publishable key required (pk_test_…).
+        Stripe TEST publishable key required (pk_test_â€¦).
       </p>
     );
   }
@@ -165,7 +170,7 @@ export function ProtectedPaymentCheckout({
   if (!stripePromise) {
     return (
       <div className="flex items-center gap-2 text-xs text-white/50">
-        <Loader2 size={14} className="animate-spin" /> Loading payment form…
+        <Loader2 size={14} className="animate-spin" /> Loading payment formâ€¦
       </div>
     );
   }
@@ -177,6 +182,7 @@ export function ProtectedPaymentCheckout({
           amountMinor={amountMinor}
           currency={currency}
           returnPath={returnPath}
+          paymentMode={paymentMode}
           onDismiss={onDismiss}
           onSubmitted={onPaymentSubmitted}
         />

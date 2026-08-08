@@ -61,6 +61,8 @@ type ListingForm = {
   availability: ListingAvailability;
   saleStatus: "AVAILABLE" | "RESERVED" | "SOLD" | "ARCHIVED";
   images: string[];
+  protectedPaymentEnabled: boolean;
+  directPaymentEnabled: boolean;
 };
 
 const blank: ListingForm = {
@@ -84,6 +86,8 @@ const blank: ListingForm = {
   availability: "available",
   saleStatus: "AVAILABLE",
   images: [],
+  protectedPaymentEnabled: true,
+  directPaymentEnabled: false,
 };
 
 function fromListing(item: Listing): ListingForm {
@@ -115,6 +119,11 @@ function fromListing(item: Listing): ListingForm {
     availability: item.availability || "available",
     saleStatus,
     images: (item.images || []).filter((x) => !x.includes("/placeholders/")),
+    protectedPaymentEnabled:
+      item.protectedPaymentEnabled !== undefined
+        ? Boolean(item.protectedPaymentEnabled)
+        : true,
+    directPaymentEnabled: Boolean(item.directPaymentEnabled),
   };
 }
 
@@ -280,6 +289,10 @@ export function ListingEditor({
       showToast("Select a category");
       return;
     }
+    if (!form.protectedPaymentEnabled && !form.directPaymentEnabled) {
+      showToast("Choose at least one payment option.");
+      return;
+    }
     const price = Number(form.price);
     if (!Number.isFinite(price) || price < 0) {
       showToast("Enter a valid price");
@@ -309,6 +322,8 @@ export function ListingEditor({
         availability: form.availability,
         saleStatus: form.saleStatus,
         images: form.images.slice(0, 12),
+        protectedPaymentEnabled: form.protectedPaymentEnabled,
+        directPaymentEnabled: form.directPaymentEnabled,
       };
       if (listingId) {
         await apiJson(`/api/stock/${listingId}`, jsonBody("PATCH", payload));
@@ -659,6 +674,62 @@ export function ListingEditor({
             />
             Shipping available
           </label>
+
+          <div className="sm:col-span-2 space-y-3 rounded-lg border border-white/10 px-4 py-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+              Payment options
+            </p>
+            <p className="text-xs text-white/50">
+              Choose how buyers can pay on Source Bridge. At least one option is
+              required.
+            </p>
+            <label className="flex items-start gap-3 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={form.protectedPaymentEnabled}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    protectedPaymentEnabled: e.target.checked,
+                  }))
+                }
+                className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent"
+                disabled={busy}
+              />
+              <span>
+                <span className="font-medium text-white">Protected Payment</span>
+                <span className="mt-0.5 block text-xs text-white/45">
+                  Funds held until delivery and inspection rules are met.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 text-sm text-white/80">
+              <input
+                type="checkbox"
+                checked={form.directPaymentEnabled}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    directPaymentEnabled: e.target.checked,
+                  }))
+                }
+                className="mt-0.5 h-4 w-4 rounded border-white/30 bg-transparent"
+                disabled={busy}
+              />
+              <span>
+                <span className="font-medium text-white">Direct Payment</span>
+                <span className="mt-0.5 block text-xs text-white/45">
+                  Released to your payouts after Stripe confirms — no Source
+                  Bridge protection.
+                </span>
+              </span>
+            </label>
+            {!form.protectedPaymentEnabled && !form.directPaymentEnabled ? (
+              <p className="text-xs text-amber-200/90">
+                Choose at least one payment option.
+              </p>
+            ) : null}
+          </div>
 
           <div className="sm:col-span-2">
             <EditorField label="Description">

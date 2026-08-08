@@ -249,7 +249,10 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
 
       <p className="mt-2 text-xs text-white/45">
         Protected by Source Bridge ·{" "}
-        {ticket.paymentOption === "INSTANT" ? "Instant" : "Protected"} Transaction
+        {ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT"
+          ? "Direct Payment"
+          : "Protected"}{" "}
+        Transaction
         · funds held until delivery
       </p>
 

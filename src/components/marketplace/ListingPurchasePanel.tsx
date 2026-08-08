@@ -233,6 +233,8 @@ export function ListingPurchasePanel({
         listingCover={listing.images?.[0]}
         listingPriceLabel={formatPrice(listing.price, listing.currency)}
         isDemo={isDemo || !listing.isDbListing}
+        protectedPaymentEnabled={listing.protectedPaymentEnabled !== false}
+        directPaymentEnabled={Boolean(listing.directPaymentEnabled)}
       />
     </div>
   );

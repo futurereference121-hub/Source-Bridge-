@@ -46,6 +46,8 @@ export function serializeListingFormSnapshot(form: {
   availability: string;
   saleStatus: string;
   images: string[];
+  protectedPaymentEnabled?: boolean;
+  directPaymentEnabled?: boolean;
 }): string {
   return JSON.stringify({
     name: form.name,
@@ -68,6 +70,8 @@ export function serializeListingFormSnapshot(form: {
     availability: form.availability,
     saleStatus: form.saleStatus,
     images: form.images,
+    protectedPaymentEnabled: Boolean(form.protectedPaymentEnabled),
+    directPaymentEnabled: Boolean(form.directPaymentEnabled),
   });
 }
 

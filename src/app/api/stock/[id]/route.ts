@@ -7,8 +7,27 @@ import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 import { deleteStoredImageForUser } from "@/lib/storage";
 import { syncListingImages } from "@/lib/listing-images";
+import { encodeListingPaymentOptions } from "@/lib/payments/listing-options";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+function resolvePaymentOptionsPatch(data: {
+  paymentOptions?: string;
+  protectedPaymentEnabled?: boolean;
+  directPaymentEnabled?: boolean;
+}): string | undefined {
+  if (
+    data.protectedPaymentEnabled !== undefined ||
+    data.directPaymentEnabled !== undefined
+  ) {
+    return encodeListingPaymentOptions({
+      protectedPaymentEnabled: Boolean(data.protectedPaymentEnabled),
+      directPaymentEnabled: Boolean(data.directPaymentEnabled),
+    });
+  }
+  if (data.paymentOptions) return data.paymentOptions;
+  return undefined;
+}
 
 async function assertCategoryAllowed(category: string, productKind: string) {
   if (productKind === "clothing") {
@@ -50,6 +69,15 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const shipCountry = data.shipFromCountry ?? existing.shipFromCountry;
     const shipLabel =
       shipCity && shipCountry ? `${shipCity}, ${shipCountry}` : existing.location;
+
+    let paymentOptions: string | undefined;
+    try {
+      paymentOptions = resolvePaymentOptionsPatch(data);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Choose at least one payment option.";
+      return jsonError(message, 400);
+    }
 
     await prisma.stockListing.update({
       where: { id },
@@ -97,6 +125,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
         location: data.location !== undefined ? data.location : shipLabel,
         ...(data.price !== undefined ? { price: data.price } : {}),
         ...(data.currency !== undefined ? { currency: data.currency } : {}),
+        ...(paymentOptions !== undefined ? { paymentOptions } : {}),
       },
     });
     if (data.images !== undefined) await syncListingImages(id, data.images);

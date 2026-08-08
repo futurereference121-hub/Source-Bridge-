@@ -742,6 +742,10 @@ model PlatformPaymentConfig {
   protectionFeeFloorMinor         Int      @default(50)
   /// Seller service fee basis points (shown separately from protection fee).
   sellerServiceFeeBps             Int      @default(0)
+  /// Direct Payment platform service fee bps (item+shipping). Not Protection Fee.
+  directServiceFeeBps             Int      @default(350)
+  /// Direct Payment service fee floor in minor units.
+  directServiceFeeFloorMinor      Int      @default(50)
   /// Default inspection window hours after delivery confirmed by tracking.
   inspectionHours                 Int      @default(48)
   /// Minimum trust level (0–3) required for procurement advances.

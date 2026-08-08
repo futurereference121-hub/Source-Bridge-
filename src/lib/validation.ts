@@ -179,6 +179,12 @@ export const stockSchema = z.object({
   price: z.number().nonnegative("Price required"),
   currency: z.string().trim().max(8).optional().default("USD"),
   images: z.array(z.string().trim().min(1)).min(1, "Add at least one image").max(12),
+  /** Source Bridge payment options — at least one of Protected / Direct required. */
+  paymentOptions: z
+    .enum(["CONTACT_ONLY", "PROTECTED_ONLY", "INSTANT_ONLY", "BOTH"])
+    .optional(),
+  protectedPaymentEnabled: z.boolean().optional(),
+  directPaymentEnabled: z.boolean().optional(),
 });
 
 export const saleStatusSchema = z.enum([

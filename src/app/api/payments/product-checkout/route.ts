@@ -12,7 +12,7 @@ import {
   assertNotSelfTrade,
 } from "@/lib/payments/eligibility";
 import {
-  isInstantPaymentsEnabled,
+  isDirectPaymentsEnabled,
   isProtectedPaymentsEnabled,
   getStripeMode,
 } from "@/lib/payments/flags";
@@ -23,19 +23,26 @@ import { majorToMinor, normalizeCurrency, totalChargeMinor } from "@/lib/payment
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
+import {
+  isDirectPaymentOption,
+  normalizeTxnPaymentOption,
+  platformFeePublicLabel,
+} from "@/lib/payments/payment-option";
 
 export const runtime = "nodejs";
 
 const schema = z.object({
   listingId: z.string().trim().min(1),
-  paymentOption: z.enum(["PROTECTED", "INSTANT"]),
+  /** PROTECTED | DIRECT (preferred) | INSTANT (legacy alias for Direct). */
+  paymentOption: z.enum(["PROTECTED", "INSTANT", "DIRECT"]),
   selectedSize: z.string().trim().max(40).optional(),
   shippingMinor: z.number().int().nonnegative().optional(),
 });
 
 /**
- * Product listing → Protected / Instant checkout (creates ProtectedTransaction).
+ * Product listing → Protected / Direct checkout (creates ProtectedTransaction).
  * Does not charge; buyer then calls /api/payments/checkout with the txn id.
+ * Direct stores as INSTANT for money-flow compatibility.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -72,21 +79,21 @@ export async function POST(req: NextRequest) {
     }
     if (listing.price == null) return jsonError("Listing has no price", 400);
 
-    const option = parseListingPaymentOptions(listing.paymentOptions);
+    const listingOption = parseListingPaymentOptions(listing.paymentOptions);
+    const selected = parsed.data.paymentOption;
+    const storageOption = normalizeTxnPaymentOption(selected);
+    const isDirect = isDirectPaymentOption(selected);
+
     assertListingCheckoutOption({
-      listingOption: option,
-      selected: parsed.data.paymentOption,
-      // CONTACT_ONLY catalogue entries still reach Protected Payment for TEST
-      // allowlisted parties after gates below (Connect + flags + allowlist).
-      allowContactOnlyAsProtected:
-        parsed.data.paymentOption === "PROTECTED",
+      listingOption,
+      selected,
     });
 
-    if (parsed.data.paymentOption === "PROTECTED" && !isProtectedPaymentsEnabled()) {
+    if (!isDirect && !isProtectedPaymentsEnabled()) {
       return jsonError("Protected Payments are not enabled", 503);
     }
-    if (parsed.data.paymentOption === "INSTANT" && !isInstantPaymentsEnabled()) {
-      return jsonError("Instant payments are not enabled", 503);
+    if (isDirect && !isDirectPaymentsEnabled()) {
+      return jsonError("Direct Payment is not enabled", 503);
     }
 
     assertNotSelfTrade(user.id, listing.userId);
@@ -115,6 +122,12 @@ export async function POST(req: NextRequest) {
 
     const connect = await getConnectStatus(listing.userId);
     if (!connect.canReceiveProtectedPayments) {
+      if (isDirect) {
+        return jsonError(
+          "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
+          409,
+        );
+      }
       return jsonError(
         "Seller has not completed Payments & Payouts onboarding",
         409,
@@ -125,12 +138,15 @@ export async function POST(req: NextRequest) {
     const currency = normalizeCurrency(listing.currency || "USD");
     assertCurrencyAllowed(currency, config);
     const itemCostMinor = majorToMinor(listing.price, currency);
+    // Server recalculates fees — never trust client totals.
     const fees = calculateFees({
       itemCostMinor,
       shippingMinor: parsed.data.shippingMinor ?? 0,
       config,
+      paymentOption: storageOption,
     });
     const total = totalChargeMinor(fees);
+    const feeLabel = platformFeePublicLabel(storageOption);
     const terms: CanonicalTerms = {
       currency,
       itemCostMinor: fees.itemCostMinor,
@@ -138,7 +154,7 @@ export async function POST(req: NextRequest) {
       sellerServiceFeeMinor: fees.sellerServiceFeeMinor,
       protectionFeeMinor: fees.protectionFeeMinor,
       totalChargeMinor: total,
-      paymentOption: parsed.data.paymentOption,
+      paymentOption: storageOption,
       procurementAdvanceAgreed: false,
       procurementAdvanceMinor: 0,
       title: listing.name,
@@ -149,7 +165,7 @@ export async function POST(req: NextRequest) {
     };
     const termsHash = hashTerms(terms);
 
-    // Soft inventory reservation
+    // Soft inventory reservation (same point as Protected checkout).
     await prisma.stockListing.update({
       where: { id: listing.id },
       data: {
@@ -158,6 +174,7 @@ export async function POST(req: NextRequest) {
           buyerId: user.id,
           reservedAt: new Date().toISOString(),
           selectedSize: parsed.data.selectedSize || "",
+          paymentOption: storageOption,
         }),
       },
     });
@@ -166,7 +183,7 @@ export async function POST(req: NextRequest) {
       data: {
         status: "ACCEPTED",
         origin: "PRODUCT_CHECKOUT",
-        paymentOption: parsed.data.paymentOption,
+        paymentOption: storageOption,
         buyerId: user.id,
         sellerId: listing.userId,
         listingId: listing.id,
@@ -189,13 +206,19 @@ export async function POST(req: NextRequest) {
       protectedTxnId: txn.id,
       actorUserId: user.id,
       action: "PRODUCT_CHECKOUT_CREATED",
-      meta: { listingId: listing.id, paymentOption: parsed.data.paymentOption },
+      meta: {
+        listingId: listing.id,
+        paymentOption: storageOption,
+        productLabel: isDirect ? "Direct Payment" : "Protected Payment",
+      },
     });
 
     return Response.json(
       {
         ok: true,
         protectedTxnId: txn.id,
+        paymentOption: storageOption,
+        productLabel: isDirect ? "Direct Payment" : "Protected Payment",
         termsHash,
         amountMinor: total,
         currency,
@@ -203,12 +226,14 @@ export async function POST(req: NextRequest) {
           itemCost: fees.itemCostMinor,
           shipping: fees.shippingMinor,
           sellerServiceFee: fees.sellerServiceFeeMinor,
+          platformFee: fees.protectionFeeMinor,
           sourceBridgeProtectionFee: fees.protectionFeeMinor,
           labels: {
             itemCost: "Item Cost",
             shipping: "Shipping",
             sellerServiceFee: "Seller Service Fee",
-            sourceBridgeProtectionFee: "Source Bridge Protection Fee",
+            platformFee: feeLabel,
+            sourceBridgeProtectionFee: feeLabel,
           },
         },
         next: "POST /api/payments/checkout with protectedTxnId",
