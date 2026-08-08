@@ -50,9 +50,13 @@ function nextStatus(from, action) {
   return next;
 }
 
-/** releaseFinal guard for PROTECTED (mirrors release.ts) */
+/** releaseFinal money path — PROTECTED only after READY_TO_RELEASE; Direct never uses platform transfer */
 function canReleaseFinalProtected(status, paymentOption) {
   if (!canTransition(status, "RELEASE_FINAL")) return false;
+  if (paymentOption === "INSTANT" || paymentOption === "DIRECT") {
+    // Destination Charges — no stripe.transfers.create
+    return false;
+  }
   if (paymentOption === "PROTECTED" && status !== "READY_TO_RELEASE") {
     return false;
   }
@@ -210,7 +214,9 @@ assert.equal(
 assert.equal(canReleaseFinalProtected("FUNDED", "PROTECTED"), false);
 assert.equal(canReleaseFinalProtected("IN_INSPECTION", "PROTECTED"), false);
 assert.equal(canReleaseFinalProtected("READY_TO_RELEASE", "PROTECTED"), true);
-assert.equal(canReleaseFinalProtected("FUNDED", "INSTANT"), true); // state map; instant path
+// Direct: Destination Charges — no platform transfers.create from FUNDED
+assert.equal(canReleaseFinalProtected("FUNDED", "INSTANT"), false);
+assert.equal(canReleaseFinalProtected("FUNDED", "DIRECT"), false);
 
 // ── listing stays RESERVED before final release; SOLD only after RELEASED
 assert.equal(listingStatusAfter({ event: "checkout_start", current: "AVAILABLE" }), "RESERVED");

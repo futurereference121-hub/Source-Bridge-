@@ -11,18 +11,23 @@ import {
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   CHARGE_MODEL,
+  DIRECT_CHARGE_MODEL,
   getStripe,
   getStripePublishableKey,
   isStripeConfigured,
 } from "@/lib/payments/stripe/client";
 import { nextStatus, type ProtectedStatus } from "@/lib/payments/state-machine";
-import { releaseFinal, releaseProcurement } from "@/lib/payments/release";
+import { releaseProcurement } from "@/lib/payments/release";
+import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
 /**
- * Create a platform PaymentIntent (Separate Charges and Transfers).
- * Funds land on the platform; transfers happen at release — not at charge time.
- * Idempotent: reuses an existing open PaymentIntent for the same txn when still payable.
+ * Create a PaymentIntent for a ProtectedTransaction.
+ *
+ * PROTECTED: platform PI only (Separate Charges and Transfers). No transfer_data.
+ * DIRECT: Destination Charges — transfer_data.destination + application_fee_amount.
+ *   Fee approach: application_fee_amount = platform service fee (protectionFeeMinor).
+ *   Seller automatically receives the remainder; no transfers.create on fund.
  */
 export async function createPaymentIntentForTxn(opts: {
   protectedTxnId: string;
@@ -106,8 +111,34 @@ export async function createPaymentIntentForTxn(opts: {
   }
 
   const stripe = getStripe();
+  const isDirect =
+    isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
 
-  // Idempotent: reuse open PaymentIntent (no second charge path for same terms).
+  let sellerConnectId = "";
+  if (isDirect) {
+    const connect = await prisma.stripeConnectAccount.findUnique({
+      where: { userId: txn.sellerId },
+    });
+    if (!connect?.chargesEnabled || !connect.payoutsEnabled || !connect.stripeAccountId) {
+      throw Object.assign(
+        new Error("Seller Connect account not ready for Direct Payment"),
+        { status: 409, code: "CONNECT_NOT_READY" },
+      );
+    }
+    sellerConnectId = connect.stripeAccountId;
+  }
+
+  const sellerShareMinor =
+    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
+  const platformFeeMinor = txn.protectionFeeMinor;
+  if (isDirect && sellerShareMinor + platformFeeMinor !== txn.totalChargeMinor) {
+    throw Object.assign(
+      new Error("Direct Payment fee breakdown does not match total charge"),
+      { status: 500, code: "FEE_TOTAL_MISMATCH" },
+    );
+  }
+
+  // Idempotent: reuse open PaymentIntent only when architecture still matches.
   if (txn.stripePaymentIntentId) {
     try {
       const existing = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
@@ -116,8 +147,21 @@ export async function createPaymentIntentForTxn(opts: {
         existing.status === "requires_confirmation" ||
         existing.status === "requires_action" ||
         existing.status === "requires_capture";
+      const existingDest =
+        typeof existing.transfer_data?.destination === "string"
+          ? existing.transfer_data.destination
+          : existing.transfer_data?.destination &&
+              typeof existing.transfer_data.destination === "object"
+            ? (existing.transfer_data.destination as { id?: string }).id || ""
+            : "";
+      const architectureOk = isDirect
+        ? Boolean(existingDest) &&
+          existingDest === sellerConnectId &&
+          (existing.application_fee_amount ?? 0) === platformFeeMinor
+        : !existingDest;
       if (
         reusable &&
+        architectureOk &&
         existing.amount === txn.totalChargeMinor &&
         existing.currency?.toLowerCase() === txn.currency.toLowerCase() &&
         !existing.livemode
@@ -135,6 +179,7 @@ export async function createPaymentIntentForTxn(opts: {
           amountMinor: txn.totalChargeMinor,
           currency: txn.currency,
           transaction: txn,
+          chargeModel: isDirect ? DIRECT_CHARGE_MODEL : CHARGE_MODEL,
           reused: true as const,
         };
       }
@@ -147,26 +192,55 @@ export async function createPaymentIntentForTxn(opts: {
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code === "PI_ALREADY_SUCCEEDED") throw err;
-      // Missing PI or API error — fall through to create with idempotency key
+      // Missing PI or architecture mismatch — fall through to create
     }
   }
 
-  const intent = await stripe.paymentIntents.create(
-    {
-      amount: txn.totalChargeMinor,
-      currency: txn.currency.toLowerCase(),
-      transfer_group: txn.id,
-      metadata: {
-        protectedTxnId: txn.id,
-        termsHash: txn.termsHash,
-        chargeModel: CHARGE_MODEL,
-        paymentOption: txn.paymentOption,
-        releaseStrategy: "KEEP_ALL_PROTECTED",
-      },
-      automatic_payment_methods: { enabled: true },
-    },
-    { idempotencyKey: opts.idempotencyKey },
-  );
+  const baseMeta: Record<string, string> = {
+    protectedTxnId: txn.id,
+    termsHash: txn.termsHash,
+    paymentOption: txn.paymentOption,
+  };
+
+  const intent = isDirect
+    ? await stripe.paymentIntents.create(
+        {
+          amount: txn.totalChargeMinor,
+          currency: txn.currency.toLowerCase(),
+          // Destination Charges: automatic route to seller; Stripe FX on multi-currency.
+          transfer_data: {
+            destination: sellerConnectId,
+          },
+          // Platform keeps Source Bridge service fee; remainder → seller connected account.
+          application_fee_amount: platformFeeMinor,
+          transfer_group: txn.id,
+          metadata: {
+            ...baseMeta,
+            chargeModel: DIRECT_CHARGE_MODEL,
+            releaseStrategy: "DESTINATION_AUTO",
+            sellerConnectAccountId: sellerConnectId,
+            sellerShareMinor: String(sellerShareMinor),
+            platformFeeMinor: String(platformFeeMinor),
+          },
+          automatic_payment_methods: { enabled: true },
+        },
+        { idempotencyKey: opts.idempotencyKey },
+      )
+    : await stripe.paymentIntents.create(
+        {
+          amount: txn.totalChargeMinor,
+          currency: txn.currency.toLowerCase(),
+          transfer_group: txn.id,
+          // PROTECTED: no transfer_data — funds stay on platform until releaseFinal.
+          metadata: {
+            ...baseMeta,
+            chargeModel: CHARGE_MODEL,
+            releaseStrategy: "KEEP_ALL_PROTECTED",
+          },
+          automatic_payment_methods: { enabled: true },
+        },
+        { idempotencyKey: opts.idempotencyKey },
+      );
 
   if (intent.livemode) {
     throw Object.assign(new Error("Live PaymentIntents are refused"), {
@@ -181,6 +255,9 @@ export async function createPaymentIntentForTxn(opts: {
     data: {
       status: nextStatus(status, "START_CHECKOUT"),
       stripePaymentIntentId: intent.id,
+      ...(isDirect && sellerConnectId
+        ? { sellerConnectAccountId: sellerConnectId }
+        : {}),
     },
   });
 
@@ -188,7 +265,13 @@ export async function createPaymentIntentForTxn(opts: {
     protectedTxnId: txn.id,
     actorUserId: opts.buyerId,
     action: "START_CHECKOUT",
-    meta: { paymentIntentId: intent.id, reused: false },
+    meta: {
+      paymentIntentId: intent.id,
+      reused: false,
+      chargeModel: isDirect ? DIRECT_CHARGE_MODEL : CHARGE_MODEL,
+      destination: isDirect ? sellerConnectId : null,
+      applicationFeeMinor: isDirect ? platformFeeMinor : null,
+    },
   });
 
   return {
@@ -198,11 +281,16 @@ export async function createPaymentIntentForTxn(opts: {
     amountMinor: txn.totalChargeMinor,
     currency: txn.currency,
     transaction: updated,
+    chargeModel: isDirect ? DIRECT_CHARGE_MODEL : CHARGE_MODEL,
     reused: false as const,
   };
 }
 
-/** Apply funding from verified webhook (source of truth). Never transfers on PROTECTED fund. */
+/**
+ * Apply funding from verified webhook (source of truth).
+ * PROTECTED: never transfers on fund.
+ * DIRECT (Destination Charges): mark FUNDED + RELEASED from transfer_data; no transfers.create.
+ */
 export async function markTxnFundedFromWebhook(opts: {
   paymentIntentId: string;
   chargeId?: string;
@@ -218,6 +306,25 @@ export async function markTxnFundedFromWebhook(opts: {
   assertStripeModeCompatible(txn.stripeMode);
 
   if (txn.status === "FUNDED" || txn.fundedAt) {
+    // Idempotent re-delivery: complete Destination release only when still pending.
+    // SCT Direct orphans (no transfer_data.destination) stay FUNDED — finalize no-ops.
+    if (
+      isDirectPaymentOption(txn.paymentOption) &&
+      isDirectPaymentsEnabled() &&
+      txn.status !== "RELEASED" &&
+      !txn.releasedAt
+    ) {
+      const release = await finalizeDirectDestinationFromWebhook({
+        txn,
+        paymentIntentId: opts.paymentIntentId,
+        eventId: opts.eventId,
+      });
+      return {
+        handled: true,
+        reason: "already_funded_direct_retry",
+        direct: release,
+      };
+    }
     return { handled: true, reason: "already_funded" };
   }
 
@@ -297,8 +404,9 @@ export async function markTxnFundedFromWebhook(opts: {
     meta: {
       eventId: opts.eventId,
       paymentOption: updated.paymentOption,
-      releaseStrategy: directPath ? "TRANSFER_ON_FUND" : "KEEP_ALL_PROTECTED",
-      transferOnFund: directPath,
+      releaseStrategy: directPath ? "DESTINATION_AUTO" : "KEEP_ALL_PROTECTED",
+      transferOnFund: false,
+      chargeModel: directPath ? DIRECT_CHARGE_MODEL : CHARGE_MODEL,
     },
   });
 
@@ -307,23 +415,18 @@ export async function markTxnFundedFromWebhook(opts: {
     data: { status: "FUNDED" },
   });
 
-  // CRITICAL: PROTECTED never transfers on FUND. Direct/INSTANT only.
+  // Direct: Destination Charges only — verify routing, mark RELEASED, NO transfers.create.
   if (directPath) {
-    try {
-      // Idempotent via transferAttempt final_xfer_* keys inside releaseFinal.
-      await releaseFinal({ protectedTxnId: updated.id, actorUserId: null });
-    } catch (err) {
-      // Charge stays FUNDED; transfer can retry. Never re-charge.
-      await recordAuditEvent({
-        protectedTxnId: updated.id,
-        action: "DIRECT_RELEASE_FAILED",
-        meta: {
-          error: err instanceof Error ? err.message : "unknown",
-          legacyActionAlias: "INSTANT_RELEASE_FAILED",
-        },
-      });
-    }
-  } else if (
+    const release = await finalizeDirectDestinationFromWebhook({
+      txn: updated,
+      paymentIntentId: opts.paymentIntentId,
+      eventId: opts.eventId,
+    });
+    return { handled: true, reason: "funded", txn: updated, direct: release };
+  }
+
+  // PROTECTED procurement advance (SCT transfer) when agreed — never on Direct.
+  if (
     !isDirectPaymentOption(updated.paymentOption) &&
     updated.procurementAdvanceAgreed &&
     updated.procurementAdvanceMinor > 0 &&
@@ -346,11 +449,236 @@ export async function markTxnFundedFromWebhook(opts: {
   return { handled: true, reason: "funded", txn: updated };
 }
 
+/**
+ * After Destination Charge succeeds: verify transfer_data.destination, book RELEASED
+ * in presentment amounts, mark listing SOLD. Never calls stripe.transfers.create.
+ * Idempotent.
+ */
+async function finalizeDirectDestinationFromWebhook(opts: {
+  txn: {
+    id: string;
+    status: string;
+    paymentOption: string;
+    sellerId: string;
+    listingId: string | null;
+    itemCostMinor: number;
+    shippingMinor: number;
+    sellerServiceFeeMinor: number;
+    finalTransferredMinor: number;
+    sellerConnectAccountId: string;
+    currency: string;
+    releasedAt: Date | null;
+  };
+  paymentIntentId: string;
+  eventId: string;
+}) {
+  const { txn } = opts;
+  if (txn.releasedAt || txn.status === "RELEASED") {
+    return { released: true, reason: "already_released" as const };
+  }
+
+  let destinationId = "";
+  let applicationFee: number | null = null;
+  try {
+    const stripe = getStripe();
+    const pi = await stripe.paymentIntents.retrieve(opts.paymentIntentId);
+    const dest = pi.transfer_data?.destination;
+    destinationId =
+      typeof dest === "string"
+        ? dest
+        : dest && typeof dest === "object"
+          ? (dest as { id?: string }).id || ""
+          : "";
+    applicationFee =
+      typeof pi.application_fee_amount === "number"
+        ? pi.application_fee_amount
+        : null;
+  } catch (err) {
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      action: "DIRECT_DESTINATION_PI_RETRIEVE_FAILED",
+      meta: {
+        eventId: opts.eventId,
+        error: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+      },
+    });
+    // Leave FUNDED — ops can inspect. Never invent transfers.create.
+    return { released: false, reason: "pi_retrieve_failed" as const };
+  }
+
+  if (!destinationId) {
+    // Legacy SCT Direct PI (e.g. orphaned FUNDED path if fund were re-processed).
+    // Do NOT transfers.create — leave FUNDED for manual reconciliation only.
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      action: "DIRECT_DESTINATION_MISSING",
+      meta: {
+        eventId: opts.eventId,
+        paymentIntentId: opts.paymentIntentId,
+        note: "No transfer_data.destination — skipped platform transfer by design",
+      },
+    });
+    return { released: false, reason: "destination_missing" as const };
+  }
+
+  const expectedConnect = await prisma.stripeConnectAccount.findUnique({
+    where: { userId: txn.sellerId },
+    select: { stripeAccountId: true },
+  });
+  if (
+    expectedConnect?.stripeAccountId &&
+    destinationId !== expectedConnect.stripeAccountId
+  ) {
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      action: "DIRECT_DESTINATION_MISMATCH",
+      meta: {
+        eventId: opts.eventId,
+        expected: expectedConnect.stripeAccountId,
+        got: destinationId,
+      },
+    });
+    return { released: false, reason: "destination_mismatch" as const };
+  }
+
+  const sellerShareMinor =
+    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
+
+  // Bookkeeping idempotency (no Stripe transfer object for destination auto-split).
+  const ledgerKey = `dest_release_${txn.id}_${opts.paymentIntentId}`;
+
+  const updated = await prisma.protectedTransaction.update({
+    where: { id: txn.id },
+    data: {
+      status: nextStatus("FUNDED", "RELEASE_FINAL"),
+      finalTransferredMinor: sellerShareMinor,
+      releasedAt: new Date(),
+      sellerConnectAccountId: destinationId,
+    },
+  });
+
+  await appendLedgerEntry({
+    protectedTxnId: txn.id,
+    entryType: "FINAL_TRANSFER",
+    direction: "DEBIT",
+    amountMinor: sellerShareMinor,
+    currency: txn.currency,
+    idempotencyKey: ledgerKey,
+    stripeObjectId: opts.paymentIntentId,
+    stripeObjectType: "payment_intent",
+    meta: {
+      eventId: opts.eventId,
+      chargeModel: DIRECT_CHARGE_MODEL,
+      destination: destinationId,
+      applicationFeeAmount: applicationFee,
+      presentmentAmountMinor: sellerShareMinor,
+      note: "Destination Charges — auto route; no transfers.create",
+    },
+  });
+
+  await recordAuditEvent({
+    protectedTxnId: txn.id,
+    action: "RELEASE_FINAL",
+    meta: {
+      eventId: opts.eventId,
+      chargeModel: DIRECT_CHARGE_MODEL,
+      destination: destinationId,
+      amountMinor: sellerShareMinor,
+      applicationFeeAmount: applicationFee,
+      transferCreated: false,
+    },
+  });
+
+  await markListingSoldIfLinked(txn.listingId);
+
+  await prisma.paymentTicket.updateMany({
+    where: { protectedTransactionId: txn.id },
+    data: { status: "RELEASED" },
+  });
+
+  return {
+    released: true,
+    reason: "destination_released" as const,
+    destination: destinationId,
+    amountMinor: sellerShareMinor,
+    txn: updated,
+  };
+}
+
+/** Buyer/seller status poll after client confirmPayment (funding is webhook-only). */
+export async function getProtectedTxnPaymentStatus(opts: {
+  protectedTxnId: string;
+  viewerUserId: string;
+}) {
+  const txn = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.protectedTxnId },
+    select: {
+      id: true,
+      status: true,
+      paymentOption: true,
+      buyerId: true,
+      sellerId: true,
+      fundedAt: true,
+      releasedAt: true,
+      finalTransferredMinor: true,
+      totalChargeMinor: true,
+      currency: true,
+      listingId: true,
+      stripePaymentIntentId: true,
+      listing: {
+        select: { id: true, slug: true, saleStatus: true, name: true },
+      },
+    },
+  });
+  if (!txn) {
+    throw Object.assign(new Error("Transaction not found"), { status: 404 });
+  }
+  if (txn.buyerId !== opts.viewerUserId && txn.sellerId !== opts.viewerUserId) {
+    throw Object.assign(new Error("Not a party to this transaction"), {
+      status: 403,
+    });
+  }
+
+  const isDirect = isDirectPaymentOption(txn.paymentOption);
+  const complete =
+    txn.status === "RELEASED" ||
+    Boolean(txn.releasedAt) ||
+    (!isDirect && Boolean(txn.fundedAt)) ||
+    (isDirect && (txn.status === "FUNDED" || txn.status === "RELEASED"));
+
+  return {
+    id: txn.id,
+    status: txn.status,
+    paymentOption: txn.paymentOption,
+    fundedAt: txn.fundedAt?.toISOString() ?? null,
+    releasedAt: txn.releasedAt?.toISOString() ?? null,
+    finalTransferredMinor: txn.finalTransferredMinor,
+    totalChargeMinor: txn.totalChargeMinor,
+    currency: txn.currency,
+    isDirect,
+    /** Buyer UX: true when payment is accepted (FUNDED+) — never wait forever. */
+    paymentReceived: Boolean(txn.fundedAt) || ["FUNDED", "RELEASED"].includes(txn.status),
+    complete: Boolean(complete && (txn.fundedAt || txn.status === "RELEASED" || txn.status === "FUNDED")),
+    payoutSettled: isDirect
+      ? txn.status === "RELEASED" || Boolean(txn.releasedAt)
+      : txn.status === "RELEASED",
+    listing: txn.listing
+      ? {
+          id: txn.listing.id,
+          slug: txn.listing.slug,
+          name: txn.listing.name,
+          saleStatus: txn.listing.saleStatus,
+        }
+      : null,
+  };
+}
+
 export function checkoutPublicConfig() {
   return {
     stripeConfigured: isStripeConfigured(),
     publishableKey: getStripePublishableKey() || null,
     stripeMode: getStripeMode(),
     chargeModel: CHARGE_MODEL,
+    directChargeModel: DIRECT_CHARGE_MODEL,
   };
 }

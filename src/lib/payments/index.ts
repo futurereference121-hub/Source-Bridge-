@@ -26,6 +26,7 @@ export {
 } from "@/lib/payments/state-machine";
 export {
   CHARGE_MODEL,
+  DIRECT_CHARGE_MODEL,
   isStripeConfigured,
   isConnectOnboardingApiReady,
   hasStripeTestSecretKey,

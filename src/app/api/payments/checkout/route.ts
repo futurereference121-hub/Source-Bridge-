@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/validation";
 import {
   checkoutPublicConfig,
   createPaymentIntentForTxn,
+  getProtectedTxnPaymentStatus,
 } from "@/lib/payments/checkout";
 import { isPaymentsEnabled } from "@/lib/payments/flags";
 
@@ -15,12 +16,41 @@ const schema = z.object({
   idempotencyKey: z.string().trim().min(8).max(200),
 });
 
-export async function GET() {
-  return Response.json({
+export async function GET(req: NextRequest) {
+  const publicConfig = {
     ok: true,
     paymentsEnabled: isPaymentsEnabled(),
     ...checkoutPublicConfig(),
-  });
+  };
+
+  const protectedTxnId = (req.nextUrl.searchParams.get("protectedTxnId") || "").trim();
+  if (!protectedTxnId) {
+    return Response.json(publicConfig);
+  }
+
+  try {
+    const user = await requireSessionUser();
+    if (!isPaymentsEnabled()) {
+      return jsonError("Payments are not enabled", 503);
+    }
+    const status = await getProtectedTxnPaymentStatus({
+      protectedTxnId,
+      viewerUserId: user.id,
+    });
+    return Response.json({
+      ok: true,
+      transaction: status,
+      paymentsEnabled: isPaymentsEnabled(),
+      ...checkoutPublicConfig(),
+    });
+  } catch (err) {
+    const code = (err as { status?: number }).status || 500;
+    const message = err instanceof Error ? err.message : "Failed";
+    if (code === 401) return jsonError("Sign in required", 401);
+    if (code >= 400 && code < 500) return jsonError(message, code);
+    console.error("[payments:checkout:status]", err);
+    return jsonError("Failed to load payment status", 500);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -46,7 +76,8 @@ export async function POST(req: NextRequest) {
       publishableKey: result.publishableKey,
       amountMinor: result.amountMinor,
       currency: result.currency,
-      chargeModel: checkoutPublicConfig().chargeModel,
+      chargeModel: result.chargeModel,
+      protectedTxnId: parsed.data.protectedTxnId,
     });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;

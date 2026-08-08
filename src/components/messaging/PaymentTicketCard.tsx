@@ -148,12 +148,14 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     setError("");
     setCheckout(null);
     try {
+      const isDirect =
+        ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
       const res = await fetch("/api/payments/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           protectedTxnId: ticket.protectedTransactionId,
-          idempotencyKey: `pay_${ticket.id}_${ticket.termsHash}`,
+          idempotencyKey: `pay_${ticket.id}_${ticket.termsHash}_${isDirect ? "dest_v1" : "prot_v1"}`,
         }),
       });
       const json = (await res.json()) as {
@@ -174,7 +176,7 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           currency: json.currency ?? ticket.currency,
         });
         setPayNotice(
-          "Complete payment below. Status becomes FUNDED only after Stripe confirms (not from this page alone).",
+          "Complete payment below. Status updates after Stripe confirms (do not pay again).",
         );
       } else {
         setError("Checkout did not return a payment form");
@@ -335,21 +337,21 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           publishableKey={checkout.publishableKey}
           amountMinor={checkout.amountMinor}
           currency={checkout.currency}
+          paymentMode={
+            ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT"
+              ? "direct"
+              : "protected"
+          }
+          protectedTxnId={ticket.protectedTransactionId || undefined}
+          ordersHref="/profile/purchases"
           returnPath="/inbox?payment=return"
           onDismiss={() => setCheckout(null)}
           onPaymentSubmitted={() => {
             setPayNotice(
-              "Payment submitted. Waiting for confirmation — FUNDED appears after webhook (refresh if needed).",
+              "Payment received. Seller payout is being processed. Do not pay again.",
             );
-            setCheckout(null);
             void load();
             onChanged?.();
-            let n = 0;
-            const id = window.setInterval(() => {
-              n += 1;
-              void load();
-              if (n >= 10) window.clearInterval(id);
-            }, 2000);
           }}
         />
       ) : null}

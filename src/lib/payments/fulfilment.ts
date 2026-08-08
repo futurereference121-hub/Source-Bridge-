@@ -154,7 +154,9 @@ export function mapProtectedTxnSummary(
 function paymentLabel(status: string, option: string) {
   if (isDirectPaymentOption(option)) {
     if (status === "RELEASED") return "Direct Payment — completed";
-    if (status === "FUNDED") return "Direct Payment — released to seller";
+    if (status === "FUNDED") {
+      return "Direct Payment — payment received (payout processing)";
+    }
     if (status === "AWAITING_PAYMENT" || status === "ACCEPTED") {
       return "Direct Payment — awaiting payment";
     }
@@ -195,8 +197,11 @@ function shippingLabel(status: string, shipped: boolean, option: string) {
 
 function deliveryLabel(status: string, option: string) {
   if (isDirectPaymentOption(option)) {
-    if (status === "RELEASED" || status === "FUNDED") {
-      return "Funds released after Stripe confirmation (no Source Bridge protection)";
+    if (status === "RELEASED") {
+      return "Funds routed to seller (Destination Charges · no Source Bridge protection)";
+    }
+    if (status === "FUNDED") {
+      return "Payment received — seller destination payout processing";
     }
     return "Direct Payment — no inspection period";
   }

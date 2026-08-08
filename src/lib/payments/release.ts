@@ -206,7 +206,21 @@ export async function releaseFinal(opts: {
   assertStripeModeCompatible(txn.stripeMode);
 
   const status = txn.status as ProtectedStatus;
-  // Direct: allow release from FUNDED. Protected: READY_TO_RELEASE.
+  // Direct uses Destination Charges only — never platform transfers.create.
+  const isDirect = isDirectPaymentOption(txn.paymentOption);
+  if (isDirect) {
+    if (status === "RELEASED" || txn.releasedAt) {
+      return { alreadyReleased: true, txn };
+    }
+    throw Object.assign(
+      new Error(
+        "Direct Payment uses Destination Charges; platform transfers.create is disabled for Direct. Leave SCT-funded Direct transactions for manual reconciliation.",
+      ),
+      { status: 409, code: "DIRECT_NO_PLATFORM_TRANSFER" },
+    );
+  }
+
+  // PROTECTED only from here.
   const action: DomainAction = "RELEASE_FINAL";
   if (!canTransition(status, action)) {
     throw Object.assign(
@@ -215,9 +229,7 @@ export async function releaseFinal(opts: {
     );
   }
 
-  // PROTECTED holds until READY_TO_RELEASE. Direct/INSTANT may release from FUNDED.
-  const isDirect = isDirectPaymentOption(txn.paymentOption);
-  if (!isDirect && status !== "READY_TO_RELEASE") {
+  if (status !== "READY_TO_RELEASE") {
     throw Object.assign(
       new Error(
         "Protected transactions require READY_TO_RELEASE (after delivery/inspection) before final release",
@@ -256,9 +268,6 @@ export async function releaseFinal(opts: {
   });
   // Stripe already paid — reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
   if (existingAttempt?.status === "SUCCEEDED") {
-    if (status === "RELEASED") {
-      return { alreadyReleased: true, txn };
-    }
     const next = nextStatus(status, action);
     const updated = await prisma.protectedTransaction.update({
       where: { id: txn.id },

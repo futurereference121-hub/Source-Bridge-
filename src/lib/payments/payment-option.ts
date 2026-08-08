@@ -3,7 +3,10 @@
  *
  * Product name: "Direct Payment" (UI only).
  * Storage/canonical money-flow value remains INSTANT (legacy) — DIRECT is accepted as an alias.
- * PROTECTED never transfers on fund.
+ *
+ * PROTECTED: Separate Charges and Transfers — never transfers on fund.
+ * DIRECT: Destination Charges (transfer_data.destination + application_fee) — never
+ * transfers.create on fund; Stripe routes seller share at charge success.
  */
 
 export const TXN_PAYMENT_OPTIONS = ["PROTECTED", "INSTANT", "DIRECT"] as const;

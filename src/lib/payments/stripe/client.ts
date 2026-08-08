@@ -126,13 +126,16 @@ export function getStripe(): Stripe {
 }
 
 /**
- * Preferred charge model: Separate Charges and Transfers.
- * Platform creates PaymentIntent on the platform account, then Transfer to
- * connected account at release (procurement and/or final).
- *
- * Limitation: requires Stripe Connect with transfers capability and a
- * platform country that supports Separate Charges and Transfers. If the
- * platform country cannot support this, do not silently switch to Destination
- * Charges — escalate before architecture change.
+ * PROTECTED only: Separate Charges and Transfers.
+ * Platform PaymentIntent (no transfer_data) → funds on platform →
+ * delayed stripe.transfers.create at releaseFinal / procurement.
  */
 export const CHARGE_MODEL = "SEPARATE_CHARGES_AND_TRANSFERS" as const;
+
+/**
+ * DIRECT only: Destination Charges.
+ * Platform PaymentIntent with transfer_data.destination + application_fee_amount.
+ * Seller share routes automatically on charge success; no transfers.create on fund.
+ * Stripe handles FX when presentment currency ≠ platform settle currency.
+ */
+export const DIRECT_CHARGE_MODEL = "DESTINATION_CHARGES" as const;

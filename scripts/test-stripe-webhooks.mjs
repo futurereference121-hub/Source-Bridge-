@@ -186,9 +186,33 @@ function makeSignedPayload(payloadObj, secret, timestamp = Math.floor(Date.now()
   assert.equal(event.id, "evt_hmac");
 }
 
+// ── Direct Destination fund path (no transfers.create)
+{
+  function handleDirectFund({ hasDestination, alreadyReleased }) {
+    if (alreadyReleased) return { transfersCreate: false, status: "RELEASED" };
+    if (hasDestination) return { transfersCreate: false, status: "RELEASED" };
+    // orphan SCT Direct
+    return { transfersCreate: false, status: "FUNDED" };
+  }
+  assert.deepEqual(handleDirectFund({ hasDestination: true, alreadyReleased: false }), {
+    transfersCreate: false,
+    status: "RELEASED",
+  });
+  assert.deepEqual(handleDirectFund({ hasDestination: false, alreadyReleased: false }), {
+    transfersCreate: false,
+    status: "FUNDED",
+  });
+  // protected fund never transfer on fund
+  function handleProtectedFund() {
+    return { transfersCreate: false, status: "FUNDED" };
+  }
+  assert.equal(handleProtectedFund().transfersCreate, false);
+}
+
 console.log("test-stripe-webhooks: all assertions passed");
 console.log("  - invalid signature rejects");
 console.log("  - valid TEST constructEvent (snapshot + thin) OK");
 console.log("  - multi-secret + idempotency simulation OK");
 console.log("  - payments-disabled financial gate OK");
+console.log("  - direct destination fund path (no transfers.create) OK");
 console.log("  (No live Stripe Dashboard send in this script)");

@@ -218,7 +218,8 @@ export function CheckoutPageClient({ slug }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           protectedTxnId,
-          idempotencyKey: `product-checkout:${protectedTxnId}:v1`,
+          // dest_v1 bumps Direct onto Destination Charges (never reuse SCT Direct PIs).
+          idempotencyKey: `product-checkout:${protectedTxnId}:${mode === "direct" ? "dest_v1" : "prot_v1"}`,
         }),
       });
       const pi = await piRes.json().catch(() => ({}));
@@ -492,13 +493,19 @@ export function CheckoutPageClient({ slug }: Props) {
                     {activeMode === "direct" ? "Direct Payment" : "Protected Payment"}
                   </p>
                 ) : null}
-                {paymentSubmitted ? (
-                  <p className="mt-4 text-sm text-white/60">
-                    Payment submitted. Status updates when Stripe confirms
-                    (usually a few seconds). You can refresh this page or open
-                    Transactions / inbox later — the success redirect alone does
-                    not mark the order funded.
-                  </p>
+                {paymentSubmitted && !stripePay ? (
+                  <div className="mt-4 space-y-2">
+                    <p className="text-sm text-white/70">
+                      Payment received. Seller payout is being processed. Do not
+                      pay again.
+                    </p>
+                    <Link
+                      href="/profile/purchases"
+                      className="text-sm text-electric hover:text-electric-hover"
+                    >
+                      View your orders
+                    </Link>
+                  </div>
                 ) : null}
                 {stripePay ? (
                   <ProtectedPaymentCheckout
@@ -507,6 +514,8 @@ export function CheckoutPageClient({ slug }: Props) {
                     amountMinor={stripePay.amountMinor}
                     currency={stripePay.currency}
                     paymentMode={stripePay.mode}
+                    protectedTxnId={stripePay.protectedTxnId}
+                    ordersHref="/profile/purchases"
                     returnPath={`/checkout/${encodeURIComponent(slug)}?method=card&pay=${stripePay.mode}&payment=return`}
                     onDismiss={() => {
                       setStripePay(null);
@@ -515,7 +524,7 @@ export function CheckoutPageClient({ slug }: Props) {
                     onPaymentSubmitted={() => {
                       setPaymentSubmitted(true);
                       showToast(
-                        "Payment submitted — waiting for Stripe confirmation",
+                        "Payment submitted — confirming (do not pay again)",
                       );
                     }}
                   />
