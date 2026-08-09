@@ -45,6 +45,19 @@ export type PaymentsProposalAccess = {
   peerPresent?: boolean;
 };
 
+export type EditTicketPrefill = {
+  conversationId: string;
+  title?: string;
+  currency?: string;
+  itemCostMinor: number;
+  shippingMinor?: number;
+  sellerServiceFeeMinor?: number;
+  procurementAdvanceAgreed?: boolean;
+  notes?: string;
+  buyerId?: string;
+  sellerId?: string;
+};
+
 type ProposePaymentTicketButtonProps = {
   conversationId: string;
   myId: string;
@@ -58,9 +71,20 @@ type ProposePaymentTicketButtonProps = {
     ticket: { id: string; conversationId?: string };
     message: ProposedTicketTimelineMessage | null;
   }) => void;
+  /** Prefill + revise mode (supersedes open ticket via createOrRevise). */
+  editFromTicket?: EditTicketPrefill | null;
+  forceOpen?: boolean;
+  onCloseEdit?: () => void;
+  /** When true, hide the compact toolbar button (card-embedded revise form). */
+  hideTrigger?: boolean;
 };
 
-const BUILD_FINGERPRINT = "pt-propose-v3-nested-form-fix";
+const BUILD_FINGERPRINT = "pt-propose-v4-lifecycle-edit";
+
+function minorToMajor(minor: number | undefined): string {
+  if (minor == null || !Number.isFinite(minor)) return "0";
+  return (minor / 100).toFixed(2);
+}
 
 /**
  * Compact composer action to propose a Payment Ticket (no funding).
@@ -75,17 +99,34 @@ export function ProposePaymentTicketButton({
   myId,
   proposalAccess,
   onCreated,
+  editFromTicket,
+  forceOpen,
+  onCloseEdit,
+  hideTrigger,
 }: ProposePaymentTicketButtonProps) {
-  const [open, setOpen] = useState(false);
-  const [itemMajor, setItemMajor] = useState("");
-  const [shippingMajor, setShippingMajor] = useState("0");
-  const [serviceMajor, setServiceMajor] = useState("0");
-  const [title, setTitle] = useState("");
-  const [currency, setCurrency] = useState("GBP");
-  const [procurement, setProcurement] = useState(false);
+  const isEdit = Boolean(editFromTicket);
+  const convId = editFromTicket?.conversationId || conversationId;
+
+  const [open, setOpen] = useState(Boolean(forceOpen || editFromTicket));
+  const [itemMajor, setItemMajor] = useState(
+    editFromTicket ? minorToMajor(editFromTicket.itemCostMinor) : "",
+  );
+  const [shippingMajor, setShippingMajor] = useState(
+    editFromTicket ? minorToMajor(editFromTicket.shippingMinor ?? 0) : "0",
+  );
+  const [serviceMajor, setServiceMajor] = useState(
+    editFromTicket
+      ? minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0)
+      : "0",
+  );
+  const [title, setTitle] = useState(editFromTicket?.title || "");
+  const [currency, setCurrency] = useState(editFromTicket?.currency || "GBP");
+  const [procurement, setProcurement] = useState(
+    Boolean(editFromTicket?.procurementAdvanceAgreed),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(isEdit);
   const [procurementFlag, setProcurementFlag] = useState(false);
 
   useEffect(() => {
@@ -93,6 +134,22 @@ export function ProposePaymentTicketButton({
       window.__SB_PAYMENT_TICKET_BUILD__ = BUILD_FINGERPRINT;
     }
   }, []);
+
+  useEffect(() => {
+    if (forceOpen || editFromTicket) {
+      setOpen(true);
+    }
+  }, [forceOpen, editFromTicket]);
+
+  useEffect(() => {
+    if (!editFromTicket) return;
+    setItemMajor(minorToMajor(editFromTicket.itemCostMinor));
+    setShippingMajor(minorToMajor(editFromTicket.shippingMinor ?? 0));
+    setServiceMajor(minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0));
+    setTitle(editFromTicket.title || "");
+    setCurrency(editFromTicket.currency || "GBP");
+    setProcurement(Boolean(editFromTicket.procurementAdvanceAgreed));
+  }, [editFromTicket]);
 
   useEffect(() => {
     void fetch("/api/payments/connect", { cache: "no-store" })
@@ -112,14 +169,16 @@ export function ProposePaymentTicketButton({
               j.flags?.INSTANT_PAYMENTS_ENABLED,
           );
           const access = Boolean(j.paymentsAccess?.testAccessAllowed);
-          setEnabled(flagOn && access);
+          setEnabled(isEdit || (flagOn && access));
           setProcurementFlag(Boolean(j.flags?.PROCUREMENT_ADVANCES_ENABLED));
         },
       )
-      .catch(() => setEnabled(false));
-  }, []);
+      .catch(() => {
+        if (!isEdit) setEnabled(false);
+      });
+  }, [isEdit]);
 
-  if (!enabled) return null;
+  if (!enabled && !isEdit) return null;
 
   const peerMissing =
     proposalAccess != null &&
@@ -144,6 +203,11 @@ export function ProposePaymentTicketButton({
       setBusy(false);
       return;
     }
+    if (!convId) {
+      setError(`Missing conversation. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
     // Pre-flight: still call the API (authoritative), but surface both-party gate early.
     if (peerMissing) {
       setError(
@@ -162,7 +226,7 @@ export function ProposePaymentTicketButton({
         },
         cache: "no-store",
         body: JSON.stringify({
-          conversationId,
+          conversationId: convId,
           itemCostMinor: item,
           shippingMinor: Number.isFinite(shipping) ? Math.max(0, shipping) : 0,
           sellerServiceFeeMinor: Number.isFinite(service)
@@ -173,6 +237,10 @@ export function ProposePaymentTicketButton({
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
           proposalTraceId,
+          ...(editFromTicket?.buyerId ? { buyerId: editFromTicket.buyerId } : {}),
+          ...(editFromTicket?.sellerId
+            ? { sellerId: editFromTicket.sellerId }
+            : {}),
         }),
       });
 
@@ -195,7 +263,7 @@ export function ProposePaymentTicketButton({
           );
           console.info("[payments:propose]", {
             proposalTraceId,
-            conversationId,
+            conversationId: convId,
             status: res.status,
             ticketId: null,
             parseError: true,
@@ -208,7 +276,7 @@ export function ProposePaymentTicketButton({
         );
         console.info("[payments:propose]", {
           proposalTraceId,
-          conversationId,
+          conversationId: convId,
           status: res.status,
           ticketId: null,
         });
@@ -221,9 +289,10 @@ export function ProposePaymentTicketButton({
 
       console.info("[payments:propose]", {
         proposalTraceId: ref,
-        conversationId,
+        conversationId: convId,
         status: res.status,
         ticketId: ticketId ?? null,
+        revise: isEdit,
       });
 
       // Close modal ONLY after confirmed 2xx + ticket matching this conversation.
@@ -233,7 +302,7 @@ export function ProposePaymentTicketButton({
         res.status < 300 &&
         Boolean(json.ok) &&
         Boolean(ticketId) &&
-        (ticketConv == null || ticketConv === conversationId);
+        (ticketConv == null || ticketConv === convId);
 
       if (!confirmed) {
         const serverMsg = (json.error || "").trim();
@@ -281,15 +350,18 @@ export function ProposePaymentTicketButton({
       }
 
       setOpen(false);
-      setItemMajor("");
-      setShippingMajor("0");
-      setServiceMajor("0");
-      setTitle("");
-      setProcurement(false);
+      if (!isEdit) {
+        setItemMajor("");
+        setShippingMajor("0");
+        setServiceMajor("0");
+        setTitle("");
+        setProcurement(false);
+      }
+      onCloseEdit?.();
       onCreated?.({
         ticket: {
           id: ticketId,
-          conversationId: ticketConv ?? conversationId,
+          conversationId: ticketConv ?? convId,
         },
         // message may be null; parent synthesizes a timeline row from ticket.
         message: json.message ?? null,
@@ -302,7 +374,7 @@ export function ProposePaymentTicketButton({
       setError(msg);
       console.info("[payments:propose]", {
         proposalTraceId,
-        conversationId,
+        conversationId: convId,
         status: "throw",
         ticketId: null,
         error: err instanceof Error ? err.message : "unknown",
@@ -319,25 +391,38 @@ export function ProposePaymentTicketButton({
     void submitProposal();
   }
 
+  function closeForm() {
+    setOpen(false);
+    onCloseEdit?.();
+  }
+
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-electric/40 px-2.5 py-1.5 text-[11px] font-medium text-electric hover:bg-electric/10"
-        title="Propose Protected Payment"
-        data-sb-build={BUILD_FINGERPRINT}
-      >
-        <ShieldCheck size={14} />
-        Payment Ticket
-      </button>
+    <div className={isEdit ? "relative w-full" : "relative"}>
+      {!hideTrigger && !isEdit ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-electric/40 px-2.5 py-1.5 text-[11px] font-medium text-electric hover:bg-electric/10"
+          title="Propose Protected Payment"
+          data-sb-build={BUILD_FINGERPRINT}
+        >
+          <ShieldCheck size={14} />
+          Payment Ticket
+        </button>
+      ) : null}
       {open ? (
         // role=group (NOT form): parent MessagesInbox uses a compose <form>;
         // nested <form> is invalid HTML and can steal/drop ticket proposes.
         <div
           role="group"
-          aria-label="Propose Payment Ticket"
-          className="absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
+          aria-label={
+            isEdit ? "Propose Revised Payment Terms" : "Propose Payment Ticket"
+          }
+          className={
+            isEdit
+              ? "w-full rounded-xl border border-electric/30 bg-[#061228] p-3"
+              : "absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
+          }
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
               // Enter in text inputs must not submit the parent message form.
@@ -348,12 +433,19 @@ export function ProposePaymentTicketButton({
           }}
         >
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
-            Protected Payment
+            {isEdit ? "Revised Terms" : "Protected Payment"}
           </p>
           <p className="mt-1 text-[11px] text-white/45">
-            Both parties must accept the same terms before payment. Fees are
-            calculated by Source Bridge. TEST allowlist only.
+            {isEdit
+              ? "This creates a new revision. Prior acceptance is invalidated — both parties must re-accept. Procurement can be turned on or off."
+              : "Both parties must accept the same terms before payment. Fees are calculated by Source Bridge. TEST allowlist only."}
           </p>
+          {isEdit ? (
+            <p className="mt-2 text-[11px] text-amber-300/90">
+              Warning: proposing revised terms supersedes the current ticket
+              and requires re-acceptance before funding.
+            </p>
+          ) : null}
           {peerMissing ? (
             <p className="mt-2 text-[11px] text-amber-300">
               Your partner is not on the payments test allowlist. Propose will
@@ -416,18 +508,21 @@ export function ProposePaymentTicketButton({
               disabled={busy}
             />
           </label>
-          {procurementFlag ? (
+          {procurementFlag || isEdit ? (
             <label className="mt-3 flex items-start gap-2 text-[11px] text-white/60">
               <input
                 type="checkbox"
                 className="mt-0.5"
                 checked={procurement}
                 onChange={(e) => setProcurement(e.target.checked)}
-                disabled={busy}
+                disabled={busy || (!procurementFlag && isEdit)}
               />
               <span>
                 Request procurement advance (item cost only). Buyer authorizes
                 Release Item Funds after funding — never shipping.
+                {!procurementFlag && isEdit
+                  ? " (Procurement advances currently disabled.)"
+                  : ""}
               </span>
             </label>
           ) : null}
@@ -435,7 +530,7 @@ export function ProposePaymentTicketButton({
           <div className="mt-3 flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={closeForm}
               disabled={busy}
               className="rounded-md px-2 py-1 text-[11px] text-white/50"
             >
@@ -448,7 +543,11 @@ export function ProposePaymentTicketButton({
               className="inline-flex items-center gap-1 rounded-md bg-electric px-2.5 py-1 text-[11px] font-medium text-app-navy disabled:opacity-50"
             >
               {busy ? <Loader2 size={12} className="animate-spin" /> : null}
-              {busy ? "Submitting..." : "Propose"}
+              {busy
+                ? "Submitting..."
+                : isEdit
+                  ? "Propose Revised Terms"
+                  : "Propose"}
             </button>
           </div>
           {/* Hidden bridge keeps unit tests that expect form onSubmit happy */}

@@ -32,10 +32,38 @@ import {
   participantUserSelect,
 } from "@/lib/messaging";
 
-/** Ticket statuses that block a second concurrent agreement on the same sourcing request. */
+/**
+ * Ticket statuses that block a second concurrent agreement.
+ * Inactive / non-blocking: DECLINED, CANCELLED, SUPERSEDED, DELETED, REFUNDED, etc.
+ */
 const ACTIVE_TICKET_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"] as const;
 
-/** Protected txn statuses still in flight (historical RELEASED/REFUNDED/CANCELLED OK). */
+/** Historical / terminal statuses that never block a new ticket. */
+const INACTIVE_TICKET_STATUSES = [
+  "DECLINED",
+  "CANCELLED",
+  "SUPERSEDED",
+  "DELETED",
+  "VOIDED",
+  "REFUNDED",
+] as const;
+
+/** Protected txn statuses that mean money has, is, or may still be in flight. */
+const MONEY_TXN_STATUSES = [
+  "FUNDED",
+  "PROCUREMENT_RELEASED",
+  "AWAITING_SHIPMENT",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "IN_INSPECTION",
+  "READY_TO_RELEASE",
+  "RELEASED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+  "DISPUTED",
+] as const;
+
+/** Protected txn statuses still in flight (historical RELEASED/REFUNDED/CANCELLED OK for SR concurrency). */
 const ACTIVE_TXN_STATUSES = [
   "DRAFT",
   "AWAITING_ACCEPTANCE",
@@ -50,6 +78,73 @@ const ACTIVE_TXN_STATUSES = [
   "READY_TO_RELEASE",
   "DISPUTED",
 ] as const;
+
+type FundingGuardInputs = {
+  ticketStatus: string;
+  protectedTxn?: {
+    status: string;
+    fundedAt: Date | null;
+    stripePaymentIntentId?: string | null;
+    procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
+    refundedMinor?: number;
+  } | null;
+};
+
+/**
+ * True when the ticket/PT has any funding or payment ambiguity.
+ * Reject edit/cancel/delete that would destroy financial state.
+ */
+export function ticketInvolvesMoney(input: FundingGuardInputs): boolean {
+  if (input.ticketStatus === "FUNDED") return true;
+  const pt = input.protectedTxn;
+  if (!pt) return false;
+  if (pt.fundedAt) return true;
+  if ((pt.stripePaymentIntentId || "").trim().length > 0) return true;
+  if ((pt.procurementTransferredMinor ?? 0) > 0) return true;
+  if ((pt.finalTransferredMinor ?? 0) > 0) return true;
+  if ((pt.refundedMinor ?? 0) > 0) return true;
+  if ((MONEY_TXN_STATUSES as readonly string[]).includes(pt.status)) return true;
+  return false;
+}
+
+export function isActiveTicketStatus(status: string): boolean {
+  return (ACTIVE_TICKET_STATUSES as readonly string[]).includes(status);
+}
+
+export function isInactiveTicketStatus(status: string): boolean {
+  return (INACTIVE_TICKET_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Lifecycle actions for a party viewing a ticket.
+ * - PROPOSED (never dual-accepted): edit + safe delete
+ * - ACCEPTED unfunded: edit (supersede) + cancel agreement
+ * - FUNDED / money: none of the above
+ */
+export function computeTicketLifecycleActions(opts: {
+  status: string;
+  viewerId: string;
+  buyerId: string;
+  sellerId: string;
+  involvesMoney: boolean;
+}): { canEdit: boolean; canCancel: boolean; canDelete: boolean } {
+  const isParty =
+    opts.viewerId === opts.buyerId || opts.viewerId === opts.sellerId;
+  if (!isParty || opts.involvesMoney) {
+    return { canEdit: false, canCancel: false, canDelete: false };
+  }
+  if (opts.status === "PROPOSED") {
+    return { canEdit: true, canCancel: false, canDelete: true };
+  }
+  if (opts.status === "ACCEPTED") {
+    return { canEdit: true, canCancel: true, canDelete: false };
+  }
+  if (opts.status === "DRAFT") {
+    return { canEdit: true, canCancel: false, canDelete: true };
+  }
+  return { canEdit: false, canCancel: false, canDelete: false };
+}
 
 export type TicketAmountsInput = {
   itemCostMinor: number;
@@ -110,6 +205,8 @@ function mapTicket(
       name: string;
       username: string | null;
     } | null;
+    viewerId?: string | null;
+    involvesMoney?: boolean;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -140,6 +237,33 @@ function mapTicket(
     protectedStatus,
     procReleased,
   );
+
+  const involvesMoney =
+    extras?.involvesMoney ??
+    ticketInvolvesMoney({
+      ticketStatus: t.status,
+      protectedTxn: extras
+        ? {
+            status: protectedStatus || "",
+            fundedAt: null,
+            // mapTicket often lacks PI/fundedAt — GET path passes involvesMoney
+            procurementTransferredMinor: extras.procurementTransferredMinor,
+            finalTransferredMinor: extras.finalTransferredMinor,
+            refundedMinor: extras.refundedMinor,
+          }
+        : null,
+    });
+
+  const lifecycle =
+    extras?.viewerId
+      ? computeTicketLifecycleActions({
+          status: t.status,
+          viewerId: extras.viewerId,
+          buyerId: t.buyerId,
+          sellerId: t.sellerId,
+          involvesMoney,
+        })
+      : { canEdit: false, canCancel: false, canDelete: false };
 
   return {
     id: t.id,
@@ -183,6 +307,9 @@ function mapTicket(
       canReleaseProcurement: procPending,
       canPay:
         t.status === "ACCEPTED" && Boolean(t.protectedTransactionId),
+      canEdit: lifecycle.canEdit,
+      canCancel: lifecycle.canCancel,
+      canDelete: lifecycle.canDelete,
     },
     breakdown: {
       itemCost: t.itemCostMinor,
@@ -216,7 +343,13 @@ function resolveLifecycleStage(
   protectedStatus: string | null,
   procReleased: boolean,
 ): string {
-  if (ticketStatus === "DECLINED" || ticketStatus === "SUPERSEDED" || ticketStatus === "CANCELLED") {
+  if (
+    ticketStatus === "DECLINED" ||
+    ticketStatus === "SUPERSEDED" ||
+    ticketStatus === "CANCELLED" ||
+    ticketStatus === "DELETED" ||
+    ticketStatus === "VOIDED"
+  ) {
     return ticketStatus;
   }
   const st = protectedStatus || ticketStatus;
@@ -262,8 +395,70 @@ export function lifecycleLabel(stage: string): string {
       return "DECLINED";
     case "CANCELLED":
       return "CANCELLED";
+    case "DELETED":
+    case "VOIDED":
+      return "DELETED";
     default:
       return stage.replace(/_/g, " ");
+  }
+}
+
+async function loadProtectedTxnForGuard(protectedTransactionId: string | null) {
+  if (!protectedTransactionId) return null;
+  return prisma.protectedTransaction.findUnique({
+    where: { id: protectedTransactionId },
+    select: {
+      id: true,
+      status: true,
+      fundedAt: true,
+      stripePaymentIntentId: true,
+      procurementTransferredMinor: true,
+      finalTransferredMinor: true,
+      refundedMinor: true,
+      listingId: true,
+      buyerId: true,
+    },
+  });
+}
+
+function assertNotFundedForMutation(
+  ticketStatus: string,
+  protectedTxn: Awaited<ReturnType<typeof loadProtectedTxnForGuard>>,
+  action: string,
+) {
+  if (
+    ticketInvolvesMoney({
+      ticketStatus,
+      protectedTxn,
+    })
+  ) {
+    throw Object.assign(
+      new Error(
+        `Cannot ${action} a funded or in-progress Payment Ticket`,
+      ),
+      { status: 409, code: "TICKET_FUNDED" },
+    );
+  }
+}
+
+async function assertPartyToTicket(
+  ticket: { buyerId: string; sellerId: string; conversationId: string },
+  actorId: string,
+) {
+  if (actorId !== ticket.buyerId && actorId !== ticket.sellerId) {
+    throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
+  }
+  const participant = await prisma.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId: ticket.conversationId,
+        userId: actorId,
+      },
+    },
+    select: { leftAt: true },
+  });
+  if (!participant || participant.leftAt) {
+    throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
   }
 }
 
@@ -572,6 +767,22 @@ export async function createOrRevisePaymentTicket(opts: {
     orderBy: { createdAt: "desc" },
   });
 
+  // Same conversation supersede — refuse if open ticket has any money/PI.
+  if (open) {
+    const openPt = await loadProtectedTxnForGuard(open.protectedTransactionId);
+    if (
+      open.status === "FUNDED" ||
+      ticketInvolvesMoney({ ticketStatus: open.status, protectedTxn: openPt })
+    ) {
+      throw Object.assign(
+        new Error(
+          "Cannot revise a funded or in-progress Payment Ticket",
+        ),
+        { status: 409, code: "TICKET_FUNDED" },
+      );
+    }
+  }
+
   // Same conversation supersede — still block if another ticket for this
   // sourcing request is already FUNDED.
   if (sourcingRequestId) {
@@ -725,8 +936,218 @@ export async function createOrRevisePaymentTicket(opts: {
     ticket: mapTicket(ticket, {
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
       proposedBy: creator,
+      viewerId: opts.actorId,
+      involvesMoney: false,
     }),
     message: messageRow ? mapMessage(messageRow) : null,
+  };
+}
+
+/**
+ * Cancel an ACCEPTED (or PROPOSED) unfunded agreement.
+ * → CANCELLED, non-actionable, does not block new tickets. No hard-delete.
+ */
+export async function cancelPaymentTicket(opts: {
+  ticketId: string;
+  actorId: string;
+  reason?: string;
+}) {
+  const ticket = await prisma.paymentTicket.findUnique({
+    where: { id: opts.ticketId },
+  });
+  if (!ticket) {
+    throw Object.assign(new Error("Ticket not found"), { status: 404 });
+  }
+  await assertPartyToTicket(ticket, opts.actorId);
+
+  if (ticket.status !== "ACCEPTED" && ticket.status !== "PROPOSED") {
+    throw Object.assign(
+      new Error("Only open or accepted unfunded tickets can be cancelled"),
+      { status: 409, code: "TICKET_NOT_CANCELLABLE" },
+    );
+  }
+
+  // Product rule: ACCEPTED → Cancel Agreement. PROPOSED uses Delete.
+  // Allow cancel on PROPOSED only when dual-accept race left it awkward —
+  // primary path for ACCEPTED.
+  if (ticket.status === "PROPOSED") {
+    throw Object.assign(
+      new Error("Proposed tickets should be deleted, not cancelled"),
+      { status: 409, code: "USE_DELETE" },
+    );
+  }
+
+  const pt = await loadProtectedTxnForGuard(ticket.protectedTransactionId);
+  assertNotFundedForMutation(ticket.status, pt, "cancel");
+
+  const deferredListingReleases: Array<{ listingId: string; buyerId: string }> =
+    [];
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (pt && !pt.fundedAt) {
+      const unfundedOk = ["ACCEPTED", "AWAITING_PAYMENT", "DRAFT", "AWAITING_ACCEPTANCE"].includes(
+        pt.status,
+      );
+      if (unfundedOk) {
+        await tx.protectedTransaction.update({
+          where: { id: pt.id },
+          data: { status: "CANCELLED", cancelledAt: new Date() },
+        });
+        if (pt.listingId) {
+          deferredListingReleases.push({
+            listingId: pt.listingId,
+            buyerId: pt.buyerId,
+          });
+        }
+      } else if (pt.status !== "CANCELLED") {
+        // Ambiguous state — do not cancel.
+        throw Object.assign(
+          new Error("Cannot cancel — protected payment state is not clear"),
+          { status: 409, code: "TICKET_FUNDED" },
+        );
+      }
+    }
+
+    const row = await tx.paymentTicket.update({
+      where: { id: ticket.id },
+      data: {
+        status: "CANCELLED",
+        declineReason: opts.reason || "",
+      },
+    });
+
+    await tx.message.create({
+      data: {
+        conversationId: ticket.conversationId,
+        senderId: opts.actorId,
+        body: "Payment agreement cancelled. A new Payment Ticket may be proposed.",
+        messageType: "PAYMENT_TICKET",
+        systemEventType: "PAYMENT_TICKET_CANCELLED",
+        paymentTicketId: ticket.id,
+      },
+    });
+    await tx.conversation.update({
+      where: { id: ticket.conversationId },
+      data: { lastMessageAt: new Date(), updatedAt: new Date() },
+    });
+    return row;
+  });
+
+  for (const item of deferredListingReleases) {
+    await releaseListingReservation(item.listingId, item.buyerId);
+  }
+
+  await recordAuditEvent({
+    actorUserId: opts.actorId,
+    action: "PAYMENT_TICKET_CANCELLED",
+    reason: opts.reason,
+    meta: { ticketId: ticket.id },
+  });
+
+  return mapTicket(updated, {
+    protectedTxnStatus: "CANCELLED",
+    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    viewerId: opts.actorId,
+    involvesMoney: false,
+  });
+}
+
+/**
+ * Safe hard-delete for PROPOSED / never dual-accepted tickets (no money).
+ * Removes timeline markers so the ticket disappears from the active timeline.
+ */
+export async function deletePaymentTicket(opts: {
+  ticketId: string;
+  actorId: string;
+}) {
+  const ticket = await prisma.paymentTicket.findUnique({
+    where: { id: opts.ticketId },
+  });
+  if (!ticket) {
+    throw Object.assign(new Error("Ticket not found"), { status: 404 });
+  }
+  await assertPartyToTicket(ticket, opts.actorId);
+
+  if (ticket.status !== "PROPOSED" && ticket.status !== "DRAFT") {
+    throw Object.assign(
+      new Error(
+        "Only proposed (never fully accepted) unfunded tickets can be deleted",
+      ),
+      { status: 409, code: "TICKET_NOT_DELETABLE" },
+    );
+  }
+
+  const pt = await loadProtectedTxnForGuard(ticket.protectedTransactionId);
+  assertNotFundedForMutation(ticket.status, pt, "delete");
+
+  // Extra guard: dual-accepted would be ACCEPTED status; refuse if both
+  // already approved same revision (race / spoof).
+  if (
+    ticket.buyerApprovedRevision === ticket.revision &&
+    ticket.sellerApprovedRevision === ticket.revision
+  ) {
+    throw Object.assign(
+      new Error("Accepted agreements cannot be hard-deleted — cancel instead"),
+      { status: 409, code: "TICKET_NOT_DELETABLE" },
+    );
+  }
+
+  const deferredListingReleases: Array<{ listingId: string; buyerId: string }> =
+    [];
+
+  await prisma.$transaction(async (tx) => {
+    if (pt && !pt.fundedAt) {
+      if (
+        ["ACCEPTED", "AWAITING_PAYMENT", "DRAFT", "AWAITING_ACCEPTANCE"].includes(
+          pt.status,
+        )
+      ) {
+        await tx.protectedTransaction.update({
+          where: { id: pt.id },
+          data: { status: "CANCELLED", cancelledAt: new Date() },
+        });
+        if (pt.listingId) {
+          deferredListingReleases.push({
+            listingId: pt.listingId,
+            buyerId: pt.buyerId,
+          });
+        }
+      }
+    }
+
+    // Detach messages then delete markers so conversation timeline is clean.
+    await tx.message.deleteMany({
+      where: { paymentTicketId: ticket.id },
+    });
+
+    await tx.paymentTicket.update({
+      where: { id: ticket.id },
+      data: { protectedTransactionId: null },
+    });
+
+    await tx.paymentTicket.delete({
+      where: { id: ticket.id },
+    });
+  });
+
+  for (const item of deferredListingReleases) {
+    await releaseListingReservation(item.listingId, item.buyerId);
+  }
+
+  await recordAuditEvent({
+    actorUserId: opts.actorId,
+    action: "PAYMENT_TICKET_DELETED",
+    meta: {
+      ticketId: ticket.id,
+      conversationId: ticket.conversationId,
+      sourcingRequestId: ticket.sourcingRequestId,
+    },
+  });
+
+  return {
+    deleted: true as const,
+    ticketId: ticket.id,
+    conversationId: ticket.conversationId,
   };
 }
 
@@ -806,7 +1227,11 @@ export async function respondToPaymentTicket(opts: {
       reason: opts.reason,
       meta: { ticketId: ticket.id },
     });
-    return mapTicket(updated);
+    return mapTicket(updated, {
+      viewerId: opts.actorId,
+      involvesMoney: false,
+      procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    });
   }
 
   // Accept current revision
@@ -908,6 +1333,8 @@ export async function respondToPaymentTicket(opts: {
   return mapTicket(updated, {
     protectedTxnStatus: bothWillApprove ? "ACCEPTED" : null,
     procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    viewerId: opts.actorId,
+    involvesMoney: false,
   });
 }
 
@@ -921,6 +1348,8 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
       protectedTransaction: {
         select: {
           status: true,
+          fundedAt: true,
+          stripePaymentIntentId: true,
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
@@ -948,6 +1377,10 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
   }
   const pt = ticket.protectedTransaction;
+  const involvesMoney = ticketInvolvesMoney({
+    ticketStatus: ticket.status,
+    protectedTxn: pt,
+  });
   return mapTicket(ticket, {
     protectedTxnStatus: pt?.status ?? null,
     procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
@@ -961,5 +1394,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           username: ticket.createdBy.username,
         }
       : null,
+    viewerId,
+    involvesMoney,
   });
 }

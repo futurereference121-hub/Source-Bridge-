@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, MoreHorizontal, ShieldCheck } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
+import {
+  ProposePaymentTicketButton,
+} from "@/components/messaging/ProposePaymentTicketButton";
 
 export type PaymentTicketView = {
   id: string;
+  conversationId: string;
   status: string;
   revision: number;
   termsHash: string;
@@ -29,6 +33,7 @@ export type PaymentTicketView = {
   lifecycleStage?: string;
   lifecycleLabel?: string;
   createdAt?: string;
+  notes?: string;
   proposedBy?: {
     id: string;
     name: string;
@@ -37,6 +42,9 @@ export type PaymentTicketView = {
   actions?: {
     canReleaseProcurement?: boolean;
     canPay?: boolean;
+    canEdit?: boolean;
+    canCancel?: boolean;
+    canDelete?: boolean;
   };
   books?: {
     itemFundsReleasedEarlyMinor: number;
@@ -81,6 +89,13 @@ export function PaymentTicketCard({
   const [error, setError] = useState("");
   const [payNotice, setPayNotice] = useState("");
   const [confirmRelease, setConfirmRelease] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [gone, setGone] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [checkout, setCheckout] = useState<{
     clientSecret: string;
     publishableKey: string;
@@ -101,6 +116,11 @@ export function PaymentTicketCard({
         ticket?: PaymentTicketView;
         error?: string;
       };
+      if (res.status === 404) {
+        setGone(true);
+        setTicket(null);
+        return;
+      }
       if (!res.ok || !json.ticket) {
         setError(json.error || "Could not load Payment Ticket");
         setTicket(null);
@@ -135,6 +155,17 @@ export function PaymentTicketCard({
       )
       .catch(() => setPaymentsAccess(false));
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDoc(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [menuOpen]);
 
   // After return from 3DS: poll — funding only when webhook sets FUNDED.
   useEffect(() => {
@@ -172,6 +203,63 @@ export function PaymentTicketCard({
       }
     } catch {
       setError("Action failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelAgreement() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/payments/tickets/${ticketId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        ticket?: PaymentTicketView;
+        error?: string;
+      };
+      if (!res.ok || !json.ticket) {
+        setError(json.error || "Could not cancel agreement");
+      } else {
+        setTicket(json.ticket);
+        setConfirmCancel(false);
+        setMenuOpen(false);
+        onChanged?.();
+      }
+    } catch {
+      setError("Could not cancel agreement");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteTicket() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/payments/tickets/${ticketId}`, {
+        method: "DELETE",
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        deleted?: boolean;
+        error?: string;
+      };
+      if (!res.ok || !json.ok) {
+        setError(json.error || "Could not delete ticket");
+      } else {
+        setGone(true);
+        setTicket(null);
+        setConfirmDelete(false);
+        setMenuOpen(false);
+        onChanged?.();
+      }
+    } catch {
+      setError("Could not delete ticket");
     } finally {
       setBusy(false);
     }
@@ -265,6 +353,10 @@ export function PaymentTicketCard({
     }
   }
 
+  if (gone) {
+    return null;
+  }
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white/50">
@@ -291,7 +383,9 @@ export function PaymentTicketCard({
   const historical =
     ticket.status === "DECLINED" ||
     ticket.status === "SUPERSEDED" ||
-    ticket.status === "CANCELLED";
+    ticket.status === "CANCELLED" ||
+    ticket.status === "DELETED" ||
+    ticket.status === "VOIDED";
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
   const canRespond =
     open && ticket.status === "PROPOSED" && !myApproved && (iAmBuyer || iAmSeller);
@@ -308,6 +402,10 @@ export function PaymentTicketCard({
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseProcurement) &&
     Boolean(ticket.protectedTransactionId);
+  const canEdit = Boolean(ticket.actions?.canEdit);
+  const canCancel = Boolean(ticket.actions?.canCancel);
+  const canDelete = Boolean(ticket.actions?.canDelete);
+  const showMenu = canEdit || canCancel || canDelete;
   const isDirect =
     ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
   const stageLabel =
@@ -347,13 +445,54 @@ export function PaymentTicketCard({
     ],
   ] as const;
 
+  // Historical: collapsed subdued card, expandable to view terms.
+  if (historical && !expanded) {
+    return (
+      <div className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 opacity-75">
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex w-full items-start justify-between gap-3 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-white/35" />
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+                Payment Ticket · v{ticket.revision}
+              </p>
+              <p className="mt-0.5 text-sm text-white/55">
+                {ticket.title || "Payment Ticket"} · {stageLabel}
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] text-white/35">View</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="w-full rounded-xl border border-electric/35 bg-[#07152c] px-4 py-4">
+    <div
+      className={
+        historical
+          ? "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4 opacity-80"
+          : "w-full rounded-xl border border-electric/35 bg-[#07152c] px-4 py-4"
+      }
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck size={18} className="text-electric" />
+          <ShieldCheck
+            size={18}
+            className={historical ? "text-white/40" : "text-electric"}
+          />
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-electric">
+            <p
+              className={
+                historical
+                  ? "text-[10px] font-semibold uppercase tracking-[0.16em] text-white/40"
+                  : "text-[10px] font-semibold uppercase tracking-[0.16em] text-electric"
+              }
+            >
               Protected Payment
             </p>
             <p className="mt-0.5 text-sm font-medium text-white">
@@ -361,10 +500,75 @@ export function PaymentTicketCard({
             </p>
           </div>
         </div>
-        <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
-          {stageLabel}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
+            {stageLabel}
+          </span>
+          {showMenu ? (
+            <div className="relative" ref={menuRef}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setMenuOpen((v) => !v)}
+                className="rounded-md border border-white/15 p-1 text-white/60 hover:border-white/30 hover:text-white"
+                aria-label="Ticket actions"
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {menuOpen ? (
+                <div className="absolute right-0 z-30 mt-1 w-44 overflow-hidden rounded-lg border border-white/15 bg-[#061228] py-1 shadow-xl">
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setEditOpen(true);
+                      }}
+                    >
+                      Edit Terms
+                    </button>
+                  ) : null}
+                  {canCancel ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2 text-left text-xs text-amber-200/90 hover:bg-white/5"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setConfirmCancel(true);
+                      }}
+                    >
+                      Cancel Agreement
+                    </button>
+                  ) : null}
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2 text-left text-xs text-red-300/90 hover:bg-white/5"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setConfirmDelete(true);
+                      }}
+                    >
+                      Delete Ticket
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
+
+      {historical ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="mt-1 text-[10px] text-white/40 hover:text-white/60"
+        >
+          Collapse
+        </button>
+      ) : null}
 
       {proposerLabel || proposedWhen ? (
         <p className="mt-2 text-xs text-white/45">
@@ -499,51 +703,108 @@ export function PaymentTicketCard({
         <p className="mt-3 text-xs text-electric">{payNotice}</p>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {canRespond ? (
-          <>
+      {!historical ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {canRespond ? (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void respond("accept")}
+                className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+              >
+                Accept terms
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void respond("decline")}
+                className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:border-white/40 disabled:opacity-50"
+              >
+                Decline
+              </button>
+            </>
+          ) : null}
+          {ticket.status === "PROPOSED" && myApproved ? (
+            <p className="text-xs text-white/45">Waiting for the other party…</p>
+          ) : null}
+          {canPay && !checkout ? (
             <button
               type="button"
               disabled={busy}
-              onClick={() => void respond("accept")}
+              onClick={() => void startPay()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
             >
-              Accept terms
+              Pay securely
+            </button>
+          ) : null}
+          {canRelease && !confirmRelease ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmRelease(true)}
+              className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+            >
+              Release Item Funds
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {confirmCancel ? (
+        <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-3 text-xs text-white/80">
+          <p>
+            Cancel this payment agreement? It becomes non-actionable. No funds
+            will move. You can propose a new Payment Ticket afterward.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void cancelAgreement()}
+              className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+            >
+              {busy ? "Cancelling…" : "Confirm cancel"}
             </button>
             <button
               type="button"
               disabled={busy}
-              onClick={() => void respond("decline")}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:border-white/40 disabled:opacity-50"
+              onClick={() => setConfirmCancel(false)}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
             >
-              Decline
+              Keep agreement
             </button>
-          </>
-        ) : null}
-        {ticket.status === "PROPOSED" && myApproved ? (
-          <p className="text-xs text-white/45">Waiting for the other party…</p>
-        ) : null}
-        {canPay && !checkout ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void startPay()}
-            className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
-          >
-            Pay securely
-          </button>
-        ) : null}
-        {canRelease && !confirmRelease ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setConfirmRelease(true)}
-            className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
-          >
-            Release Item Funds
-          </button>
-        ) : null}
-      </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmDelete ? (
+        <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-3 text-xs text-white/80">
+          <p>
+            Delete this proposed Payment Ticket? It will disappear from the
+            timeline. This only works for unfunded tickets that were never
+            fully accepted.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void deleteTicket()}
+              className="rounded-lg bg-red-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+            >
+              {busy ? "Deleting…" : "Confirm delete"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
+            >
+              Keep ticket
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {confirmRelease ? (
         <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-3 text-xs text-white/80">
@@ -571,6 +832,35 @@ export function PaymentTicketCard({
               Cancel
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {editOpen && canEdit && ticket.conversationId ? (
+        <div className="mt-3">
+          <ProposePaymentTicketButton
+            conversationId={ticket.conversationId}
+            myId={myId}
+            hideTrigger
+            forceOpen
+            editFromTicket={{
+              conversationId: ticket.conversationId,
+              title: ticket.title,
+              currency: ticket.currency,
+              itemCostMinor: ticket.itemCostMinor,
+              shippingMinor: ticket.shippingMinor,
+              sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
+              procurementAdvanceAgreed: ticket.procurementAdvanceAgreed,
+              notes: ticket.notes || "",
+              buyerId: ticket.buyerId,
+              sellerId: ticket.sellerId,
+            }}
+            onCloseEdit={() => setEditOpen(false)}
+            onCreated={() => {
+              setEditOpen(false);
+              void load();
+              onChanged?.();
+            }}
+          />
         </div>
       ) : null}
 

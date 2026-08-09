@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSessionUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import {
+  deletePaymentTicket,
   getPaymentTicket,
   respondToPaymentTicket,
 } from "@/lib/payments/tickets";
@@ -55,5 +56,31 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     if (status >= 400 && status < 500) return jsonError(message, status);
     console.error("[payments:tickets:respond]", err);
     return jsonError("Failed to update ticket", 500);
+  }
+}
+
+/** Safe hard-delete for unfunded PROPOSED tickets only. */
+export async function DELETE(_req: NextRequest, ctx: Ctx) {
+  try {
+    const user = await requireSessionUser();
+    const { id } = await ctx.params;
+    const result = await deletePaymentTicket({
+      ticketId: id,
+      actorId: user.id,
+    });
+    return Response.json({ ok: true, ...result });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    const message = err instanceof Error ? err.message : "Failed";
+    const code = (err as { code?: string }).code;
+    if (status === 401) return jsonError("Sign in required", 401);
+    if (status >= 400 && status < 500) {
+      return jsonError(message, status, {
+        ok: false,
+        ...(code ? { code } : {}),
+      });
+    }
+    console.error("[payments:tickets:delete]", err);
+    return jsonError("Failed to delete ticket", 500);
   }
 }
