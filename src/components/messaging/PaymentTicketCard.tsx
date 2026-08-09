@@ -385,7 +385,11 @@ export function PaymentTicketCard({
               : " · funds held until release / delivery"}
       </p>
 
-      <dl className="mt-4 space-y-1.5 text-sm">
+      <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+        Review agreement
+      </p>
+
+      <dl className="mt-2 space-y-1.5 text-sm">
         {rows.map(([label, amount]) =>
           amount > 0 ||
           label.toLowerCase().includes("protection") ||
@@ -403,6 +407,31 @@ export function PaymentTicketCard({
           </dd>
         </div>
       </dl>
+
+      <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
+        <p className="font-medium text-white/70">Dual-accept status</p>
+        <p>
+          Buyer:{" "}
+          {ticket.buyerApprovedRevision === ticket.revision
+            ? "accepted this revision"
+            : "not yet accepted"}
+        </p>
+        <p>
+          Seller:{" "}
+          {ticket.sellerApprovedRevision === ticket.revision
+            ? "accepted this revision"
+            : "not yet accepted"}
+        </p>
+        {procAgreed ? (
+          <p>
+            Procurement advance:{" "}
+            {formatMinor(ticket.procurementAdvanceMinor, cur)} (buyer
+            authorizes after funding)
+          </p>
+        ) : (
+          <p>Procurement advance: not requested</p>
+        )}
+      </div>
 
       {procAgreed && ticket.breakdown.releaseStructure && !procTransferred ? (
         <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">

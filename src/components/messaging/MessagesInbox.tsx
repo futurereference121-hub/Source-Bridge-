@@ -1018,10 +1018,7 @@ export function MessagesInbox({
                   This account is no longer available. Messaging is disabled.
                 </div>
               ) : (
-              <form
-                onSubmit={onSubmit}
-                className="border-t border-white/10 px-3 py-3 sm:px-4"
-              >
+              <div className="border-t border-white/10 px-3 py-3 sm:px-4">
                 {pendingUrls.length > 0 ? (
                   <div className="mb-2 flex flex-wrap gap-2">
                     {pendingUrls.map((url) => (
@@ -1051,7 +1048,8 @@ export function MessagesInbox({
                     ))}
                   </div>
                 ) : null}
-                <div className="flex items-end gap-2">
+                {/* Payment Ticket propose sits outside the message form (no nested forms). */}
+                <div className="mb-2">
                   <ProposePaymentTicketButton
                     conversationId={activeId!}
                     myId={myId}
@@ -1059,6 +1057,12 @@ export function MessagesInbox({
                     onCreated={({ ticket, message }) => {
                       shouldScrollRef.current = true;
                       const now = new Date().toISOString();
+                      if (!ticket?.id) {
+                        console.error(
+                          "[payments:propose] onCreated without ticket.id",
+                        );
+                        return;
+                      }
                       // Prefer server message; if missing, synthetic row so card renders.
                       const msg = (message
                         ? {
@@ -1151,6 +1155,8 @@ export function MessagesInbox({
                       })();
                     }}
                   />
+                </div>
+                <form onSubmit={onSubmit} className="flex items-end gap-2">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -1195,8 +1201,8 @@ export function MessagesInbox({
                       <Send size={18} />
                     )}
                   </button>
-                </div>
-              </form>
+                </form>
+              </div>
               )}
             </>
           )}
