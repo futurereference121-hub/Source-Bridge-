@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const ticket = await createOrRevisePaymentTicket({
+    const { ticket, message } = await createOrRevisePaymentTicket({
       conversationId: data.conversationId,
       actorId: user.id,
       buyerId,
@@ -89,7 +89,15 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return Response.json({ ok: true, ticket }, { status: 201 });
+    return Response.json(
+      { ok: true, ticket, message },
+      {
+        status: 201,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Failed";

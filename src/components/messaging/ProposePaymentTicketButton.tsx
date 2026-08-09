@@ -3,10 +3,39 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Loader2, ShieldCheck } from "lucide-react";
 
+export type ProposedTicketTimelineMessage = {
+  id: string;
+  conversationId: string;
+  senderId: string | null;
+  body: string;
+  createdAt: string;
+  messageType?: string;
+  systemEventType?: string;
+  replyAllowed?: boolean;
+  paymentTicketId?: string | null;
+  attachments?: {
+    id: string;
+    url: string;
+    pathname: string;
+    mimeType: string;
+    sizeBytes: number;
+  }[];
+  sender?: {
+    id: string;
+    name: string;
+    username: string | null;
+    slug: string | null;
+    photo: string;
+  };
+};
+
 type ProposePaymentTicketButtonProps = {
   conversationId: string;
   myId: string;
-  onCreated?: () => void;
+  onCreated?: (payload: {
+    ticket: { id: string };
+    message: ProposedTicketTimelineMessage | null;
+  }) => void;
 };
 
 /**
@@ -31,7 +60,7 @@ export function ProposePaymentTicketButton({
   const [procurementFlag, setProcurementFlag] = useState(false);
 
   useEffect(() => {
-    void fetch("/api/payments/connect")
+    void fetch("/api/payments/connect", { cache: "no-store" })
       .then((r) => r.json())
       .then(
         (j: {
@@ -73,6 +102,7 @@ export function ProposePaymentTicketButton({
       const res = await fetch("/api/payments/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        cache: "no-store",
         body: JSON.stringify({
           conversationId,
           itemCostMinor: item,
@@ -86,8 +116,13 @@ export function ProposePaymentTicketButton({
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
         }),
       });
-      const json = (await res.json()) as { ok?: boolean; error?: string };
-      if (!res.ok) {
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        ticket?: { id: string };
+        message?: ProposedTicketTimelineMessage | null;
+      };
+      if (!res.ok || !json.ticket) {
         setError(json.error || "Could not create ticket");
       } else {
         setOpen(false);
@@ -96,7 +131,10 @@ export function ProposePaymentTicketButton({
         setServiceMajor("0");
         setTitle("");
         setProcurement(false);
-        onCreated?.();
+        onCreated?.({
+          ticket: json.ticket,
+          message: json.message ?? null,
+        });
       }
     } catch {
       setError("Could not create ticket");

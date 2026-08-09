@@ -7,6 +7,7 @@ import {
   participantUserSelect,
   requireParticipant,
 } from "@/lib/messaging";
+import { ensureConversationPaymentTicketMessages } from "@/lib/payments/tickets";
 import { jsonError } from "@/lib/validation";
 
 const RECENT_MESSAGES = 30;
@@ -19,6 +20,9 @@ export async function GET(_req: Request, { params }: Params) {
     const { id } = await params;
 
     await requireParticipant(id, user.id);
+
+    // Repair orphan tickets so Payment Ticket cards always appear in chat.
+    await ensureConversationPaymentTicketMessages(id);
 
     const conversation = await prisma.conversation.findUnique({
       where: { id },
@@ -54,16 +58,23 @@ export async function GET(_req: Request, { params }: Params) {
 
     const messagesAsc = [...conversation.messages].reverse();
 
-    return Response.json({
-      conversation: mapConversation(
-        {
-          ...conversation,
-          messages: conversation.messages.slice(0, 1),
+    return Response.json(
+      {
+        conversation: mapConversation(
+          {
+            ...conversation,
+            messages: conversation.messages.slice(0, 1),
+          },
+          user.id,
+        ),
+        messages: messagesAsc.map(mapMessage),
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store",
         },
-        user.id,
-      ),
-      messages: messagesAsc.map(mapMessage),
-    });
+      },
+    );
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message =

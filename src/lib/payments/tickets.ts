@@ -27,6 +27,10 @@ import {
   type TxnPaymentOptionInput,
 } from "@/lib/payments/payment-option";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import {
+  mapMessage,
+  participantUserSelect,
+} from "@/lib/messaging";
 
 /** Ticket statuses that block a second concurrent agreement on the same sourcing request. */
 const ACTIVE_TICKET_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"] as const;
@@ -101,6 +105,11 @@ function mapTicket(
     finalTransferredMinor?: number;
     refundedMinor?: number;
     procurementAdvancesFlag?: boolean;
+    proposedBy?: {
+      id: string;
+      name: string;
+      username: string | null;
+    } | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -126,11 +135,17 @@ function mapTicket(
   const procReleased =
     (extras?.procurementTransferredMinor ?? 0) > 0 ||
     protectedStatus === "PROCUREMENT_RELEASED";
+  const lifecycleStage = resolveLifecycleStage(
+    t.status,
+    protectedStatus,
+    procReleased,
+  );
 
   return {
     id: t.id,
     conversationId: t.conversationId,
     createdById: t.createdById,
+    proposedBy: extras?.proposedBy ?? null,
     buyerId: t.buyerId,
     sellerId: t.sellerId,
     listingId: t.listingId,
@@ -161,7 +176,8 @@ function mapTicket(
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
-    lifecycleStage: resolveLifecycleStage(t.status, protectedStatus, procReleased),
+    lifecycleStage,
+    lifecycleLabel: lifecycleLabel(lifecycleStage),
     books,
     actions: {
       canReleaseProcurement: procPending,
@@ -204,17 +220,104 @@ function resolveLifecycleStage(
     return ticketStatus;
   }
   const st = protectedStatus || ticketStatus;
-  if (st === "RELEASED") return "RELEASED";
+  if (st === "RELEASED") return "COMPLETED";
   if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
   if (st === "DISPUTED") return "DISPUTED";
   if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
   if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
-  if (procReleased || st === "PROCUREMENT_RELEASED") return "PROCUREMENT_RELEASED";
+  if (procReleased || st === "PROCUREMENT_RELEASED") return "ITEM_FUNDS_RELEASED";
   if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
-  if (st === "AWAITING_PAYMENT") return "AWAITING_PAYMENT";
-  if (ticketStatus === "ACCEPTED") return "ACCEPTED";
+  // Dual-accept is done — buyer still needs to fund.
+  if (
+    ticketStatus === "ACCEPTED" ||
+    st === "ACCEPTED" ||
+    st === "AWAITING_PAYMENT"
+  ) {
+    return "AGREED_AWAITING_PAYMENT";
+  }
   if (ticketStatus === "PROPOSED") return "PROPOSED";
   return ticketStatus;
+}
+
+/** Human-facing stage on the chat card badge. */
+export function lifecycleLabel(stage: string): string {
+  switch (stage) {
+    case "PROPOSED":
+      return "PROPOSED";
+    case "AGREED_AWAITING_PAYMENT":
+    case "ACCEPTED":
+    case "AWAITING_PAYMENT":
+      return "AGREED · AWAITING PAYMENT";
+    case "FUNDED":
+      return "FUNDED";
+    case "ITEM_FUNDS_RELEASED":
+    case "PROCUREMENT_RELEASED":
+      return "ITEM FUNDS RELEASED";
+    case "COMPLETED":
+    case "RELEASED":
+      return "COMPLETED";
+    case "SUPERSEDED":
+      return "SUPERSEDED";
+    case "DECLINED":
+      return "DECLINED";
+    case "CANCELLED":
+      return "CANCELLED";
+    default:
+      return stage.replace(/_/g, " ");
+  }
+}
+
+/**
+ * Every Payment Ticket must appear in the conversation timeline as a
+ * PAYMENT_TICKET message. Repairs orphan tickets (ticket row exists, no message)
+ * so both parties always share the same chronological card.
+ */
+export async function ensureConversationPaymentTicketMessages(
+  conversationId: string,
+): Promise<number> {
+  const tickets = await prisma.paymentTicket.findMany({
+    where: { conversationId },
+    select: {
+      id: true,
+      createdById: true,
+      revision: true,
+      createdAt: true,
+      status: true,
+    },
+  });
+  if (tickets.length === 0) return 0;
+
+  const existing = await prisma.message.findMany({
+    where: {
+      conversationId,
+      paymentTicketId: { in: tickets.map((t) => t.id) },
+      systemEventType: "PAYMENT_TICKET_PROPOSED",
+    },
+    select: { paymentTicketId: true },
+  });
+  const have = new Set(
+    existing.map((m) => m.paymentTicketId).filter(Boolean) as string[],
+  );
+
+  let created = 0;
+  for (const t of tickets) {
+    if (have.has(t.id)) continue;
+    await prisma.message.create({
+      data: {
+        conversationId,
+        senderId: t.createdById,
+        body: `Payment Ticket v${t.revision} proposed — Protected by Source Bridge.`,
+        messageType: "PAYMENT_TICKET",
+        systemEventType: "PAYMENT_TICKET_PROPOSED",
+        paymentTicketId: t.id,
+        replyAllowed: true,
+        // Preserve ticket chronology when backfilling missing timeline rows.
+        createdAt: t.createdAt,
+      },
+    });
+    created += 1;
+  }
+  return created;
 }
 
 async function assertNoConcurrentSourcingAgreement(opts: {
@@ -438,7 +541,7 @@ export async function createOrRevisePaymentTicket(opts: {
     buyerId: string;
   }> = [];
 
-  const result = await prisma.$transaction(async (tx) => {
+  const { ticket, messageId } = await prisma.$transaction(async (tx) => {
     if (open && open.status !== "FUNDED") {
       await tx.paymentTicket.update({
         where: { id: open.id },
@@ -500,7 +603,8 @@ export async function createOrRevisePaymentTicket(opts: {
       },
     });
 
-    await tx.message.create({
+    // Timeline card — required so both parties see the ticket after propose/reload.
+    const message = await tx.message.create({
       data: {
         conversationId: opts.conversationId,
         senderId: opts.actorId,
@@ -515,7 +619,7 @@ export async function createOrRevisePaymentTicket(opts: {
       where: { id: opts.conversationId },
       data: { lastMessageAt: new Date(), updatedAt: new Date() },
     });
-    return ticket;
+    return { ticket, messageId: message.id };
   });
 
   for (const item of deferredListingReleases) {
@@ -524,12 +628,28 @@ export async function createOrRevisePaymentTicket(opts: {
   await recordAuditEvent({
     actorUserId: opts.actorId,
     action: "PAYMENT_TICKET_PROPOSED",
-    meta: { ticketId: result.id, revision, termsHash, sourcingRequestId },
+    meta: { ticketId: ticket.id, revision, termsHash, sourcingRequestId },
   });
 
-  return mapTicket(result, {
-    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+  const messageRow = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: {
+      attachments: true,
+      sender: { select: participantUserSelect },
+    },
   });
+  const creator = await prisma.user.findUnique({
+    where: { id: opts.actorId },
+    select: { id: true, name: true, username: true },
+  });
+
+  return {
+    ticket: mapTicket(ticket, {
+      procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+      proposedBy: creator,
+    }),
+    message: messageRow ? mapMessage(messageRow) : null,
+  };
 }
 
 export async function respondToPaymentTicket(opts: {
@@ -717,6 +837,9 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
   const ticket = await prisma.paymentTicket.findUnique({
     where: { id: ticketId },
     include: {
+      createdBy: {
+        select: { id: true, name: true, username: true },
+      },
       protectedTransaction: {
         select: {
           status: true,
@@ -730,7 +853,20 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
   if (!ticket) {
     throw Object.assign(new Error("Ticket not found"), { status: 404 });
   }
+  // Parties only — buyers and sellers; conversation membership must match.
   if (viewerId !== ticket.buyerId && viewerId !== ticket.sellerId) {
+    throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
+  }
+  const participant = await prisma.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId: ticket.conversationId,
+        userId: viewerId,
+      },
+    },
+    select: { leftAt: true },
+  });
+  if (!participant || participant.leftAt) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
   }
   const pt = ticket.protectedTransaction;
@@ -740,5 +876,12 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
     refundedMinor: pt?.refundedMinor ?? 0,
     procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    proposedBy: ticket.createdBy
+      ? {
+          id: ticket.createdBy.id,
+          name: ticket.createdBy.name,
+          username: ticket.createdBy.username,
+        }
+      : null,
   });
 }

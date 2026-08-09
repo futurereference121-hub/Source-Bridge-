@@ -49,6 +49,7 @@
     "repair:conversations": "node --env-file=.env.local --import=dotenv/config scripts/repair-conversations.mjs",
     "test:payments": "node scripts/test-payments-domain.mjs",
     "test:procurement": "node scripts/test-procurement-release.mjs",
+    "test:payment-ticket-timeline": "node --env-file=.env scripts/test-payment-ticket-timeline.mjs",
     "test:listing-payment-options": "node scripts/test-listing-payment-options.mjs",
     "test:direct-payment": "node scripts/test-direct-payment.mjs",
     "test:pci-no-raw-cards": "node scripts/test-pci-no-raw-cards.mjs",

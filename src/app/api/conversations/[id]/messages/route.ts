@@ -11,6 +11,7 @@ import {
   requireParticipant,
   safePathname,
 } from "@/lib/messaging";
+import { ensureConversationPaymentTicketMessages } from "@/lib/payments/tickets";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
@@ -24,6 +25,9 @@ export async function GET(req: NextRequest, { params }: Params) {
     const user = await requireSessionUser();
     const { id } = await params;
     await requireParticipant(id, user.id);
+
+    // Backfill timeline messages for tickets missing their chat card row.
+    await ensureConversationPaymentTicketMessages(id);
 
     const sp = req.nextUrl.searchParams;
     const cursor = sp.get("cursor") || undefined;
@@ -47,10 +51,17 @@ export async function GET(req: NextRequest, { params }: Params) {
     // Return chronological (oldest → newest) for chat UI
     const messages = [...slice].reverse().map(mapMessage);
 
-    return Response.json({
-      messages,
-      nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
-    });
+    return Response.json(
+      {
+        messages,
+        nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message =

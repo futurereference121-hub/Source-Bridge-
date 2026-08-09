@@ -286,7 +286,9 @@ export function MessagesInbox({
       setMessages([]);
       try {
         // Single request — conversation GET already returns recent messages.
-        const res = await fetch(`/api/conversations/${activeId}`);
+        const res = await fetch(`/api/conversations/${activeId}`, {
+          cache: "no-store",
+        });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || "Failed to open conversation");
@@ -353,6 +355,7 @@ export function MessagesInbox({
     try {
       const res = await fetch(
         `/api/conversations/${activeId}/messages?limit=30&cursor=${encodeURIComponent(messagesCursor)}`,
+        { cache: "no-store" },
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to load messages");
@@ -712,7 +715,11 @@ export function MessagesInbox({
                   </div>
                 ) : (
                   <ul className="space-y-3">
-                    {messages.map((m) => {
+                    {(() => {
+                      // One Payment Ticket card per ticketId (update in place).
+                      // Later accept/decline rows stay as compact history lines.
+                      const cardShown = new Set<string>();
+                      return messages.map((m) => {
                       const isSystem =
                         m.messageType === "SYSTEM" || !m.senderId;
                       const isSourcing =
@@ -722,13 +729,42 @@ export function MessagesInbox({
                         Boolean(m.paymentTicketId);
                       const mine = !isSystem && m.senderId === myId;
                       if (isPaymentTicket && m.paymentTicketId) {
+                        const isPrimaryCard =
+                          m.systemEventType === "PAYMENT_TICKET_PROPOSED" ||
+                          !m.systemEventType ||
+                          !cardShown.has(m.paymentTicketId);
+                        if (isPrimaryCard && !cardShown.has(m.paymentTicketId)) {
+                          cardShown.add(m.paymentTicketId);
+                          return (
+                            <li key={m.id} className="flex justify-stretch">
+                              <PaymentTicketCard
+                                ticketId={m.paymentTicketId}
+                                myId={myId}
+                                proposedAt={m.createdAt}
+                                proposedByName={
+                                  m.sender?.username
+                                    ? `@${m.sender.username}`
+                                    : m.sender?.name || null
+                                }
+                                onChanged={() =>
+                                  setThreadRefresh((n) => n + 1)
+                                }
+                              />
+                            </li>
+                          );
+                        }
+                        // Historical lifecycle note (accept / decline) — not a second card.
                         return (
-                          <li key={m.id} className="flex justify-stretch">
-                            <PaymentTicketCard
-                              ticketId={m.paymentTicketId}
-                              myId={myId}
-                              onChanged={() => setThreadRefresh((n) => n + 1)}
-                            />
+                          <li
+                            key={m.id}
+                            className="flex justify-center px-2"
+                          >
+                            <p className="max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-center text-[11px] text-white/50">
+                              {m.body?.trim() || "Payment Ticket update"}
+                              <span className="ml-2 text-white/30">
+                                {formatTime(m.createdAt)}
+                              </span>
+                            </p>
                           </li>
                         );
                       }
@@ -846,7 +882,8 @@ export function MessagesInbox({
                           </div>
                         </li>
                       );
-                    })}
+                    });
+                    })()}
                   </ul>
                 )}
                 <div ref={threadEndRef} />
@@ -923,7 +960,78 @@ export function MessagesInbox({
                   <ProposePaymentTicketButton
                     conversationId={activeId!}
                     myId={myId}
-                    onCreated={() => setThreadRefresh((n) => n + 1)}
+                    onCreated={({ message }) => {
+                      shouldScrollRef.current = true;
+                      if (message) {
+                        const msg = {
+                          id: message.id,
+                          conversationId: message.conversationId,
+                          senderId: message.senderId,
+                          body: message.body,
+                          createdAt: message.createdAt,
+                          messageType: message.messageType || "PAYMENT_TICKET",
+                          systemEventType:
+                            message.systemEventType || "PAYMENT_TICKET_PROPOSED",
+                          replyAllowed: message.replyAllowed !== false,
+                          paymentTicketId: message.paymentTicketId ?? null,
+                          attachments: message.attachments ?? [],
+                          sender: message.sender,
+                        } satisfies Message;
+                        setMessages((prev) =>
+                          prev.some((m) => m.id === msg.id)
+                            ? prev
+                            : [...prev, msg],
+                        );
+                        setConversations((prev) => {
+                          const updated = prev.map((c) =>
+                            c.id === activeId
+                              ? {
+                                  ...c,
+                                  lastMessage: msg,
+                                  lastMessageAt: msg.createdAt,
+                                  unread: false,
+                                }
+                              : c,
+                          );
+                          return [...updated].sort((a, b) => {
+                            const at = a.lastMessageAt
+                              ? new Date(a.lastMessageAt).getTime()
+                              : 0;
+                            const bt = b.lastMessageAt
+                              ? new Date(b.lastMessageAt).getTime()
+                              : 0;
+                            return bt - at;
+                          });
+                        });
+                        // Soft revalidate after insert (no clear) so second party state stays authoritative.
+                        const convId = activeId;
+                        void (async () => {
+                          try {
+                            const res = await fetch(
+                              `/api/conversations/${convId}`,
+                              { cache: "no-store" },
+                            );
+                            if (!res.ok) return;
+                            const data = (await res.json()) as {
+                              messages?: Message[];
+                            };
+                            const msgs = (data.messages ?? [])
+                              .slice()
+                              .sort((a, b) => {
+                                const at = Date.parse(a.createdAt);
+                                const bt = Date.parse(b.createdAt);
+                                if (at !== bt) return at - bt;
+                                return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                              });
+                            setMessages(msgs);
+                          } catch {
+                            /* keep optimistic timeline message */
+                          }
+                        })();
+                      } else {
+                        setThreadRefresh((n) => n + 1);
+                      }
+                    }}
                   />
                   <input
                     ref={fileInputRef}

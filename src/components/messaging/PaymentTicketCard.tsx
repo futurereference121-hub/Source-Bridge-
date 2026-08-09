@@ -27,6 +27,13 @@ export type PaymentTicketView = {
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
   lifecycleStage?: string;
+  lifecycleLabel?: string;
+  createdAt?: string;
+  proposedBy?: {
+    id: string;
+    name: string;
+    username: string | null;
+  } | null;
   actions?: {
     canReleaseProcurement?: boolean;
     canPay?: boolean;
@@ -56,10 +63,18 @@ export type PaymentTicketView = {
 type Props = {
   ticketId: string;
   myId: string;
+  proposedAt?: string | null;
+  proposedByName?: string | null;
   onChanged?: () => void;
 };
 
-export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
+export function PaymentTicketCard({
+  ticketId,
+  myId,
+  proposedAt,
+  proposedByName,
+  onChanged,
+}: Props) {
   const [ticket, setTicket] = useState<PaymentTicketView | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -78,7 +93,9 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/payments/tickets/${ticketId}`);
+      const res = await fetch(`/api/payments/tickets/${ticketId}`, {
+        cache: "no-store",
+      });
       const json = (await res.json()) as {
         ok?: boolean;
         ticket?: PaymentTicketView;
@@ -271,24 +288,53 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
     : iAmSeller
       ? ticket.sellerApprovedRevision === ticket.revision
       : false;
-  const open = ticket.status === "PROPOSED" || ticket.status === "ACCEPTED";
-  const canRespond = open && ticket.status === "PROPOSED" && !myApproved;
+  const historical =
+    ticket.status === "DECLINED" ||
+    ticket.status === "SUPERSEDED" ||
+    ticket.status === "CANCELLED";
+  const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
+  const canRespond =
+    open && ticket.status === "PROPOSED" && !myApproved && (iAmBuyer || iAmSeller);
   const canPay =
+    !historical &&
     paymentsAccess &&
     iAmBuyer &&
-    ticket.status === "ACCEPTED" &&
+    (ticket.status === "ACCEPTED" ||
+      ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT") &&
     Boolean(ticket.protectedTransactionId);
   const canRelease =
+    !historical &&
     paymentsAccess &&
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseProcurement) &&
     Boolean(ticket.protectedTransactionId);
   const isDirect =
     ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
-  const stage = ticket.lifecycleStage || ticket.status;
+  const stageLabel =
+    ticket.lifecycleLabel ||
+    ticket.lifecycleStage ||
+    ticket.status;
   const procAgreed =
     ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0;
   const procTransferred = (ticket.books?.procurementTransferredMinor ?? 0) > 0;
+  const proposerLabel =
+    proposedByName ||
+    (ticket.proposedBy?.username
+      ? `@${ticket.proposedBy.username}`
+      : ticket.proposedBy?.name) ||
+    null;
+  const proposedWhen = proposedAt || ticket.createdAt || null;
+
+  function formatProposedTime(iso: string) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
 
   const cur = ticket.currency;
   const rows = [
@@ -316,18 +362,27 @@ export function PaymentTicketCard({ ticketId, myId, onChanged }: Props) {
           </div>
         </div>
         <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
-          {stage}
+          {stageLabel}
         </span>
       </div>
+
+      {proposerLabel || proposedWhen ? (
+        <p className="mt-2 text-xs text-white/45">
+          Proposed by {proposerLabel || "member"}
+          {proposedWhen ? ` · ${formatProposedTime(proposedWhen)}` : ""}
+        </p>
+      ) : null}
 
       <p className="mt-2 text-xs text-white/45">
         Protected by Source Bridge ·{" "}
         {isDirect ? "Direct Payment" : "Protected"} Transaction
-        {isDirect
-          ? " · funds route on fund"
-          : procTransferred
-            ? " · item funds released; remainder held until delivery"
-            : " · funds held until release / delivery"}
+        {historical
+          ? " · no longer actionable"
+          : isDirect
+            ? " · funds route on fund"
+            : procTransferred
+              ? " · item funds released; remainder held until delivery"
+              : " · funds held until release / delivery"}
       </p>
 
       <dl className="mt-4 space-y-1.5 text-sm">
