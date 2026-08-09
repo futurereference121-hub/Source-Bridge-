@@ -817,6 +817,84 @@ async function main() {
     ),
   );
 
+  // --- Conversation isolation: ticket on A is not on C's other thread ---
+  const keyAC = pairKey(userA.id, userC.id);
+  let convC = await prisma.conversation.findUnique({ where: { pairKey: keyAC } });
+  if (!convC) {
+    convC = await prisma.conversation.create({
+      data: {
+        subject: "Ticket isolation C",
+        contextType: "direct",
+        pairKey: keyAC,
+        participants: {
+          create: [{ userId: userA.id }, { userId: userC.id }],
+        },
+      },
+    });
+  }
+  const ticketsOnC = await prisma.paymentTicket.findMany({
+    where: { conversationId: convC.id },
+  });
+  ok(
+    "other conversation has no tickets from A↔B propose",
+    !ticketsOnC.some((t) => t.id === ticket.id),
+  );
+  const ticketsOnlyA = await prisma.paymentTicket.findMany({
+    where: { conversationId: conversation.id, id: ticket.id },
+  });
+  ok("ticket only on conversation A", ticketsOnlyA.length === 1);
+  ok(
+    "ticket.conversationId equals conversation A",
+    ticket.conversationId === conversation.id,
+  );
+
+  // Failed proposal rollback: simulate transaction abort → no orphan ticket
+  let rolledBack = false;
+  try {
+    await prisma.$transaction(async (tx) => {
+      const ghost = await tx.paymentTicket.create({
+        data: {
+          conversationId: conversation.id,
+          createdById: userA.id,
+          buyerId: userA.id,
+          sellerId: userB.id,
+          status: "PROPOSED",
+          revision: 99,
+          termsHash: termsHash + "rollback",
+          title: "Should rollback",
+          currency: "GBP",
+          itemCostMinor: 100,
+          protectionFeeMinor: 50,
+          totalChargeMinor: 150,
+          paymentOption: "PROTECTED",
+          stripeMode: "TEST",
+        },
+      });
+      // Force failure after ticket insert (mirrors createOrRevise atomicity).
+      if (ghost.id) {
+        throw Object.assign(new Error("simulated propose failure"), {
+          status: 500,
+        });
+      }
+    });
+  } catch {
+    rolledBack = true;
+  }
+  ok("failed proposal rolled back transaction", rolledBack);
+  const ghostCount = await prisma.paymentTicket.count({
+    where: {
+      conversationId: conversation.id,
+      title: "Should rollback",
+    },
+  });
+  ok("no orphan ticket after failed propose transaction", ghostCount === 0);
+
+  // Same T.id for accept path (already ACCEPTED above) — card still one id
+  ok(
+    "accept mutates same ticket row",
+    afterSeller.id === ticket.id && afterSeller.status === "ACCEPTED",
+  );
+
   console.log("\nAll payment-ticket timeline checks passed.");
 }
 

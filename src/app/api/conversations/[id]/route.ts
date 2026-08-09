@@ -12,6 +12,14 @@ import {
   listConversationPaymentTickets,
   mergePaymentTicketsIntoTimeline,
 } from "@/lib/payments/tickets";
+import {
+  isPaymentsTestAllowlistConfigured,
+  userMatchesPaymentsAllowlist,
+} from "@/lib/payments/allowlist";
+import {
+  isInstantPaymentsEnabled,
+  isProtectedPaymentsEnabled,
+} from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
 const RECENT_MESSAGES = 30;
@@ -71,6 +79,42 @@ export async function GET(_req: Request, { params }: Params) {
       paymentTickets,
     );
 
+    // Dual-party allowlist gate for chat propose (UI vs POST create).
+    // Self-only allowlist is enough to *show* the form; *create* still needs both.
+    const activeParts = conversation.participants.filter((p) => !p.leftAt);
+    const peerPart = activeParts.find((p) => p.userId !== user.id);
+    const identityRows = await prisma.user.findMany({
+      where: {
+        id: {
+          in: [user.id, ...(peerPart ? [peerPart.userId] : [])],
+        },
+      },
+      select: { id: true, email: true },
+    });
+    const byId = new Map(identityRows.map((r) => [r.id, r]));
+    const selfIdentity = byId.get(user.id) || {
+      id: user.id,
+      email: user.email,
+    };
+    const peerIdentity = peerPart ? byId.get(peerPart.userId) : null;
+    const allowlistConfigured = isPaymentsTestAllowlistConfigured();
+    const selfAllowed =
+      allowlistConfigured && userMatchesPaymentsAllowlist(selfIdentity);
+    const peerAllowed = peerIdentity
+      ? allowlistConfigured && userMatchesPaymentsAllowlist(peerIdentity)
+      : false;
+    const paymentsProposalAccess = {
+      allowlistConfigured,
+      flagsOn: Boolean(
+        isProtectedPaymentsEnabled() || isInstantPaymentsEnabled(),
+      ),
+      selfAllowed,
+      peerAllowed,
+      /** True only when POST create can pass both-party allowlist. */
+      bothAllowed: selfAllowed && peerAllowed,
+      peerPresent: Boolean(peerPart),
+    };
+
     return Response.json(
       {
         conversation: mapConversation(
@@ -82,6 +126,7 @@ export async function GET(_req: Request, { params }: Params) {
         ),
         messages,
         paymentTickets,
+        paymentsProposalAccess,
       },
       {
         headers: {

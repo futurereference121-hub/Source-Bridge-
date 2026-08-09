@@ -33,7 +33,8 @@ function matches(list, user) {
   return false;
 }
 
-const buyer = "cms8or23a00001a046qm6ene4";
+// Real Production ids (futureman uses letter l, not digit 1).
+const buyer = "cms8or23a0000la046qm6ene4";
 const seller = "cms62cfan0000ih04giwg7ee3";
 
 assert.equal(normalizeAllowlistToken(`  "${buyer}"  `), buyer);

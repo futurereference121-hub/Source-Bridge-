@@ -29,9 +29,24 @@ export type ProposedTicketTimelineMessage = {
   };
 };
 
+export type PaymentsProposalAccess = {
+  allowlistConfigured?: boolean;
+  flagsOn?: boolean;
+  selfAllowed?: boolean;
+  peerAllowed?: boolean;
+  bothAllowed?: boolean;
+  peerPresent?: boolean;
+};
+
 type ProposePaymentTicketButtonProps = {
   conversationId: string;
   myId: string;
+  /**
+   * From conversation GET. When self is allowlisted but peer is not, the form
+   * still opens (same as before) but shows a clear pre-POST warning — create
+   * requires both parties on PAYMENTS_TEST_ALLOWLIST.
+   */
+  proposalAccess?: PaymentsProposalAccess | null;
   onCreated?: (payload: {
     ticket: { id: string };
     message: ProposedTicketTimelineMessage | null;
@@ -45,6 +60,7 @@ type ProposePaymentTicketButtonProps = {
 export function ProposePaymentTicketButton({
   conversationId,
   myId,
+  proposalAccess,
   onCreated,
 }: ProposePaymentTicketButtonProps) {
   const [open, setOpen] = useState(false);
@@ -86,6 +102,12 @@ export function ProposePaymentTicketButton({
 
   if (!enabled) return null;
 
+  const peerMissing =
+    proposalAccess != null &&
+    proposalAccess.peerPresent !== false &&
+    proposalAccess.selfAllowed === true &&
+    proposalAccess.peerAllowed === false;
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -95,6 +117,14 @@ export function ProposePaymentTicketButton({
     const service = Math.round(Number(serviceMajor || "0") * 100);
     if (!Number.isFinite(item) || item <= 0) {
       setError("Enter a valid item cost");
+      setBusy(false);
+      return;
+    }
+    // Pre-flight: still call the API (authoritative), but surface both-party gate early.
+    if (peerMissing) {
+      setError(
+        "Your chat partner is not on the payments test allowlist. Both parties must be allowlisted before a ticket can be created.",
+      );
       setBusy(false);
       return;
     }
@@ -120,17 +150,31 @@ export function ProposePaymentTicketButton({
         ok?: boolean;
         error?: string;
         code?: string;
+        allowlistParty?: string;
         ticket?: { id: string };
         message?: ProposedTicketTimelineMessage | null;
       };
       // Never silently succeed: form stays open unless ticket id is present.
       if (!res.ok || !json.ok || !json.ticket?.id) {
         const serverMsg = (json.error || "").trim();
+        const party = (json.allowlistParty || "").trim();
         if (res.status === 403) {
-          setError(
-            serverMsg ||
-              "Payments test access denied (allowlist). You cannot propose a ticket for this pair.",
-          );
+          if (
+            json.code === "PAYMENTS_ALLOWLIST_DENIED" ||
+            /allowlist/i.test(serverMsg)
+          ) {
+            setError(
+              serverMsg ||
+                (party
+                  ? `Payments test access denied — ${party} is not on the allowlist.`
+                  : "Payments test access denied. Both parties must be on the payments test allowlist before proposing."),
+            );
+          } else {
+            setError(
+              serverMsg ||
+                "Payments test access denied (allowlist). You cannot propose a ticket for this pair.",
+            );
+          }
         } else if (res.status === 503) {
           setError(
             serverMsg ||
@@ -182,6 +226,12 @@ export function ProposePaymentTicketButton({
             Both parties must accept the same terms before payment. Fees are
             calculated by Source Bridge. TEST allowlist only.
           </p>
+          {peerMissing ? (
+            <p className="mt-2 text-[11px] text-amber-300">
+              Your partner is not on the payments test allowlist. Propose will
+              fail until both of you are approved for the test ramp.
+            </p>
+          ) : null}
           <label className="mt-3 block text-[11px] text-white/55">
             Title
             <input

@@ -71,30 +71,47 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { ticket, message } = await createOrRevisePaymentTicket({
-      conversationId: data.conversationId,
-      actorId: user.id,
-      buyerId,
-      sellerId,
-      amounts: {
-        itemCostMinor: data.itemCostMinor,
-        shippingMinor: data.shippingMinor,
-        sellerServiceFeeMinor: data.sellerServiceFeeMinor,
-        title: data.title,
-        notes: data.notes,
-        paymentOption: data.paymentOption,
-        procurementAdvanceAgreed: data.procurementAdvanceAgreed,
-        listingId: data.listingId,
-        currency: data.currency,
-      },
-    });
+    let ticket;
+    let message;
+    try {
+      ({ ticket, message } = await createOrRevisePaymentTicket({
+        conversationId: data.conversationId,
+        actorId: user.id,
+        buyerId,
+        sellerId,
+        amounts: {
+          itemCostMinor: data.itemCostMinor,
+          shippingMinor: data.shippingMinor,
+          sellerServiceFeeMinor: data.sellerServiceFeeMinor,
+          title: data.title,
+          notes: data.notes,
+          paymentOption: data.paymentOption,
+          procurementAdvanceAgreed: data.procurementAdvanceAgreed,
+          listingId: data.listingId,
+          currency: data.currency,
+        },
+      }));
+    } catch (inner) {
+      // Attach conversationId for safe denial logs below.
+      throw Object.assign(inner instanceof Error ? inner : new Error("Failed"), {
+        conversationId: data.conversationId,
+        status: (inner as { status?: number })?.status,
+        code: (inner as { code?: string })?.code,
+        allowlistParty: (inner as { allowlistParty?: string })?.allowlistParty,
+      });
+    }
 
     // Success path always includes ticket; message may be null (client can
-    // synthesize a timeline row). No secrets / amounts in log lines.
+    // synthesize a timeline row). SAFE: ids only, no secrets / amounts.
     console.info("[payments:tickets:create] ok", {
       conversationId: data.conversationId,
       ticketId: ticket.id,
       messageId: message?.id ?? null,
+      actorId: user.id,
+      buyerId,
+      sellerId,
+      status: ticket.status,
+      sourcingRequestId: ticket.sourcingRequestId ?? null,
     });
 
     return Response.json(
@@ -109,13 +126,28 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const code = (err as { code?: string }).code;
+    const allowlistParty = (err as { allowlistParty?: string }).allowlistParty;
     const message = err instanceof Error ? err.message : "Failed";
     if (status === 401) return jsonError("Sign in required", 401);
     // Preserve client-facing errors: 403 allowlist, 400 validation, 409 races, 503 disabled.
     if ((status >= 400 && status < 500) || status === 503) {
-      return jsonError(message, status, code ? { code } : undefined);
+      // SAFE diagnosis — no secrets, amounts, or allowlist contents.
+      console.info("[payments:tickets:create] denied", {
+        status,
+        code: code ?? null,
+        allowlistParty: allowlistParty ?? null,
+        conversationId:
+          typeof (err as { conversationId?: string }).conversationId === "string"
+            ? (err as { conversationId?: string }).conversationId
+            : null,
+      });
+      return jsonError(message, status, {
+        ok: false,
+        ...(code ? { code } : {}),
+        ...(allowlistParty ? { allowlistParty } : {}),
+      });
     }
     console.error("[payments:tickets:create]", err);
-    return jsonError("Failed to create Payment Ticket", 500);
+    return jsonError("Failed to create Payment Ticket", 500, { ok: false });
   }
 }

@@ -17,7 +17,10 @@ import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { memberPhoto } from "@/lib/placeholders";
 import { ReviewPrompt } from "@/components/messaging/ReviewPrompt";
 import { PaymentTicketCard } from "@/components/messaging/PaymentTicketCard";
-import { ProposePaymentTicketButton } from "@/components/messaging/ProposePaymentTicketButton";
+import {
+  ProposePaymentTicketButton,
+  type PaymentsProposalAccess,
+} from "@/components/messaging/ProposePaymentTicketButton";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
@@ -245,6 +248,8 @@ export function MessagesInbox({
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [threadRefresh, setThreadRefresh] = useState(0);
+  const [proposalAccess, setProposalAccess] =
+    useState<PaymentsProposalAccess | null>(null);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -330,6 +335,7 @@ export function MessagesInbox({
       setMessages([]);
       setActiveConversation(null);
       setMessagesCursor(null);
+      setProposalAccess(null);
       return;
     }
 
@@ -339,6 +345,7 @@ export function MessagesInbox({
     async function openThread() {
       setThreadLoading(true);
       setMessages([]);
+      setProposalAccess(null);
       try {
         // Single request — conversation GET already returns recent messages.
         const res = await fetch(`/api/conversations/${activeId}`, {
@@ -351,6 +358,10 @@ export function MessagesInbox({
         if (cancelled) return;
 
         setActiveConversation(data.conversation as Conversation);
+        setProposalAccess(
+          (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
+            null,
+        );
         setConversations((prev) =>
           prev.map((c) =>
             c.id === activeId ? { ...c, unread: false } : c,
@@ -1044,6 +1055,7 @@ export function MessagesInbox({
                   <ProposePaymentTicketButton
                     conversationId={activeId!}
                     myId={myId}
+                    proposalAccess={proposalAccess}
                     onCreated={({ ticket, message }) => {
                       shouldScrollRef.current = true;
                       const now = new Date().toISOString();

@@ -526,9 +526,11 @@ export async function createOrRevisePaymentTicket(opts: {
   const seller = await loadParty(opts.sellerId);
   assertEligiblePaymentParty(buyer, "buyer");
   assertEligiblePaymentParty(seller, "seller");
-  // Controlled TEST ramp — empty allowlist = deny; both parties must match.
+  // Controlled TEST ramp — empty allowlist = deny; BOTH buyer and seller must match.
+  // UI may show the form when only the actor is allowlisted; create still enforces both.
   assertPaymentsTestAllowlisted([buyer, seller], {
     action: "create Payment Ticket",
+    labels: ["buyer", "seller"],
   });
   if (opts.actorId !== buyer.id && opts.actorId !== seller.id) {
     throw Object.assign(new Error("Only buyer or seller can propose terms"), {
