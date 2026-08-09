@@ -37,11 +37,23 @@ function ticketInvolvesMoney(input) {
   const pt = input.protectedTxn;
   if (!pt) return false;
   if (pt.fundedAt) return true;
-  if ((pt.stripePaymentIntentId || "").trim().length > 0) return true;
   if ((pt.procurementTransferredMinor ?? 0) > 0) return true;
   if ((pt.finalTransferredMinor ?? 0) > 0) return true;
   if ((pt.refundedMinor ?? 0) > 0) return true;
   if (MONEY_TXN_STATUSES.includes(pt.status)) return true;
+  const unfundedOpen = [
+    "ACCEPTED",
+    "AWAITING_PAYMENT",
+    "DRAFT",
+    "AWAITING_ACCEPTANCE",
+    "CANCELLED",
+  ];
+  if (
+    (pt.stripePaymentIntentId || "").trim().length > 0 &&
+    !unfundedOpen.includes(pt.status)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -97,16 +109,28 @@ ok(
   }),
 );
 ok(
-  "PI present blocks mutation",
-  ticketInvolvesMoney({
+  "PI present on AWAITING_PAYMENT without fundedAt is NOT money",
+  !ticketInvolvesMoney({
     ticketStatus: "ACCEPTED",
     protectedTxn: {
       status: "AWAITING_PAYMENT",
+      fundedAt: null,
+      stripePaymentIntentId: "pi_test_unfunded",
+    },
+  }),
+);
+ok(
+  "PI on unexpected status is money/ambiguous",
+  ticketInvolvesMoney({
+    ticketStatus: "ACCEPTED",
+    protectedTxn: {
+      status: "UNKNOWN_WEIRD",
       fundedAt: null,
       stripePaymentIntentId: "pi_test_spoof",
     },
   }),
 );
+// Keep fundedAt / transfer guards
 ok(
   "fundedAt blocks mutation",
   ticketInvolvesMoney({

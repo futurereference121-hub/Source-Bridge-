@@ -94,17 +94,36 @@ type FundingGuardInputs = {
 /**
  * True when the ticket/PT has any funding or payment ambiguity.
  * Reject edit/cancel/delete that would destroy financial state.
+ *
+ * Unfunded domain states (ACCEPTED / AWAITING_PAYMENT without fundedAt /
+ * transfers / refunds) are NOT money — even if a Stripe PaymentIntent id
+ * was created during checkout startup. Those can be cancelled / superseded.
+ * True captures (fundedAt, money statuses, transfers, refunds) always block.
  */
 export function ticketInvolvesMoney(input: FundingGuardInputs): boolean {
   if (input.ticketStatus === "FUNDED") return true;
   const pt = input.protectedTxn;
   if (!pt) return false;
   if (pt.fundedAt) return true;
-  if ((pt.stripePaymentIntentId || "").trim().length > 0) return true;
   if ((pt.procurementTransferredMinor ?? 0) > 0) return true;
   if ((pt.finalTransferredMinor ?? 0) > 0) return true;
   if ((pt.refundedMinor ?? 0) > 0) return true;
   if ((MONEY_TXN_STATUSES as readonly string[]).includes(pt.status)) return true;
+  // PI present but domain still pre-fund and non-money status is OK for cancel/edit.
+  // PI + unexpected status (or unknown) → treat as ambiguous money risk.
+  const unfundedOpen = [
+    "ACCEPTED",
+    "AWAITING_PAYMENT",
+    "DRAFT",
+    "AWAITING_ACCEPTANCE",
+    "CANCELLED",
+  ];
+  if (
+    (pt.stripePaymentIntentId || "").trim().length > 0 &&
+    !unfundedOpen.includes(pt.status)
+  ) {
+    return true;
+  }
   return false;
 }
 
