@@ -161,6 +161,61 @@ function previewText(message: Message | null) {
   return "No messages yet";
 }
 
+/** Client defense: inject missing ticket markers into timeline (dedupe by ticket id). */
+type TimelineTicketLite = {
+  id: string;
+  createdById?: string;
+  createdAt: string;
+  revision?: number;
+  status?: string;
+  title?: string;
+};
+
+function mergePaymentTicketsClient(
+  conversationId: string,
+  messages: Message[],
+  tickets: TimelineTicketLite[] | null | undefined,
+): Message[] {
+  if (!tickets?.length) {
+    return messages.slice().sort((a, b) => {
+      const at = Date.parse(a.createdAt);
+      const bt = Date.parse(b.createdAt);
+      if (at !== bt) return at - bt;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+  }
+  const covered = new Set(
+    messages
+      .map((m) => m.paymentTicketId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const injected: Message[] = [];
+  for (const t of tickets) {
+    if (!t?.id || covered.has(t.id)) continue;
+    injected.push({
+      id: `payment-ticket:${t.id}`,
+      conversationId,
+      senderId: t.createdById ?? null,
+      body:
+        t.revision != null && t.title
+          ? `Payment Ticket v${t.revision} · ${t.title} (${t.status ?? "PROPOSED"})`
+          : "Payment Ticket",
+      createdAt: t.createdAt,
+      messageType: "PAYMENT_TICKET",
+      systemEventType: "PAYMENT_TICKET_PROPOSED",
+      replyAllowed: true,
+      paymentTicketId: t.id,
+      attachments: [],
+    });
+  }
+  return [...messages, ...injected].sort((a, b) => {
+    const at = Date.parse(a.createdAt);
+    const bt = Date.parse(b.createdAt);
+    if (at !== bt) return at - bt;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
 export function MessagesInbox({
   initialConversationId = null,
 }: MessagesInboxProps) {
@@ -302,12 +357,14 @@ export function MessagesInbox({
           ),
         );
 
-        const msgs = ((data.messages as Message[]) ?? []).slice().sort((a, b) => {
-          const at = Date.parse(a.createdAt);
-          const bt = Date.parse(b.createdAt);
-          if (at !== bt) return at - bt;
-          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-        });
+        const rawMsgs = (data.messages as Message[]) ?? [];
+        const tickets = (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+        // Server already merges; client re-merge is defense in depth.
+        const msgs = mergePaymentTicketsClient(
+          activeId!,
+          rawMsgs,
+          tickets,
+        );
         setMessages(msgs);
         setMessagesCursor(msgs.length >= 30 ? msgs[0]?.id ?? null : null);
       } catch (err) {
@@ -359,10 +416,37 @@ export function MessagesInbox({
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to load messages");
-      const older = (data.messages as Message[]) ?? [];
+      const olderRaw = (data.messages as Message[]) ?? [];
+      const tickets =
+        (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+      const older = mergePaymentTicketsClient(activeId, olderRaw, tickets);
       setMessages((prev) => {
-        const ids = new Set(prev.map((m) => m.id));
-        return [...older.filter((m) => !ids.has(m.id)), ...prev];
+        // Prefer real marker ids over payment-ticket: synthetic when both exist.
+        const byTicket = new Map<string, string>();
+        for (const m of [...older, ...prev]) {
+          if (!m.paymentTicketId) continue;
+          const existing = byTicket.get(m.paymentTicketId);
+          if (!existing || !m.id.startsWith("payment-ticket:")) {
+            byTicket.set(m.paymentTicketId, m.id);
+          }
+        }
+        const ids = new Set<string>();
+        const merged: Message[] = [];
+        for (const m of [...older, ...prev]) {
+          if (m.paymentTicketId) {
+            const keepId = byTicket.get(m.paymentTicketId);
+            if (keepId && m.id !== keepId) continue;
+          }
+          if (ids.has(m.id)) continue;
+          ids.add(m.id);
+          merged.push(m);
+        }
+        return merged.sort((a, b) => {
+          const at = Date.parse(a.createdAt);
+          const bt = Date.parse(b.createdAt);
+          if (at !== bt) return at - bt;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
       });
       setMessagesCursor(data.nextCursor ?? null);
     } catch (err) {
@@ -960,77 +1044,99 @@ export function MessagesInbox({
                   <ProposePaymentTicketButton
                     conversationId={activeId!}
                     myId={myId}
-                    onCreated={({ message }) => {
+                    onCreated={({ ticket, message }) => {
                       shouldScrollRef.current = true;
-                      if (message) {
-                        const msg = {
-                          id: message.id,
-                          conversationId: message.conversationId,
-                          senderId: message.senderId,
-                          body: message.body,
-                          createdAt: message.createdAt,
-                          messageType: message.messageType || "PAYMENT_TICKET",
-                          systemEventType:
-                            message.systemEventType || "PAYMENT_TICKET_PROPOSED",
-                          replyAllowed: message.replyAllowed !== false,
-                          paymentTicketId: message.paymentTicketId ?? null,
-                          attachments: message.attachments ?? [],
-                          sender: message.sender,
-                        } satisfies Message;
-                        setMessages((prev) =>
-                          prev.some((m) => m.id === msg.id)
-                            ? prev
-                            : [...prev, msg],
-                        );
-                        setConversations((prev) => {
-                          const updated = prev.map((c) =>
-                            c.id === activeId
-                              ? {
-                                  ...c,
-                                  lastMessage: msg,
-                                  lastMessageAt: msg.createdAt,
-                                  unread: false,
-                                }
-                              : c,
-                          );
-                          return [...updated].sort((a, b) => {
-                            const at = a.lastMessageAt
-                              ? new Date(a.lastMessageAt).getTime()
-                              : 0;
-                            const bt = b.lastMessageAt
-                              ? new Date(b.lastMessageAt).getTime()
-                              : 0;
-                            return bt - at;
-                          });
-                        });
-                        // Soft revalidate after insert (no clear) so second party state stays authoritative.
-                        const convId = activeId;
-                        void (async () => {
-                          try {
-                            const res = await fetch(
-                              `/api/conversations/${convId}`,
-                              { cache: "no-store" },
-                            );
-                            if (!res.ok) return;
-                            const data = (await res.json()) as {
-                              messages?: Message[];
-                            };
-                            const msgs = (data.messages ?? [])
-                              .slice()
-                              .sort((a, b) => {
-                                const at = Date.parse(a.createdAt);
-                                const bt = Date.parse(b.createdAt);
-                                if (at !== bt) return at - bt;
-                                return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-                              });
-                            setMessages(msgs);
-                          } catch {
-                            /* keep optimistic timeline message */
+                      const now = new Date().toISOString();
+                      // Prefer server message; if missing, synthetic row so card renders.
+                      const msg = (message
+                        ? {
+                            id: message.id,
+                            conversationId: message.conversationId,
+                            senderId: message.senderId,
+                            body: message.body,
+                            createdAt: message.createdAt,
+                            messageType:
+                              message.messageType || "PAYMENT_TICKET",
+                            systemEventType:
+                              message.systemEventType ||
+                              "PAYMENT_TICKET_PROPOSED",
+                            replyAllowed: message.replyAllowed !== false,
+                            paymentTicketId:
+                              message.paymentTicketId ?? ticket.id,
+                            attachments: message.attachments ?? [],
+                            sender: message.sender,
                           }
-                        })();
-                      } else {
-                        setThreadRefresh((n) => n + 1);
-                      }
+                        : {
+                            id: `payment-ticket:${ticket.id}`,
+                            conversationId: activeId!,
+                            senderId: myId,
+                            body: "Payment Ticket",
+                            createdAt: now,
+                            messageType: "PAYMENT_TICKET",
+                            systemEventType: "PAYMENT_TICKET_PROPOSED",
+                            replyAllowed: true,
+                            paymentTicketId: ticket.id,
+                            attachments: [],
+                          }) satisfies Message;
+
+                      setMessages((prev) => {
+                        if (
+                          prev.some(
+                            (m) =>
+                              m.id === msg.id ||
+                              (msg.paymentTicketId &&
+                                m.paymentTicketId === msg.paymentTicketId),
+                          )
+                        ) {
+                          return prev;
+                        }
+                        return [...prev, msg];
+                      });
+                      setConversations((prev) => {
+                        const updated = prev.map((c) =>
+                          c.id === activeId
+                            ? {
+                                ...c,
+                                lastMessage: msg,
+                                lastMessageAt: msg.createdAt,
+                                unread: false,
+                              }
+                            : c,
+                        );
+                        return [...updated].sort((a, b) => {
+                          const at = a.lastMessageAt
+                            ? new Date(a.lastMessageAt).getTime()
+                            : 0;
+                          const bt = b.lastMessageAt
+                            ? new Date(b.lastMessageAt).getTime()
+                            : 0;
+                          return bt - at;
+                        });
+                      });
+                      // Always revalidate as backup so authoritative GET merge wins.
+                      setThreadRefresh((n) => n + 1);
+                      const convId = activeId;
+                      void (async () => {
+                        try {
+                          const res = await fetch(
+                            `/api/conversations/${convId}`,
+                            { cache: "no-store" },
+                          );
+                          if (!res.ok) return;
+                          const data = (await res.json()) as {
+                            messages?: Message[];
+                            paymentTickets?: TimelineTicketLite[];
+                          };
+                          const msgs = mergePaymentTicketsClient(
+                            convId!,
+                            data.messages ?? [],
+                            data.paymentTickets,
+                          );
+                          setMessages(msgs);
+                        } catch {
+                          /* keep optimistic timeline message */
+                        }
+                      })();
                     }}
                   />
                   <input

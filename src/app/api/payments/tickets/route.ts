@@ -89,6 +89,14 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Success path always includes ticket; message may be null (client can
+    // synthesize a timeline row). No secrets / amounts in log lines.
+    console.info("[payments:tickets:create] ok", {
+      conversationId: data.conversationId,
+      ticketId: ticket.id,
+      messageId: message?.id ?? null,
+    });
+
     return Response.json(
       { ok: true, ticket, message },
       {
@@ -100,9 +108,13 @@ export async function POST(req: NextRequest) {
     );
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
+    const code = (err as { code?: string }).code;
     const message = err instanceof Error ? err.message : "Failed";
     if (status === 401) return jsonError("Sign in required", 401);
-    if (status >= 400 && status < 500) return jsonError(message, status);
+    // Preserve client-facing errors: 403 allowlist, 400 validation, 409 races, 503 disabled.
+    if ((status >= 400 && status < 500) || status === 503) {
+      return jsonError(message, status, code ? { code } : undefined);
+    }
     console.error("[payments:tickets:create]", err);
     return jsonError("Failed to create Payment Ticket", 500);
   }

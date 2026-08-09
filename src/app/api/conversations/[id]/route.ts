@@ -7,7 +7,11 @@ import {
   participantUserSelect,
   requireParticipant,
 } from "@/lib/messaging";
-import { ensureConversationPaymentTicketMessages } from "@/lib/payments/tickets";
+import {
+  ensureConversationPaymentTicketMessages,
+  listConversationPaymentTickets,
+  mergePaymentTicketsIntoTimeline,
+} from "@/lib/payments/tickets";
 import { jsonError } from "@/lib/validation";
 
 const RECENT_MESSAGES = 30;
@@ -56,7 +60,16 @@ export async function GET(_req: Request, { params }: Params) {
 
     await markRead(id, user.id);
 
-    const messagesAsc = [...conversation.messages].reverse();
+    // Authoritative tickets for this conversation (all, not just recent page).
+    const paymentTickets = await listConversationPaymentTickets(id);
+    const messagesAsc = [...conversation.messages].reverse().map(mapMessage);
+    // Merge ALL tickets even when only recent N messages are loaded so older
+    // ticket cards never vanish due to pagination. Dedupes by paymentTicketId.
+    const messages = mergePaymentTicketsIntoTimeline(
+      id,
+      messagesAsc,
+      paymentTickets,
+    );
 
     return Response.json(
       {
@@ -67,7 +80,8 @@ export async function GET(_req: Request, { params }: Params) {
           },
           user.id,
         ),
-        messages: messagesAsc.map(mapMessage),
+        messages,
+        paymentTickets,
       },
       {
         headers: {

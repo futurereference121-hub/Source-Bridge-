@@ -119,25 +119,41 @@ export function ProposePaymentTicketButton({
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
+        code?: string;
         ticket?: { id: string };
         message?: ProposedTicketTimelineMessage | null;
       };
-      if (!res.ok || !json.ticket) {
-        setError(json.error || "Could not create ticket");
-      } else {
-        setOpen(false);
-        setItemMajor("");
-        setShippingMajor("0");
-        setServiceMajor("0");
-        setTitle("");
-        setProcurement(false);
-        onCreated?.({
-          ticket: json.ticket,
-          message: json.message ?? null,
-        });
+      // Never silently succeed: form stays open unless ticket id is present.
+      if (!res.ok || !json.ok || !json.ticket?.id) {
+        const serverMsg = (json.error || "").trim();
+        if (res.status === 403) {
+          setError(
+            serverMsg ||
+              "Payments test access denied (allowlist). You cannot propose a ticket for this pair.",
+          );
+        } else if (res.status === 503) {
+          setError(
+            serverMsg ||
+              "Protected Payments are not enabled right now. Try again later.",
+          );
+        } else {
+          setError(serverMsg || "Could not create Payment Ticket");
+        }
+        return;
       }
+      setOpen(false);
+      setItemMajor("");
+      setShippingMajor("0");
+      setServiceMajor("0");
+      setTitle("");
+      setProcurement(false);
+      onCreated?.({
+        ticket: json.ticket,
+        // message may be null; parent synthesizes a timeline row from ticket.
+        message: json.message ?? null,
+      });
     } catch {
-      setError("Could not create ticket");
+      setError("Could not create Payment Ticket — network or server error");
     } finally {
       setBusy(false);
     }

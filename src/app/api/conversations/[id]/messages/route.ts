@@ -11,7 +11,11 @@ import {
   requireParticipant,
   safePathname,
 } from "@/lib/messaging";
-import { ensureConversationPaymentTicketMessages } from "@/lib/payments/tickets";
+import {
+  ensureConversationPaymentTicketMessages,
+  listConversationPaymentTickets,
+  mergePaymentTicketsIntoTimeline,
+} from "@/lib/payments/tickets";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
@@ -49,11 +53,20 @@ export async function GET(req: NextRequest, { params }: Params) {
 
     const slice = rows.slice(0, limit);
     // Return chronological (oldest → newest) for chat UI
-    const messages = [...slice].reverse().map(mapMessage);
+    const mapped = [...slice].reverse().map(mapMessage);
+    // Authoritative tickets for this conversation (all, not just page).
+    // Merge so paginated window cannot hide older tickets.
+    const paymentTickets = await listConversationPaymentTickets(id);
+    const messages = mergePaymentTicketsIntoTimeline(
+      id,
+      mapped,
+      paymentTickets,
+    );
 
     return Response.json(
       {
         messages,
+        paymentTickets,
         nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
       },
       {

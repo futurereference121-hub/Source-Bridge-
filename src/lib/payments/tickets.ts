@@ -287,11 +287,11 @@ export async function ensureConversationPaymentTicketMessages(
   });
   if (tickets.length === 0) return 0;
 
+  // Any linked timeline row counts (not only PROPOSED) so we do not double-insert.
   const existing = await prisma.message.findMany({
     where: {
       conversationId,
       paymentTicketId: { in: tickets.map((t) => t.id) },
-      systemEventType: "PAYMENT_TICKET_PROPOSED",
     },
     select: { paymentTicketId: true },
   });
@@ -318,6 +318,82 @@ export async function ensureConversationPaymentTicketMessages(
     created += 1;
   }
   return created;
+}
+
+/**
+ * Authoritative Payment Tickets for a conversation (not solely via Message table).
+ * Used to merge ticket cards into the chat timeline even if a marker Message is missing.
+ */
+export async function listConversationPaymentTickets(conversationId: string) {
+  const rows = await prisma.paymentTicket.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map((t) =>
+    mapTicket(t, {
+      procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    }),
+  );
+}
+
+type TimelineMessageLike = {
+  id: string;
+  conversationId: string;
+  senderId: string | null;
+  body: string;
+  createdAt: string;
+  messageType?: string;
+  systemEventType?: string;
+  replyAllowed?: boolean;
+  paymentTicketId?: string | null;
+  attachments?: unknown[];
+  sender?: unknown;
+};
+
+/**
+ * Merge mapped chat messages with PaymentTicket rows.
+ * Dedupes by paymentTicketId so ticket+marker does not render twice as cards
+ * (card UI already dedupes, but we only inject one synthetic PROPOSED row).
+ */
+export function mergePaymentTicketsIntoTimeline(
+  conversationId: string,
+  messages: TimelineMessageLike[],
+  tickets: Array<{
+    id: string;
+    createdById: string;
+    createdAt: string;
+    revision: number;
+    status: string;
+    title: string;
+  }>,
+): TimelineMessageLike[] {
+  const covered = new Set(
+    messages
+      .map((m) => m.paymentTicketId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const injected: TimelineMessageLike[] = [];
+  for (const t of tickets) {
+    if (covered.has(t.id)) continue;
+    injected.push({
+      id: `payment-ticket:${t.id}`,
+      conversationId,
+      senderId: t.createdById,
+      body: `Payment Ticket v${t.revision} · ${t.title} (${t.status})`,
+      createdAt: t.createdAt,
+      messageType: "PAYMENT_TICKET",
+      systemEventType: "PAYMENT_TICKET_PROPOSED",
+      replyAllowed: true,
+      paymentTicketId: t.id,
+      attachments: [],
+    });
+  }
+  return [...messages, ...injected].sort((a, b) => {
+    const at = Date.parse(a.createdAt);
+    const bt = Date.parse(b.createdAt);
+    if (at !== bt) return at - bt;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 }
 
 async function assertNoConcurrentSourcingAgreement(opts: {

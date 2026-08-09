@@ -5,12 +5,17 @@
  * - Ticket is persisted with conversationId
  * - PAYMENT_TICKET message is created and linked (paymentTicketId)
  * - Both participants retrieve the same ticket + message
- * - Unrelated third party is blocked
+ * - Unrelated third party is blocked (party check mirror of getPaymentTicket)
  * - Timeline sorts by createdAt (user messages + ticket messages + events)
  * - Money breakdown comes from ticket row (server)
  * - Accept advances dual-accept state; proposer cannot double-accept when already counting
  * - Declined / superseded remain as historical non-actionable statuses
- * - ensureConversationPaymentTicketMessages repairs orphan tickets
+ * - ensureConversationPaymentTicketMessages repairs orphan tickets (ANY link counts)
+ * - mergePaymentTicketsIntoTimeline injects synthetic rows when marker missing
+ * - ticket + marker does not duplicate (one card target id)
+ * - chronological merge with other message types
+ * - failed propose keeps form open (unit comment — see failedProposeKeepsFormOpen)
+ * - proposer gets ticket after successful create path (ticket always returned)
  *
  * Run: node --env-file=.env scripts/test-payment-ticket-timeline.mjs
  * Does not call Stripe; may skip full create when payments flags are off by
@@ -126,7 +131,10 @@ function resolveLifecycleStage(ticketStatus, protectedStatus, procReleased) {
   return ticketStatus;
 }
 
-/** Mirror of ensureConversationPaymentTicketMessages */
+/**
+ * Mirror of ensureConversationPaymentTicketMessages (src/lib/payments/tickets.ts):
+ * ANY linked message with paymentTicketId counts (not only PROPOSED).
+ */
 async function ensureMessages(conversationId) {
   const tickets = await prisma.paymentTicket.findMany({
     where: { conversationId },
@@ -135,13 +143,14 @@ async function ensureMessages(conversationId) {
       createdById: true,
       revision: true,
       createdAt: true,
+      status: true,
     },
   });
+  if (tickets.length === 0) return 0;
   const existing = await prisma.message.findMany({
     where: {
       conversationId,
       paymentTicketId: { in: tickets.map((t) => t.id) },
-      systemEventType: "PAYMENT_TICKET_PROPOSED",
     },
     select: { paymentTicketId: true },
   });
@@ -166,11 +175,171 @@ async function ensureMessages(conversationId) {
   return created;
 }
 
+/**
+ * Mirror of mergePaymentTicketsIntoTimeline from tickets.ts
+ */
+function mergePaymentTicketsIntoTimeline(conversationId, messages, tickets) {
+  const covered = new Set(
+    messages.map((m) => m.paymentTicketId).filter((id) => Boolean(id)),
+  );
+  const injected = [];
+  for (const t of tickets) {
+    if (covered.has(t.id)) continue;
+    injected.push({
+      id: `payment-ticket:${t.id}`,
+      conversationId,
+      senderId: t.createdById,
+      body: `Payment Ticket v${t.revision} · ${t.title} (${t.status})`,
+      createdAt: t.createdAt,
+      messageType: "PAYMENT_TICKET",
+      systemEventType: "PAYMENT_TICKET_PROPOSED",
+      replyAllowed: true,
+      paymentTicketId: t.id,
+      attachments: [],
+    });
+  }
+  return [...messages, ...injected].sort((a, b) => {
+    const at = Date.parse(a.createdAt);
+    const bt = Date.parse(b.createdAt);
+    if (at !== bt) return at - bt;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
 function partyMayView(ticket, viewerId) {
   return viewerId === ticket.buyerId || viewerId === ticket.sellerId;
 }
 
+/**
+ * Mirror of getPaymentTicket access: parties + conversation membership.
+ */
+async function canGetPaymentTicket(ticket, viewerId) {
+  if (!partyMayView(ticket, viewerId)) return false;
+  const participant = await prisma.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: {
+        conversationId: ticket.conversationId,
+        userId: viewerId,
+      },
+    },
+    select: { leftAt: true },
+  });
+  return Boolean(participant && !participant.leftAt);
+}
+
+/**
+ * Propose UX contract (unit): form only closes when res.ok && json.ok && ticket.id.
+ * Failed POST must keep form open. See ProposePaymentTicketButton.tsx.
+ */
+function simulateProposeFormClose(resOk, json) {
+  // returns true if form would close
+  return Boolean(resOk && json?.ok && json?.ticket?.id);
+}
+
+function uniquePrimaryTicketTargets(timeline) {
+  const seen = new Set();
+  for (const m of timeline) {
+    if (m.messageType !== "PAYMENT_TICKET") continue;
+    if (!m.paymentTicketId) continue;
+    if (
+      m.systemEventType === "PAYMENT_TICKET_PROPOSED" ||
+      !seen.has(m.paymentTicketId)
+    ) {
+      if (!seen.has(m.paymentTicketId)) seen.add(m.paymentTicketId);
+    }
+  }
+  return seen;
+}
+
 async function main() {
+  // --- pure merge unit (no DB) ---
+  {
+    const conv = "conv-merge";
+    const msgs = [
+      {
+        id: "m1",
+        conversationId: conv,
+        senderId: "u1",
+        body: "hi",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        messageType: "USER",
+      },
+      {
+        id: "m2",
+        conversationId: conv,
+        senderId: "u1",
+        body: "marker",
+        createdAt: "2026-01-01T00:02:00.000Z",
+        messageType: "PAYMENT_TICKET",
+        systemEventType: "PAYMENT_TICKET_PROPOSED",
+        paymentTicketId: "t-linked",
+      },
+    ];
+    const tickets = [
+      {
+        id: "t-orphan",
+        createdById: "u1",
+        createdAt: "2026-01-01T00:01:00.000Z",
+        revision: 1,
+        status: "PROPOSED",
+        title: "Orphan",
+      },
+      {
+        id: "t-linked",
+        createdById: "u1",
+        createdAt: "2026-01-01T00:02:00.000Z",
+        revision: 1,
+        status: "PROPOSED",
+        title: "Linked",
+      },
+    ];
+    const merged = mergePaymentTicketsIntoTimeline(conv, msgs, tickets);
+    ok(
+      "merge injects orphan with synthetic id",
+      merged.some((m) => m.id === "payment-ticket:t-orphan"),
+    );
+    ok(
+      "merge does not duplicate linked ticket",
+      merged.filter((m) => m.paymentTicketId === "t-linked").length === 1,
+    );
+    const times = merged.map((m) => m.createdAt);
+    ok(
+      "merge chronological order",
+      times[0] <= times[1] && times[1] <= times[2],
+    );
+    ok("merge one card target for linked", uniquePrimaryTicketTargets(merged).has("t-linked"));
+    ok("merge one card target for orphan", uniquePrimaryTicketTargets(merged).has("t-orphan"));
+  }
+
+  // Propose UX — form stays open on failure; closes only with ticket id
+  ok(
+    "failed propose (!ok) keeps form open",
+    !simulateProposeFormClose(false, { error: "x" }),
+  );
+  ok(
+    "failed propose (no ticket) keeps form open",
+    !simulateProposeFormClose(true, { ok: true, ticket: null }),
+  );
+  ok(
+    "failed propose (allowlist 403) keeps form open",
+    !simulateProposeFormClose(false, {
+      error: "Payments test access denied",
+      code: "ALLOWLIST",
+    }),
+  );
+  ok(
+    "success propose closes form",
+    simulateProposeFormClose(true, { ok: true, ticket: { id: "x" } }),
+  );
+  ok(
+    "proposer success requires ticket id even if message null",
+    simulateProposeFormClose(true, {
+      ok: true,
+      ticket: { id: "ticket-1" },
+      message: null,
+    }),
+  );
+
   const userA = await ensureUser(A);
   const userB = await ensureUser(B);
   const userC = await ensureUser(C);
@@ -306,7 +475,10 @@ async function main() {
   ok("same ticket id both viewers", asA.id === asB.id && asA.id === ticket.id);
   ok("party A can view", partyMayView(asA, userA.id));
   ok("party B can view", partyMayView(asB, userB.id));
-  ok("unrelated C blocked", !partyMayView(asA, userC.id));
+  ok("unrelated C blocked (party)", !partyMayView(asA, userC.id));
+  ok("party A may getPaymentTicket", await canGetPaymentTicket(asA, userA.id));
+  ok("party B may getPaymentTicket", await canGetPaymentTicket(asB, userB.id));
+  ok("third party cannot getPaymentTicket", !(await canGetPaymentTicket(asA, userC.id)));
 
   // Conversation participants only (extra security mirror)
   const partC = await prisma.conversationParticipant.findFirst({
@@ -363,7 +535,6 @@ async function main() {
   );
 
   // Accept progress: seller accepts → dual agree
-  // Proposer already has buyerApprovedRevision=1 — no double-self-accept needed
   ok(
     "proposer already counting (no self-accept needed)",
     asA.buyerApprovedRevision === 1 && asA.sellerApprovedRevision == null,
@@ -400,7 +571,7 @@ async function main() {
       cards[1].systemEventType === "PAYMENT_TICKET_ACCEPTED",
   );
 
-  // Supersede path: new revision ticket + prior SUPERSEDED stays
+  // Supersede path: declined historical remains
   const declined = await prisma.paymentTicket.create({
     data: {
       conversationId: conversation.id,
@@ -462,6 +633,68 @@ async function main() {
     where: { paymentTicketId: orphan.id },
   });
   ok("orphan has no message", before === 0);
+
+  // Merge visibility BEFORE ensure: ticket visible via synthetic row
+  const preEnsureMessages = (
+    await prisma.message.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: "asc" },
+    })
+  ).map((m) => ({
+    id: m.id,
+    conversationId: m.conversationId,
+    senderId: m.senderId,
+    body: m.body,
+    createdAt: m.createdAt.toISOString(),
+    messageType: m.messageType,
+    systemEventType: m.systemEventType,
+    paymentTicketId: m.paymentTicketId,
+  }));
+  const allTicketsForMerge = (
+    await prisma.paymentTicket.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: "asc" },
+    })
+  ).map((t) => ({
+    id: t.id,
+    createdById: t.createdById,
+    createdAt: t.createdAt.toISOString(),
+    revision: t.revision,
+    status: t.status,
+    title: t.title,
+  }));
+  const mergedPre = mergePaymentTicketsIntoTimeline(
+    conversation.id,
+    preEnsureMessages,
+    allTicketsForMerge,
+  );
+  ok(
+    "merge shows orphan ticket without marker Message",
+    mergedPre.some((m) => m.paymentTicketId === orphan.id),
+  );
+  ok(
+    "merge synthetic id for orphan",
+    mergedPre.some((m) => m.id === `payment-ticket:${orphan.id}`),
+  );
+  // Linked tickets not duplicated as synthetic
+  ok(
+    "merge no synthetic for already-linked primary ticket",
+    !mergedPre.some((m) => m.id === `payment-ticket:${ticket.id}`),
+  );
+
+  // Both participants would see same ticket set (authoritative by conversationId)
+  const ticketsA = await prisma.paymentTicket.findMany({
+    where: { conversationId: conversation.id },
+  });
+  const ticketsB = await prisma.paymentTicket.findMany({
+    where: { conversationId: conversation.id },
+  });
+  ok(
+    "both participants see same tickets",
+    ticketsA.length === ticketsB.length &&
+      ticketsA.every((t) => ticketsB.some((x) => x.id === t.id)),
+  );
+
   const repaired = await ensureMessages(conversation.id);
   ok("ensure created at least one", repaired >= 1);
   const after = await prisma.message.count({
@@ -472,6 +705,50 @@ async function main() {
   });
   ok("orphan repaired with PROPOSED message", after === 1);
 
+  // ensure is idempotent: existing ANY link (including ACCEPTED only) counts
+  const acceptOnlyOrphan = await prisma.paymentTicket.create({
+    data: {
+      conversationId: conversation.id,
+      createdById: userA.id,
+      buyerId: userA.id,
+      sellerId: userB.id,
+      status: "ACCEPTED",
+      revision: 3,
+      termsHash: termsHash + "a",
+      title: "Accept-only link",
+      currency: "GBP",
+      itemCostMinor: 200,
+      protectionFeeMinor: 50,
+      totalChargeMinor: 250,
+      paymentOption: "PROTECTED",
+      stripeMode: "TEST",
+    },
+  });
+  await prisma.message.create({
+    data: {
+      conversationId: conversation.id,
+      senderId: userA.id,
+      body: "accepted only",
+      messageType: "PAYMENT_TICKET",
+      systemEventType: "PAYMENT_TICKET_ACCEPTED",
+      paymentTicketId: acceptOnlyOrphan.id,
+    },
+  });
+  const ensure2 = await ensureMessages(conversation.id);
+  const acceptOnlyCount = await prisma.message.count({
+    where: { paymentTicketId: acceptOnlyOrphan.id },
+  });
+  ok("ensure does not double-insert when ANY link exists", ensure2 === 0);
+  ok("accept-only link blocks second PROPOSED insert", acceptOnlyCount === 1);
+  // Confirm no PROPOSED was added for accept-only
+  const propForAcceptOnly = await prisma.message.count({
+    where: {
+      paymentTicketId: acceptOnlyOrphan.id,
+      systemEventType: "PAYMENT_TICKET_PROPOSED",
+    },
+  });
+  ok("no spurious PROPOSED when ACCEPTED link exists", propForAcceptOnly === 0);
+
   // Dedupe card rule: unique ticketIds for primary cards
   const allPt = await prisma.message.findMany({
     where: {
@@ -480,22 +757,65 @@ async function main() {
     },
     orderBy: { createdAt: "asc" },
   });
-  const primaryIds = new Set();
-  let primaryCount = 0;
-  for (const m of allPt) {
-    if (!m.paymentTicketId) continue;
-    if (
-      m.systemEventType === "PAYMENT_TICKET_PROPOSED" ||
-      !primaryIds.has(m.paymentTicketId)
-    ) {
-      if (!primaryIds.has(m.paymentTicketId)) {
-        primaryIds.add(m.paymentTicketId);
-        primaryCount += 1;
-      }
-    }
+  const primaryIds = uniquePrimaryTicketTargets(allPt);
+  ok("unique primary cards by ticket id", primaryIds.size >= 3);
+
+  // Final listConversation-style: tickets authoritative + messages merged
+  const finalMsgs = (
+    await prisma.message.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 30,
+    })
+  )
+    .reverse()
+    .map((m) => ({
+      id: m.id,
+      conversationId: m.conversationId,
+      senderId: m.senderId,
+      body: m.body,
+      createdAt: m.createdAt.toISOString(),
+      messageType: m.messageType,
+      systemEventType: m.systemEventType,
+      paymentTicketId: m.paymentTicketId,
+    }));
+  const finalTickets = (
+    await prisma.paymentTicket.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: { createdAt: "asc" },
+    })
+  ).map((t) => ({
+    id: t.id,
+    createdById: t.createdById,
+    createdAt: t.createdAt.toISOString(),
+    revision: t.revision,
+    status: t.status,
+    title: t.title,
+  }));
+  const finalMerged = mergePaymentTicketsIntoTimeline(
+    conversation.id,
+    finalMsgs,
+    finalTickets,
+  );
+  for (const t of finalTickets) {
+    ok(
+      `ticket ${t.id.slice(0, 8)} appears in merged timeline`,
+      finalMerged.some((m) => m.paymentTicketId === t.id),
+    );
   }
-  ok("unique primary cards by ticket id", primaryCount === primaryIds.size);
-  ok("at least three tickets have primary cards", primaryCount >= 3);
+  // Pagination simulation: only recent 2 messages, still merge ALL tickets
+  const page = finalMsgs.slice(-2);
+  const pageMerged = mergePaymentTicketsIntoTimeline(
+    conversation.id,
+    page,
+    finalTickets,
+  );
+  ok(
+    "pagination still surfaces all tickets via merge",
+    finalTickets.every((t) =>
+      pageMerged.some((m) => m.paymentTicketId === t.id),
+    ),
+  );
 
   console.log("\nAll payment-ticket timeline checks passed.");
 }
