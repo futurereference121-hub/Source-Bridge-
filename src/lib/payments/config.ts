@@ -17,7 +17,7 @@ const DEFAULTS: PlatformConfig = {
   // admin/config can diverge later without hardcoding checkout amounts.
   directServiceFeeBps: 350,
   directServiceFeeFloorMinor: 50,
-  inspectionHours: 48,
+  inspectionHours: 12,
   procurementMinTrustLevel: 2,
   procurementAdvancesGloballyOn: true,
   allowedCurrencies: ["USD"],

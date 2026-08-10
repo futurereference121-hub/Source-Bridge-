@@ -4,15 +4,28 @@ import { requireSessionUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { confirmReceipt } from "@/lib/payments/fulfilment";
 import { formatMinor } from "@/lib/payments/money";
+import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 
 export const runtime = "nodejs";
 
 const schema = z.object({
   protectedTxnId: z.string().trim().min(1),
+  /**
+   * Three-way Protected receipt decision.
+   * Default START_INSPECTION preserves older clients that only confirmed receipt.
+   */
+  decision: z
+    .enum(["RELEASE_NOW", "START_INSPECTION", "REPORT_ISSUE"])
+    .optional()
+    .default("START_INSPECTION"),
+  reason: z.string().trim().min(3).max(200).optional(),
+  details: z.string().trim().max(4000).optional(),
 });
 
 /**
- * Buyer confirms item received → IN_INSPECTION only (no Stripe Transfer).
+ * Buyer confirms item received — three-way decision for Protected Payments:
+ * RELEASE_NOW | START_INSPECTION | REPORT_ISSUE.
+ * Never used for Direct Payment money paths.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -23,25 +36,88 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
+    if (
+      parsed.data.decision === "REPORT_ISSUE" &&
+      !(parsed.data.reason && parsed.data.reason.trim().length >= 3)
+    ) {
+      return jsonError("Issue reason is required (min 3 characters)", 400);
+    }
+
     const result = await confirmReceipt({
       protectedTxnId: parsed.data.protectedTxnId,
       buyerId: user.id,
       buyerEmail: user.email,
+      decision: parsed.data.decision,
+      reason: parsed.data.reason,
+      details: parsed.data.details,
     });
 
-    const t = result.transaction;
+    const t = result.transaction as {
+      id: string;
+      status: string;
+      inspectionEndsAt: Date | null;
+      deliveredAt: Date | null;
+      releasedAt?: Date | null;
+      totalChargeMinor: number;
+      currency: string;
+      itemCostMinor?: number;
+      shippingMinor?: number;
+      sellerServiceFeeMinor?: number;
+      protectionFeeMinor?: number;
+      procurementAdvanceAgreed?: boolean;
+      procurementAdvanceMinor?: number;
+      procurementTransferredMinor?: number;
+      finalTransferredMinor?: number;
+      refundedMinor?: number;
+    };
+
+    const books =
+      typeof t.itemCostMinor === "number" &&
+      typeof t.shippingMinor === "number" &&
+      typeof t.sellerServiceFeeMinor === "number" &&
+      typeof t.protectionFeeMinor === "number"
+        ? computeProtectedFinancials({
+            itemCostMinor: t.itemCostMinor,
+            shippingMinor: t.shippingMinor,
+            sellerServiceFeeMinor: t.sellerServiceFeeMinor,
+            protectionFeeMinor: t.protectionFeeMinor,
+            totalChargeMinor: t.totalChargeMinor,
+            procurementAdvanceAgreed: t.procurementAdvanceAgreed,
+            procurementAdvanceMinor: t.procurementAdvanceMinor,
+            procurementTransferredMinor: t.procurementTransferredMinor,
+            finalTransferredMinor: t.finalTransferredMinor,
+            refundedMinor: t.refundedMinor,
+          })
+        : null;
+
     return Response.json({
       ok: true,
       alreadyConfirmed: result.alreadyConfirmed,
-      transferTriggered: false,
+      decision: result.decision,
+      transferTriggered: Boolean(result.transferTriggered),
+      alreadyReleased: Boolean(
+        (result as { alreadyReleased?: boolean }).alreadyReleased,
+      ),
+      transferId: (result as { transferId?: string | null }).transferId ?? null,
+      dispute: (result as { dispute?: unknown }).dispute ?? null,
       transaction: {
         id: t.id,
         status: t.status,
-        inspectionEndsAt: t.inspectionEndsAt?.toISOString() ?? null,
-        deliveredAt: t.deliveredAt?.toISOString() ?? null,
+        inspectionEndsAt: t.inspectionEndsAt?.toISOString?.() ?? t.inspectionEndsAt ?? null,
+        deliveredAt: t.deliveredAt?.toISOString?.() ?? t.deliveredAt ?? null,
+        releasedAt: t.releasedAt
+          ? typeof t.releasedAt === "string"
+            ? t.releasedAt
+            : t.releasedAt.toISOString()
+          : null,
         totalChargeMinor: t.totalChargeMinor,
         currency: t.currency,
         totalLabel: formatMinor(t.totalChargeMinor, t.currency),
+        finalResidualMinor: books?.finalResidualMinor ?? null,
+        procurementTransferredMinor: books?.procurementTransferredMinor ?? null,
+        sellerEntitledMinor: books?.sellerEntitledMinor ?? null,
+        platformFeeMinor: books?.platformFeeMinor ?? null,
+        protectedRemainingMinor: books?.protectedRemainingMinor ?? null,
       },
     });
   } catch (err) {

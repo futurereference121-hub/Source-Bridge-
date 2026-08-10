@@ -749,7 +749,7 @@ model PlatformPaymentConfig {
   /// Direct Payment service fee floor in minor units.
   directServiceFeeFloorMinor      Int      @default(50)
   /// Default inspection window hours after delivery confirmed by tracking.
-  inspectionHours                 Int      @default(48)
+  inspectionHours                 Int      @default(12)
   /// Minimum trust level (0–3) required for procurement advances.
   procurementMinTrustLevel        Int      @default(2)
   /// Global kill-switch for procurement advances (also gated by feature flag).

@@ -37,6 +37,8 @@ export type DomainAction =
   | "TRACKING_DELIVERED"
   | "START_INSPECTION"
   | "CONFIRM_RECEIPT"
+  /** Buyer chooses immediate residual release (bypass remaining inspection). */
+  | "BUYER_RELEASE_NOW"
   | "COMPLETE_INSPECTION"
   | "RELEASE_FINAL"
   | "OPEN_DISPUTE"
@@ -95,6 +97,17 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
     AWAITING_SHIPMENT: "IN_INSPECTION",
     IN_TRANSIT: "IN_INSPECTION",
     DELIVERED: "IN_INSPECTION",
+  },
+  /**
+   * Buyer “Release funds now” — marks ready for residual releaseFinal only.
+   * Never jumps straight to RELEASED (money path stays in releaseFinal).
+   */
+  BUYER_RELEASE_NOW: {
+    AWAITING_SHIPMENT: "READY_TO_RELEASE",
+    IN_TRANSIT: "READY_TO_RELEASE",
+    DELIVERED: "READY_TO_RELEASE",
+    IN_INSPECTION: "READY_TO_RELEASE",
+    READY_TO_RELEASE: "READY_TO_RELEASE",
   },
   COMPLETE_INSPECTION: {
     IN_INSPECTION: "READY_TO_RELEASE",

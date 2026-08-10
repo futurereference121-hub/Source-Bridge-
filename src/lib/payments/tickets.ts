@@ -29,6 +29,8 @@ import {
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import {
   buyerCanConfirmReceipt,
+  buyerCanReleaseNow,
+  buyerCanReportIssue,
   sellerCanAddTracking,
 } from "@/lib/payments/fulfilment";
 import {
@@ -333,6 +335,19 @@ function mapTicket(
       status: ptStatus,
       shipped,
     });
+  const canReleaseNow =
+    Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
+    buyerCanReleaseNow({
+      paymentOption: t.paymentOption,
+      status: ptStatus,
+      shipped,
+    });
+  const canReportIssue =
+    Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
+    buyerCanReportIssue({
+      paymentOption: t.paymentOption,
+      status: ptStatus,
+    });
 
   return {
     id: t.id,
@@ -387,6 +402,8 @@ function mapTicket(
       canMarkShipped,
       canAddTracking: canMarkShipped,
       canConfirmReceipt,
+      canReleaseNow,
+      canReportIssue,
     },
     breakdown: {
       itemCost: t.itemCostMinor,
@@ -465,16 +482,20 @@ export function lifecycleLabel(stage: string): string {
       return "ITEM FUNDS RELEASED";
     case "AWAITING_SHIPMENT":
     case "IN_TRANSIT":
-    case "DELIVERED":
     case "SHIPPED":
       return "SHIPPED";
+    case "DELIVERED":
+      return "AWAITING BUYER";
     case "IN_INSPECTION":
-    case "READY_TO_RELEASE":
     case "INSPECTION":
       return "INSPECTION";
+    case "READY_TO_RELEASE":
+      return "RELEASING";
     case "COMPLETED":
     case "RELEASED":
       return "COMPLETED";
+    case "DISPUTED":
+      return "ISSUE REPORTED";
     case "SUPERSEDED":
       return "SUPERSEDED";
     case "DECLINED":

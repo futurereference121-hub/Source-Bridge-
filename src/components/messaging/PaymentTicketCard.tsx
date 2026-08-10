@@ -48,6 +48,8 @@ export type PaymentTicketView = {
     canMarkShipped?: boolean;
     canAddTracking?: boolean;
     canConfirmReceipt?: boolean;
+    canReleaseNow?: boolean;
+    canReportIssue?: boolean;
   };
   trackingNumber?: string;
   trackingCarrier?: string;
@@ -116,6 +118,9 @@ export function PaymentTicketCard({
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
   const [confirmReceiptOpen, setConfirmReceiptOpen] = useState(false);
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issueReason, setIssueReason] = useState("");
+  const [issueDetails, setIssueDetails] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -403,8 +408,14 @@ export function PaymentTicketCard({
     }
   }
 
-  async function confirmItemReceived() {
+  async function submitReceiptDecision(
+    decision: "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE",
+  ) {
     if (!ticket?.protectedTransactionId) return;
+    if (decision === "REPORT_ISSUE" && issueReason.trim().length < 3) {
+      setError("Describe the issue (min 3 characters)");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -413,27 +424,53 @@ export function PaymentTicketCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           protectedTxnId: ticket.protectedTransactionId,
+          decision,
+          reason:
+            decision === "REPORT_ISSUE" ? issueReason.trim() : undefined,
+          details:
+            decision === "REPORT_ISSUE"
+              ? issueDetails.trim() || undefined
+              : undefined,
         }),
       });
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
         alreadyConfirmed?: boolean;
+        transferTriggered?: boolean;
+        decision?: string;
       };
       if (!res.ok) {
-        setError(json.error || "Could not confirm receipt");
+        setError(json.error || "Could not complete decision");
       } else {
-        setPayNotice(
-          json.alreadyConfirmed
-            ? "Already confirmed — inspection period active (no funds released)."
-            : "Item receipt confirmed. Inspection period started — no funds released yet.",
-        );
+        if (decision === "RELEASE_NOW") {
+          setPayNotice(
+            json.alreadyConfirmed || !json.transferTriggered
+              ? "Funds release already processed (or zero residual)."
+              : "Residual seller funds released to the sourcer.",
+          );
+        } else if (decision === "START_INSPECTION") {
+          setPayNotice(
+            json.alreadyConfirmed
+              ? "Inspection period already active — no funds released."
+              : "Inspection started — remaining seller funds stay protected. You can still release early.",
+          );
+        } else {
+          setPayNotice(
+            json.alreadyConfirmed
+              ? "Issue already open — auto-release remains frozen."
+              : "Issue reported — remaining funds held; auto-release frozen.",
+          );
+        }
         setConfirmReceiptOpen(false);
+        setIssueOpen(false);
+        setIssueReason("");
+        setIssueDetails("");
         await load();
         onChanged?.();
       }
     } catch {
-      setError("Could not confirm receipt");
+      setError("Could not complete decision");
     } finally {
       setBusy(false);
     }
@@ -505,6 +542,24 @@ export function PaymentTicketCard({
     iAmBuyer &&
     Boolean(ticket.actions?.canConfirmReceipt) &&
     Boolean(ticket.protectedTransactionId);
+  const canReleaseNow =
+    !historical &&
+    paymentsAccess &&
+    iAmBuyer &&
+    Boolean(ticket.actions?.canReleaseNow) &&
+    Boolean(ticket.protectedTransactionId);
+  const canReportIssue =
+    !historical &&
+    paymentsAccess &&
+    iAmBuyer &&
+    Boolean(ticket.actions?.canReportIssue) &&
+    Boolean(ticket.protectedTransactionId);
+  const inInspection =
+    ticket.protectedTxnStatus === "IN_INSPECTION" ||
+    ticket.lifecycleStage === "IN_INSPECTION";
+  const issueHold =
+    ticket.protectedTxnStatus === "DISPUTED" ||
+    ticket.lifecycleStage === "DISPUTED";
   const hasTracking = Boolean(ticket.trackingNumber);
   const showFulfilment =
     !historical &&
@@ -514,14 +569,26 @@ export function PaymentTicketCard({
       hasTracking ||
       canMarkShipped ||
       canConfirmReceipt ||
-      ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "READY_TO_RELEASE"].includes(
-        ticket.protectedTxnStatus || ticket.status,
-      ));
+      canReleaseNow ||
+      canReportIssue ||
+      issueHold ||
+      [
+        "FUNDED",
+        "PROCUREMENT_RELEASED",
+        "AWAITING_SHIPMENT",
+        "IN_TRANSIT",
+        "DELIVERED",
+        "IN_INSPECTION",
+        "READY_TO_RELEASE",
+        "DISPUTED",
+      ].includes(ticket.protectedTxnStatus || ticket.status));
   const residualProtected =
     ticket.books?.finalResidualMinor ??
     ticket.books?.remainingProtectedSellerShareMinor ??
     ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
     0;
+  const platformFeeHeld =
+    ticket.books?.platformFeeMinor ?? ticket.protectionFeeMinor ?? 0;
   const itemFundsReceived =
     ticket.books?.procurementTransferredMinor ?? 0;
   const canEdit = Boolean(ticket.actions?.canEdit);
@@ -823,21 +890,28 @@ export function PaymentTicketCard({
           {procAgreed || itemFundsReceived > 0 ? (
             <div className="space-y-1 text-xs text-white/70">
               <p className="flex justify-between gap-3">
-                <span>Item funds received</span>
+                <span>Item funds already released</span>
                 <span className="tabular-nums text-white">
                   {formatMinor(itemFundsReceived, cur)}
                 </span>
               </p>
               <p className="flex justify-between gap-3">
-                <span>Remaining earnings protected</span>
+                <span>Remaining seller funds protected</span>
                 <span className="tabular-nums text-white">
                   {formatMinor(residualProtected, cur)}
+                </span>
+              </p>
+              <p className="flex justify-between gap-3">
+                <span>Source Bridge fee (held)</span>
+                <span className="tabular-nums text-white">
+                  {formatMinor(platformFeeHeld, cur)}
                 </span>
               </p>
             </div>
           ) : (
             <p className="text-xs text-white/55">
-              Seller earnings remain protected until delivery and inspection.
+              Seller earnings remain protected until you choose release,
+              inspection completes, or an issue is resolved.
             </p>
           )}
 
@@ -920,47 +994,205 @@ export function PaymentTicketCard({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => setConfirmReceiptOpen(true)}
+                  onClick={() => {
+                    setConfirmReceiptOpen(true);
+                    setIssueOpen(false);
+                  }}
                   className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
                 >
                   Confirm Item Received
                 </button>
               ) : (
                 <div className="space-y-2 text-xs text-white/75">
-                  <p>
-                    Confirm you received the item? This starts the inspection
-                    period only — no funds are released.
+                  <p className="font-medium text-white/90">
+                    Item received — choose one:
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  {residualProtected > 0 ? (
+                    <p className="text-white/45">
+                      Remaining seller residual{" "}
+                      {formatMinor(residualProtected, cur)}
+                      {itemFundsReceived > 0
+                        ? ` (after ${formatMinor(itemFundsReceived, cur)} item funds already released)`
+                        : ""}
+                      . Source Bridge fee stays on platform.
+                    </p>
+                  ) : null}
+                  <div className="flex flex-col gap-2">
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => void confirmItemReceived()}
+                      onClick={() => void submitReceiptDecision("RELEASE_NOW")}
                       className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
                     >
-                      {busy ? "Confirming…" : "Confirm receipt"}
+                      {busy ? "Working…" : "Release Funds Now"}
                     </button>
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => setConfirmReceiptOpen(false)}
+                      onClick={() =>
+                        void submitReceiptDecision("START_INSPECTION")
+                      }
+                      className="rounded-lg border border-white/25 bg-white/5 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                    >
+                      Start 12-Hour Inspection
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setIssueOpen(true)}
+                      className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
+                    >
+                      Report a Problem
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setConfirmReceiptOpen(false);
+                        setIssueOpen(false);
+                      }}
+                      className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/60"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {issueOpen ? (
+                    <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
+                      <label className="block text-xs text-white/60">
+                        What went wrong?
+                        <input
+                          value={issueReason}
+                          onChange={(e) => setIssueReason(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                          placeholder="e.g. Item not as described"
+                          disabled={busy}
+                          maxLength={200}
+                        />
+                      </label>
+                      <label className="block text-xs text-white/60">
+                        Details (optional)
+                        <textarea
+                          value={issueDetails}
+                          onChange={(e) => setIssueDetails(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                          rows={2}
+                          disabled={busy}
+                          maxLength={4000}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={busy || issueReason.trim().length < 3}
+                        onClick={() =>
+                          void submitReceiptDecision("REPORT_ISSUE")
+                        }
+                        className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                      >
+                        {busy ? "Submitting…" : "Submit issue & hold funds"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {inInspection && canReleaseNow ? (
+            <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
+              {ticket.inspectionEndsAt ? (
+                <p className="text-white/50">
+                  Inspection ends{" "}
+                  {new Date(ticket.inspectionEndsAt).toLocaleString()}
+                  {" — "}auto-release after window unless you act sooner.
+                </p>
+              ) : (
+                <p className="text-white/50">Inspection in progress.</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void submitReceiptDecision("RELEASE_NOW")}
+                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                >
+                  {busy ? "Releasing…" : "Release Funds Now"}
+                </button>
+                {canReportIssue && !issueOpen ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setIssueOpen(true)}
+                    className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
+                  >
+                    Report a Problem
+                  </button>
+                ) : null}
+              </div>
+              {issueOpen ? (
+                <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
+                  <label className="block text-xs text-white/60">
+                    What went wrong?
+                    <input
+                      value={issueReason}
+                      onChange={(e) => setIssueReason(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                      placeholder="e.g. Damaged in transit"
+                      disabled={busy}
+                      maxLength={200}
+                    />
+                  </label>
+                  <label className="block text-xs text-white/60">
+                    Details (optional)
+                    <textarea
+                      value={issueDetails}
+                      onChange={(e) => setIssueDetails(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                      rows={2}
+                      disabled={busy}
+                      maxLength={4000}
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy || issueReason.trim().length < 3}
+                      onClick={() => void submitReceiptDecision("REPORT_ISSUE")}
+                      className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                    >
+                      {busy ? "Submitting…" : "Submit issue & hold funds"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setIssueOpen(false)}
                       className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
                     >
                       Cancel
                     </button>
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
           ) : null}
 
-          {ticket.inspectionEndsAt &&
-          (ticket.protectedTxnStatus === "IN_INSPECTION" ||
-            ticket.lifecycleStage === "IN_INSPECTION" ||
+          {issueHold ? (
+            <p className="border-t border-white/10 pt-2 text-xs text-amber-200/90">
+              Issue reported — remaining seller funds stay protected; auto-release
+              is frozen
+              {itemFundsReceived > 0
+                ? ` (earlier item funds ${formatMinor(itemFundsReceived, cur)} already released stay with the sourcer)`
+                : ""}
+              .
+            </p>
+          ) : null}
+
+          {!inInspection &&
+          !canConfirmReceipt &&
+          ticket.inspectionEndsAt &&
+          (ticket.protectedTxnStatus === "READY_TO_RELEASE" ||
             ticket.lifecycleStage === "READY_TO_RELEASE") ? (
             <p className="text-xs text-white/50">
-              Inspection ends{" "}
-              {new Date(ticket.inspectionEndsAt).toLocaleString()}
+              Inspection complete — residual release in progress.
             </p>
           ) : null}
         </div>

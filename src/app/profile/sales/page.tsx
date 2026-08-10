@@ -23,6 +23,7 @@ type Order = {
   trackingStatus: string;
   conversationId?: string | null;
   paymentTicketId?: string | null;
+  inspectionEndsAt?: string | null;
   procurementTransferredMinor?: number;
   books?: {
     remainingProtectedSellerShareMinor?: number;
@@ -234,7 +235,51 @@ export default function SalesFulfilmentPage() {
                         {(o.books?.finalResidualMinor ?? 0) > 0
                           ? ` (${formatMinor(o.books!.finalResidualMinor!, o.currency)})`
                           : ""}{" "}
-                        pays after delivery/inspection.
+                        pays after buyer decision / inspection (you never release residual).
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "AWAITING_SHIPMENT" || o.status === "IN_TRANSIT" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Shipped — waiting for buyer confirmation (release now,
+                        inspection, or report issue). Sellers cannot release residual funds.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "DELIVERED" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Delivered — awaiting buyer decision (release / inspect /
+                        report). Residual stays protected.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "IN_INSPECTION" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Buyer inspection window active
+                        {o.inspectionEndsAt
+                          ? ` until ${fmtDate(o.inspectionEndsAt)}`
+                          : ""}
+                        . Buyer may still release residual early. Auto-release after window.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "DISPUTED" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-amber-200/80">
+                        Issue reported — remaining seller funds on hold; auto-release frozen.
+                        Already-released item funds are not reclaimed automatically.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.status === "RELEASED" || o.status === "READY_TO_RELEASE" ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        {o.status === "RELEASED"
+                          ? "Completed — residual released to your Connect balance (when transfer succeeded)."
+                          : "Inspection complete — residual release in progress."}
                       </p>
                     </div>
                   ) : null}

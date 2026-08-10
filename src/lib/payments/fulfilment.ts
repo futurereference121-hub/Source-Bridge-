@@ -81,6 +81,34 @@ export function buyerCanConfirmReceipt(opts: {
   return ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(opts.status);
 }
 
+/** Buyer may release residual immediately (shipped pre-decision or active inspection). */
+export function buyerCanReleaseNow(opts: {
+  paymentOption: string;
+  status: string;
+  shipped: boolean;
+}): boolean {
+  if (isDirectPaymentOption(opts.paymentOption)) return false;
+  if (opts.status === "IN_INSPECTION" || opts.status === "READY_TO_RELEASE") {
+    return true;
+  }
+  if (!opts.shipped) return false;
+  return ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(opts.status);
+}
+
+/** Buyer may open an issue/hold that freezes auto-release (reuses OPEN_DISPUTE). */
+export function buyerCanReportIssue(opts: {
+  paymentOption: string;
+  status: string;
+}): boolean {
+  if (isDirectPaymentOption(opts.paymentOption)) return false;
+  return canTransition(opts.status as ProtectedStatus, "OPEN_DISPUTE");
+}
+
+export type ConfirmReceiptDecision =
+  | "RELEASE_NOW"
+  | "START_INSPECTION"
+  | "REPORT_ISSUE";
+
 export function mapProtectedTxnSummary(
   t: {
     id: string;
@@ -248,6 +276,19 @@ export function mapProtectedTxnSummary(
           status: t.status,
           shipped,
         }),
+      canReleaseNow:
+        viewerRole === "buyer" &&
+        buyerCanReleaseNow({
+          paymentOption: t.paymentOption,
+          status: t.status,
+          shipped,
+        }),
+      canReportIssue:
+        viewerRole === "buyer" &&
+        buyerCanReportIssue({
+          paymentOption: t.paymentOption,
+          status: t.status,
+        }),
       canReleaseProcurement,
       /** Sourcer/seller never releases item funds. */
       canSellerReleaseProcurement: false,
@@ -285,11 +326,12 @@ function paymentLabel(status: string, option: string, procReleased = false) {
       ? "Partially protected — item funds already released to sourcer"
       : "Funded / Protected";
   }
+  if (status === "DELIVERED") return "Delivered — waiting for buyer decision";
   if (status === "IN_INSPECTION") return "Funded — inspection active";
   if (status === "READY_TO_RELEASE") return "Ready to release residual";
-  if (status === "RELEASED") return "Released to seller";
+  if (status === "RELEASED") return "Completed — residual released to seller";
   if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "Refunded";
-  if (status === "DISPUTED") return "Disputed";
+  if (status === "DISPUTED") return "Issue reported — remaining funds on hold";
   return status;
 }
 
@@ -335,12 +377,18 @@ function deliveryLabel(status: string, option: string) {
     return "Direct Payment — no inspection period";
   }
   if (status === "IN_INSPECTION") {
-    return "Delivery confirmed — inspection period active";
+    return "Delivery confirmed — inspection period active (buyer may release early)";
   }
-  if (status === "DELIVERED") return "Delivered";
-  if (status === "READY_TO_RELEASE") return "Inspection complete";
+  if (status === "DELIVERED") {
+    return "Delivered — awaiting buyer decision (release / inspect / report)";
+  }
+  if (status === "READY_TO_RELEASE") return "Inspection complete — releasing residual";
   if (status === "RELEASED") return "Complete";
+  if (status === "DISPUTED") {
+    return "Issue reported — auto-release frozen; remaining funds protected";
+  }
   if (status === "IN_TRANSIT") return "In transit";
+  if (status === "AWAITING_SHIPMENT") return "Shipped — awaiting buyer confirmation";
   return "Pending delivery";
 }
 
@@ -386,14 +434,24 @@ export async function listProtectedOrdersForUser(opts: {
 }
 
 /**
- * Buyer confirms physical receipt → IN_INSPECTION (no money movement).
+ * Buyer three-way receipt decision for Protected Payments only:
+ * - START_INSPECTION → deliveredAt + inspectionEndsAt, IN_INSPECTION, no transfer
+ * - RELEASE_NOW → deliveredAt, READY_TO_RELEASE, existing releaseFinal residual only
+ * - REPORT_ISSUE → DISPUTED / issue hold (cron skips); remaining funds protected
+ *
+ * Direct Payment is rejected. Idempotent for double-clicks and race with cron.
  */
 export async function confirmReceipt(opts: {
   protectedTxnId: string;
   buyerId: string;
   buyerEmail?: string | null;
+  decision?: ConfirmReceiptDecision;
+  reason?: string;
+  details?: string;
 }) {
   assertFulfilmentAccess();
+
+  const decision: ConfirmReceiptDecision = opts.decision ?? "START_INSPECTION";
 
   const txn = await prisma.protectedTransaction.findUnique({
     where: { id: opts.protectedTxnId },
@@ -406,6 +464,12 @@ export async function confirmReceipt(opts: {
       status: 403,
       code: "BUYER_ONLY",
     });
+  }
+  if (isDirectPaymentOption(txn.paymentOption)) {
+    throw Object.assign(
+      new Error("Buyer confirmation decisions do not apply to Direct Payment"),
+      { status: 409, code: "DIRECT_NOT_SUPPORTED" },
+    );
   }
 
   const buyer = await prisma.user.findUnique({
@@ -424,6 +488,44 @@ export async function confirmReceipt(opts: {
     labels: ["buyer", "seller"],
   });
 
+  if (decision === "RELEASE_NOW") {
+    return releaseNowAfterReceipt({
+      txn,
+      buyerId: opts.buyerId,
+    });
+  }
+  if (decision === "REPORT_ISSUE") {
+    return reportIssueAfterReceipt({
+      txn,
+      buyerId: opts.buyerId,
+      reason: opts.reason,
+      details: opts.details,
+    });
+  }
+  return startInspectionAfterReceipt({
+    txn,
+    buyerId: opts.buyerId,
+  });
+}
+
+type TxnRow = {
+  id: string;
+  status: string;
+  buyerId: string;
+  sellerId: string;
+  paymentOption: string;
+  shippedAt: Date | null;
+  trackingNumber: string;
+  deliveredAt: Date | null;
+  inspectionEndsAt: Date | null;
+  releasedAt: Date | null;
+};
+
+async function startInspectionAfterReceipt(opts: {
+  txn: TxnRow;
+  buyerId: string;
+}) {
+  const txn = opts.txn;
   const status = txn.status as ProtectedStatus;
 
   // Idempotent if inspection already active or past inspection.
@@ -434,8 +536,17 @@ export async function confirmReceipt(opts: {
   ) {
     return {
       alreadyConfirmed: true,
+      decision: "START_INSPECTION" as const,
+      transferTriggered: false,
       transaction: txn,
     };
+  }
+
+  if (status === "DISPUTED") {
+    throw Object.assign(
+      new Error("Cannot start inspection while an issue is open"),
+      { status: 409, code: "DISPUTED" },
+    );
   }
 
   const shipped = Boolean(txn.shippedAt || txn.trackingNumber);
@@ -448,7 +559,7 @@ export async function confirmReceipt(opts: {
 
   if (!canTransition(status, "CONFIRM_RECEIPT")) {
     throw Object.assign(
-      new Error(`Cannot confirm receipt from status ${status}`),
+      new Error(`Cannot start inspection from status ${status}`),
       { status: 409, code: "INVALID_TRANSITION" },
     );
   }
@@ -472,10 +583,186 @@ export async function confirmReceipt(opts: {
     actorUserId: opts.buyerId,
     action: "CONFIRM_RECEIPT",
     meta: {
+      decision: "START_INSPECTION",
       inspectionEndsAt: inspectionEnds.toISOString(),
+      inspectionHours: config.inspectionHours,
       transferTriggered: false,
     },
   });
 
-  return { alreadyConfirmed: false, transaction: updated };
+  return {
+    alreadyConfirmed: false,
+    decision: "START_INSPECTION" as const,
+    transferTriggered: false,
+    transaction: updated,
+  };
+}
+
+async function releaseNowAfterReceipt(opts: {
+  txn: TxnRow;
+  buyerId: string;
+}) {
+  // Lazy import avoids circular deps if release ever pulls fulfilment labels.
+  const { releaseFinal } = await import("@/lib/payments/release");
+
+  let txn = opts.txn;
+  let status = txn.status as ProtectedStatus;
+
+  if (status === "RELEASED" || txn.releasedAt) {
+    return {
+      alreadyConfirmed: true,
+      decision: "RELEASE_NOW" as const,
+      transferTriggered: false,
+      alreadyReleased: true,
+      transaction: txn,
+    };
+  }
+
+  if (status === "DISPUTED") {
+    throw Object.assign(
+      new Error("Cannot release funds while an issue is open"),
+      { status: 409, code: "DISPUTED" },
+    );
+  }
+
+  const shipped = Boolean(txn.shippedAt || txn.trackingNumber);
+  if (
+    !shipped &&
+    status !== "IN_INSPECTION" &&
+    status !== "READY_TO_RELEASE"
+  ) {
+    throw Object.assign(
+      new Error("Cannot release funds before the seller ships the item"),
+      { status: 409, code: "NOT_SHIPPED" },
+    );
+  }
+
+  if (status !== "READY_TO_RELEASE") {
+    if (!canTransition(status, "BUYER_RELEASE_NOW")) {
+      throw Object.assign(
+        new Error(`Cannot release funds from status ${status}`),
+        { status: 409, code: "INVALID_TRANSITION" },
+      );
+    }
+    const next = nextStatus(status, "BUYER_RELEASE_NOW");
+    txn = await prisma.protectedTransaction.update({
+      where: { id: txn.id },
+      data: {
+        status: next,
+        deliveredAt: txn.deliveredAt ?? new Date(),
+        // Early release cancels any open inspection timer (cron no longer needed).
+        inspectionEndsAt: null,
+      },
+    });
+    status = next;
+    await recordAuditEvent({
+      protectedTxnId: txn.id,
+      actorUserId: opts.buyerId,
+      action: "BUYER_RELEASE_NOW",
+      meta: { decision: "RELEASE_NOW", statusBeforeReleaseFinal: status },
+    });
+  }
+
+  const result = await releaseFinal({
+    protectedTxnId: txn.id,
+    actorUserId: opts.buyerId,
+  });
+
+  return {
+    alreadyConfirmed: Boolean(result.alreadyReleased),
+    decision: "RELEASE_NOW" as const,
+    transferTriggered: !result.alreadyReleased,
+    alreadyReleased: Boolean(result.alreadyReleased),
+    transferId: result.transferId ?? null,
+    transaction: result.txn,
+  };
+}
+
+async function reportIssueAfterReceipt(opts: {
+  txn: TxnRow;
+  buyerId: string;
+  reason?: string;
+  details?: string;
+}) {
+  const txn = opts.txn;
+  const status = txn.status as ProtectedStatus;
+  const reason = (opts.reason || "").trim();
+
+  if (status === "DISPUTED") {
+    const existing = await prisma.disputeCase.findFirst({
+      where: { protectedTxnId: txn.id, status: "OPEN" },
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      alreadyConfirmed: true,
+      decision: "REPORT_ISSUE" as const,
+      transferTriggered: false,
+      transaction: txn,
+      dispute: existing,
+    };
+  }
+
+  if (status === "RELEASED") {
+    throw Object.assign(
+      new Error("Cannot report an issue after residual funds are released"),
+      { status: 409, code: "ALREADY_RELEASED" },
+    );
+  }
+
+  if (!reason || reason.length < 3) {
+    throw Object.assign(new Error("Please describe the issue (min 3 characters)"), {
+      status: 400,
+      code: "REASON_REQUIRED",
+    });
+  }
+
+  if (!canTransition(status, "OPEN_DISPUTE")) {
+    throw Object.assign(
+      new Error(`Cannot report an issue from status ${status}`),
+      { status: 409, code: "INVALID_TRANSITION" },
+    );
+  }
+
+  const { dispute, updated } = await prisma.$transaction(async (tx) => {
+    const d = await tx.disputeCase.create({
+      data: {
+        protectedTxnId: txn.id,
+        openedById: opts.buyerId,
+        reason: reason.slice(0, 200),
+        details: (opts.details || "").slice(0, 4000),
+        status: "OPEN",
+      },
+    });
+    const u = await tx.protectedTransaction.update({
+      where: { id: txn.id },
+      data: {
+        status: nextStatus(status, "OPEN_DISPUTE"),
+        deliveredAt: txn.deliveredAt ?? new Date(),
+        // Freeze scheduled auto-release; cron only processes IN_INSPECTION / READY.
+        inspectionEndsAt: null,
+      },
+    });
+    return { dispute: d, updated: u };
+  });
+
+  await recordAuditEvent({
+    protectedTxnId: txn.id,
+    actorUserId: opts.buyerId,
+    action: "OPEN_DISPUTE",
+    reason,
+    meta: {
+      decision: "REPORT_ISSUE",
+      disputeId: dispute.id,
+      transferTriggered: false,
+      autoReleaseFrozen: true,
+    },
+  });
+
+  return {
+    alreadyConfirmed: false,
+    decision: "REPORT_ISSUE" as const,
+    transferTriggered: false,
+    transaction: updated,
+    dispute,
+  };
 }

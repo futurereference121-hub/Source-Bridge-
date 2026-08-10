@@ -36,6 +36,13 @@ const TRANSITIONS = {
     IN_TRANSIT: "IN_INSPECTION",
     DELIVERED: "IN_INSPECTION",
   },
+  BUYER_RELEASE_NOW: {
+    AWAITING_SHIPMENT: "READY_TO_RELEASE",
+    IN_TRANSIT: "READY_TO_RELEASE",
+    DELIVERED: "READY_TO_RELEASE",
+    IN_INSPECTION: "READY_TO_RELEASE",
+    READY_TO_RELEASE: "READY_TO_RELEASE",
+  },
   COMPLETE_INSPECTION: {
     IN_INSPECTION: "READY_TO_RELEASE",
     DELIVERED: "READY_TO_RELEASE",
@@ -44,6 +51,15 @@ const TRANSITIONS = {
     READY_TO_RELEASE: "RELEASED",
     FUNDED: "RELEASED",
     PROCUREMENT_RELEASED: "RELEASED",
+  },
+  OPEN_DISPUTE: {
+    FUNDED: "DISPUTED",
+    PROCUREMENT_RELEASED: "DISPUTED",
+    AWAITING_SHIPMENT: "DISPUTED",
+    IN_TRANSIT: "DISPUTED",
+    DELIVERED: "DISPUTED",
+    IN_INSPECTION: "DISPUTED",
+    READY_TO_RELEASE: "DISPUTED",
   },
 };
 
@@ -119,10 +135,63 @@ function canConfirmReceipt({
   return true;
 }
 
-/** After CONFIRM_RECEIPT — no Stripe transfer */
-function confirmReceiptSideEffects() {
+function canReleaseNow({ role, txnStatus, shipped }) {
+  if (role !== "buyer") return false;
+  if (txnStatus === "IN_INSPECTION" || txnStatus === "READY_TO_RELEASE") return true;
+  if (!shipped) return false;
+  return canTransition(txnStatus, "BUYER_RELEASE_NOW");
+}
+
+function canReportIssue({ role, txnStatus }) {
+  if (role !== "buyer") return false;
+  return canTransition(txnStatus, "OPEN_DISPUTE");
+}
+
+/** START_INSPECTION decision — no Stripe transfer */
+function startInspectionSideEffects() {
   return { nextStatus: "IN_INSPECTION", transferTriggered: false };
 }
+
+/** RELEASE_NOW → READY_TO_RELEASE then releaseFinal residual only */
+function releaseNowSideEffects(status) {
+  assert.equal(canTransition(status, "BUYER_RELEASE_NOW"), true);
+  const ready = nextStatus(status, "BUYER_RELEASE_NOW");
+  assert.equal(ready, "READY_TO_RELEASE");
+  return {
+    nextStatus: ready,
+    transferPath: "releaseFinal",
+    residualOnly: true,
+  };
+}
+
+/** REPORT_ISSUE freezes cron auto-release */
+function reportIssueSideEffects(status) {
+  assert.equal(canTransition(status, "OPEN_DISPUTE"), true);
+  const s = nextStatus(status, "OPEN_DISPUTE");
+  assert.equal(s, "DISPUTED");
+  return {
+    nextStatus: s,
+    transferTriggered: false,
+    cronSkips: true,
+  };
+}
+
+function cronWouldRelease({ status, inspectionEndsAt, now }) {
+  if (status === "DISPUTED") return false;
+  if (status === "IN_INSPECTION" && inspectionEndsAt && inspectionEndsAt <= now) {
+    return true;
+  }
+  if (status === "READY_TO_RELEASE") return true;
+  return false;
+}
+
+/** Sourcing residual: proc=5000, entitled=8500 → final=3500 */
+function finalResidualMinor({ sellerEntitledMinor, procurementTransferredMinor, finalTransferredMinor }) {
+  return Math.max(0, sellerEntitledMinor - procurementTransferredMinor - finalTransferredMinor);
+}
+
+/** Default inspection hours (platform config) */
+const DEFAULT_INSPECTION_HOURS = 12;
 
 /** Provider DELIVERED → inspection only */
 function onProviderDelivered(status) {
@@ -131,7 +200,7 @@ function onProviderDelivered(status) {
   assert.equal(s, "DELIVERED");
   s = nextStatus(s, "START_INSPECTION");
   assert.equal(s, "IN_INSPECTION");
-  return { status: s, transferTriggered: false };
+  return { status: s, transferTriggered: false, inspectionHours: DEFAULT_INSPECTION_HOURS };
 }
 
 /** Listing lifecycle */
@@ -248,9 +317,9 @@ assert.equal(
   "idempotent",
 );
 
-// ── buyer confirmation does not trigger transfer
+// ── buyer confirmation does not trigger transfer (START_INSPECTION)
 {
-  const fx = confirmReceiptSideEffects();
+  const fx = startInspectionSideEffects();
   assert.equal(fx.nextStatus, "IN_INSPECTION");
   assert.equal(fx.transferTriggered, false);
   assert.equal(nextStatus("IN_TRANSIT", "CONFIRM_RECEIPT"), "IN_INSPECTION");
@@ -260,11 +329,75 @@ assert.equal(
   );
 }
 
+// ── three-way: RELEASE_NOW immediate residual via releaseFinal only
+{
+  const fx = releaseNowSideEffects("AWAITING_SHIPMENT");
+  assert.equal(fx.nextStatus, "READY_TO_RELEASE");
+  assert.equal(fx.transferPath, "releaseFinal");
+  assert.equal(fx.residualOnly, true);
+  assert.equal(canReleaseFinalProtected(fx.nextStatus, "PROTECTED"), true);
+  assert.equal(canReleaseNow({ role: "buyer", txnStatus: "IN_INSPECTION", shipped: true }), true);
+  assert.equal(canReleaseNow({ role: "seller", txnStatus: "IN_INSPECTION", shipped: true }), false);
+  // Early release from inspection
+  assert.equal(nextStatus("IN_INSPECTION", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
+}
+
+// ── three-way: REPORT_ISSUE freezes cron
+{
+  const fx = reportIssueSideEffects("IN_INSPECTION");
+  assert.equal(fx.nextStatus, "DISPUTED");
+  assert.equal(fx.cronSkips, true);
+  assert.equal(
+    cronWouldRelease({
+      status: "DISPUTED",
+      inspectionEndsAt: new Date(0),
+      now: new Date(),
+    }),
+    false,
+  );
+  assert.equal(
+    cronWouldRelease({
+      status: "IN_INSPECTION",
+      inspectionEndsAt: new Date(0),
+      now: new Date(),
+    }),
+    true,
+  );
+  assert.equal(canReportIssue({ role: "buyer", txnStatus: "IN_INSPECTION" }), true);
+  assert.equal(canReportIssue({ role: "buyer", txnStatus: "RELEASED" }), false);
+}
+
+// ── sourcing residual math (cmslox7aq style): proc 5000, entitled 8500 → final 3500
+{
+  const residual = finalResidualMinor({
+    sellerEntitledMinor: 8500,
+    procurementTransferredMinor: 5000,
+    finalTransferredMinor: 0,
+  });
+  assert.equal(residual, 3500);
+  // Never re-transfer full item after procurement
+  assert.notEqual(residual, 8500);
+  assert.notEqual(residual, 5000);
+}
+
+// ── default inspection hours
+assert.equal(DEFAULT_INSPECTION_HOURS, 12);
+
+// ── Direct Payment regression: no buyer release-now decision money path
+assert.equal(canReleaseFinalProtected("FUNDED", "DIRECT"), false);
+assert.equal(canReleaseFinalProtected("READY_TO_RELEASE", "DIRECT"), false);
+
+// ── idempotency: double BUYER_RELEASE_NOW / double COMPLETE then RELEASE
+assert.equal(nextStatus("READY_TO_RELEASE", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
+assert.equal(canTransition("RELEASED", "BUYER_RELEASE_NOW"), false);
+assert.equal(canTransition("RELEASED", "RELEASE_FINAL"), false);
+
 // ── DELIVERED enters inspection state
 {
   const r = onProviderDelivered("IN_TRANSIT");
   assert.equal(r.status, "IN_INSPECTION");
   assert.equal(r.transferTriggered, false);
+  assert.equal(r.inspectionHours, 12);
 }
 
 // ── releaseFinal requires READY_TO_RELEASE for PROTECTED
@@ -292,7 +425,7 @@ assert.equal(
   assert.equal(matchesAllowlist([], { id: "cms8or23a0000la046qm6ene4" }), false);
 }
 
-// Full happy path state hop for protected (no transfer until READY_TO_RELEASE)
+// Full happy path: START_INSPECTION then cron COMPLETE → releaseFinal
 {
   let s = "FUNDED";
   s = nextStatus(s, "ADD_TRACKING");
@@ -306,6 +439,16 @@ assert.equal(
   assert.equal(s, "RELEASED");
 }
 
+// Immediate RELEASE_NOW product path
+{
+  let s = "FUNDED";
+  s = nextStatus(s, "ADD_TRACKING");
+  s = nextStatus(s, "BUYER_RELEASE_NOW");
+  assert.equal(s, "READY_TO_RELEASE");
+  s = nextStatus(s, "RELEASE_FINAL");
+  assert.equal(s, "RELEASED");
+}
+
 // Happy path with procurement: FUNDED → PROCUREMENT_RELEASED → ship → inspect → ready
 {
   let s = "FUNDED";
@@ -315,9 +458,16 @@ assert.equal(
   assert.equal(s, "AWAITING_SHIPMENT");
   s = nextStatus(s, "CONFIRM_RECEIPT");
   assert.equal(s, "IN_INSPECTION");
-  s = nextStatus(s, "COMPLETE_INSPECTION");
+  // Early release residual during inspection
+  s = nextStatus(s, "BUYER_RELEASE_NOW");
   assert.equal(s, "READY_TO_RELEASE");
   assert.equal(canReleaseFinalProtected(s, "PROTECTED"), true);
+  const residual = finalResidualMinor({
+    sellerEntitledMinor: 8500,
+    procurementTransferredMinor: 5000,
+    finalTransferredMinor: 0,
+  });
+  assert.equal(residual, 3500);
 }
 
 console.log("test-fulfilment: all assertions passed");

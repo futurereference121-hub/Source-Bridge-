@@ -547,6 +547,11 @@ export async function processInspectionReleases(limit = 25) {
         results.push({ id: txn.id, ok: false, error: "window_open" });
         continue;
       }
+      // Buyer issue hold / dispute — never auto-release.
+      if ((fresh.status as string) === "DISPUTED") {
+        results.push({ id: txn.id, ok: false, error: "disputed" });
+        continue;
+      }
       await prisma.protectedTransaction.update({
         where: { id: fresh.id },
         data: { status: nextStatus("IN_INSPECTION", "COMPLETE_INSPECTION") },

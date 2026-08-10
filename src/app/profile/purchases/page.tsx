@@ -35,11 +35,21 @@ type Order = {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
     canConfirmReceipt: boolean;
+    canReleaseNow?: boolean;
+    canReportIssue?: boolean;
     canReleaseProcurement?: boolean;
   };
   procurementAdvanceMinor?: number;
   procurementTransferredMinor?: number;
+  books?: {
+    finalResidualMinor?: number;
+    procurementTransferredMinor?: number;
+    platformFeeMinor?: number;
+    sellerEntitledMinor?: number;
+  };
 };
+
+type Decision = "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE";
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
@@ -57,6 +67,10 @@ export default function PurchasesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [decideId, setDecideId] = useState<string | null>(null);
+  const [issueId, setIssueId] = useState<string | null>(null);
+  const [issueReason, setIssueReason] = useState("");
+  const [issueDetails, setIssueDetails] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,21 +97,54 @@ export default function PurchasesPage() {
     if (authReady && signedIn) void load();
   }, [authReady, signedIn, load]);
 
-  async function confirmReceipt(orderId: string) {
+  async function submitDecision(orderId: string, decision: Decision) {
+    if (decision === "REPORT_ISSUE" && issueReason.trim().length < 3) {
+      showToast("Describe the issue (min 3 characters)");
+      return;
+    }
     setBusyId(orderId);
     try {
       const res = await fetch("/api/payments/confirm-receipt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ protectedTxnId: orderId }),
+        body: JSON.stringify({
+          protectedTxnId: orderId,
+          decision,
+          reason:
+            decision === "REPORT_ISSUE" ? issueReason.trim() : undefined,
+          details:
+            decision === "REPORT_ISSUE"
+              ? issueDetails.trim() || undefined
+              : undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Could not confirm");
-      showToast(
-        data.alreadyConfirmed
-          ? "Already confirmed — inspection period active"
-          : "Receipt confirmed — inspection period started (no funds released yet)",
-      );
+      if (!res.ok) throw new Error(data.error || "Could not complete");
+      if (decision === "RELEASE_NOW") {
+        showToast(
+          data.transferTriggered
+            ? "Residual seller funds released"
+            : data.alreadyConfirmed
+              ? "Release already processed"
+              : "Release completed",
+        );
+      } else if (decision === "START_INSPECTION") {
+        showToast(
+          data.alreadyConfirmed
+            ? "Inspection already active"
+            : "Inspection started — funds stay protected",
+        );
+      } else {
+        showToast(
+          data.alreadyConfirmed
+            ? "Issue already open — auto-release frozen"
+            : "Issue reported — remaining funds held",
+        );
+      }
+      setDecideId(null);
+      setIssueId(null);
+      setIssueReason("");
+      setIssueDetails("");
       await load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed");
@@ -182,7 +229,19 @@ export default function PurchasesPage() {
           </p>
         ) : (
           <ul className="mt-10 space-y-4">
-            {orders.map((o) => (
+            {orders.map((o) => {
+              const residual =
+                o.books?.finalResidualMinor ?? 0;
+              const procDone =
+                o.books?.procurementTransferredMinor ??
+                o.procurementTransferredMinor ??
+                0;
+              const showDecision = o.actions.canConfirmReceipt;
+              const showInsp =
+                o.status === "IN_INSPECTION" && Boolean(o.actions.canReleaseNow);
+              const showIssueHold = o.status === "DISPUTED";
+
+              return (
               <li
                 key={o.id}
                 className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
@@ -226,6 +285,29 @@ export default function PurchasesPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
+                  {procDone > 0 || residual > 0 ? (
+                    <div className="sm:col-span-2 space-y-1 text-xs text-white/50">
+                      {procDone > 0 ? (
+                        <p>
+                          Item funds already released:{" "}
+                          {formatMinor(procDone, o.currency)}
+                        </p>
+                      ) : null}
+                      {residual > 0 ? (
+                        <p>
+                          Remaining seller funds protected:{" "}
+                          {formatMinor(residual, o.currency)}
+                        </p>
+                      ) : null}
+                      <p>
+                        Source Bridge fee held:{" "}
+                        {formatMinor(
+                          o.books?.platformFeeMinor ?? o.protectionFeeMinor,
+                          o.currency,
+                        )}
+                      </p>
+                    </div>
+                  ) : null}
                   {o.origin === "CHAT_TICKET" || o.paymentTicketId ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
@@ -264,7 +346,7 @@ export default function PurchasesPage() {
                       </div>
                     </>
                   ) : null}
-                  {o.inspectionEndsAt ? (
+                  {o.inspectionEndsAt && o.status === "IN_INSPECTION" ? (
                     <div>
                       <dt className="text-white/40">Inspection ends</dt>
                       <dd className="text-white/85">
@@ -297,27 +379,196 @@ export default function PurchasesPage() {
                   </div>
                 ) : null}
 
-                {o.actions.canConfirmReceipt ? (
+                {showDecision ? (
                   <div className="mt-5 border-t border-white/10 pt-4">
-                    <PrimaryButton
-                      type="button"
-                      showArrow={false}
-                      disabled={busyId === o.id}
-                      className="rounded-lg"
-                      onClick={() => void confirmReceipt(o.id)}
-                    >
-                      {busyId === o.id
-                        ? "Confirming…"
-                        : "Confirm item received"}
-                    </PrimaryButton>
-                    <p className="mt-2 text-xs text-white/40">
-                      Starts the inspection period. Seller is not paid until
-                      after release rules complete.
-                    </p>
+                    {decideId !== o.id ? (
+                      <>
+                        <PrimaryButton
+                          type="button"
+                          showArrow={false}
+                          disabled={busyId === o.id}
+                          className="rounded-lg"
+                          onClick={() => {
+                            setDecideId(o.id);
+                            setIssueId(null);
+                          }}
+                        >
+                          Confirm item received
+                        </PrimaryButton>
+                        <p className="mt-2 text-xs text-white/40">
+                          Choose release now, start 12-hour inspection, or report
+                          a problem. Direct Payment is not affected.
+                        </p>
+                      </>
+                    ) : (
+                      <div className="space-y-3 text-sm">
+                        <p className="font-medium text-white/90">
+                          Item received — choose one
+                        </p>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                          <PrimaryButton
+                            type="button"
+                            showArrow={false}
+                            disabled={busyId === o.id}
+                            className="rounded-lg"
+                            onClick={() =>
+                              void submitDecision(o.id, "RELEASE_NOW")
+                            }
+                          >
+                            {busyId === o.id ? "Working…" : "Release Funds Now"}
+                          </PrimaryButton>
+                          <button
+                            type="button"
+                            disabled={busyId === o.id}
+                            onClick={() =>
+                              void submitDecision(o.id, "START_INSPECTION")
+                            }
+                            className="rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50"
+                          >
+                            Start 12-Hour Inspection
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId === o.id}
+                            onClick={() => setIssueId(o.id)}
+                            className="rounded-lg border border-amber-400/40 px-4 py-2 text-sm text-amber-100 disabled:opacity-50"
+                          >
+                            Report a Problem
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId === o.id}
+                            onClick={() => {
+                              setDecideId(null);
+                              setIssueId(null);
+                            }}
+                            className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/60"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        {issueId === o.id ? (
+                          <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+                            <label className="block text-xs text-white/55">
+                              What went wrong?
+                              <input
+                                value={issueReason}
+                                onChange={(e) => setIssueReason(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                                maxLength={200}
+                                disabled={busyId === o.id}
+                              />
+                            </label>
+                            <label className="block text-xs text-white/55">
+                              Details (optional)
+                              <textarea
+                                value={issueDetails}
+                                onChange={(e) => setIssueDetails(e.target.value)}
+                                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                                rows={2}
+                                maxLength={4000}
+                                disabled={busyId === o.id}
+                              />
+                            </label>
+                            <PrimaryButton
+                              type="button"
+                              showArrow={false}
+                              disabled={
+                                busyId === o.id || issueReason.trim().length < 3
+                              }
+                              className="rounded-lg"
+                              onClick={() =>
+                                void submitDecision(o.id, "REPORT_ISSUE")
+                              }
+                            >
+                              {busyId === o.id
+                                ? "Submitting…"
+                                : "Submit issue & hold funds"}
+                            </PrimaryButton>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 ) : null}
+
+                {showInsp ? (
+                  <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
+                    <p className="text-sm text-white/70">
+                      Inspection active
+                      {o.inspectionEndsAt
+                        ? ` until ${fmtDate(o.inspectionEndsAt)}`
+                        : ""}
+                      . You can still release residual funds early.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <PrimaryButton
+                        type="button"
+                        showArrow={false}
+                        disabled={busyId === o.id}
+                        className="rounded-lg"
+                        onClick={() => void submitDecision(o.id, "RELEASE_NOW")}
+                      >
+                        {busyId === o.id ? "Releasing…" : "Release Funds Now"}
+                      </PrimaryButton>
+                      {o.actions.canReportIssue ? (
+                        <button
+                          type="button"
+                          disabled={busyId === o.id}
+                          onClick={() =>
+                            setIssueId(issueId === o.id ? null : o.id)
+                          }
+                          className="rounded-lg border border-amber-400/40 px-4 py-2 text-sm text-amber-100 disabled:opacity-50"
+                        >
+                          Report a Problem
+                        </button>
+                      ) : null}
+                    </div>
+                    {issueId === o.id ? (
+                      <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+                        <label className="block text-xs text-white/55">
+                          What went wrong?
+                          <input
+                            value={issueReason}
+                            onChange={(e) => setIssueReason(e.target.value)}
+                            className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                            maxLength={200}
+                            disabled={busyId === o.id}
+                          />
+                        </label>
+                        <PrimaryButton
+                          type="button"
+                          showArrow={false}
+                          disabled={
+                            busyId === o.id || issueReason.trim().length < 3
+                          }
+                          className="rounded-lg"
+                          onClick={() =>
+                            void submitDecision(o.id, "REPORT_ISSUE")
+                          }
+                        >
+                          {busyId === o.id
+                            ? "Submitting…"
+                            : "Submit issue & hold funds"}
+                        </PrimaryButton>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {showIssueHold ? (
+                  <p className="mt-5 border-t border-white/10 pt-4 text-sm text-amber-200/90">
+                    Issue reported — remaining funds protected; auto-release
+                    frozen
+                    {procDone > 0
+                      ? ` (item funds already released: ${formatMinor(procDone, o.currency)})`
+                      : ""}
+                    .
+                  </p>
+                ) : null}
               </li>
-            ))}
+            );
+            })}
           </ul>
         )}
       </Container>

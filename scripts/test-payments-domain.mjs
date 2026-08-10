@@ -44,6 +44,13 @@ const TRANSITIONS = {
     IN_TRANSIT: "IN_INSPECTION",
     DELIVERED: "IN_INSPECTION",
   },
+  BUYER_RELEASE_NOW: {
+    AWAITING_SHIPMENT: "READY_TO_RELEASE",
+    IN_TRANSIT: "READY_TO_RELEASE",
+    DELIVERED: "READY_TO_RELEASE",
+    IN_INSPECTION: "READY_TO_RELEASE",
+    READY_TO_RELEASE: "READY_TO_RELEASE",
+  },
   COMPLETE_INSPECTION: {
     IN_INSPECTION: "READY_TO_RELEASE",
   },
@@ -53,7 +60,7 @@ const TRANSITIONS = {
     PROCUREMENT_RELEASED: "RELEASED",
   },
   TRACKING_DELIVERED: { IN_TRANSIT: "DELIVERED", AWAITING_SHIPMENT: "DELIVERED" },
-  OPEN_DISPUTE: { FUNDED: "DISPUTED", IN_INSPECTION: "DISPUTED" },
+  OPEN_DISPUTE: { FUNDED: "DISPUTED", IN_INSPECTION: "DISPUTED", DELIVERED: "DISPUTED" },
 };
 
 function canTransition(from, action) {
@@ -114,6 +121,8 @@ assert.equal(canTransition("FUNDED", "ADD_TRACKING"), true);
 assert.equal(canTransition("FUNDED", "CONFIRM_RECEIPT"), false);
 assert.equal(canTransition("AWAITING_SHIPMENT", "CONFIRM_RECEIPT"), true);
 assert.equal(canTransition("IN_INSPECTION", "COMPLETE_INSPECTION"), true);
+assert.equal(canTransition("IN_INSPECTION", "BUYER_RELEASE_NOW"), true);
+assert.equal(canTransition("AWAITING_SHIPMENT", "BUYER_RELEASE_NOW"), true);
 
 // ── Tracking normalize
 assert.equal(normalizeTrackingStatus("Delivered"), "DELIVERED");
