@@ -21,7 +21,7 @@ import {
 } from "@/lib/payments/breakdown";
 
 /**
- * Release engine — Separate Charges and Transfers.
+ * Release engine â€” Separate Charges and Transfers.
  * Rechecks domain state before every money movement.
  *
  * Procurement is buyer-authorized only (never auto from fund webhook).
@@ -46,7 +46,7 @@ export async function releaseProcurement(opts: {
   }
   assertStripeModeCompatible(txn.stripeMode);
 
-  // Direct uses Destination Charges only — never platform procurement transfer.
+  // Direct uses Destination Charges only â€” never platform procurement transfer.
   if (isDirectPaymentOption(txn.paymentOption)) {
     throw Object.assign(
       new Error("Procurement release is not available for Direct Payment"),
@@ -247,7 +247,7 @@ export async function releaseFinal(opts: {
   assertStripeModeCompatible(txn.stripeMode);
 
   const status = txn.status as ProtectedStatus;
-  // Direct uses Destination Charges only — never platform transfers.create.
+  // Direct uses Destination Charges only â€” never platform transfers.create.
   const isDirect = isDirectPaymentOption(txn.paymentOption);
   if (isDirect) {
     if (status === "RELEASED" || txn.releasedAt) {
@@ -270,7 +270,7 @@ export async function releaseFinal(opts: {
     );
   }
 
-  if (status !== "READY_TO_RELEASE") {
+  if (status !== "READY_TO_RELEASE" && status !== "PARTIALLY_REFUNDED") {
     throw Object.assign(
       new Error(
         "Protected transactions require READY_TO_RELEASE (after delivery/inspection) before final release",
@@ -312,7 +312,7 @@ export async function releaseFinal(opts: {
   const existingAttempt = await prisma.transferAttempt.findUnique({
     where: { idempotencyKey },
   });
-  // Stripe already paid — reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
+  // Stripe already paid â€” reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
   if (existingAttempt?.status === "SUCCEEDED") {
     const next = nextStatus(status, action);
     const updated = await prisma.protectedTransaction.update({
@@ -384,7 +384,7 @@ export async function releaseFinal(opts: {
         if (!bt || !charge.amount) {
           throw Object.assign(
             new Error(
-              `Cannot convert final transfer ${presentmentCurrency}→${settleCurrency}: missing balance transaction`,
+              `Cannot convert final transfer ${presentmentCurrency}â†’${settleCurrency}: missing balance transaction`,
             ),
             { status: 409, code: "SETTLEMENT_FX_MISSING" },
           );
@@ -425,7 +425,7 @@ export async function releaseFinal(opts: {
     }
 
     // When prior attempt failed without source_transaction / FX, Stripe
-    // idempotency forbids changing params under the same key — bump retries.
+    // idempotency forbids changing params under the same key â€” bump retries.
     const stripeIdempotencyKey =
       existingAttempt &&
       (existingAttempt.status === "FAILED" || existingAttempt.status === "PENDING") &&
@@ -513,8 +513,8 @@ export async function releaseFinal(opts: {
 
 /**
  * Cron/job entry:
- * 1) IN_INSPECTION with inspectionEndsAt <= now → READY_TO_RELEASE → releaseFinal
- * 2) Recover stuck READY_TO_RELEASE (e.g. prior transfer failure) → releaseFinal only
+ * 1) IN_INSPECTION with inspectionEndsAt <= now â†’ READY_TO_RELEASE â†’ releaseFinal
+ * 2) Recover stuck READY_TO_RELEASE (e.g. prior transfer failure) â†’ releaseFinal only
  *
  * Duplicate runs are safe: releaseFinal is idempotent via transferAttempt + Stripe keys.
  */
@@ -547,9 +547,21 @@ export async function processInspectionReleases(limit = 25) {
         results.push({ id: txn.id, ok: false, error: "window_open" });
         continue;
       }
-      // Buyer issue hold / dispute — never auto-release.
+      // Buyer issue hold / dispute — never auto-release (status or open case).
       if ((fresh.status as string) === "DISPUTED") {
         results.push({ id: txn.id, ok: false, error: "disputed" });
+        continue;
+      }
+      if (fresh.releasedAt) {
+        results.push({ id: txn.id, ok: false, error: "already_released" });
+        continue;
+      }
+      const openIssue = await prisma.disputeCase.findFirst({
+        where: { protectedTxnId: fresh.id, status: "OPEN" },
+        select: { id: true },
+      });
+      if (openIssue) {
+        results.push({ id: txn.id, ok: false, error: "open_issue" });
         continue;
       }
       await prisma.protectedTransaction.update({
@@ -604,3 +616,4 @@ export async function processInspectionReleases(limit = 25) {
 
   return results;
 }
+

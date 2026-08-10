@@ -124,9 +124,23 @@ export function computeProtectedFinancials(
   // Never reverse seller transfers silently — only platform remainder is refundable.
   const refundableMinor = protectedRemainingMinor;
 
-  const finalResidualMinor = Math.max(
+  /**
+   * Residual seller share still releasable via releaseFinal.
+   * Cap by platform cash left after refunds, reserving remaining platform fee
+   * so fee is never paid out as “seller residual”.
+   */
+  const sellerShareOutstanding = Math.max(
     0,
     sellerEntitledMinor - transferredTotalMinor,
+  );
+  const feeStillOnPlatform = Math.min(platformFeeMinor, protectedRemainingMinor);
+  const platformSellerCash = Math.max(
+    0,
+    protectedRemainingMinor - feeStillOnPlatform,
+  );
+  const finalResidualMinor = Math.min(
+    sellerShareOutstanding,
+    platformSellerCash,
   );
 
   const remainingProtectedSellerShareMinor = Math.max(

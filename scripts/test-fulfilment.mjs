@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Protected Payment fulfilment / release lifecycle unit tests (no DB / Stripe).
  * Run: node scripts/test-fulfilment.mjs
  */
@@ -49,6 +49,7 @@ const TRANSITIONS = {
   },
   RELEASE_FINAL: {
     READY_TO_RELEASE: "RELEASED",
+    PARTIALLY_REFUNDED: "RELEASED",
     FUNDED: "RELEASED",
     PROCUREMENT_RELEASED: "RELEASED",
   },
@@ -60,6 +61,9 @@ const TRANSITIONS = {
     DELIVERED: "DISPUTED",
     IN_INSPECTION: "DISPUTED",
     READY_TO_RELEASE: "DISPUTED",
+  },
+  RESOLVE_DISPUTE: {
+    DISPUTED: "READY_TO_RELEASE",
   },
 };
 
@@ -77,16 +81,18 @@ function nextStatus(from, action) {
 function canReleaseFinalProtected(status, paymentOption) {
   if (!canTransition(status, "RELEASE_FINAL")) return false;
   if (paymentOption === "INSTANT" || paymentOption === "DIRECT") {
-    // Destination Charges — no stripe.transfers.create
     return false;
   }
-  if (paymentOption === "PROTECTED" && status !== "READY_TO_RELEASE") {
+  if (
+    paymentOption === "PROTECTED" &&
+    status !== "READY_TO_RELEASE" &&
+    status !== "PARTIALLY_REFUNDED"
+  ) {
     return false;
   }
   return true;
 }
 
-/** Seller add-tracking authorization (origin-agnostic CHAT_TICKET / PRODUCT) */
 function canAddTracking({
   role,
   txnStatus,
@@ -106,7 +112,6 @@ function canAddTracking({
   if (!["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(txnStatus)) {
     return false;
   }
-  // Origin never blocks tracking (CHAT_TICKET same engine as product).
   void origin;
   if (procurementAdvanceAgreed && procurementAdvanceMinor > 0) {
     const transferred =
@@ -116,12 +121,10 @@ function canAddTracking({
   return true;
 }
 
-/** Seller self-declare delivered is never allowed (no DELIVERED action for seller) */
 function sellerSelfMarkDeliveredAllowed() {
   return false;
 }
 
-/** Buyer confirm receipt */
 function canConfirmReceipt({
   role,
   txnStatus,
@@ -142,17 +145,23 @@ function canReleaseNow({ role, txnStatus, shipped }) {
   return canTransition(txnStatus, "BUYER_RELEASE_NOW");
 }
 
-function canReportIssue({ role, txnStatus }) {
+/** Report a Problem only during IN_INSPECTION with residual remaining. */
+function canReportIssue({ role, txnStatus, residualMinor = 1 }) {
   if (role !== "buyer") return false;
+  if (txnStatus !== "IN_INSPECTION") return false;
+  if (residualMinor <= 0) return false;
   return canTransition(txnStatus, "OPEN_DISPUTE");
 }
 
-/** START_INSPECTION decision — no Stripe transfer */
+/** Initial receipt modal — only two choices (Report reserved for inspection). */
+function initialReceiptChoices() {
+  return ["RELEASE_NOW", "START_INSPECTION"];
+}
+
 function startInspectionSideEffects() {
   return { nextStatus: "IN_INSPECTION", transferTriggered: false };
 }
 
-/** RELEASE_NOW → READY_TO_RELEASE then releaseFinal residual only */
 function releaseNowSideEffects(status) {
   assert.equal(canTransition(status, "BUYER_RELEASE_NOW"), true);
   const ready = nextStatus(status, "BUYER_RELEASE_NOW");
@@ -164,8 +173,8 @@ function releaseNowSideEffects(status) {
   };
 }
 
-/** REPORT_ISSUE freezes cron auto-release */
 function reportIssueSideEffects(status) {
+  assert.equal(status, "IN_INSPECTION");
   assert.equal(canTransition(status, "OPEN_DISPUTE"), true);
   const s = nextStatus(status, "OPEN_DISPUTE");
   assert.equal(s, "DISPUTED");
@@ -176,8 +185,10 @@ function reportIssueSideEffects(status) {
   };
 }
 
-function cronWouldRelease({ status, inspectionEndsAt, now }) {
+function cronWouldRelease({ status, inspectionEndsAt, now, openIssue = false, released = false }) {
+  if (released) return false;
   if (status === "DISPUTED") return false;
+  if (openIssue) return false;
   if (status === "IN_INSPECTION" && inspectionEndsAt && inspectionEndsAt <= now) {
     return true;
   }
@@ -185,15 +196,49 @@ function cronWouldRelease({ status, inspectionEndsAt, now }) {
   return false;
 }
 
-/** Sourcing residual: proc=5000, entitled=8500 → final=3500 */
-function finalResidualMinor({ sellerEntitledMinor, procurementTransferredMinor, finalTransferredMinor }) {
-  return Math.max(0, sellerEntitledMinor - procurementTransferredMinor - finalTransferredMinor);
+function finalResidualMinor({
+  sellerEntitledMinor,
+  procurementTransferredMinor,
+  finalTransferredMinor,
+  platformFeeMinor = 0,
+  grossFundedMinor,
+  refundedMinor = 0,
+}) {
+  const transferred = procurementTransferredMinor + finalTransferredMinor;
+  const protectedRemaining = Math.max(
+    0,
+    (grossFundedMinor ?? sellerEntitledMinor + platformFeeMinor) -
+      transferred -
+      refundedMinor,
+  );
+  const sellerShareOutstanding = Math.max(
+    0,
+    sellerEntitledMinor - transferred,
+  );
+  const feeStillOnPlatform = Math.min(platformFeeMinor, protectedRemaining);
+  const platformSellerCash = Math.max(0, protectedRemaining - feeStillOnPlatform);
+  return Math.min(sellerShareOutstanding, platformSellerCash);
 }
 
-/** Default inspection hours (platform config) */
+/** Admin refund bounds — never exceed platform remainder. */
+function adminRefundBound({ requestedMinor, refundableMinor }) {
+  if (requestedMinor > refundableMinor) {
+    return { ok: false, code: "REFUND_EXCEEDS_PLATFORM", amount: 0 };
+  }
+  const amount = Math.min(Math.max(0, requestedMinor), refundableMinor);
+  return { ok: amount > 0, amount, code: amount > 0 ? null : "NOTHING_REFUNDABLE" };
+}
+
+function adminSellerReleaseFromDispute(status) {
+  assert.equal(status, "DISPUTED");
+  const ready = nextStatus(status, "RESOLVE_DISPUTE");
+  assert.equal(ready, "READY_TO_RELEASE");
+  assert.equal(canReleaseFinalProtected(ready, "PROTECTED"), true);
+  return ready;
+}
+
 const DEFAULT_INSPECTION_HOURS = 12;
 
-/** Provider DELIVERED → inspection only */
 function onProviderDelivered(status) {
   assert.equal(canTransition(status, "TRACKING_DELIVERED"), true);
   let s = nextStatus(status, "TRACKING_DELIVERED");
@@ -203,16 +248,14 @@ function onProviderDelivered(status) {
   return { status: s, transferTriggered: false, inspectionHours: DEFAULT_INSPECTION_HOURS };
 }
 
-/** Listing lifecycle */
 function listingStatusAfter({ event, current }) {
   if (event === "checkout_start") return "RESERVED";
-  if (event === "funded") return current; // stay RESERVED
+  if (event === "funded") return current;
   if (event === "released") return "SOLD";
   if (event === "cancel_unfunded") return "AVAILABLE";
   return current;
 }
 
-/** Allowlist */
 function matchesAllowlist(list, user) {
   if (!list.length) return false;
   const id = (user.id || "").toLowerCase();
@@ -245,7 +288,6 @@ assert.equal(
   }),
   true,
 );
-// Procurement agreed but not released — cannot ship yet
 assert.equal(
   canAddTracking({
     role: "seller",
@@ -258,7 +300,6 @@ assert.equal(
   }),
   false,
 );
-// No procurement CHAT_TICKET — ship from FUNDED like product
 assert.equal(
   canAddTracking({
     role: "seller",
@@ -269,9 +310,7 @@ assert.equal(
   }),
   true,
 );
-// Seller cannot mark delivered
 assert.equal(sellerSelfMarkDeliveredAllowed(), false);
-// ADD_TRACKING never yields DELIVERED
 assert.notEqual(nextStatus("FUNDED", "ADD_TRACKING"), "DELIVERED");
 
 // ── only buyer can confirm receipt
@@ -317,7 +356,15 @@ assert.equal(
   "idempotent",
 );
 
-// ── buyer confirmation does not trigger transfer (START_INSPECTION)
+// ── two-choice initial receipt modal (Report removed)
+{
+  const choices = initialReceiptChoices();
+  assert.deepEqual(choices, ["RELEASE_NOW", "START_INSPECTION"]);
+  assert.equal(choices.includes("REPORT_ISSUE"), false);
+  assert.equal(choices.length, 2);
+}
+
+// ── START_INSPECTION — no Stripe transfer
 {
   const fx = startInspectionSideEffects();
   assert.equal(fx.nextStatus, "IN_INSPECTION");
@@ -329,7 +376,7 @@ assert.equal(
   );
 }
 
-// ── three-way: RELEASE_NOW immediate residual via releaseFinal only
+// ── RELEASE_NOW residual via releaseFinal only
 {
   const fx = releaseNowSideEffects("AWAITING_SHIPMENT");
   assert.equal(fx.nextStatus, "READY_TO_RELEASE");
@@ -338,11 +385,19 @@ assert.equal(
   assert.equal(canReleaseFinalProtected(fx.nextStatus, "PROTECTED"), true);
   assert.equal(canReleaseNow({ role: "buyer", txnStatus: "IN_INSPECTION", shipped: true }), true);
   assert.equal(canReleaseNow({ role: "seller", txnStatus: "IN_INSPECTION", shipped: true }), false);
-  // Early release from inspection
   assert.equal(nextStatus("IN_INSPECTION", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
 }
 
-// ── three-way: REPORT_ISSUE freezes cron
+// ── issue only during inspection (not pre-decision states)
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "AWAITING_SHIPMENT" }), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "DELIVERED" }), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "FUNDED" }), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "READY_TO_RELEASE" }), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "IN_INSPECTION", residualMinor: 0 }), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "IN_INSPECTION", residualMinor: 100 }), true);
+assert.equal(canReportIssue({ role: "seller", txnStatus: "IN_INSPECTION" }), false);
+
+// ── REPORT_ISSUE freezes cron
 {
   const fx = reportIssueSideEffects("IN_INSPECTION");
   assert.equal(fx.nextStatus, "DISPUTED");
@@ -360,24 +415,73 @@ assert.equal(
       status: "IN_INSPECTION",
       inspectionEndsAt: new Date(0),
       now: new Date(),
+      openIssue: true,
+    }),
+    false,
+  );
+  assert.equal(
+    cronWouldRelease({
+      status: "IN_INSPECTION",
+      inspectionEndsAt: new Date(0),
+      now: new Date(),
+      openIssue: false,
     }),
     true,
   );
   assert.equal(canReportIssue({ role: "buyer", txnStatus: "IN_INSPECTION" }), true);
   assert.equal(canReportIssue({ role: "buyer", txnStatus: "RELEASED" }), false);
+  assert.equal(canReportIssue({ role: "buyer", txnStatus: "RELEASED", residualMinor: 999 }), false);
 }
 
-// ── sourcing residual math (cmslox7aq style): proc 5000, entitled 8500 → final 3500
+// ── admin seller-release resolution path
+assert.equal(adminSellerReleaseFromDispute("DISPUTED"), "READY_TO_RELEASE");
+
+// ── admin refund bounds
+{
+  const over = adminRefundBound({ requestedMinor: 5000, refundableMinor: 2000 });
+  assert.equal(over.ok, false);
+  assert.equal(over.code, "REFUND_EXCEEDS_PLATFORM");
+  const ok = adminRefundBound({ requestedMinor: 1500, refundableMinor: 2000 });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.amount, 1500);
+  const zero = adminRefundBound({ requestedMinor: 0, refundableMinor: 2000 });
+  assert.equal(zero.ok, false);
+}
+
+// ── sourcing residual math (cmslox7aq style): proc 5000, entitled 8500, fee 500 → final 3500
 {
   const residual = finalResidualMinor({
     sellerEntitledMinor: 8500,
     procurementTransferredMinor: 5000,
     finalTransferredMinor: 0,
+    platformFeeMinor: 500,
+    grossFundedMinor: 9000,
   });
   assert.equal(residual, 3500);
-  // Never re-transfer full item after procurement
+  // Never treat full charge as protected residual
+  assert.notEqual(residual, 9000);
   assert.notEqual(residual, 8500);
   assert.notEqual(residual, 5000);
+  // After partial buyer refund, residual shrinks by cash left
+  const afterRefund = finalResidualMinor({
+    sellerEntitledMinor: 8500,
+    procurementTransferredMinor: 5000,
+    finalTransferredMinor: 0,
+    platformFeeMinor: 500,
+    grossFundedMinor: 9000,
+    refundedMinor: 1000,
+  });
+  assert.equal(afterRefund, 2500);
+  // Fee never paid as residual when only fee remains
+  const feeOnly = finalResidualMinor({
+    sellerEntitledMinor: 8500,
+    procurementTransferredMinor: 5000,
+    finalTransferredMinor: 3500,
+    platformFeeMinor: 500,
+    grossFundedMinor: 9000,
+    refundedMinor: 0,
+  });
+  assert.equal(feeOnly, 0);
 }
 
 // ── default inspection hours
@@ -386,11 +490,28 @@ assert.equal(DEFAULT_INSPECTION_HOURS, 12);
 // ── Direct Payment regression: no buyer release-now decision money path
 assert.equal(canReleaseFinalProtected("FUNDED", "DIRECT"), false);
 assert.equal(canReleaseFinalProtected("READY_TO_RELEASE", "DIRECT"), false);
+assert.equal(canReportIssue({ role: "buyer", txnStatus: "IN_INSPECTION" }), true);
+// Direct gate is payment option level outside canReportIssue in product tests —
+// direct never uses this inspection flow for money.
+assert.equal(canReleaseFinalProtected("IN_INSPECTION", "DIRECT"), false);
 
-// ── idempotency: double BUYER_RELEASE_NOW / double COMPLETE then RELEASE
-assert.equal(nextStatus("READY_TO_RELEASE", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
+// ── never re-open completed RELEASED (rubber / historical)
 assert.equal(canTransition("RELEASED", "BUYER_RELEASE_NOW"), false);
 assert.equal(canTransition("RELEASED", "RELEASE_FINAL"), false);
+assert.equal(canTransition("RELEASED", "OPEN_DISPUTE"), false);
+assert.equal(
+  cronWouldRelease({
+    status: "RELEASED",
+    inspectionEndsAt: new Date(0),
+    now: new Date(),
+    released: true,
+  }),
+  false,
+);
+
+// ── idempotency
+assert.equal(nextStatus("READY_TO_RELEASE", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
+assert.equal(canTransition("RELEASED", "BUYER_RELEASE_NOW"), false);
 
 // ── DELIVERED enters inspection state
 {
@@ -400,11 +521,11 @@ assert.equal(canTransition("RELEASED", "RELEASE_FINAL"), false);
   assert.equal(r.inspectionHours, 12);
 }
 
-// ── releaseFinal requires READY_TO_RELEASE for PROTECTED
+// ── releaseFinal requires READY_TO_RELEASE (or admin partial) for PROTECTED
 assert.equal(canReleaseFinalProtected("FUNDED", "PROTECTED"), false);
 assert.equal(canReleaseFinalProtected("IN_INSPECTION", "PROTECTED"), false);
 assert.equal(canReleaseFinalProtected("READY_TO_RELEASE", "PROTECTED"), true);
-// Direct: Destination Charges — no platform transfers.create from FUNDED
+assert.equal(canReleaseFinalProtected("PARTIALLY_REFUNDED", "PROTECTED"), true);
 assert.equal(canReleaseFinalProtected("FUNDED", "INSTANT"), false);
 assert.equal(canReleaseFinalProtected("FUNDED", "DIRECT"), false);
 
@@ -449,7 +570,7 @@ assert.equal(
   assert.equal(s, "RELEASED");
 }
 
-// Happy path with procurement: FUNDED → PROCUREMENT_RELEASED → ship → inspect → ready
+// Happy path with procurement residual preserved
 {
   let s = "FUNDED";
   s = nextStatus(s, "RELEASE_PROCUREMENT");
@@ -458,7 +579,6 @@ assert.equal(
   assert.equal(s, "AWAITING_SHIPMENT");
   s = nextStatus(s, "CONFIRM_RECEIPT");
   assert.equal(s, "IN_INSPECTION");
-  // Early release residual during inspection
   s = nextStatus(s, "BUYER_RELEASE_NOW");
   assert.equal(s, "READY_TO_RELEASE");
   assert.equal(canReleaseFinalProtected(s, "PROTECTED"), true);
@@ -466,8 +586,25 @@ assert.equal(
     sellerEntitledMinor: 8500,
     procurementTransferredMinor: 5000,
     finalTransferredMinor: 0,
+    platformFeeMinor: 500,
+    grossFundedMinor: 9000,
   });
   assert.equal(residual, 3500);
+}
+
+// Issue during inspection freezes then admin seller resolve
+{
+  let s = "FUNDED";
+  s = nextStatus(s, "ADD_TRACKING");
+  s = nextStatus(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "IN_INSPECTION");
+  assert.equal(canReportIssue({ role: "buyer", txnStatus: s, residualMinor: 100 }), true);
+  s = nextStatus(s, "OPEN_DISPUTE");
+  assert.equal(s, "DISPUTED");
+  assert.equal(cronWouldRelease({ status: s, inspectionEndsAt: new Date(0), now: new Date() }), false);
+  s = adminSellerReleaseFromDispute(s);
+  s = nextStatus(s, "RELEASE_FINAL");
+  assert.equal(s, "RELEASED");
 }
 
 console.log("test-fulfilment: all assertions passed");

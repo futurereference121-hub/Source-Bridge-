@@ -347,6 +347,7 @@ function mapTicket(
     buyerCanReportIssue({
       paymentOption: t.paymentOption,
       status: ptStatus,
+      residualMinor: books.finalResidualMinor,
     });
 
   return {

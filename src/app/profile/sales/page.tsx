@@ -242,16 +242,16 @@ export default function SalesFulfilmentPage() {
                   {o.status === "AWAITING_SHIPMENT" || o.status === "IN_TRANSIT" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Shipped — waiting for buyer confirmation (release now,
-                        inspection, or report issue). Sellers cannot release residual funds.
+                        Shipped — waiting for buyer confirmation (release now or
+                        start inspection). Sellers cannot release residual funds.
                       </p>
                     </div>
                   ) : null}
                   {o.status === "DELIVERED" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Delivered — awaiting buyer decision (release / inspect /
-                        report). Residual stays protected.
+                        Delivered — awaiting buyer decision (release now or start
+                        inspection). Residual stays protected.
                       </p>
                     </div>
                   ) : null}
@@ -262,7 +262,8 @@ export default function SalesFulfilmentPage() {
                         {o.inspectionEndsAt
                           ? ` until ${fmtDate(o.inspectionEndsAt)}`
                           : ""}
-                        . Buyer may still release residual early. Auto-release after window.
+                        . Buyer may release residual early or report a problem.
+                        Auto-release after the window if neither happens.
                       </p>
                     </div>
                   ) : null}

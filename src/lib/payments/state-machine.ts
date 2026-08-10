@@ -117,6 +117,11 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
     /** Protected: only after inspection window / READY_TO_RELEASE. */
     READY_TO_RELEASE: "RELEASED",
     /**
+     * Admin residual release after controlled partial refund on a payment issue.
+     * releaseFinal still pays residual-only amounts from books.
+     */
+    PARTIALLY_REFUNDED: "RELEASED",
+    /**
      * Instant path only is allowed to release from FUNDED.
      * releaseFinal() still blocks PROTECTED + FUNDED explicitly.
      */

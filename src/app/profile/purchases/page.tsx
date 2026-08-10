@@ -396,8 +396,8 @@ export default function PurchasesPage() {
                           Confirm item received
                         </PrimaryButton>
                         <p className="mt-2 text-xs text-white/40">
-                          Choose release now, start 12-hour inspection, or report
-                          a problem. Direct Payment is not affected.
+                          Choose release funds now or start a 12-hour inspection.
+                          You can report a problem once inspection is active.
                         </p>
                       </>
                     ) : (
@@ -430,14 +430,6 @@ export default function PurchasesPage() {
                           <button
                             type="button"
                             disabled={busyId === o.id}
-                            onClick={() => setIssueId(o.id)}
-                            className="rounded-lg border border-amber-400/40 px-4 py-2 text-sm text-amber-100 disabled:opacity-50"
-                          >
-                            Report a Problem
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busyId === o.id}
                             onClick={() => {
                               setDecideId(null);
                               setIssueId(null);
@@ -447,70 +439,36 @@ export default function PurchasesPage() {
                             Cancel
                           </button>
                         </div>
-                        {issueId === o.id ? (
-                          <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
-                            <label className="block text-xs text-white/55">
-                              What went wrong?
-                              <input
-                                value={issueReason}
-                                onChange={(e) => setIssueReason(e.target.value)}
-                                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-                                maxLength={200}
-                                disabled={busyId === o.id}
-                              />
-                            </label>
-                            <label className="block text-xs text-white/55">
-                              Details (optional)
-                              <textarea
-                                value={issueDetails}
-                                onChange={(e) => setIssueDetails(e.target.value)}
-                                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-                                rows={2}
-                                maxLength={4000}
-                                disabled={busyId === o.id}
-                              />
-                            </label>
-                            <PrimaryButton
-                              type="button"
-                              showArrow={false}
-                              disabled={
-                                busyId === o.id || issueReason.trim().length < 3
-                              }
-                              className="rounded-lg"
-                              onClick={() =>
-                                void submitDecision(o.id, "REPORT_ISSUE")
-                              }
-                            >
-                              {busyId === o.id
-                                ? "Submitting…"
-                                : "Submit issue & hold funds"}
-                            </PrimaryButton>
-                          </div>
-                        ) : null}
                       </div>
                     )}
                   </div>
                 ) : null}
 
-                {showInsp ? (
+                {showInsp ||
+                (o.status === "IN_INSPECTION" && o.actions.canReportIssue) ? (
                   <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
                     <p className="text-sm text-white/70">
                       Inspection active
                       {o.inspectionEndsAt
                         ? ` until ${fmtDate(o.inspectionEndsAt)}`
                         : ""}
-                      . You can still release residual funds early.
+                      . Remaining residual auto-releases after the deadline
+                      unless you release early or report a problem.
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      <PrimaryButton
-                        type="button"
-                        showArrow={false}
-                        disabled={busyId === o.id}
-                        className="rounded-lg"
-                        onClick={() => void submitDecision(o.id, "RELEASE_NOW")}
-                      >
-                        {busyId === o.id ? "Releasing…" : "Release Funds Now"}
-                      </PrimaryButton>
+                      {showInsp ? (
+                        <PrimaryButton
+                          type="button"
+                          showArrow={false}
+                          disabled={busyId === o.id}
+                          className="rounded-lg"
+                          onClick={() =>
+                            void submitDecision(o.id, "RELEASE_NOW")
+                          }
+                        >
+                          {busyId === o.id ? "Releasing…" : "Release Funds Now"}
+                        </PrimaryButton>
+                      ) : null}
                       {o.actions.canReportIssue ? (
                         <button
                           type="button"

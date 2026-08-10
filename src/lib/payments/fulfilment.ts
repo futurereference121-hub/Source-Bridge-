@@ -95,12 +95,24 @@ export function buyerCanReleaseNow(opts: {
   return ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(opts.status);
 }
 
-/** Buyer may open an issue/hold that freezes auto-release (reuses OPEN_DISPUTE). */
+/**
+ * Buyer may report a problem only during active inspection while residual
+ * remains protected. Not offered on the initial receipt modal.
+ */
 export function buyerCanReportIssue(opts: {
   paymentOption: string;
   status: string;
+  /** When known, require remaining seller residual (or protected remainder). */
+  residualMinor?: number;
 }): boolean {
   if (isDirectPaymentOption(opts.paymentOption)) return false;
+  if (opts.status !== "IN_INSPECTION") return false;
+  if (
+    typeof opts.residualMinor === "number" &&
+    opts.residualMinor <= 0
+  ) {
+    return false;
+  }
   return canTransition(opts.status as ProtectedStatus, "OPEN_DISPUTE");
 }
 
@@ -288,6 +300,7 @@ export function mapProtectedTxnSummary(
         buyerCanReportIssue({
           paymentOption: t.paymentOption,
           status: t.status,
+          residualMinor: books.finalResidualMinor,
         }),
       canReleaseProcurement,
       /** Sourcer/seller never releases item funds. */
@@ -380,7 +393,7 @@ function deliveryLabel(status: string, option: string) {
     return "Delivery confirmed — inspection period active (buyer may release early)";
   }
   if (status === "DELIVERED") {
-    return "Delivered — awaiting buyer decision (release / inspect / report)";
+    return "Delivered — awaiting buyer decision (release now or start inspection)";
   }
   if (status === "READY_TO_RELEASE") return "Inspection complete — releasing residual";
   if (status === "RELEASED") return "Complete";
@@ -434,11 +447,13 @@ export async function listProtectedOrdersForUser(opts: {
 }
 
 /**
- * Buyer three-way receipt decision for Protected Payments only:
+ * Buyer Protected receipt decisions:
  * - START_INSPECTION → deliveredAt + inspectionEndsAt, IN_INSPECTION, no transfer
  * - RELEASE_NOW → deliveredAt, READY_TO_RELEASE, existing releaseFinal residual only
- * - REPORT_ISSUE → DISPUTED / issue hold (cron skips); remaining funds protected
+ * - REPORT_ISSUE → only while IN_INSPECTION; DISPUTED / issue hold (cron skips)
  *
+ * Initial confirm-received UI offers Release Now + Start Inspection only.
+ * Report a Problem is available later during inspection (residual remaining).
  * Direct Payment is rejected. Idempotent for double-clicks and race with cron.
  */
 export async function confirmReceipt(opts: {
@@ -679,7 +694,19 @@ async function releaseNowAfterReceipt(opts: {
 }
 
 async function reportIssueAfterReceipt(opts: {
-  txn: TxnRow;
+  txn: TxnRow & {
+    itemCostMinor?: number;
+    shippingMinor?: number;
+    sellerServiceFeeMinor?: number;
+    protectionFeeMinor?: number;
+    totalChargeMinor?: number;
+    procurementAdvanceAgreed?: boolean;
+    procurementAdvanceMinor?: number;
+    procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
+    refundedMinor?: number;
+    currency?: string;
+  };
   buyerId: string;
   reason?: string;
   details?: string;
@@ -709,6 +736,17 @@ async function reportIssueAfterReceipt(opts: {
     );
   }
 
+  // Report a Problem is only available during the inspection window — not on
+  // the initial receipt decision modal (RELEASE_NOW / START_INSPECTION only).
+  if (status !== "IN_INSPECTION") {
+    throw Object.assign(
+      new Error(
+        "Report a Problem is only available during the 12-hour inspection period",
+      ),
+      { status: 409, code: "ISSUE_INSPECTION_ONLY" },
+    );
+  }
+
   if (!reason || reason.length < 3) {
     throw Object.assign(new Error("Please describe the issue (min 3 characters)"), {
       status: 400,
@@ -722,6 +760,38 @@ async function reportIssueAfterReceipt(opts: {
       { status: 409, code: "INVALID_TRANSITION" },
     );
   }
+
+  const books = computeProtectedFinancials({
+    itemCostMinor: txn.itemCostMinor ?? 0,
+    shippingMinor: txn.shippingMinor ?? 0,
+    sellerServiceFeeMinor: txn.sellerServiceFeeMinor ?? 0,
+    protectionFeeMinor: txn.protectionFeeMinor ?? 0,
+    totalChargeMinor: txn.totalChargeMinor,
+    procurementAdvanceAgreed: txn.procurementAdvanceAgreed,
+    procurementAdvanceMinor: txn.procurementAdvanceMinor,
+    procurementTransferredMinor: txn.procurementTransferredMinor,
+    finalTransferredMinor: txn.finalTransferredMinor,
+    refundedMinor: txn.refundedMinor,
+  });
+
+  if (books.finalResidualMinor <= 0) {
+    throw Object.assign(
+      new Error("No remaining protected residual to place on issue hold"),
+      { status: 409, code: "NO_RESIDUAL" },
+    );
+  }
+
+  const financialSnapshot = {
+    grossFundedMinor: books.grossFundedMinor,
+    sellerEntitledMinor: books.sellerEntitledMinor,
+    platformFeeMinor: books.platformFeeMinor,
+    procurementTransferredMinor: books.procurementTransferredMinor,
+    finalTransferredMinor: books.finalTransferredMinor,
+    finalResidualMinor: books.finalResidualMinor,
+    protectedRemainingMinor: books.protectedRemainingMinor,
+    refundableMinor: books.refundableMinor,
+    remainingProtectedSellerShareMinor: books.remainingProtectedSellerShareMinor,
+  };
 
   const { dispute, updated } = await prisma.$transaction(async (tx) => {
     const d = await tx.disputeCase.create({
@@ -745,6 +815,17 @@ async function reportIssueAfterReceipt(opts: {
     return { dispute: d, updated: u };
   });
 
+  const { appendLedgerEntry } = await import("@/lib/payments/ledger");
+  await appendLedgerEntry({
+    protectedTxnId: txn.id,
+    entryType: "DISPUTE_HOLD",
+    direction: "DEBIT",
+    amountMinor: books.finalResidualMinor,
+    currency: (txn.currency || "GBP").toUpperCase(),
+    idempotencyKey: `dispute_hold_${dispute.id}`,
+    meta: { decision: "REPORT_ISSUE", financialSnapshot },
+  });
+
   await recordAuditEvent({
     protectedTxnId: txn.id,
     actorUserId: opts.buyerId,
@@ -755,6 +836,7 @@ async function reportIssueAfterReceipt(opts: {
       disputeId: dispute.id,
       transferTriggered: false,
       autoReleaseFrozen: true,
+      financialSnapshot,
     },
   });
 
@@ -764,5 +846,6 @@ async function reportIssueAfterReceipt(opts: {
     transferTriggered: false,
     transaction: updated,
     dispute,
+    financialSnapshot,
   };
 }

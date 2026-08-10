@@ -11,7 +11,9 @@ export const runtime = "nodejs";
 const schema = z.object({
   protectedTxnId: z.string().trim().min(1),
   /**
-   * Three-way Protected receipt decision.
+   * Protected receipt decision.
+   * Initial UI: RELEASE_NOW | START_INSPECTION.
+   * REPORT_ISSUE only allowed server-side while IN_INSPECTION (not initial modal).
    * Default START_INSPECTION preserves older clients that only confirmed receipt.
    */
   decision: z
@@ -23,8 +25,8 @@ const schema = z.object({
 });
 
 /**
- * Buyer confirms item received — three-way decision for Protected Payments:
- * RELEASE_NOW | START_INSPECTION | REPORT_ISSUE.
+ * Buyer confirms item received for Protected Payments:
+ * RELEASE_NOW | START_INSPECTION (initial), REPORT_ISSUE (during inspection only).
  * Never used for Direct Payment money paths.
  */
 export async function POST(req: NextRequest) {

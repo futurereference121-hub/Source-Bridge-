@@ -1039,14 +1039,6 @@ export function PaymentTicketCard({
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => setIssueOpen(true)}
-                      className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
-                    >
-                      Report a Problem
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
                       onClick={() => {
                         setConfirmReceiptOpen(false);
                         setIssueOpen(false);
@@ -1056,67 +1048,41 @@ export function PaymentTicketCard({
                       Cancel
                     </button>
                   </div>
-                  {issueOpen ? (
-                    <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
-                      <label className="block text-xs text-white/60">
-                        What went wrong?
-                        <input
-                          value={issueReason}
-                          onChange={(e) => setIssueReason(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-                          placeholder="e.g. Item not as described"
-                          disabled={busy}
-                          maxLength={200}
-                        />
-                      </label>
-                      <label className="block text-xs text-white/60">
-                        Details (optional)
-                        <textarea
-                          value={issueDetails}
-                          onChange={(e) => setIssueDetails(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-                          rows={2}
-                          disabled={busy}
-                          maxLength={4000}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={busy || issueReason.trim().length < 3}
-                        onClick={() =>
-                          void submitReceiptDecision("REPORT_ISSUE")
-                        }
-                        className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-                      >
-                        {busy ? "Submitting…" : "Submit issue & hold funds"}
-                      </button>
-                    </div>
-                  ) : null}
+                  <p className="text-[11px] text-white/40">
+                    If something is wrong after you start inspection, you can
+                    report a problem during the inspection window.
+                  </p>
                 </div>
               )}
             </div>
           ) : null}
 
-          {inInspection && canReleaseNow ? (
+          {inInspection && (canReleaseNow || canReportIssue) ? (
             <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
               {ticket.inspectionEndsAt ? (
                 <p className="text-white/50">
                   Inspection ends{" "}
                   {new Date(ticket.inspectionEndsAt).toLocaleString()}
-                  {" — "}auto-release after window unless you act sooner.
+                  {" — "}remaining residual auto-releases after this deadline
+                  unless you release early or report a problem.
                 </p>
               ) : (
-                <p className="text-white/50">Inspection in progress.</p>
+                <p className="text-white/50">
+                  Inspection in progress — remaining funds stay protected until
+                  release or a reported issue.
+                </p>
               )}
               <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void submitReceiptDecision("RELEASE_NOW")}
-                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-                >
-                  {busy ? "Releasing…" : "Release Funds Now"}
-                </button>
+                {canReleaseNow ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void submitReceiptDecision("RELEASE_NOW")}
+                    className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                  >
+                    {busy ? "Releasing…" : "Release Funds Now"}
+                  </button>
+                ) : null}
                 {canReportIssue && !issueOpen ? (
                   <button
                     type="button"
