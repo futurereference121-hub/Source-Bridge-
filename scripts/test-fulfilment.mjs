@@ -7,6 +7,13 @@ import assert from "node:assert/strict";
 
 /** Mirrors src/lib/payments/state-machine.ts (subset) */
 const TRANSITIONS = {
+  MARK_FUNDED: {
+    AWAITING_PAYMENT: "FUNDED",
+    ACCEPTED: "FUNDED",
+  },
+  RELEASE_PROCUREMENT: {
+    FUNDED: "PROCUREMENT_RELEASED",
+  },
   ADD_TRACKING: {
     FUNDED: "AWAITING_SHIPMENT",
     PROCUREMENT_RELEASED: "AWAITING_SHIPMENT",
@@ -63,13 +70,34 @@ function canReleaseFinalProtected(status, paymentOption) {
   return true;
 }
 
-/** Seller add-tracking authorization */
-function canAddTracking({ role, txnStatus, trackingNumber }) {
+/** Seller add-tracking authorization (origin-agnostic CHAT_TICKET / PRODUCT) */
+function canAddTracking({
+  role,
+  txnStatus,
+  trackingNumber,
+  paymentOption = "PROTECTED",
+  origin = "PRODUCT_CHECKOUT",
+  procurementAdvanceAgreed = false,
+  procurementAdvanceMinor = 0,
+  procurementTransferredMinor = 0,
+}) {
   if (role !== "seller") return false;
+  if (paymentOption === "INSTANT" || paymentOption === "DIRECT") return false;
   if (trackingNumber) return false;
-  return ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(
-    txnStatus,
-  );
+  if (["RELEASED", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED", "DISPUTED"].includes(txnStatus)) {
+    return false;
+  }
+  if (!["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(txnStatus)) {
+    return false;
+  }
+  // Origin never blocks tracking (CHAT_TICKET same engine as product).
+  void origin;
+  if (procurementAdvanceAgreed && procurementAdvanceMinor > 0) {
+    const transferred =
+      procurementTransferredMinor > 0 || txnStatus === "PROCUREMENT_RELEASED";
+    if (txnStatus === "FUNDED" && !transferred) return false;
+  }
+  return true;
 }
 
 /** Seller self-declare delivered is never allowed (no DELIVERED action for seller) */
@@ -136,14 +164,43 @@ assert.equal(
 );
 assert.equal(canTransition("FUNDED", "ADD_TRACKING"), true);
 assert.equal(nextStatus("FUNDED", "ADD_TRACKING"), "AWAITING_SHIPMENT");
-
-// ── buyer cannot add tracking
 assert.equal(
-  canAddTracking({ role: "buyer", txnStatus: "FUNDED", trackingNumber: "" }),
+  canAddTracking({
+    role: "seller",
+    txnStatus: "PROCUREMENT_RELEASED",
+    trackingNumber: "",
+    origin: "CHAT_TICKET",
+    procurementAdvanceAgreed: true,
+    procurementAdvanceMinor: 5000,
+    procurementTransferredMinor: 5000,
+  }),
+  true,
+);
+// Procurement agreed but not released — cannot ship yet
+assert.equal(
+  canAddTracking({
+    role: "seller",
+    txnStatus: "FUNDED",
+    trackingNumber: "",
+    origin: "CHAT_TICKET",
+    procurementAdvanceAgreed: true,
+    procurementAdvanceMinor: 5000,
+    procurementTransferredMinor: 0,
+  }),
   false,
 );
-
-// ── seller cannot mark delivered
+// No procurement CHAT_TICKET — ship from FUNDED like product
+assert.equal(
+  canAddTracking({
+    role: "seller",
+    txnStatus: "FUNDED",
+    trackingNumber: "",
+    origin: "CHAT_TICKET",
+    procurementAdvanceAgreed: false,
+  }),
+  true,
+);
+// Seller cannot mark delivered
 assert.equal(sellerSelfMarkDeliveredAllowed(), false);
 // ADD_TRACKING never yields DELIVERED
 assert.notEqual(nextStatus("FUNDED", "ADD_TRACKING"), "DELIVERED");
@@ -247,6 +304,20 @@ assert.equal(
   assert.equal(canReleaseFinalProtected(s, "PROTECTED"), true);
   s = nextStatus(s, "RELEASE_FINAL");
   assert.equal(s, "RELEASED");
+}
+
+// Happy path with procurement: FUNDED → PROCUREMENT_RELEASED → ship → inspect → ready
+{
+  let s = "FUNDED";
+  s = nextStatus(s, "RELEASE_PROCUREMENT");
+  assert.equal(s, "PROCUREMENT_RELEASED");
+  s = nextStatus(s, "ADD_TRACKING");
+  assert.equal(s, "AWAITING_SHIPMENT");
+  s = nextStatus(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "IN_INSPECTION");
+  s = nextStatus(s, "COMPLETE_INSPECTION");
+  assert.equal(s, "READY_TO_RELEASE");
+  assert.equal(canReleaseFinalProtected(s, "PROTECTED"), true);
 }
 
 console.log("test-fulfilment: all assertions passed");

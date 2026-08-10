@@ -20,14 +20,22 @@ import {
   isTrackingAutomationEnabled,
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
+import { sellerCanAddTracking } from "@/lib/payments/fulfilment";
 
 export const runtime = "nodejs";
 
-const addSchema = z.object({
-  protectedTxnId: z.string().trim().min(1),
-  trackingNumber: z.string().trim().min(4).max(64),
-  carrier: z.string().trim().max(64).optional(),
-});
+const addSchema = z
+  .object({
+    /** Existing product sales field name. */
+    protectedTxnId: z.string().trim().min(1).optional(),
+    /** Alias for chat-ticket clients (same ProtectedTransaction id). */
+    transactionId: z.string().trim().min(1).optional(),
+    trackingNumber: z.string().trim().min(4).max(64),
+    carrier: z.string().trim().max(64).optional(),
+  })
+  .refine((d) => Boolean(d.protectedTxnId || d.transactionId), {
+    message: "protectedTxnId or transactionId required",
+  });
 
 async function assertTestPartyGate(
   buyerId: string,
@@ -57,7 +65,8 @@ async function assertTestPartyGate(
 }
 
 /**
- * Seller adds tracking. Cannot self-declare DELIVERED.
+ * Seller adds tracking for PRODUCT_CHECKOUT or CHAT_TICKET protected txns.
+ * Cannot self-declare DELIVERED. No funds movement.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -68,14 +77,37 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
+    const txnId =
+      parsed.data.protectedTxnId || parsed.data.transactionId || "";
     const txn = await prisma.protectedTransaction.findUnique({
-      where: { id: parsed.data.protectedTxnId },
+      where: { id: txnId },
     });
     if (!txn) return jsonError("Transaction not found", 404);
     if (txn.sellerId !== user.id) {
       return jsonError("Only the seller can add tracking", 403);
     }
     await assertTestPartyGate(txn.buyerId, txn.sellerId, "add tracking");
+
+    // Eligibility: origin-agnostic; procurement-agreed waits for item-fund release.
+    if (
+      !sellerCanAddTracking({
+        paymentOption: txn.paymentOption,
+        status: txn.status,
+        trackingNumber: txn.trackingNumber,
+        procurementAdvanceAgreed: txn.procurementAdvanceAgreed,
+        procurementAdvanceMinor: txn.procurementAdvanceMinor,
+        procurementTransferredMinor: txn.procurementTransferredMinor,
+      })
+    ) {
+      return jsonError(
+        txn.procurementAdvanceAgreed &&
+          txn.procurementTransferredMinor === 0 &&
+          txn.status === "FUNDED"
+          ? "Cannot add tracking until item funds are released"
+          : `Cannot add tracking from status ${txn.status}`,
+        409,
+      );
+    }
 
     const status = txn.status as ProtectedStatus;
     if (!canTransition(status, "ADD_TRACKING")) {
@@ -171,11 +203,15 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const user = await requireSessionUser();
-    const body = (await req.json()) as { protectedTxnId?: string };
-    if (!body.protectedTxnId) return jsonError("protectedTxnId required", 400);
+    const body = (await req.json()) as {
+      protectedTxnId?: string;
+      transactionId?: string;
+    };
+    const id = body.protectedTxnId || body.transactionId;
+    if (!id) return jsonError("protectedTxnId or transactionId required", 400);
 
     const txn = await prisma.protectedTransaction.findUnique({
-      where: { id: body.protectedTxnId },
+      where: { id },
     });
     if (!txn) return jsonError("Transaction not found", 404);
     if (txn.buyerId !== user.id && txn.sellerId !== user.id) {

@@ -45,12 +45,22 @@ export type PaymentTicketView = {
     canEdit?: boolean;
     canCancel?: boolean;
     canDelete?: boolean;
+    canMarkShipped?: boolean;
+    canAddTracking?: boolean;
+    canConfirmReceipt?: boolean;
   };
+  trackingNumber?: string;
+  trackingCarrier?: string;
+  shippedAt?: string | null;
+  deliveredAt?: string | null;
+  inspectionEndsAt?: string | null;
   books?: {
     itemFundsReleasedEarlyMinor: number;
     remainingProtectedSellerShareMinor: number;
     platformFeeMinor: number;
     procurementTransferredMinor: number;
+    finalResidualMinor?: number;
+    sellerEntitledMinor?: number;
   };
   breakdown: {
     labels: {
@@ -103,6 +113,9 @@ export function PaymentTicketCard({
     currency: string;
   } | null>(null);
   const [paymentsAccess, setPaymentsAccess] = useState(false);
+  const [carrier, setCarrier] = useState("");
+  const [trackingInput, setTrackingInput] = useState("");
+  const [confirmReceiptOpen, setConfirmReceiptOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -353,6 +366,79 @@ export function PaymentTicketCard({
     }
   }
 
+  async function markShipped() {
+    if (!ticket?.protectedTransactionId) return;
+    const trackingNumber = trackingInput.trim();
+    if (trackingNumber.length < 4) {
+      setError("Enter a valid tracking number");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/payments/tracking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protectedTxnId: ticket.protectedTransactionId,
+          transactionId: ticket.protectedTransactionId,
+          carrier: carrier.trim() || undefined,
+          trackingNumber,
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) {
+        setError(json.error || "Could not mark as shipped");
+      } else {
+        setPayNotice("Marked as shipped. Remaining earnings stay protected.");
+        setCarrier("");
+        setTrackingInput("");
+        await load();
+        onChanged?.();
+      }
+    } catch {
+      setError("Could not mark as shipped");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmItemReceived() {
+    if (!ticket?.protectedTransactionId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/payments/confirm-receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protectedTxnId: ticket.protectedTransactionId,
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        alreadyConfirmed?: boolean;
+      };
+      if (!res.ok) {
+        setError(json.error || "Could not confirm receipt");
+      } else {
+        setPayNotice(
+          json.alreadyConfirmed
+            ? "Already confirmed — inspection period active (no funds released)."
+            : "Item receipt confirmed. Inspection period started — no funds released yet.",
+        );
+        setConfirmReceiptOpen(false);
+        await load();
+        onChanged?.();
+      }
+    } catch {
+      setError("Could not confirm receipt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (gone) {
     return null;
   }
@@ -396,25 +482,56 @@ export function PaymentTicketCard({
     (ticket.status === "ACCEPTED" ||
       ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT") &&
     Boolean(ticket.protectedTransactionId);
+  const isDirect =
+    ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
+  const procAgreed =
+    ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0;
+  const procTransferred = (ticket.books?.procurementTransferredMinor ?? 0) > 0;
   const canRelease =
     !historical &&
     paymentsAccess &&
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseProcurement) &&
     Boolean(ticket.protectedTransactionId);
+  const canMarkShipped =
+    !historical &&
+    paymentsAccess &&
+    iAmSeller &&
+    Boolean(ticket.actions?.canMarkShipped || ticket.actions?.canAddTracking) &&
+    Boolean(ticket.protectedTransactionId);
+  const canConfirmReceipt =
+    !historical &&
+    paymentsAccess &&
+    iAmBuyer &&
+    Boolean(ticket.actions?.canConfirmReceipt) &&
+    Boolean(ticket.protectedTransactionId);
+  const hasTracking = Boolean(ticket.trackingNumber);
+  const showFulfilment =
+    !historical &&
+    !isDirect &&
+    Boolean(ticket.protectedTransactionId) &&
+    (procTransferred ||
+      hasTracking ||
+      canMarkShipped ||
+      canConfirmReceipt ||
+      ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "READY_TO_RELEASE"].includes(
+        ticket.protectedTxnStatus || ticket.status,
+      ));
+  const residualProtected =
+    ticket.books?.finalResidualMinor ??
+    ticket.books?.remainingProtectedSellerShareMinor ??
+    ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
+    0;
+  const itemFundsReceived =
+    ticket.books?.procurementTransferredMinor ?? 0;
   const canEdit = Boolean(ticket.actions?.canEdit);
   const canCancel = Boolean(ticket.actions?.canCancel);
   const canDelete = Boolean(ticket.actions?.canDelete);
   const showMenu = canEdit || canCancel || canDelete;
-  const isDirect =
-    ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
   const stageLabel =
     ticket.lifecycleLabel ||
     ticket.lifecycleStage ||
     ticket.status;
-  const procAgreed =
-    ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0;
-  const procTransferred = (ticket.books?.procurementTransferredMinor ?? 0) > 0;
   const proposerLabel =
     proposedByName ||
     (ticket.proposedBy?.username
@@ -696,6 +813,157 @@ export function PaymentTicketCard({
           Waiting for buyer to release item funds. Sourcers cannot authorize
           release.
         </p>
+      ) : null}
+
+      {showFulfilment ? (
+        <div className="mt-4 space-y-3 rounded-lg border border-white/12 bg-white/[0.03] px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">
+            Fulfilment
+          </p>
+          {procAgreed || itemFundsReceived > 0 ? (
+            <div className="space-y-1 text-xs text-white/70">
+              <p className="flex justify-between gap-3">
+                <span>Item funds received</span>
+                <span className="tabular-nums text-white">
+                  {formatMinor(itemFundsReceived, cur)}
+                </span>
+              </p>
+              <p className="flex justify-between gap-3">
+                <span>Remaining earnings protected</span>
+                <span className="tabular-nums text-white">
+                  {formatMinor(residualProtected, cur)}
+                </span>
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-white/55">
+              Seller earnings remain protected until delivery and inspection.
+            </p>
+          )}
+
+          {hasTracking ? (
+            <div className="space-y-1 border-t border-white/10 pt-2 text-xs text-white/70">
+              <p className="font-medium text-white/85">SHIPPED</p>
+              <p>
+                Carrier:{" "}
+                <span className="text-white">
+                  {ticket.trackingCarrier || "—"}
+                </span>
+              </p>
+              <p>
+                Tracking:{" "}
+                <span className="font-mono text-white">
+                  {ticket.trackingNumber}
+                </span>
+              </p>
+              {ticket.shippedAt ? (
+                <p className="text-white/45">
+                  Shipped{" "}
+                  {new Date(ticket.shippedAt).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </p>
+              ) : null}
+              {residualProtected > 0 ? (
+                <p className="text-white/45">
+                  Remaining {formatMinor(residualProtected, cur)} stays protected
+                  until inspection completes.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {canMarkShipped ? (
+            <div className="space-y-2 border-t border-white/10 pt-2">
+              <label className="block text-xs text-white/55">
+                Carrier
+                <input
+                  value={carrier}
+                  onChange={(e) => setCarrier(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                  placeholder="e.g. Royal Mail"
+                  disabled={busy}
+                />
+              </label>
+              <label className="block text-xs text-white/55">
+                Tracking number
+                <input
+                  value={trackingInput}
+                  onChange={(e) => setTrackingInput(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 font-mono text-sm text-white"
+                  placeholder="Tracking number"
+                  minLength={4}
+                  disabled={busy}
+                />
+              </label>
+              <p className="text-[11px] text-white/40">
+                You cannot mark delivered. Residual stays protected until buyer
+                confirmation / inspection.
+              </p>
+              <button
+                type="button"
+                disabled={busy || trackingInput.trim().length < 4}
+                onClick={() => void markShipped()}
+                className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+              >
+                {busy ? "Saving…" : "Mark as Shipped"}
+              </button>
+            </div>
+          ) : null}
+
+          {canConfirmReceipt ? (
+            <div className="border-t border-white/10 pt-2">
+              {!confirmReceiptOpen ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmReceiptOpen(true)}
+                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+                >
+                  Confirm Item Received
+                </button>
+              ) : (
+                <div className="space-y-2 text-xs text-white/75">
+                  <p>
+                    Confirm you received the item? This starts the inspection
+                    period only — no funds are released.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void confirmItemReceived()}
+                      className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                    >
+                      {busy ? "Confirming…" : "Confirm receipt"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setConfirmReceiptOpen(false)}
+                      className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {ticket.inspectionEndsAt &&
+          (ticket.protectedTxnStatus === "IN_INSPECTION" ||
+            ticket.lifecycleStage === "IN_INSPECTION" ||
+            ticket.lifecycleStage === "READY_TO_RELEASE") ? (
+            <p className="text-xs text-white/50">
+              Inspection ends{" "}
+              {new Date(ticket.inspectionEndsAt).toLocaleString()}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {error ? <p className="mt-3 text-xs text-amber-300">{error}</p> : null}

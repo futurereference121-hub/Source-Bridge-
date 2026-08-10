@@ -11,6 +11,7 @@ import { formatMinor } from "@/lib/payments/money";
 type Order = {
   id: string;
   status: string;
+  origin?: string;
   title: string;
   currency: string;
   totalChargeMinor: number;
@@ -20,6 +21,14 @@ type Order = {
   trackingNumber: string;
   trackingCarrier: string;
   trackingStatus: string;
+  conversationId?: string | null;
+  paymentTicketId?: string | null;
+  procurementTransferredMinor?: number;
+  books?: {
+    remainingProtectedSellerShareMinor?: number;
+    finalResidualMinor?: number;
+    procurementTransferredMinor?: number;
+  };
   labels: { payment: string; shipping: string; delivery: string };
   listing: { id: string; slug: string; name: string; saleStatus: string } | null;
   counterparty: {
@@ -30,6 +39,7 @@ type Order = {
   } | null;
   actions: {
     canAddTracking: boolean;
+    canMarkShipped?: boolean;
     canRefreshTracking: boolean;
     canConfirmReceipt: boolean;
   };
@@ -209,8 +219,40 @@ export default function SalesFulfilmentPage() {
                   {o.status === "PROCUREMENT_RELEASED" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Item funds released. Ship when ready; residual pays after
-                        delivery/inspection.
+                        Item funds released
+                        {(o.books?.procurementTransferredMinor ??
+                          o.procurementTransferredMinor ??
+                          0) > 0
+                          ? ` (${formatMinor(
+                              o.books?.procurementTransferredMinor ??
+                                o.procurementTransferredMinor ??
+                                0,
+                              o.currency,
+                            )})`
+                          : ""}
+                        . Ship when ready; residual
+                        {(o.books?.finalResidualMinor ?? 0) > 0
+                          ? ` (${formatMinor(o.books!.finalResidualMinor!, o.currency)})`
+                          : ""}{" "}
+                        pays after delivery/inspection.
+                      </p>
+                    </div>
+                  ) : null}
+                  {o.origin === "CHAT_TICKET" || o.paymentTicketId ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Sourcing payment ticket
+                        {o.conversationId ? (
+                          <>
+                            {" · "}
+                            <Link
+                              href={`/inbox/${o.conversationId}`}
+                              className="text-electric hover:underline"
+                            >
+                              Open chat
+                            </Link>
+                          </>
+                        ) : null}
                       </p>
                     </div>
                   ) : null}
@@ -250,7 +292,7 @@ export default function SalesFulfilmentPage() {
                   ) : null}
                 </dl>
 
-                {o.actions.canAddTracking ? (
+                {o.actions.canAddTracking || o.actions.canMarkShipped ? (
                   <div className="mt-5 border-t border-white/10 pt-4">
                     {openId === o.id ? (
                       <form

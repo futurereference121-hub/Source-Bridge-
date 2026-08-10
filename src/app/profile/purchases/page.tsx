@@ -11,6 +11,7 @@ import { formatMinor } from "@/lib/payments/money";
 type Order = {
   id: string;
   status: string;
+  origin?: string;
   title: string;
   currency: string;
   totalChargeMinor: number;
@@ -20,6 +21,8 @@ type Order = {
   trackingNumber: string;
   trackingCarrier: string;
   inspectionEndsAt: string | null;
+  conversationId?: string | null;
+  paymentTicketId?: string | null;
   labels: { payment: string; shipping: string; delivery: string };
   listing: { id: string; slug: string; name: string; saleStatus: string } | null;
   counterparty: {
@@ -223,6 +226,24 @@ export default function PurchasesPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
+                  {o.origin === "CHAT_TICKET" || o.paymentTicketId ? (
+                    <div className="sm:col-span-2">
+                      <p className="text-xs text-white/45">
+                        Sourcing payment ticket
+                        {o.conversationId ? (
+                          <>
+                            {" · "}
+                            <Link
+                              href={`/inbox/${o.conversationId}`}
+                              className="text-electric hover:underline"
+                            >
+                              Open chat
+                            </Link>
+                          </>
+                        ) : null}
+                      </p>
+                    </div>
+                  ) : null}
                   {o.trackingNumber ? (
                     <>
                       <div>

@@ -28,6 +28,10 @@ import {
 } from "@/lib/payments/payment-option";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import {
+  buyerCanConfirmReceipt,
+  sellerCanAddTracking,
+} from "@/lib/payments/fulfilment";
+import {
   mapMessage,
   participantUserSelect,
 } from "@/lib/messaging";
@@ -219,6 +223,11 @@ function mapTicket(
     finalTransferredMinor?: number;
     refundedMinor?: number;
     procurementAdvancesFlag?: boolean;
+    trackingNumber?: string | null;
+    trackingCarrier?: string | null;
+    shippedAt?: Date | string | null;
+    deliveredAt?: Date | string | null;
+    inspectionEndsAt?: Date | string | null;
     proposedBy?: {
       id: string;
       name: string;
@@ -284,6 +293,47 @@ function mapTicket(
         })
       : { canEdit: false, canCancel: false, canDelete: false };
 
+  const trackingNumber = extras?.trackingNumber || "";
+  const trackingCarrier = extras?.trackingCarrier || "";
+  const shippedAtIso =
+    extras?.shippedAt instanceof Date
+      ? extras.shippedAt.toISOString()
+      : extras?.shippedAt
+        ? String(extras.shippedAt)
+        : null;
+  const deliveredAtIso =
+    extras?.deliveredAt instanceof Date
+      ? extras.deliveredAt.toISOString()
+      : extras?.deliveredAt
+        ? String(extras.deliveredAt)
+        : null;
+  const inspectionEndsAtIso =
+    extras?.inspectionEndsAt instanceof Date
+      ? extras.inspectionEndsAt.toISOString()
+      : extras?.inspectionEndsAt
+        ? String(extras.inspectionEndsAt)
+        : null;
+  const shipped = Boolean(shippedAtIso || trackingNumber);
+  const ptStatus = protectedStatus || "";
+  const canMarkShipped =
+    Boolean(extras?.viewerId && extras.viewerId === t.sellerId) &&
+    !isDirectPaymentOption(t.paymentOption) &&
+    sellerCanAddTracking({
+      paymentOption: t.paymentOption,
+      status: ptStatus || t.status,
+      trackingNumber,
+      procurementAdvanceAgreed: t.procurementAdvanceAgreed,
+      procurementAdvanceMinor: t.procurementAdvanceMinor,
+      procurementTransferredMinor: extras?.procurementTransferredMinor,
+    });
+  const canConfirmReceipt =
+    Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
+    buyerCanConfirmReceipt({
+      paymentOption: t.paymentOption,
+      status: ptStatus,
+      shipped,
+    });
+
   return {
     id: t.id,
     conversationId: t.conversationId,
@@ -321,6 +371,11 @@ function mapTicket(
     updatedAt: t.updatedAt.toISOString(),
     lifecycleStage,
     lifecycleLabel: lifecycleLabel(lifecycleStage),
+    trackingNumber,
+    trackingCarrier,
+    shippedAt: shippedAtIso,
+    deliveredAt: deliveredAtIso,
+    inspectionEndsAt: inspectionEndsAtIso,
     books,
     actions: {
       canReleaseProcurement: procPending,
@@ -329,6 +384,9 @@ function mapTicket(
       canEdit: lifecycle.canEdit,
       canCancel: lifecycle.canCancel,
       canDelete: lifecycle.canDelete,
+      canMarkShipped,
+      canAddTracking: canMarkShipped,
+      canConfirmReceipt,
     },
     breakdown: {
       itemCost: t.itemCostMinor,
@@ -405,6 +463,15 @@ export function lifecycleLabel(stage: string): string {
     case "ITEM_FUNDS_RELEASED":
     case "PROCUREMENT_RELEASED":
       return "ITEM FUNDS RELEASED";
+    case "AWAITING_SHIPMENT":
+    case "IN_TRANSIT":
+    case "DELIVERED":
+    case "SHIPPED":
+      return "SHIPPED";
+    case "IN_INSPECTION":
+    case "READY_TO_RELEASE":
+    case "INSPECTION":
+      return "INSPECTION";
     case "COMPLETED":
     case "RELEASED":
       return "COMPLETED";
@@ -1372,6 +1439,11 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
+          trackingNumber: true,
+          trackingCarrier: true,
+          shippedAt: true,
+          deliveredAt: true,
+          inspectionEndsAt: true,
         },
       },
     },
@@ -1406,6 +1478,11 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
     refundedMinor: pt?.refundedMinor ?? 0,
     procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+    trackingNumber: pt?.trackingNumber ?? "",
+    trackingCarrier: pt?.trackingCarrier ?? "",
+    shippedAt: pt?.shippedAt ?? null,
+    deliveredAt: pt?.deliveredAt ?? null,
+    inspectionEndsAt: pt?.inspectionEndsAt ?? null,
     proposedBy: ticket.createdBy
       ? {
           id: ticket.createdBy.id,

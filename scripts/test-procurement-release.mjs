@@ -233,6 +233,32 @@ function hashTerms(obj) {
   assert.throws(() => assertInvariants(computeProtectedFinancials(txn), 0, 201));
 }
 
+// ── Live rubber-test residual books: £50 procurement transferred, £35 final residual
+// item £50 + ship/svc £35 seller-entitled → final = sellerEntitled - procurementTransferred - priorFinal
+{
+  const liveBooks = computeProtectedFinancials({
+    itemCostMinor: 5000, // £50
+    shippingMinor: 2000, // £20
+    sellerServiceFeeMinor: 1500, // £15
+    protectionFeeMinor: 500, // platform fee (not in seller residual)
+    totalChargeMinor: 9000,
+    procurementAdvanceAgreed: true,
+    procurementAdvanceMinor: 5000,
+    procurementTransferredMinor: 5000, // already transferred £50
+    finalTransferredMinor: 0,
+  });
+  assert.equal(liveBooks.sellerEntitledMinor, 8500);
+  assert.equal(liveBooks.procurementTransferredMinor, 5000);
+  assert.equal(liveBooks.finalResidualMinor, 3500); // £35.00
+  assert.equal(
+    liveBooks.sellerEntitledMinor -
+      liveBooks.procurementTransferredMinor -
+      liveBooks.finalTransferredMinor,
+    3500,
+  );
+  assertInvariants(liveBooks, 0, 3500);
+}
+
 // ── Refunds: full before proc; platform remainder after
 {
   const before = planProtectedRefund({

@@ -30,6 +30,57 @@ function assertFulfilmentAccess() {
   }
 }
 
+/**
+ * Seller may mark shipped / add tracking on the existing fulfilment engine.
+ * Origin-agnostic (PRODUCT_CHECKOUT and CHAT_TICKET).
+ * Procurement agreed: only after item funds released (PROCUREMENT_RELEASED / transferred).
+ * No procurement: after FUNDED (same as product protected).
+ */
+export function sellerCanAddTracking(opts: {
+  paymentOption: string;
+  status: string;
+  trackingNumber?: string | null;
+  procurementAdvanceAgreed?: boolean;
+  procurementAdvanceMinor?: number;
+  procurementTransferredMinor?: number;
+}): boolean {
+  if (isDirectPaymentOption(opts.paymentOption)) return false;
+  if (opts.trackingNumber) return false;
+  if (
+    ["RELEASED", "REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED", "DISPUTED", "FAILED"].includes(
+      opts.status,
+    )
+  ) {
+    return false;
+  }
+  if (
+    !["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(opts.status)
+  ) {
+    return false;
+  }
+  const procAgreed =
+    Boolean(opts.procurementAdvanceAgreed) &&
+    (opts.procurementAdvanceMinor ?? 0) > 0;
+  if (procAgreed) {
+    const transferred =
+      (opts.procurementTransferredMinor ?? 0) > 0 ||
+      opts.status === "PROCUREMENT_RELEASED";
+    // After FUNDED but before item-fund release — wait (mirrors product timing with advance).
+    if (opts.status === "FUNDED" && !transferred) return false;
+  }
+  return true;
+}
+
+export function buyerCanConfirmReceipt(opts: {
+  paymentOption: string;
+  status: string;
+  shipped: boolean;
+}): boolean {
+  if (isDirectPaymentOption(opts.paymentOption)) return false;
+  if (!opts.shipped) return false;
+  return ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(opts.status);
+}
+
 export function mapProtectedTxnSummary(
   t: {
     id: string;
@@ -60,12 +111,14 @@ export function mapProtectedTxnSummary(
     trackingStatus: string;
     createdAt: Date;
     listingId: string | null;
+    conversationId?: string | null;
     listing?: {
       id: string;
       slug: string;
       name: string;
       saleStatus: string;
     } | null;
+    paymentTicket?: { id: string } | null;
     buyer?: {
       id: string;
       username: string | null;
@@ -103,6 +156,16 @@ export function mapProtectedTxnSummary(
     Boolean(t.procurementAdvanceAgreed) &&
     (t.procurementAdvanceMinor ?? 0) > 0 &&
     (t.procurementTransferredMinor ?? 0) === 0;
+  const canAddTracking =
+    viewerRole === "seller" &&
+    sellerCanAddTracking({
+      paymentOption: t.paymentOption,
+      status: t.status,
+      trackingNumber: t.trackingNumber,
+      procurementAdvanceAgreed: t.procurementAdvanceAgreed,
+      procurementAdvanceMinor: t.procurementAdvanceMinor,
+      procurementTransferredMinor: t.procurementTransferredMinor,
+    });
 
   return {
     id: t.id,
@@ -131,6 +194,8 @@ export function mapProtectedTxnSummary(
     trackingCarrier: t.trackingCarrier || "",
     trackingStatus: t.trackingStatus || "",
     createdAt: t.createdAt.toISOString(),
+    conversationId: t.conversationId ?? null,
+    paymentTicketId: t.paymentTicket?.id ?? null,
     listing: t.listing
       ? {
           id: t.listing.id,
@@ -169,23 +234,20 @@ export function mapProtectedTxnSummary(
       delivery: deliveryLabel(t.status, t.paymentOption),
     },
     actions: {
-      canAddTracking:
-        viewerRole === "seller" &&
-        !isDirectPaymentOption(t.paymentOption) &&
-        ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(
-          t.status,
-        ) &&
-        !t.trackingNumber,
+      canAddTracking,
+      canMarkShipped: canAddTracking,
       canRefreshTracking:
         !isDirectPaymentOption(t.paymentOption) &&
         shipped &&
-        t.trackingNumber &&
+        Boolean(t.trackingNumber) &&
         !["RELEASED", "REFUNDED", "CANCELLED"].includes(t.status),
       canConfirmReceipt:
         viewerRole === "buyer" &&
-        !isDirectPaymentOption(t.paymentOption) &&
-        shipped &&
-        ["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(t.status),
+        buyerCanConfirmReceipt({
+          paymentOption: t.paymentOption,
+          status: t.status,
+          shipped,
+        }),
       canReleaseProcurement,
       /** Sourcer/seller never releases item funds. */
       canSellerReleaseProcurement: false,
@@ -238,10 +300,21 @@ function shippingLabel(status: string, shipped: boolean, option: string) {
     }
     return shipped ? "Shipped" : "Not required for release";
   }
-  if (!shipped && (status === "FUNDED" || status === "ACCEPTED" || status === "AWAITING_PAYMENT")) {
+  if (
+    !shipped &&
+    (status === "FUNDED" ||
+      status === "PROCUREMENT_RELEASED" ||
+      status === "ACCEPTED" ||
+      status === "AWAITING_PAYMENT")
+  ) {
     return "Waiting for seller to ship";
   }
-  if (shipped && ["AWAITING_SHIPMENT", "IN_TRANSIT", "FUNDED"].includes(status)) {
+  if (
+    shipped &&
+    ["AWAITING_SHIPMENT", "IN_TRANSIT", "FUNDED", "PROCUREMENT_RELEASED"].includes(
+      status,
+    )
+  ) {
     return "Item shipped";
   }
   if (status === "DELIVERED" || status === "IN_INSPECTION" || status === "READY_TO_RELEASE") {
@@ -295,6 +368,7 @@ export async function listProtectedOrdersForUser(opts: {
       listing: {
         select: { id: true, slug: true, name: true, saleStatus: true },
       },
+      paymentTicket: { select: { id: true } },
       buyer: {
         select: { id: true, username: true, name: true, slug: true },
       },
