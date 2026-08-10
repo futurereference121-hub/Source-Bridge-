@@ -22,6 +22,8 @@ const createSchema = z.object({
   listingId: z.string().trim().nullable().optional(),
   currency: z.string().trim().length(3).optional(),
   proposalTraceId: z.string().trim().max(80).optional(),
+  /** Edit path: supersede this ticket only (multi-ticket conversations). */
+  reviseFromTicketId: z.string().trim().min(1).optional(),
 });
 
 function readProposalTraceId(req: NextRequest, body: { proposalTraceId?: string }) {
@@ -129,6 +131,7 @@ export async function POST(req: NextRequest) {
           listingId: data.listingId,
           currency: data.currency,
         },
+        reviseFromTicketId: data.reviseFromTicketId ?? null,
       }));
     } catch (inner) {
       // Attach conversationId + peer for safe denial logs below.

@@ -11,6 +11,8 @@ import {
   ensureConversationPaymentTicketMessages,
   listConversationPaymentTickets,
   mergePaymentTicketsIntoTimeline,
+  countActiveConversationTickets,
+  MAX_ACTIVE_PAYMENT_TICKETS,
 } from "@/lib/payments/tickets";
 import {
   isPaymentsTestAllowlistConfigured,
@@ -70,6 +72,7 @@ export async function GET(_req: Request, { params }: Params) {
 
     // Authoritative tickets for this conversation (all, not just recent page).
     const paymentTickets = await listConversationPaymentTickets(id);
+    const activePaymentTicketCount = await countActiveConversationTickets(id);
     const messagesAsc = [...conversation.messages].reverse().map(mapMessage);
     // Merge ALL tickets even when only recent N messages are loaded so older
     // ticket cards never vanish due to pagination. Dedupes by paymentTicketId.
@@ -126,6 +129,10 @@ export async function GET(_req: Request, { params }: Params) {
         ),
         messages,
         paymentTickets,
+        activePaymentTicketCount,
+        maxActivePaymentTickets: MAX_ACTIVE_PAYMENT_TICKETS,
+        canCreatePaymentTicket:
+          activePaymentTicketCount < MAX_ACTIVE_PAYMENT_TICKETS,
         paymentsProposalAccess,
       },
       {

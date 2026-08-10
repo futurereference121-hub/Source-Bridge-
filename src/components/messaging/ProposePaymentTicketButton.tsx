@@ -47,6 +47,8 @@ export type PaymentsProposalAccess = {
 
 export type EditTicketPrefill = {
   conversationId: string;
+  /** Specific ticket to supersede (required for multi-ticket conversations). */
+  reviseFromTicketId?: string;
   title?: string;
   currency?: string;
   itemCostMinor: number;
@@ -71,15 +73,19 @@ type ProposePaymentTicketButtonProps = {
     ticket: { id: string; conversationId?: string };
     message: ProposedTicketTimelineMessage | null;
   }) => void;
-  /** Prefill + revise mode (supersedes open ticket via createOrRevise). */
+  /** Prefill + revise mode (supersedes the given ticket via createOrRevise). */
   editFromTicket?: EditTicketPrefill | null;
   forceOpen?: boolean;
   onCloseEdit?: () => void;
   /** When true, hide the compact toolbar button (card-embedded revise form). */
   hideTrigger?: boolean;
+  /** Active (non-terminal) ticket count for this conversation. */
+  activeTicketCount?: number;
+  /** Server cap; defaults to 3. */
+  maxActiveTickets?: number;
 };
 
-const BUILD_FINGERPRINT = "pt-propose-v4-lifecycle-edit";
+const BUILD_FINGERPRINT = "pt-propose-v5-multi-active";
 
 function minorToMajor(minor: number | undefined): string {
   if (minor == null || !Number.isFinite(minor)) return "0";
@@ -103,9 +109,13 @@ export function ProposePaymentTicketButton({
   forceOpen,
   onCloseEdit,
   hideTrigger,
+  activeTicketCount = 0,
+  maxActiveTickets = 3,
 }: ProposePaymentTicketButtonProps) {
   const isEdit = Boolean(editFromTicket);
   const convId = editFromTicket?.conversationId || conversationId;
+  const atActiveLimit =
+    !isEdit && activeTicketCount >= maxActiveTickets;
 
   const [open, setOpen] = useState(Boolean(forceOpen || editFromTicket));
   const [itemMajor, setItemMajor] = useState(
@@ -216,6 +226,13 @@ export function ProposePaymentTicketButton({
       setBusy(false);
       return;
     }
+    if (atActiveLimit) {
+      setError(
+        `3 active tickets maximum. Complete, cancel, or resolve an existing ticket first. Ref: ${proposalTraceId}`,
+      );
+      setBusy(false);
+      return;
+    }
 
     try {
       const res = await fetch("/api/payments/tickets", {
@@ -240,6 +257,9 @@ export function ProposePaymentTicketButton({
           ...(editFromTicket?.buyerId ? { buyerId: editFromTicket.buyerId } : {}),
           ...(editFromTicket?.sellerId
             ? { sellerId: editFromTicket.sellerId }
+            : {}),
+          ...(editFromTicket?.reviseFromTicketId
+            ? { reviseFromTicketId: editFromTicket.reviseFromTicketId }
             : {}),
         }),
       });
@@ -335,6 +355,15 @@ export function ProposePaymentTicketButton({
               "Protected Payments are not enabled right now. Try again later."
             } Ref: ${ref}`,
           );
+        } else if (json.code === "ACTIVE_TICKET_LIMIT" || res.status === 409) {
+          setError(
+            `${
+              serverMsg ||
+              (json.code === "ACTIVE_TICKET_LIMIT"
+                ? "3 active tickets maximum"
+                : "Could not create Payment Ticket")
+            } Ref: ${ref}`,
+          );
         } else {
           setError(
             `${serverMsg || "Could not create Payment Ticket"} Ref: ${ref}`,
@@ -401,16 +430,30 @@ export function ProposePaymentTicketButton({
       {!hideTrigger && !isEdit ? (
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-electric/40 px-2.5 py-1.5 text-[11px] font-medium text-electric hover:bg-electric/10"
-          title="Propose Protected Payment"
+          onClick={() => {
+            if (atActiveLimit) return;
+            setOpen((v) => !v);
+          }}
+          disabled={atActiveLimit}
+          className={
+            atActiveLimit
+              ? "inline-flex max-w-full items-center gap-1.5 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] font-medium text-white/35"
+              : "inline-flex items-center gap-1.5 rounded-lg border border-electric/40 px-2.5 py-1.5 text-[11px] font-medium text-electric hover:bg-electric/10"
+          }
+          title={
+            atActiveLimit
+              ? "3 active tickets maximum"
+              : "Propose Protected Payment"
+          }
           data-sb-build={BUILD_FINGERPRINT}
         >
           <ShieldCheck size={14} />
-          Payment Ticket
+          <span className="truncate">
+            {atActiveLimit ? "3 active tickets maximum" : "Payment Ticket"}
+          </span>
         </button>
       ) : null}
-      {open ? (
+      {open && (isEdit || !atActiveLimit) ? (
         // role=group (NOT form): parent MessagesInbox uses a compose <form>;
         // nested <form> is invalid HTML and can steal/drop ticket proposes.
         <div

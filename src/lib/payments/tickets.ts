@@ -37,22 +37,28 @@ import {
   mapMessage,
   participantUserSelect,
 } from "@/lib/messaging";
+import {
+  ACTIVE_TICKET_STATUSES,
+  isActiveLifecycleTicket,
+  lifecycleLabel,
+  MAX_ACTIVE_PAYMENT_TICKETS,
+  resolveLifecycleStage,
+} from "@/lib/payments/ticket-lifecycle";
 
-/**
- * Ticket statuses that block a second concurrent agreement.
- * Inactive / non-blocking: DECLINED, CANCELLED, SUPERSEDED, DELETED, REFUNDED, etc.
- */
-const ACTIVE_TICKET_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"] as const;
-
-/** Historical / terminal statuses that never block a new ticket. */
-const INACTIVE_TICKET_STATUSES = [
-  "DECLINED",
-  "CANCELLED",
-  "SUPERSEDED",
-  "DELETED",
-  "VOIDED",
-  "REFUNDED",
-] as const;
+export {
+  ACTIVE_TICKET_STATUSES,
+  INACTIVE_TICKET_STATUSES,
+  isActiveLifecycleTicket,
+  isActiveTicketStatus,
+  isInactiveTicketStatus,
+  isTerminalLifecycleStage,
+  lifecycleLabel,
+  MAX_ACTIVE_PAYMENT_TICKETS,
+  resolveLifecycleStage,
+  isSubtleHistoricalTicket,
+  isCompletedLifecycleTicket,
+  subtleHistoricalLabel,
+} from "@/lib/payments/ticket-lifecycle";
 
 /** Protected txn statuses that mean money has, is, or may still be in flight. */
 const MONEY_TXN_STATUSES = [
@@ -131,14 +137,6 @@ export function ticketInvolvesMoney(input: FundingGuardInputs): boolean {
     return true;
   }
   return false;
-}
-
-export function isActiveTicketStatus(status: string): boolean {
-  return (ACTIVE_TICKET_STATUSES as readonly string[]).includes(status);
-}
-
-export function isInactiveTicketStatus(status: string): boolean {
-  return (INACTIVE_TICKET_STATUSES as readonly string[]).includes(status);
 }
 
 /**
@@ -433,84 +431,6 @@ function mapTicket(
   };
 }
 
-function resolveLifecycleStage(
-  ticketStatus: string,
-  protectedStatus: string | null,
-  procReleased: boolean,
-): string {
-  if (
-    ticketStatus === "DECLINED" ||
-    ticketStatus === "SUPERSEDED" ||
-    ticketStatus === "CANCELLED" ||
-    ticketStatus === "DELETED" ||
-    ticketStatus === "VOIDED"
-  ) {
-    return ticketStatus;
-  }
-  const st = protectedStatus || ticketStatus;
-  if (st === "RELEASED") return "COMPLETED";
-  if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
-  if (st === "DISPUTED") return "DISPUTED";
-  if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
-  if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
-  if (procReleased || st === "PROCUREMENT_RELEASED") return "ITEM_FUNDS_RELEASED";
-  if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
-  // Dual-accept is done — buyer still needs to fund.
-  if (
-    ticketStatus === "ACCEPTED" ||
-    st === "ACCEPTED" ||
-    st === "AWAITING_PAYMENT"
-  ) {
-    return "AGREED_AWAITING_PAYMENT";
-  }
-  if (ticketStatus === "PROPOSED") return "PROPOSED";
-  return ticketStatus;
-}
-
-/** Human-facing stage on the chat card badge. */
-export function lifecycleLabel(stage: string): string {
-  switch (stage) {
-    case "PROPOSED":
-      return "PROPOSED";
-    case "AGREED_AWAITING_PAYMENT":
-    case "ACCEPTED":
-    case "AWAITING_PAYMENT":
-      return "AGREED · AWAITING PAYMENT";
-    case "FUNDED":
-      return "FUNDED";
-    case "ITEM_FUNDS_RELEASED":
-    case "PROCUREMENT_RELEASED":
-      return "ITEM FUNDS RELEASED";
-    case "AWAITING_SHIPMENT":
-    case "IN_TRANSIT":
-    case "SHIPPED":
-      return "SHIPPED";
-    case "DELIVERED":
-      return "AWAITING BUYER";
-    case "IN_INSPECTION":
-    case "INSPECTION":
-      return "INSPECTION";
-    case "READY_TO_RELEASE":
-      return "RELEASING";
-    case "COMPLETED":
-    case "RELEASED":
-      return "COMPLETED";
-    case "DISPUTED":
-      return "ISSUE REPORTED";
-    case "SUPERSEDED":
-      return "SUPERSEDED";
-    case "DECLINED":
-      return "DECLINED";
-    case "CANCELLED":
-      return "CANCELLED";
-    case "DELETED":
-    case "VOIDED":
-      return "DELETED";
-    default:
-      return stage.replace(/_/g, " ");
-  }
-}
-
 async function loadProtectedTxnForGuard(protectedTransactionId: string | null) {
   if (!protectedTransactionId) return null;
   return prisma.protectedTransaction.findUnique({
@@ -626,17 +546,76 @@ export async function ensureConversationPaymentTicketMessages(
 /**
  * Authoritative Payment Tickets for a conversation (not solely via Message table).
  * Used to merge ticket cards into the chat timeline even if a marker Message is missing.
+ * Includes ProtectedTransaction so lifecycleStage is COMPLETED when RELEASED.
  */
 export async function listConversationPaymentTickets(conversationId: string) {
   const rows = await prisma.paymentTicket.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
+    include: {
+      protectedTransaction: {
+        select: {
+          status: true,
+          procurementTransferredMinor: true,
+          finalTransferredMinor: true,
+          refundedMinor: true,
+        },
+      },
+    },
   });
   return rows.map((t) =>
     mapTicket(t, {
+      protectedTxnStatus: t.protectedTransaction?.status ?? null,
+      procurementTransferredMinor:
+        t.protectedTransaction?.procurementTransferredMinor ?? 0,
+      finalTransferredMinor:
+        t.protectedTransaction?.finalTransferredMinor ?? 0,
+      refundedMinor: t.protectedTransaction?.refundedMinor ?? 0,
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
     }),
   );
+}
+
+/**
+ * Count active (non-terminal) Payment Tickets in a conversation using the
+ * shared PaymentTicket + ProtectedTransaction lifecycle helper.
+ */
+export async function countActiveConversationTickets(
+  conversationId: string,
+  excludeTicketId?: string | null,
+): Promise<number> {
+  const rows = await prisma.paymentTicket.findMany({
+    where: {
+      conversationId,
+      ...(excludeTicketId ? { id: { not: excludeTicketId } } : {}),
+    },
+    select: {
+      id: true,
+      status: true,
+      protectedTransaction: {
+        select: {
+          status: true,
+          procurementTransferredMinor: true,
+        },
+      },
+    },
+  });
+  let n = 0;
+  for (const r of rows) {
+    const procReleased =
+      (r.protectedTransaction?.procurementTransferredMinor ?? 0) > 0 ||
+      r.protectedTransaction?.status === "PROCUREMENT_RELEASED";
+    if (
+      isActiveLifecycleTicket({
+        ticketStatus: r.status,
+        protectedStatus: r.protectedTransaction?.status ?? null,
+        procReleased,
+      })
+    ) {
+      n += 1;
+    }
+  }
+  return n;
 }
 
 type TimelineMessageLike = {
@@ -699,6 +678,12 @@ export function mergePaymentTicketsIntoTimeline(
   });
 }
 
+/**
+ * Block a second active agreement on the same sourcing request in a
+ * *different* conversation. Same-conversation multi-ticket is allowed (cap via
+ * MAX_ACTIVE_PAYMENT_TICKETS) so funding/completing ticket A never blocks B/C
+ * in the same thread.
+ */
 async function assertNoConcurrentSourcingAgreement(opts: {
   sourcingRequestId: string;
   conversationId: string;
@@ -709,23 +694,48 @@ async function assertNoConcurrentSourcingAgreement(opts: {
       sourcingRequestId: opts.sourcingRequestId,
       status: { in: [...ACTIVE_TICKET_STATUSES] },
       ...(opts.excludeTicketId ? { id: { not: opts.excludeTicketId } } : {}),
-      // Same conversation supersede is handled separately; block other threads.
+      // Same-conversation multi-ticket independence: only other threads.
       conversationId: { not: opts.conversationId },
     },
-    select: { id: true },
+    select: { id: true, protectedTransactionId: true, status: true },
   });
   if (activeTicket) {
-    throw Object.assign(
-      new Error(
-        "This sourcing request already has an active Payment Ticket agreement",
-      ),
-      { status: 409, code: "SOURCING_TICKET_ACTIVE" },
-    );
+    // COMPLETED (RELEASED PT) does not block — only true active lifecycles.
+    let stillActive = true;
+    if (activeTicket.protectedTransactionId) {
+      const pt = await prisma.protectedTransaction.findUnique({
+        where: { id: activeTicket.protectedTransactionId },
+        select: { status: true, procurementTransferredMinor: true },
+      });
+      const procReleased =
+        (pt?.procurementTransferredMinor ?? 0) > 0 ||
+        pt?.status === "PROCUREMENT_RELEASED";
+      stillActive = isActiveLifecycleTicket({
+        ticketStatus: activeTicket.status,
+        protectedStatus: pt?.status ?? null,
+        procReleased,
+      });
+    } else {
+      stillActive = isActiveLifecycleTicket({
+        ticketStatus: activeTicket.status,
+      });
+    }
+    if (stillActive) {
+      throw Object.assign(
+        new Error(
+          "This sourcing request already has an active Payment Ticket agreement",
+        ),
+        { status: 409, code: "SOURCING_TICKET_ACTIVE" },
+      );
+    }
   }
   const activeTxn = await prisma.protectedTransaction.findFirst({
     where: {
       sourcingRequestId: opts.sourcingRequestId,
       status: { in: [...ACTIVE_TXN_STATUSES] },
+      // Multi-ticket independence: funded/open PT in *this* conversation
+      // must not block additional tickets here.
+      conversationId: { not: opts.conversationId },
     },
     select: { id: true },
   });
@@ -802,6 +812,8 @@ export async function createOrRevisePaymentTicket(opts: {
   buyerId: string;
   sellerId: string;
   amounts: TicketAmountsInput;
+  /** When set, supersede this specific ticket only (edit terms). */
+  reviseFromTicketId?: string | null;
 }) {
   if (!isProtectedPaymentsEnabled() && !isDirectPaymentsEnabled()) {
     throw Object.assign(new Error("Protected Payments are not enabled"), {
@@ -858,6 +870,7 @@ export async function createOrRevisePaymentTicket(opts: {
     await assertNoConcurrentSourcingAgreement({
       sourcingRequestId,
       conversationId: opts.conversationId,
+      excludeTicketId: opts.reviseFromTicketId ?? null,
     });
   }
 
@@ -867,42 +880,120 @@ export async function createOrRevisePaymentTicket(opts: {
     paymentOption,
   );
 
-  const open = await prisma.paymentTicket.findFirst({
-    where: {
-      conversationId: opts.conversationId,
-      status: { in: ["DRAFT", "PROPOSED", "ACCEPTED"] },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  // Edit path: supersede one specific open ticket. New proposes never auto-
+  // supersede siblings — multi-ticket independence for B/C after A is funded.
+  let open: {
+    id: string;
+    status: string;
+    revision: number;
+    title: string;
+    listingId: string | null;
+    protectedTransactionId: string | null;
+  } | null = null;
 
-  // Same conversation supersede — refuse if open ticket has any money/PI.
-  if (open) {
-    const openPt = await loadProtectedTxnForGuard(open.protectedTransactionId);
+  if (opts.reviseFromTicketId) {
+    const target = await prisma.paymentTicket.findFirst({
+      where: {
+        id: opts.reviseFromTicketId,
+        conversationId: opts.conversationId,
+      },
+    });
+    if (!target) {
+      throw Object.assign(new Error("Ticket to revise not found"), {
+        status: 404,
+        code: "TICKET_NOT_FOUND",
+      });
+    }
+    if (!["DRAFT", "PROPOSED", "ACCEPTED"].includes(target.status)) {
+      throw Object.assign(
+        new Error("Only open unfunded tickets can be revised"),
+        { status: 409, code: "TICKET_NOT_REVISABLE" },
+      );
+    }
+    const openPt = await loadProtectedTxnForGuard(target.protectedTransactionId);
     if (
-      open.status === "FUNDED" ||
-      ticketInvolvesMoney({ ticketStatus: open.status, protectedTxn: openPt })
+      ticketInvolvesMoney({
+        ticketStatus: target.status,
+        protectedTxn: openPt,
+      })
     ) {
       throw Object.assign(
-        new Error(
-          "Cannot revise a funded or in-progress Payment Ticket",
-        ),
+        new Error("Cannot revise a funded or in-progress Payment Ticket"),
         { status: 409, code: "TICKET_FUNDED" },
       );
     }
+    open = target;
   }
 
-  // Same conversation supersede — still block if another ticket for this
-  // sourcing request is already FUNDED.
+  // Max 3 ACTIVE tickets (derived lifecycle). Revising supersedes the old one,
+  // so exclude it from the count. Completed (RELEASED) does not count.
+  const activeCount = await countActiveConversationTickets(
+    opts.conversationId,
+    open?.id ?? null,
+  );
+  if (activeCount >= MAX_ACTIVE_PAYMENT_TICKETS) {
+    throw Object.assign(
+      new Error("This conversation already has 3 active Payment Tickets"),
+      {
+        status: 409,
+        code: "ACTIVE_TICKET_LIMIT",
+        maxActive: MAX_ACTIVE_PAYMENT_TICKETS,
+      },
+    );
+  }
+
+  // Funded / in-progress money ticket on the same sourcing request in a
+  // *different* conversation still blocks. Same-conversation funded tickets
+  // do not — multi-ticket independence.
   if (sourcingRequestId) {
-    const fundedElsewhere = await prisma.paymentTicket.findFirst({
+    const otherSrTickets = await prisma.paymentTicket.findMany({
       where: {
         sourcingRequestId,
-        status: "FUNDED",
-        ...(open ? { id: { not: open.id } } : {}),
+        conversationId: { not: opts.conversationId },
+        status: { in: [...ACTIVE_TICKET_STATUSES] },
       },
-      select: { id: true },
+      select: {
+        status: true,
+        protectedTransaction: {
+          select: {
+            status: true,
+            procurementTransferredMinor: true,
+            fundedAt: true,
+          },
+        },
+      },
     });
-    if (fundedElsewhere) {
+    const otherActiveMoney = otherSrTickets.some((row) => {
+      const st = row.protectedTransaction?.status ?? null;
+      const procReleased =
+        (row.protectedTransaction?.procurementTransferredMinor ?? 0) > 0 ||
+        st === "PROCUREMENT_RELEASED";
+      if (
+        !isActiveLifecycleTicket({
+          ticketStatus: row.status,
+          protectedStatus: st,
+          procReleased,
+        })
+      ) {
+        return false;
+      }
+      if (row.status === "FUNDED") return true;
+      if (row.protectedTransaction?.fundedAt) return true;
+      if (
+        st &&
+        ![
+          "DRAFT",
+          "AWAITING_ACCEPTANCE",
+          "ACCEPTED",
+          "AWAITING_PAYMENT",
+          "CANCELLED",
+        ].includes(st)
+      ) {
+        return true;
+      }
+      return false;
+    });
+    if (otherActiveMoney) {
       throw Object.assign(
         new Error(
           "This sourcing request already has a funded Payment Ticket",

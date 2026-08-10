@@ -7,8 +7,9 @@
  */
 import assert from "node:assert/strict";
 
-// --- Mirrors of tickets.ts guards (keep in sync) ---
+// --- Mirrors of ticket-lifecycle.ts + tickets.ts guards (keep in sync) ---
 
+const MAX_ACTIVE_PAYMENT_TICKETS = 3;
 const ACTIVE_TICKET_STATUSES = ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"];
 const INACTIVE_TICKET_STATUSES = [
   "DECLINED",
@@ -17,6 +18,17 @@ const INACTIVE_TICKET_STATUSES = [
   "DELETED",
   "VOIDED",
   "REFUNDED",
+];
+const TERMINAL_LIFECYCLE_STAGES = [
+  "COMPLETED",
+  "RELEASED",
+  "CANCELLED",
+  "DECLINED",
+  "SUPERSEDED",
+  "DELETED",
+  "VOIDED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
 ];
 const MONEY_TXN_STATUSES = [
   "FUNDED",
@@ -57,6 +69,58 @@ function ticketInvolvesMoney(input) {
   return false;
 }
 
+function resolveLifecycleStage(ticketStatus, protectedStatus, procReleased) {
+  if (
+    ["DECLINED", "SUPERSEDED", "CANCELLED", "DELETED", "VOIDED"].includes(
+      ticketStatus,
+    )
+  ) {
+    return ticketStatus;
+  }
+  const st = protectedStatus || ticketStatus;
+  if (st === "RELEASED") return "COMPLETED";
+  if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
+  if (st === "DISPUTED") return "DISPUTED";
+  if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
+  if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
+  if (procReleased || st === "PROCUREMENT_RELEASED") return "ITEM_FUNDS_RELEASED";
+  if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
+  if (
+    ticketStatus === "ACCEPTED" ||
+    st === "ACCEPTED" ||
+    st === "AWAITING_PAYMENT"
+  ) {
+    return "AGREED_AWAITING_PAYMENT";
+  }
+  if (ticketStatus === "PROPOSED") return "PROPOSED";
+  return ticketStatus;
+}
+
+function isActiveTicketStatus(status) {
+  return ACTIVE_TICKET_STATUSES.includes(status);
+}
+
+function isInactiveTicketStatus(status) {
+  return INACTIVE_TICKET_STATUSES.includes(status);
+}
+
+function isTerminalLifecycleStage(stage) {
+  return TERMINAL_LIFECYCLE_STAGES.includes(stage);
+}
+
+function isActiveLifecycleTicket(opts) {
+  if (isInactiveTicketStatus(opts.ticketStatus)) return false;
+  const stage =
+    opts.lifecycleStage ||
+    resolveLifecycleStage(
+      opts.ticketStatus,
+      opts.protectedStatus ?? null,
+      Boolean(opts.procReleased),
+    );
+  if (isTerminalLifecycleStage(stage)) return false;
+  return true;
+}
+
 function computeTicketLifecycleActions(opts) {
   const isParty =
     opts.viewerId === opts.buyerId || opts.viewerId === opts.sellerId;
@@ -75,12 +139,10 @@ function computeTicketLifecycleActions(opts) {
   return { canEdit: false, canCancel: false, canDelete: false };
 }
 
-function isActiveTicketStatus(status) {
-  return ACTIVE_TICKET_STATUSES.includes(status);
-}
-
-function blocksNewTicket(status) {
-  return isActiveTicketStatus(status);
+/** Cap model: new create only blocked at max active; revise always ok. */
+function canCreateNewTicket(activeCount, isRevise) {
+  if (isRevise) return true;
+  return activeCount < MAX_ACTIVE_PAYMENT_TICKETS;
 }
 
 function ok(name, cond) {
@@ -236,12 +298,90 @@ const stranger = "stranger";
   ok("SUPERSEDED: no actions", !a.canEdit && !a.canCancel && !a.canDelete);
 }
 
-// --- Active vs inactive constraint ---
+// --- Derived lifecycle + max 3 active (independence) ---
+ok(
+  "RELEASED txn → COMPLETED stage",
+  resolveLifecycleStage("FUNDED", "RELEASED", false) === "COMPLETED",
+);
+ok(
+  "COMPLETED not active (does not block create)",
+  !isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "RELEASED",
+  }),
+);
+ok(
+  "FUNDED in-progress is active",
+  isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "FUNDED",
+  }),
+);
+ok(
+  "IN_TRANSIT is active",
+  isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "IN_TRANSIT",
+  }),
+);
+ok(
+  "DECLINED inactive",
+  !isActiveLifecycleTicket({ ticketStatus: "DECLINED" }),
+);
+ok(
+  "CANCELLED inactive",
+  !isActiveLifecycleTicket({ ticketStatus: "CANCELLED" }),
+);
+ok(
+  "SUPERSEDED inactive",
+  !isActiveLifecycleTicket({ ticketStatus: "SUPERSEDED" }),
+);
+ok(
+  "PROPOSED active",
+  isActiveLifecycleTicket({ ticketStatus: "PROPOSED" }),
+);
+ok(
+  "AGREED awaiting payment active",
+  isActiveLifecycleTicket({
+    ticketStatus: "ACCEPTED",
+    protectedStatus: "AWAITING_PAYMENT",
+  }),
+);
+ok("max active is 3", MAX_ACTIVE_PAYMENT_TICKETS === 3);
+ok("0 active → can create", canCreateNewTicket(0, false));
+ok("2 active → can create", canCreateNewTicket(2, false));
+ok("3 active → blocked", !canCreateNewTicket(3, false));
+ok("3 active + revise still allowed", canCreateNewTicket(3, true));
+{
+  const three = [
+    { ticketStatus: "PROPOSED" },
+    { ticketStatus: "ACCEPTED", protectedStatus: "AWAITING_PAYMENT" },
+    { ticketStatus: "FUNDED", protectedStatus: "IN_TRANSIT" },
+  ].filter((t) => isActiveLifecycleTicket(t));
+  ok(
+    "three concurrent active tickets allowed",
+    three.length === 3 && !canCreateNewTicket(three.length, false),
+  );
+}
+{
+  const afterFundedPlusProposed = [
+    isActiveLifecycleTicket({
+      ticketStatus: "FUNDED",
+      protectedStatus: "FUNDED",
+    }),
+    isActiveLifecycleTicket({ ticketStatus: "PROPOSED" }),
+  ].filter(Boolean).length;
+  ok(
+    "funded A + proposed B independent (2 slots)",
+    afterFundedPlusProposed === 2 &&
+      canCreateNewTicket(afterFundedPlusProposed, false),
+  );
+}
 for (const s of ACTIVE_TICKET_STATUSES) {
-  ok(`active ${s} blocks new ticket`, blocksNewTicket(s));
+  ok(`status list active ${s}`, isActiveTicketStatus(s));
 }
 for (const s of INACTIVE_TICKET_STATUSES) {
-  ok(`inactive ${s} does not block`, !blocksNewTicket(s));
+  ok(`status list inactive ${s}`, isInactiveTicketStatus(s));
 }
 
 // --- Revision invalidates acceptance (model) ---
@@ -285,7 +425,7 @@ function termsWithProcurement(agreed, itemCostMinor, eligible) {
   );
 }
 
-// --- Supersede flow model ---
+// --- Supersede flow model (edit path only; multi-ticket create does not auto-supersede) ---
 function supersedeModel(open, newRevision) {
   return {
     oldStatus: open ? "SUPERSEDED" : null,
@@ -299,6 +439,10 @@ function supersedeModel(open, newRevision) {
   ok("superseded retained historically", s.oldStatus === "SUPERSEDED" && s.historicalRetained);
   ok("new is PROPOSED revision++", s.newStatus === "PROPOSED" && s.revision === 2);
 }
+ok(
+  "new propose without reviseFromTicketId does not supersede",
+  supersedeModel(null, 1).oldStatus === null,
+);
 
 // API route shape contract
 function canHardDelete({ status, involvesMoney, bothApproved }) {

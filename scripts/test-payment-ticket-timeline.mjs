@@ -113,11 +113,19 @@ function lifecycleLabel(stage) {
 }
 
 function resolveLifecycleStage(ticketStatus, protectedStatus, procReleased) {
-  if (["DECLINED", "SUPERSEDED", "CANCELLED"].includes(ticketStatus)) {
+  if (
+    ["DECLINED", "SUPERSEDED", "CANCELLED", "DELETED", "VOIDED"].includes(
+      ticketStatus,
+    )
+  ) {
     return ticketStatus;
   }
   const st = protectedStatus || ticketStatus;
   if (st === "RELEASED") return "COMPLETED";
+  if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
+  if (st === "DISPUTED") return "DISPUTED";
+  if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
+  if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
   if (procReleased || st === "PROCUREMENT_RELEASED") return "ITEM_FUNDS_RELEASED";
   if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
   if (

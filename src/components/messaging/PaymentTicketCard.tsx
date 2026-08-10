@@ -1,12 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, MoreHorizontal, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, ShieldCheck } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
+import {
+  isCompletedLifecycleTicket,
+  isSubtleHistoricalTicket,
+  isTerminalLifecycleStage,
+  resolveLifecycleStage,
+  subtleHistoricalLabel,
+} from "@/lib/payments/ticket-lifecycle";
 
 export type PaymentTicketView = {
   id: string;
@@ -503,12 +510,23 @@ export function PaymentTicketCard({
     : iAmSeller
       ? ticket.sellerApprovedRevision === ticket.revision
       : false;
-  const historical =
-    ticket.status === "DECLINED" ||
-    ticket.status === "SUPERSEDED" ||
-    ticket.status === "CANCELLED" ||
-    ticket.status === "DELETED" ||
-    ticket.status === "VOIDED";
+  const subtleHistorical = isSubtleHistoricalTicket(ticket.status);
+  const lifecycleStageResolved =
+    ticket.lifecycleStage ||
+    resolveLifecycleStage(
+      ticket.status,
+      ticket.protectedTxnStatus ?? null,
+      (ticket.books?.procurementTransferredMinor ?? 0) > 0,
+    );
+  const isCompleted = isCompletedLifecycleTicket({
+    ticketStatus: ticket.status,
+    protectedStatus: ticket.protectedTxnStatus ?? null,
+    lifecycleStage: lifecycleStageResolved,
+  });
+  const isTerminal =
+    isTerminalLifecycleStage(lifecycleStageResolved) || subtleHistorical;
+  // Actions / CTAs blocked for all terminal lifecycle stages.
+  const historical = isTerminal;
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
   const canRespond =
     open && ticket.status === "PROPOSED" && !myApproved && (iAmBuyer || iAmSeller);
@@ -629,27 +647,96 @@ export function PaymentTicketCard({
     ],
   ] as const;
 
-  // Historical: collapsed subdued card, expandable to view terms.
-  if (historical && !expanded) {
+  const needsAction =
+    canRespond ||
+    canPay ||
+    canRelease ||
+    canMarkShipped ||
+    canConfirmReceipt ||
+    canReleaseNow ||
+    canReportIssue ||
+    Boolean(checkout) ||
+    confirmRelease ||
+    confirmCancel ||
+    confirmDelete ||
+    editOpen;
+
+  // --- Collapsed: subtle system-message style for cancelled/declined/superseded ---
+  if (subtleHistorical && !expanded) {
     return (
-      <div className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 opacity-75">
+      <div className="w-full min-w-0 max-w-full px-1 py-1.5">
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="flex w-full items-start justify-between gap-3 text-left"
+          className="flex w-full min-w-0 items-center justify-between gap-2 text-left text-[11px] text-white/40 hover:text-white/55"
         >
-          <div className="flex items-center gap-2">
-            <ShieldCheck size={16} className="text-white/35" />
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
-                Payment Ticket · v{ticket.revision}
+          <span className="min-w-0 truncate">
+            {subtleHistoricalLabel(ticket.status)}
+            {ticket.title ? ` · ${ticket.title}` : ""}
+          </span>
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-white/30">
+            View
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  // --- Collapsed: compact active / completed (no big CTAs) ---
+  if (!expanded) {
+    return (
+      <div
+        className={
+          isCompleted
+            ? "w-full min-w-0 max-w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 opacity-85 sm:px-4"
+            : "w-full min-w-0 max-w-full rounded-xl border border-electric/30 bg-[#07152c] px-3 py-2.5 sm:px-4"
+        }
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex w-full min-w-0 items-start justify-between gap-2 text-left sm:gap-3"
+        >
+          <div className="flex min-w-0 items-start gap-2">
+            <ShieldCheck
+              size={16}
+              className={
+                isCompleted
+                  ? "mt-0.5 shrink-0 text-white/35"
+                  : "mt-0.5 shrink-0 text-electric"
+              }
+            />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span
+                  className={
+                    isCompleted
+                      ? "rounded border border-white/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/45"
+                      : "rounded border border-electric/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-electric"
+                  }
+                >
+                  {isCompleted ? "COMPLETED" : stageLabel}
+                </span>
+                {needsAction ? (
+                  <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200/90">
+                    Action required
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 truncate text-sm font-medium text-white/85">
+                {ticket.title || "Payment Ticket"}
               </p>
-              <p className="mt-0.5 text-sm text-white/55">
-                {ticket.title || "Payment Ticket"} · {stageLabel}
+              <p className="mt-0.5 text-xs tabular-nums text-white/50">
+                {formatMinor(ticket.totalChargeMinor, cur)}
+                <span className="text-white/30"> · v{ticket.revision}</span>
               </p>
             </div>
           </div>
-          <span className="text-[10px] text-white/35">View</span>
+          <ChevronDown
+            size={16}
+            className="mt-1 shrink-0 text-white/35"
+            aria-hidden
+          />
         </button>
       </div>
     );
@@ -659,17 +746,17 @@ export function PaymentTicketCard({
     <div
       className={
         historical
-          ? "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4 opacity-80"
-          : "w-full rounded-xl border border-electric/35 bg-[#07152c] px-4 py-4"
+          ? "w-full min-w-0 max-w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-4 opacity-80 sm:px-4"
+          : "w-full min-w-0 max-w-full rounded-xl border border-electric/35 bg-[#07152c] px-3 py-4 sm:px-4"
       }
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-start justify-between gap-2 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-2">
           <ShieldCheck
             size={18}
-            className={historical ? "text-white/40" : "text-electric"}
+            className={historical ? "shrink-0 text-white/40" : "shrink-0 text-electric"}
           />
-          <div>
+          <div className="min-w-0">
             <p
               className={
                 historical
@@ -679,12 +766,12 @@ export function PaymentTicketCard({
             >
               Protected Payment
             </p>
-            <p className="mt-0.5 text-sm font-medium text-white">
+            <p className="mt-0.5 truncate text-sm font-medium text-white">
               {ticket.title || "Payment Ticket"} · v{ticket.revision}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
             {stageLabel}
           </span>
@@ -741,18 +828,24 @@ export function PaymentTicketCard({
               ) : null}
             </div>
           ) : null}
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="rounded-md border border-white/15 p-1 text-white/55 hover:border-white/30 hover:text-white"
+            aria-label="Collapse ticket"
+          >
+            <ChevronUp size={16} />
+          </button>
         </div>
       </div>
 
-      {historical ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          className="mt-1 text-[10px] text-white/40 hover:text-white/60"
-        >
-          Collapse
-        </button>
-      ) : null}
+      <button
+        type="button"
+        onClick={() => setExpanded(false)}
+        className="mt-1 text-[10px] text-white/40 hover:text-white/60"
+      >
+        Collapse
+      </button>
 
       {proposerLabel || proposedWhen ? (
         <p className="mt-2 text-xs text-white/45">
@@ -1310,6 +1403,7 @@ export function PaymentTicketCard({
             forceOpen
             editFromTicket={{
               conversationId: ticket.conversationId,
+              reviseFromTicketId: ticket.id,
               title: ticket.title,
               currency: ticket.currency,
               itemCostMinor: ticket.itemCostMinor,

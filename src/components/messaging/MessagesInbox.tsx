@@ -21,6 +21,10 @@ import {
   ProposePaymentTicketButton,
   type PaymentsProposalAccess,
 } from "@/components/messaging/ProposePaymentTicketButton";
+import {
+  isActiveLifecycleTicket,
+  MAX_ACTIVE_PAYMENT_TICKETS,
+} from "@/lib/payments/ticket-lifecycle";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
@@ -172,7 +176,28 @@ type TimelineTicketLite = {
   revision?: number;
   status?: string;
   title?: string;
+  lifecycleStage?: string;
+  protectedTxnStatus?: string | null;
 };
+
+function countActiveTicketsClient(
+  tickets: TimelineTicketLite[] | null | undefined,
+): number {
+  if (!tickets?.length) return 0;
+  let n = 0;
+  for (const t of tickets) {
+    if (
+      isActiveLifecycleTicket({
+        ticketStatus: t.status || "PROPOSED",
+        protectedStatus: t.protectedTxnStatus ?? null,
+        lifecycleStage: t.lifecycleStage ?? null,
+      })
+    ) {
+      n += 1;
+    }
+  }
+  return n;
+}
 
 function mergePaymentTicketsClient(
   conversationId: string,
@@ -250,6 +275,7 @@ export function MessagesInbox({
   const [threadRefresh, setThreadRefresh] = useState(0);
   const [proposalAccess, setProposalAccess] =
     useState<PaymentsProposalAccess | null>(null);
+  const [activeTicketCount, setActiveTicketCount] = useState(0);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -336,6 +362,7 @@ export function MessagesInbox({
       setActiveConversation(null);
       setMessagesCursor(null);
       setProposalAccess(null);
+      setActiveTicketCount(0);
       return;
     }
 
@@ -346,6 +373,7 @@ export function MessagesInbox({
       setThreadLoading(true);
       setMessages([]);
       setProposalAccess(null);
+      setActiveTicketCount(0);
       try {
         // Single request — conversation GET already returns recent messages.
         const res = await fetch(`/api/conversations/${activeId}`, {
@@ -378,6 +406,11 @@ export function MessagesInbox({
         );
         setMessages(msgs);
         setMessagesCursor(msgs.length >= 30 ? msgs[0]?.id ?? null : null);
+        const serverCount =
+          typeof data.activePaymentTicketCount === "number"
+            ? data.activePaymentTicketCount
+            : countActiveTicketsClient(tickets);
+        setActiveTicketCount(serverCount);
       } catch (err) {
         if (!cancelled) {
           showToast(
@@ -386,6 +419,7 @@ export function MessagesInbox({
           setActiveConversation(null);
           setMessages([]);
           setMessagesCursor(null);
+          setActiveTicketCount(0);
         }
       } finally {
         if (!cancelled) setThreadLoading(false);
@@ -1054,6 +1088,8 @@ export function MessagesInbox({
                     conversationId={activeId!}
                     myId={myId}
                     proposalAccess={proposalAccess}
+                    activeTicketCount={activeTicketCount}
+                    maxActiveTickets={MAX_ACTIVE_PAYMENT_TICKETS}
                     onCreated={({ ticket, message }) => {
                       shouldScrollRef.current = true;
                       const now = new Date().toISOString();
@@ -1063,6 +1099,7 @@ export function MessagesInbox({
                         );
                         return;
                       }
+                      setActiveTicketCount((n) => n + 1);
                       // Prefer server message; if missing, synthetic row so card renders.
                       const msg = (message
                         ? {
