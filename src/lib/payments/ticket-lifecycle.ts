@@ -201,3 +201,54 @@ export function subtleHistoricalLabel(ticketStatus: string): string {
       return "Payment agreement closed";
   }
 }
+
+/**
+ * Seller share still owed after procurement + final transfers.
+ * remainingSellerEntitlement = sellerEntitled − procurement − final
+ */
+export function remainingSellerEntitlementMinor(opts: {
+  sellerEntitledMinor: number;
+  procurementTransferredMinor: number;
+  finalTransferredMinor: number;
+}): number {
+  return Math.max(
+    0,
+    (opts.sellerEntitledMinor ?? 0) -
+      (opts.procurementTransferredMinor ?? 0) -
+      (opts.finalTransferredMinor ?? 0),
+  );
+}
+
+/**
+ * Amber "item funds released… remaining protected" copy.
+ * Show only when procurement has moved AND residual seller share remains
+ * AND the ticket is still financially open (not RELEASED/COMPLETED with residual 0).
+ */
+export function shouldShowItemFundsRemainingProtectedMessage(opts: {
+  procurementTransferredMinor: number;
+  finalTransferredMinor?: number;
+  sellerEntitledMinor: number;
+  protectedStatus?: string | null;
+  lifecycleStage?: string | null;
+  ticketStatus?: string;
+}): boolean {
+  const proc = opts.procurementTransferredMinor ?? 0;
+  if (proc <= 0) return false;
+  const remaining = remainingSellerEntitlementMinor({
+    sellerEntitledMinor: opts.sellerEntitledMinor ?? 0,
+    procurementTransferredMinor: proc,
+    finalTransferredMinor: opts.finalTransferredMinor ?? 0,
+  });
+  if (remaining <= 0) return false;
+  if (
+    isCompletedLifecycleTicket({
+      ticketStatus: opts.ticketStatus || opts.protectedStatus || "FUNDED",
+      protectedStatus: opts.protectedStatus ?? null,
+      lifecycleStage: opts.lifecycleStage ?? null,
+    })
+  ) {
+    return false;
+  }
+  if (opts.protectedStatus === "RELEASED") return false;
+  return true;
+}

@@ -223,6 +223,59 @@ ok(
   ticketInvolvesMoney({ ticketStatus: "FUNDED", protectedTxn: null }),
 );
 
+function remainingSellerEntitlementMinor(opts) {
+  return Math.max(
+    0,
+    (opts.sellerEntitledMinor ?? 0) -
+      (opts.procurementTransferredMinor ?? 0) -
+      (opts.finalTransferredMinor ?? 0),
+  );
+}
+
+function shouldShowItemFundsRemainingProtectedMessage(opts) {
+  const proc = opts.procurementTransferredMinor ?? 0;
+  if (proc <= 0) return false;
+  const remaining = remainingSellerEntitlementMinor({
+    sellerEntitledMinor: opts.sellerEntitledMinor ?? 0,
+    procurementTransferredMinor: proc,
+    finalTransferredMinor: opts.finalTransferredMinor ?? 0,
+  });
+  if (remaining <= 0) return false;
+  if (opts.protectedStatus === "RELEASED") return false;
+  if (opts.lifecycleStage === "COMPLETED" || opts.lifecycleStage === "RELEASED") {
+    return false;
+  }
+  return true;
+}
+
+ok(
+  "partial proc: yellow message on",
+  shouldShowItemFundsRemainingProtectedMessage({
+    procurementTransferredMinor: 5000,
+    finalTransferredMinor: 0,
+    sellerEntitledMinor: 8500,
+    protectedStatus: "PROCUREMENT_RELEASED",
+  }) === true,
+);
+ok(
+  "full release residual 0: yellow off",
+  shouldShowItemFundsRemainingProtectedMessage({
+    procurementTransferredMinor: 10000,
+    finalTransferredMinor: 5000,
+    sellerEntitledMinor: 15000,
+    protectedStatus: "RELEASED",
+    lifecycleStage: "COMPLETED",
+  }) === false,
+);
+ok(
+  "newest test books residual 0",
+  remainingSellerEntitlementMinor({
+    sellerEntitledMinor: 15000,
+    procurementTransferredMinor: 10000,
+    finalTransferredMinor: 5000,
+  }) === 0,
+);
+
 // --- Unit: actions ---
 const buyer = "buyer1";
 const seller = "seller1";

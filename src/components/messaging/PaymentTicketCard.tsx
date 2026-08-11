@@ -12,6 +12,7 @@ import {
   isSubtleHistoricalTicket,
   isTerminalLifecycleStage,
   resolveLifecycleStage,
+  shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
 } from "@/lib/payments/ticket-lifecycle";
 
@@ -68,6 +69,7 @@ export type PaymentTicketView = {
     remainingProtectedSellerShareMinor: number;
     platformFeeMinor: number;
     procurementTransferredMinor: number;
+    finalTransferredMinor?: number;
     finalResidualMinor?: number;
     sellerEntitledMinor?: number;
   };
@@ -93,6 +95,9 @@ type Props = {
   proposedAt?: string | null;
   proposedByName?: string | null;
   onChanged?: () => void;
+  /** Lifted collapse state so conversation revalidation does not reset it. */
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 export function PaymentTicketCard({
@@ -101,6 +106,8 @@ export function PaymentTicketCard({
   proposedAt,
   proposedByName,
   onChanged,
+  expanded: expandedControlled,
+  onExpandedChange,
 }: Props) {
   const [ticket, setTicket] = useState<PaymentTicketView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,7 +119,20 @@ export function PaymentTicketCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expandedLocal, setExpandedLocal] = useState(false);
+  const expanded =
+    typeof expandedControlled === "boolean"
+      ? expandedControlled
+      : expandedLocal;
+  const setExpanded = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const value =
+        typeof next === "function" ? next(expanded) : next;
+      if (onExpandedChange) onExpandedChange(value);
+      else setExpandedLocal(value);
+    },
+    [expanded, onExpandedChange],
+  );
   const [gone, setGone] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [checkout, setCheckout] = useState<{
@@ -129,9 +149,12 @@ export function PaymentTicketCard({
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const res = await fetch(`/api/payments/tickets/${ticketId}`, {
         cache: "no-store",
@@ -147,15 +170,17 @@ export function PaymentTicketCard({
         return;
       }
       if (!res.ok || !json.ticket) {
-        setError(json.error || "Could not load Payment Ticket");
-        setTicket(null);
+        if (!silent) {
+          setError(json.error || "Could not load Payment Ticket");
+          setTicket(null);
+        }
       } else {
         setTicket(json.ticket);
       }
     } catch {
-      setError("Could not load Payment Ticket");
+      if (!silent) setError("Could not load Payment Ticket");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [ticketId]);
 
@@ -192,6 +217,38 @@ export function PaymentTicketCard({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [menuOpen]);
 
+  // Soft revalidate ticket state while conversation is open (visibility-aware).
+  useEffect(() => {
+    if (typeof window === "undefined" || !ticketId) return;
+    let cancelled = false;
+    let inFlight = false;
+    const POLL_MS = 2500;
+    async function soft() {
+      if (cancelled || inFlight) return;
+      if (document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        await load({ silent: true });
+      } finally {
+        inFlight = false;
+      }
+    }
+    const id = window.setInterval(() => void soft(), POLL_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void soft();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    window.addEventListener("online", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+      window.removeEventListener("online", onVis);
+    };
+  }, [ticketId, load]);
+
   // After return from 3DS: poll — funding only when webhook sets FUNDED.
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -200,7 +257,7 @@ export function PaymentTicketCard({
     let n = 0;
     const id = window.setInterval(() => {
       n += 1;
-      void load();
+      void load({ silent: true });
       if (n >= 12) window.clearInterval(id);
     }, 2500);
     return () => window.clearInterval(id);
@@ -609,6 +666,26 @@ export function PaymentTicketCard({
     ticket.books?.platformFeeMinor ?? ticket.protectionFeeMinor ?? 0;
   const itemFundsReceived =
     ticket.books?.procurementTransferredMinor ?? 0;
+  const sellerEntitledMinor =
+    ticket.books?.sellerEntitledMinor ??
+    ticket.itemCostMinor +
+      ticket.shippingMinor +
+      ticket.sellerServiceFeeMinor;
+  const finalTransferredMinor =
+    ticket.books?.finalTransferredMinor ?? 0;
+  const remainingSellerEntitlement = Math.max(
+    0,
+    sellerEntitledMinor - itemFundsReceived - finalTransferredMinor,
+  );
+  const showItemFundsRemainingProtected =
+    shouldShowItemFundsRemainingProtectedMessage({
+      procurementTransferredMinor: itemFundsReceived,
+      finalTransferredMinor,
+      sellerEntitledMinor,
+      protectedStatus: ticket.protectedTxnStatus ?? null,
+      lifecycleStage: lifecycleStageResolved,
+      ticketStatus: ticket.status,
+    });
   const canEdit = Boolean(ticket.actions?.canEdit);
   const canCancel = Boolean(ticket.actions?.canCancel);
   const canDelete = Boolean(ticket.actions?.canDelete);
@@ -952,7 +1029,7 @@ export function PaymentTicketCard({
         </p>
       ) : null}
 
-      {ticket.status === "FUNDED" && !procTransferred ? (
+      {ticket.status === "FUNDED" && !procTransferred && !isCompleted ? (
         <p className="mt-3 text-xs text-emerald-300/90">
           Funded and held on platform. No transfer yet
           {procAgreed
@@ -961,11 +1038,54 @@ export function PaymentTicketCard({
         </p>
       ) : null}
 
-      {procTransferred ? (
+      {showItemFundsRemainingProtected ? (
         <p className="mt-3 text-xs text-amber-200/80">
-          Item funds released to sourcer. Remaining amount stays protected until
-          delivery — this is not full protection on the full total.
+          Item funds have been released to the sourcer. The remaining{" "}
+          {formatMinor(remainingSellerEntitlement, cur)} stays protected until
+          delivery and buyer approval.
         </p>
+      ) : null}
+
+      {isCompleted ? (
+        <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white/70">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300/90">
+            Payment completed
+          </p>
+          <p className="flex justify-between gap-3">
+            <span>Seller payment fully released</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(sellerEntitledMinor, cur)}
+            </span>
+          </p>
+          {itemFundsReceived > 0 ? (
+            <>
+              <p className="flex justify-between gap-3 text-white/55">
+                <span>Item / procurement released</span>
+                <span className="tabular-nums">
+                  {formatMinor(itemFundsReceived, cur)}
+                </span>
+              </p>
+              <p className="flex justify-between gap-3 text-white/55">
+                <span>Final seller funds released</span>
+                <span className="tabular-nums">
+                  {formatMinor(finalTransferredMinor, cur)}
+                </span>
+              </p>
+            </>
+          ) : null}
+          <p className="flex justify-between gap-3">
+            <span>Remaining protected</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(0, cur)}
+            </span>
+          </p>
+          <p className="flex justify-between gap-3">
+            <span>Source Bridge fee</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(platformFeeHeld, cur)}
+            </span>
+          </p>
+        </div>
       ) : null}
 
       {iAmSeller && ticket.status === "FUNDED" && procAgreed && !procTransferred ? (

@@ -282,6 +282,8 @@ export function MessagesInbox({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldScrollRef = useRef(true);
   const nearBottomRef = useRef(true);
+  const softPollInFlightRef = useRef(false);
+  const [newMessageHint, setNewMessageHint] = useState(false);
 
   const myId = account?.id ?? "";
   const draft = activeId ? draftByConversation[activeId] ?? "" : "";
@@ -442,12 +444,123 @@ export function MessagesInbox({
     nearBottomRef.current = true;
   }, [messages, threadLoading]);
 
+  // Soft revalidate open conversation (messages + tickets) without wiping UI state.
+  useEffect(() => {
+    if (!activeId || !myId) return;
+    const POLL_MS = 2500;
+    let cancelled = false;
+
+    async function softRefresh() {
+      if (cancelled || softPollInFlightRef.current) return;
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      softPollInFlightRef.current = true;
+      try {
+        const res = await fetch(`/api/conversations/${activeId}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !data?.conversation) return;
+
+        setActiveConversation(data.conversation as Conversation);
+        setProposalAccess(
+          (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
+            null,
+        );
+        if (typeof data.activePaymentTicketCount === "number") {
+          setActiveTicketCount(data.activePaymentTicketCount);
+        }
+
+        const rawMsgs = (data.messages as Message[]) ?? [];
+        const tickets =
+          (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+        const merged = mergePaymentTicketsClient(activeId!, rawMsgs, tickets);
+
+        setMessages((prev) => {
+          // keep full merge by sorted unique ids from server + any optimistic pending.
+          const serverIds = new Set(merged.map((m) => m.id));
+          const optimistic = prev.filter(
+            (m) =>
+              !serverIds.has(m.id) &&
+              m.id.startsWith("tmp-") &&
+              m.conversationId === activeId,
+          );
+          const next = [...merged];
+          for (const o of optimistic) {
+            if (!next.some((m) => m.id === o.id)) next.push(o);
+          }
+          next.sort((a, b) => {
+            const at = Date.parse(a.createdAt);
+            const bt = Date.parse(b.createdAt);
+            if (at !== bt) return at - bt;
+            return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+          });
+          // Avoid re-render if same id set and order
+          if (
+            next.length === prev.length &&
+            next.every((m, i) => m.id === prev[i]?.id)
+          ) {
+            return prev;
+          }
+          if (!nearBottomRef.current) {
+            const prevLast = prev[prev.length - 1]?.id;
+            const nextLast = next[next.length - 1]?.id;
+            if (nextLast && nextLast !== prevLast) setNewMessageHint(true);
+          } else {
+            shouldScrollRef.current = true;
+            setNewMessageHint(false);
+          }
+          return next;
+        });
+
+        setConversations((prev) => {
+          const updated = prev.map((c) =>
+            c.id === activeId
+              ? {
+                  ...c,
+                  unread: false,
+                  lastMessageAt:
+                    (data.conversation as Conversation).lastMessageAt ??
+                    c.lastMessageAt,
+                  lastMessage:
+                    (data.messages as Message[])?.slice(-1)[0] ?? c.lastMessage,
+                }
+              : c,
+          );
+          return updated;
+        });
+      } catch {
+        /* silent — avoid toast spam */
+      } finally {
+        softPollInFlightRef.current = false;
+      }
+    }
+
+    const id = window.setInterval(() => void softRefresh(), POLL_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void softRefresh();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    window.addEventListener("online", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+      window.removeEventListener("online", onVis);
+    };
+  }, [activeId, myId]);
+
   function onThreadScroll() {
     const container = threadScrollRef.current;
     if (!container) return;
     const distance =
       container.scrollHeight - container.scrollTop - container.clientHeight;
     nearBottomRef.current = distance < 80;
+    if (nearBottomRef.current) setNewMessageHint(false);
   }
 
   async function loadOlderMessages() {
@@ -865,7 +978,10 @@ export function MessagesInbox({
                         if (isPrimaryCard && !cardShown.has(m.paymentTicketId)) {
                           cardShown.add(m.paymentTicketId);
                           return (
-                            <li key={m.id} className="flex justify-stretch">
+                            <li
+                              key={m.paymentTicketId || m.id}
+                              className="flex justify-stretch"
+                            >
                               <PaymentTicketCard
                                 ticketId={m.paymentTicketId}
                                 myId={myId}
@@ -1015,6 +1131,23 @@ export function MessagesInbox({
                     })()}
                   </ul>
                 )}
+                {newMessageHint ? (
+                  <button
+                    type="button"
+                    className="sticky bottom-2 mx-auto mt-2 rounded-full border border-electric/40 bg-[#061228]/95 px-3 py-1.5 text-[11px] font-medium text-electric shadow-lg"
+                    onClick={() => {
+                      shouldScrollRef.current = true;
+                      setNewMessageHint(false);
+                      const container = threadScrollRef.current;
+                      if (container) {
+                        container.scrollTop = container.scrollHeight;
+                        nearBottomRef.current = true;
+                      }
+                    }}
+                  >
+                    New message
+                  </button>
+                ) : null}
                 <div ref={threadEndRef} />
               </div>
 
