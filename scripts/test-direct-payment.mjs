@@ -80,11 +80,11 @@ function inspectionApplies(paymentOption) {
 }
 
 const config = {
-  protectionFeeBps: 350,
-  protectionFeeFloorMinor: 50,
+  protectionFeeBps: 200,
+  protectionFeeFloorMinor: 0,
   sellerServiceFeeBps: 0,
-  directServiceFeeBps: 250,
-  directServiceFeeFloorMinor: 40,
+  directServiceFeeBps: 200,
+  directServiceFeeFloorMinor: 0,
 };
 
 const protectedFees = calculateFees({
@@ -99,11 +99,12 @@ const directFees = calculateFees({
   config,
   paymentOption: "DIRECT",
 });
-assert.equal(protectedFees.protectionFeeMinor, 385);
-assert.equal(directFees.protectionFeeMinor, 275);
+// base 11000 → ceil(11000*200/10000)=220
+assert.equal(protectedFees.protectionFeeMinor, 220);
+assert.equal(directFees.protectionFeeMinor, 220);
 assert.equal(protectedFees.feeKind, "PROTECTION");
 assert.equal(directFees.feeKind, "SERVICE");
-assert.equal(totalChargeMinor(directFees), 11275);
+assert.equal(totalChargeMinor(directFees), 11220);
 assert.equal(
   calculateFees({
     itemCostMinor: 100,
@@ -111,32 +112,39 @@ assert.equal(
     config,
     paymentOption: "INSTANT",
   }).protectionFeeMinor,
-  40,
+  2,
 );
 assert.equal(normalizeTxnPaymentOption("DIRECT"), "INSTANT");
-// No hard-coded 140/4000/4140 product amounts
-assert.notEqual(config.directServiceFeeFloorMinor, 140);
-assert.notEqual(totalChargeMinor(directFees), 4140);
+// Product $40 → $0.80 application_fee
+assert.equal(
+  calculateFees({
+    itemCostMinor: 4000,
+    shippingMinor: 0,
+    config,
+    paymentOption: "DIRECT",
+  }).protectionFeeMinor,
+  80,
+);
 
-// Fee approach: application_fee_amount = platform service fee
+// Fee approach: application_fee_amount = platform service fee (2%)
 const directTxn = {
   itemCostMinor: 4000,
   shippingMinor: 0,
   sellerServiceFeeMinor: 0,
-  protectionFeeMinor: 140,
-  totalChargeMinor: 4140,
+  protectionFeeMinor: 80,
+  totalChargeMinor: 4080,
   currency: "USD",
 };
 const destPi = buildDirectPiParams(directTxn, "acct_test_seller");
 assert.equal(destPi.transfer_data.destination, "acct_test_seller");
-assert.equal(destPi.application_fee_amount, 140);
+assert.equal(destPi.application_fee_amount, 80);
 assert.equal(destPi.sellerShareMinor, 4000);
-assert.equal(destPi.amount, 4140);
+assert.equal(destPi.amount, 4080);
 assert.equal(destPi.chargeModel, "DESTINATION_CHARGES");
 
 const protPi = buildProtectedPiParams({
   ...directTxn,
-  totalChargeMinor: 4140,
+  totalChargeMinor: 4080,
 });
 assert.equal(protPi.transfer_data, undefined);
 assert.equal(protPi.application_fee_amount, undefined);

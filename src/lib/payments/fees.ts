@@ -20,22 +20,24 @@ export type FeeConfig = {
 export type FeeLineItems = MoneyBreakdownInput & {
   /** Public label depends on payment option. */
   platformFeeLabel:
-    | "Source Bridge Protection Fee"
-    | "Source Bridge service fee";
+    | "Source Bridge Protection Fee (2%)"
+    | "Source Bridge service fee (2%)";
   protectionFeeLabel:
-    | "Source Bridge Protection Fee"
-    | "Source Bridge service fee";
+    | "Source Bridge Protection Fee (2%)"
+    | "Source Bridge service fee (2%)";
   sellerServiceFeeLabel: "Seller Service Fee";
   feeKind: "PROTECTION" | "SERVICE";
 };
 
 /**
- * Server-side fee calculation. Client may propose item/shipping only;
- * platform + seller service fees are always recalculated here.
+ * Server-side fee calculation. Client may propose item/shipping/sellerService only;
+ * platform fee is ALWAYS recalculated here (never trust client fee/total).
  *
+ * Fee base = itemCost + shipping (seller/sourcer service fee excluded).
  * Protected → Protection Fee (protectionFeeBps / floor).
  * Direct (INSTANT/DIRECT) → Source Bridge service fee (directServiceFeeBps / floor).
  * Platform fee is stored in protectionFeeMinor for both paths (existing ledger field).
+ * Rounding: ceil(base * bps / 10_000), then max with floor when base > 0.
  */
 export function calculateFees(opts: {
   itemCostMinor: number;

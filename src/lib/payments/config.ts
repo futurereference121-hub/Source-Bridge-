@@ -1,6 +1,19 @@
 import { prisma } from "@/lib/db";
 import type { FeeConfig } from "@/lib/payments/fees";
 
+/**
+ * Authoritative Source Bridge platform fee rate.
+ * 200 bps = 2%. Used for Protected + Direct product and sourcing tickets.
+ * Fee base = itemCost + shipping (never seller/sourcer service fee).
+ */
+export const SOURCE_BRIDGE_FEE_BPS = 200;
+
+/**
+ * Minimum platform fee in minor units. Product decision is pure 2% (no minimum).
+ * Historical default was 50 (at 3.5%); zeroed so $20 → $0.40.
+ */
+export const SOURCE_BRIDGE_FEE_FLOOR_MINOR = 0;
+
 export type PlatformConfig = FeeConfig & {
   inspectionHours: number;
   procurementMinTrustLevel: number;
@@ -10,13 +23,12 @@ export type PlatformConfig = FeeConfig & {
 };
 
 const DEFAULTS: PlatformConfig = {
-  protectionFeeBps: 350,
-  protectionFeeFloorMinor: 50,
+  protectionFeeBps: SOURCE_BRIDGE_FEE_BPS,
+  protectionFeeFloorMinor: SOURCE_BRIDGE_FEE_FLOOR_MINOR,
   sellerServiceFeeBps: 0,
-  // Separate Direct service fee (not Protection Fee). Defaults match protection rates;
-  // admin/config can diverge later without hardcoding checkout amounts.
-  directServiceFeeBps: 350,
-  directServiceFeeFloorMinor: 50,
+  // Direct service fee shares the same Source Bridge rate; admin can diverge later.
+  directServiceFeeBps: SOURCE_BRIDGE_FEE_BPS,
+  directServiceFeeFloorMinor: SOURCE_BRIDGE_FEE_FLOOR_MINOR,
   inspectionHours: 12,
   procurementMinTrustLevel: 2,
   procurementAdvancesGloballyOn: true,
@@ -27,7 +39,13 @@ const DEFAULTS: PlatformConfig = {
 export async function getPlatformPaymentConfig(): Promise<PlatformConfig> {
   const row = await prisma.platformPaymentConfig.upsert({
     where: { id: "default" },
-    create: { id: "default" },
+    create: {
+      id: "default",
+      protectionFeeBps: DEFAULTS.protectionFeeBps,
+      protectionFeeFloorMinor: DEFAULTS.protectionFeeFloorMinor,
+      directServiceFeeBps: DEFAULTS.directServiceFeeBps,
+      directServiceFeeFloorMinor: DEFAULTS.directServiceFeeFloorMinor,
+    },
     update: {},
   });
   let allowed: string[] = ["USD", "GBP"];
@@ -43,19 +61,27 @@ export async function getPlatformPaymentConfig(): Promise<PlatformConfig> {
   const merged = Array.from(
     new Set([...(allowed.length ? allowed : ["USD"]), "USD", "GBP"].map((c) => c.toUpperCase())),
   );
-  // Prefer DB columns when present (migration added); else env overrides; else DEFAULTS.
-  // Avoid hardcoding 70¢ checkout amounts — floors come from config.
+  // Prefer DB columns when present; else env overrides; else DEFAULTS.
+  // SOURCE_BRIDGE_FEE_BPS env can force both rates in TEST without a DB edit.
+  const sharedBps = envInt("SOURCE_BRIDGE_FEE_BPS", DEFAULTS.protectionFeeBps);
+  const sharedFloor = envInt(
+    "SOURCE_BRIDGE_FEE_FLOOR_MINOR",
+    DEFAULTS.protectionFeeFloorMinor,
+  );
   const directBps = readOptionalInt(
     (row as { directServiceFeeBps?: number }).directServiceFeeBps,
-    envInt("DIRECT_SERVICE_FEE_BPS", DEFAULTS.directServiceFeeBps),
+    envInt("DIRECT_SERVICE_FEE_BPS", sharedBps),
   );
   const directFloor = readOptionalInt(
     (row as { directServiceFeeFloorMinor?: number }).directServiceFeeFloorMinor,
-    envInt("DIRECT_SERVICE_FEE_FLOOR_MINOR", DEFAULTS.directServiceFeeFloorMinor),
+    envInt("DIRECT_SERVICE_FEE_FLOOR_MINOR", sharedFloor),
   );
   return {
-    protectionFeeBps: row.protectionFeeBps,
-    protectionFeeFloorMinor: row.protectionFeeFloorMinor,
+    protectionFeeBps: readOptionalInt(row.protectionFeeBps, sharedBps),
+    protectionFeeFloorMinor: readOptionalInt(
+      row.protectionFeeFloorMinor,
+      sharedFloor,
+    ),
     sellerServiceFeeBps: row.sellerServiceFeeBps,
     directServiceFeeBps: directBps,
     directServiceFeeFloorMinor: directFloor,

@@ -49,11 +49,13 @@ export function paymentOptionPublicLabel(
     : "Protected Payment";
 }
 
-/** Platform fee line label on checkout / receipts. */
+/** Platform fee line label on checkout / receipts (rate for NEW calcs; history uses stored minor). */
 export function platformFeePublicLabel(
   option: string | null | undefined,
-): "Source Bridge Protection Fee" | "Source Bridge service fee" {
+):
+  | "Source Bridge Protection Fee (2%)"
+  | "Source Bridge service fee (2%)" {
   return isDirectPaymentOption(option)
-    ? "Source Bridge service fee"
-    : "Source Bridge Protection Fee";
+    ? "Source Bridge service fee (2%)"
+    : "Source Bridge Protection Fee (2%)";
 }

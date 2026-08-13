@@ -18,6 +18,11 @@ export {
   paymentsAllowlistGateSnapshot,
 } from "@/lib/payments/allowlist";
 export { calculateFees, assertTotalsMatch } from "@/lib/payments/fees";
+export {
+  SOURCE_BRIDGE_FEE_BPS,
+  SOURCE_BRIDGE_FEE_FLOOR_MINOR,
+  getPlatformPaymentConfig,
+} from "@/lib/payments/config";
 export { hashTerms } from "@/lib/payments/terms";
 export {
   canTransition,

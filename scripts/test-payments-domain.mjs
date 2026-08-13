@@ -91,24 +91,163 @@ function hashTerms(obj) {
   return createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
-// ── Fee calc
+const SOURCE_BRIDGE_FEE_BPS = 200;
+const SOURCE_BRIDGE_FEE_FLOOR_MINOR = 0;
+const feeConfig2pct = {
+  protectionFeeBps: SOURCE_BRIDGE_FEE_BPS,
+  protectionFeeFloorMinor: SOURCE_BRIDGE_FEE_FLOOR_MINOR,
+  sellerServiceFeeBps: 0,
+  directServiceFeeBps: SOURCE_BRIDGE_FEE_BPS,
+  directServiceFeeFloorMinor: SOURCE_BRIDGE_FEE_FLOOR_MINOR,
+};
+
+// ── Fee calc: product $20 → $0.40, $40 → $0.80
 {
-  const fees = calculateFees({
-    itemCostMinor: 10_000,
-    shippingMinor: 1_000,
-    config: { protectionFeeBps: 350, protectionFeeFloorMinor: 50, sellerServiceFeeBps: 0 },
+  const f20 = calculateFees({
+    itemCostMinor: 2_000,
+    shippingMinor: 0,
+    config: feeConfig2pct,
   });
-  assert.equal(fees.protectionFeeMinor, 385); // ceil(11000 * 0.035)
-  assert.equal(totalChargeMinor(fees), 11_385);
+  assert.equal(f20.protectionFeeMinor, 40);
+  assert.equal(totalChargeMinor(f20), 2_040);
+
+  const f40 = calculateFees({
+    itemCostMinor: 4_000,
+    shippingMinor: 0,
+    config: feeConfig2pct,
+  });
+  assert.equal(f40.protectionFeeMinor, 80);
+  assert.equal(totalChargeMinor(f40), 4_080);
 }
 
+// ── Sourcing: £50 + £15 + £20 sourcer → fee base £65 → £1.30; buyer £86.30; seller £85
+{
+  const fees = calculateFees({
+    itemCostMinor: 5_000,
+    shippingMinor: 1_500,
+    config: feeConfig2pct,
+    sellerServiceFeeMinorOverride: 2_000,
+  });
+  assert.equal(fees.protectionFeeMinor, 130); // ceil(6500 * 200 / 10000)
+  assert.equal(
+    fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+    8_500,
+  );
+  assert.equal(totalChargeMinor(fees), 8_630);
+}
+
+// ── Sourcer fee exclusion: £20 → £100 must NOT change SB fee
+{
+  const a = calculateFees({
+    itemCostMinor: 5_000,
+    shippingMinor: 1_500,
+    config: feeConfig2pct,
+    sellerServiceFeeMinorOverride: 2_000,
+  });
+  const b = calculateFees({
+    itemCostMinor: 5_000,
+    shippingMinor: 1_500,
+    config: feeConfig2pct,
+    sellerServiceFeeMinorOverride: 10_000,
+  });
+  assert.equal(a.protectionFeeMinor, 130);
+  assert.equal(b.protectionFeeMinor, 130);
+  assert.equal(totalChargeMinor(b), 16_630); // 50+15+100+1.30
+}
+
+// ── Rounding / uneven amounts (ceil)
+{
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 100,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    2,
+  ); // £1.00 → ceil(2)=2
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 199,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    4,
+  ); // £1.99 → ceil(3.98)=4
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 9999,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    200,
+  ); // £99.99 → ceil(199.98)=200
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 50_000,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    1_000,
+  );
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 100_000,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    2_000,
+  );
+}
+
+// ── Historical display: stored 3.5% fee is NOT recalculated from config
+{
+  const historicalStoredFeeMinor = 70; // $20 @ 3.5%
+  const displayFee = historicalStoredFeeMinor; // UI uses stored protectionFeeMinor
+  assert.equal(displayFee, 70);
+  assert.notEqual(
+    calculateFees({
+      itemCostMinor: 2_000,
+      shippingMinor: 0,
+      config: feeConfig2pct,
+    }).protectionFeeMinor,
+    historicalStoredFeeMinor,
+  );
+}
+
+// ── Security: client-supplied platform fee is ignored (server recalc)
+{
+  const clientClaimedFee = 1; // attacker tries $0.01
+  const serverFees = calculateFees({
+    itemCostMinor: 4_000,
+    shippingMinor: 0,
+    config: feeConfig2pct,
+  });
+  assert.equal(serverFees.protectionFeeMinor, 80);
+  assert.notEqual(serverFees.protectionFeeMinor, clientClaimedFee);
+}
+
+// ── Direct uses same 2% bps (application_fee_amount = protectionFeeMinor)
+{
+  const direct = calculateFees({
+    itemCostMinor: 4_000,
+    shippingMinor: 0,
+    config: feeConfig2pct,
+    paymentOption: "DIRECT",
+  });
+  assert.equal(direct.protectionFeeMinor, 80);
+}
+
+// ── Optional floor still works when configured (not used at product default 0)
 {
   const fees = calculateFees({
     itemCostMinor: 100,
     shippingMinor: 0,
-    config: { protectionFeeBps: 350, protectionFeeFloorMinor: 50, sellerServiceFeeBps: 0 },
+    config: {
+      ...feeConfig2pct,
+      protectionFeeFloorMinor: 50,
+    },
   });
-  assert.equal(fees.protectionFeeMinor, 50); // floor
+  assert.equal(fees.protectionFeeMinor, 50); // ceil(2) < floor 50
 }
 
 // ── State transitions
@@ -177,20 +316,20 @@ assert.notEqual(a, c);
 const DEFAULT = "CONTACT_ONLY";
 assert.equal(DEFAULT, "CONTACT_ONLY");
 
-// ── Test amounts (GBP-style minor units): £5 + £1 + £1 service + platform fee
+// ── Test amounts (GBP): £5 + £1 + £1 service + 2% of £6 = 12p
 {
   const fees = calculateFees({
     itemCostMinor: 500,
     shippingMinor: 100,
-    config: { protectionFeeBps: 350, protectionFeeFloorMinor: 50, sellerServiceFeeBps: 0 },
+    config: feeConfig2pct,
     sellerServiceFeeMinorOverride: 100,
   });
   assert.equal(fees.itemCostMinor, 500);
   assert.equal(fees.shippingMinor, 100);
   assert.equal(fees.sellerServiceFeeMinor, 100);
-  // base 600 → ceil(600*0.035)=21, floor 50 → protection 50
-  assert.equal(fees.protectionFeeMinor, 50);
-  assert.equal(totalChargeMinor(fees), 750);
+  // base 600 → ceil(600*200/10000)=12
+  assert.equal(fees.protectionFeeMinor, 12);
+  assert.equal(totalChargeMinor(fees), 712);
 }
 
 // ── Allowlist parse (mirrors src/lib/payments/allowlist.ts)

@@ -208,8 +208,8 @@ export function CheckoutPageClient({ slug }: Props) {
           bd.labels?.platformFee ||
           bd.labels?.sourceBridgeProtectionFee ||
           (mode === "direct"
-            ? "Source Bridge service fee"
-            : "Source Bridge Protection Fee"),
+            ? "Source Bridge service fee (2%)"
+            : "Source Bridge Protection Fee (2%)"),
         currency,
       });
 
