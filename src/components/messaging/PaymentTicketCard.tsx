@@ -8,6 +8,7 @@ import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
 import {
+  deriveTicketAcceptanceState,
   isCompletedLifecycleTicket,
   isSubtleHistoricalTicket,
   isTerminalLifecycleStage,
@@ -270,7 +271,12 @@ export function PaymentTicketCard({
       const res = await fetch(`/api/payments/tickets/${ticketId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({
+          action,
+          ...(ticket?.revision != null
+            ? { expectedRevision: ticket.revision }
+            : {}),
+        }),
       });
       const json = (await res.json()) as {
         ok?: boolean;
@@ -562,11 +568,15 @@ export function PaymentTicketCard({
 
   const iAmBuyer = myId === ticket.buyerId;
   const iAmSeller = myId === ticket.sellerId;
-  const myApproved = iAmBuyer
-    ? ticket.buyerApprovedRevision === ticket.revision
-    : iAmSeller
-      ? ticket.sellerApprovedRevision === ticket.revision
-      : false;
+  const acceptance = deriveTicketAcceptanceState({
+    viewerId: myId,
+    buyerId: ticket.buyerId,
+    sellerId: ticket.sellerId,
+    revision: ticket.revision,
+    buyerApprovedRevision: ticket.buyerApprovedRevision,
+    sellerApprovedRevision: ticket.sellerApprovedRevision,
+    status: ticket.status,
+  });
   const subtleHistorical = isSubtleHistoricalTicket(ticket.status);
   const lifecycleStageResolved =
     ticket.lifecycleStage ||
@@ -586,7 +596,7 @@ export function PaymentTicketCard({
   const historical = isTerminal;
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
   const canRespond =
-    open && ticket.status === "PROPOSED" && !myApproved && (iAmBuyer || iAmSeller);
+    open && acceptance.canAccept && (acceptance.iAmBuyer || acceptance.iAmSeller);
   const canPay =
     !historical &&
     paymentsAccess &&
@@ -662,6 +672,10 @@ export function PaymentTicketCard({
     ticket.books?.remainingProtectedSellerShareMinor ??
     ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
     0;
+  const remainingSellerFundsProtected =
+    ticket.books?.remainingProtectedSellerShareMinor ??
+    ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
+    residualProtected;
   const platformFeeHeld =
     ticket.books?.platformFeeMinor ?? ticket.protectionFeeMinor ?? 0;
   const itemFundsReceived =
@@ -738,8 +752,38 @@ export function PaymentTicketCard({
     confirmDelete ||
     editOpen;
 
+  // Outstanding acceptor always sees Accept — never hide behind a collapsed card.
+  const showExpanded = expanded || canRespond;
+
+  const acceptDeclineButtons = canRespond ? (
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={(e) => {
+          e.stopPropagation();
+          void respond("accept");
+        }}
+        className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+      >
+        Accept Agreement
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={(e) => {
+          e.stopPropagation();
+          void respond("decline");
+        }}
+        className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:border-white/40 disabled:opacity-50"
+      >
+        Decline
+      </button>
+    </>
+  ) : null;
+
   // --- Collapsed: subtle system-message style for cancelled/declined/superseded ---
-  if (subtleHistorical && !expanded) {
+  if (subtleHistorical && !showExpanded) {
     return (
       <div className="w-full min-w-0 max-w-full px-1 py-1.5">
         <button
@@ -760,7 +804,7 @@ export function PaymentTicketCard({
   }
 
   // --- Collapsed: compact active / completed (no big CTAs) ---
-  if (!expanded) {
+  if (!showExpanded) {
     return (
       <div
         className={
@@ -799,6 +843,9 @@ export function PaymentTicketCard({
                     Action required
                   </span>
                 ) : null}
+                <span className="rounded border border-amber-400/25 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-200/70">
+                  TEST
+                </span>
               </div>
               <p className="mt-1 truncate text-sm font-medium text-white/85">
                 {ticket.title || "Payment Ticket"}
@@ -807,6 +854,11 @@ export function PaymentTicketCard({
                 {formatMinor(ticket.totalChargeMinor, cur)}
                 <span className="text-white/30"> · v{ticket.revision}</span>
               </p>
+              {acceptance.waitingForOther ? (
+                <p className="mt-1 text-[11px] text-white/45">
+                  {acceptance.waitingLabel}
+                </p>
+              ) : null}
             </div>
           </div>
           <ChevronDown
@@ -845,6 +897,9 @@ export function PaymentTicketCard({
             </p>
             <p className="mt-0.5 truncate text-sm font-medium text-white">
               {ticket.title || "Payment Ticket"} · v{ticket.revision}
+            </p>
+            <p className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-amber-200/70">
+              TEST PAYMENT · Sandbox — no real money
             </p>
           </div>
         </div>
@@ -967,19 +1022,29 @@ export function PaymentTicketCard({
       </dl>
 
       <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
-        <p className="font-medium text-white/70">Dual-accept status</p>
+        <p className="font-medium text-white/70">Dual-accept status · v{ticket.revision}</p>
         <p>
           Buyer:{" "}
-          {ticket.buyerApprovedRevision === ticket.revision
+          {acceptance.buyerAcceptedCurrentRevision
             ? "accepted this revision"
             : "not yet accepted"}
         </p>
         <p>
           Seller:{" "}
-          {ticket.sellerApprovedRevision === ticket.revision
+          {acceptance.sellerAcceptedCurrentRevision
             ? "accepted this revision"
             : "not yet accepted"}
         </p>
+        {acceptance.bothAcceptedCurrentRevision ? (
+          <p className="text-emerald-300/90">
+            {acceptance.bothAcceptedLabel}
+          </p>
+        ) : null}
+        {canRespond ? (
+          <p className="text-amber-200/90">
+            You need to review and accept this agreement.
+          </p>
+        ) : null}
         {procAgreed ? (
           <p>
             Procurement advance:{" "}
@@ -994,26 +1059,36 @@ export function PaymentTicketCard({
       {procAgreed && ticket.breakdown.releaseStructure && !procTransferred ? (
         <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
           <p className="font-medium text-white/70">Release structure</p>
-          <p>
-            {ticket.breakdown.releaseStructure
-              ? "Item funds released early"
-              : "Item funds"}
-            :{" "}
-            {formatMinor(
-              ticket.breakdown.releaseStructure.itemFundsReleasedEarlyMinor,
-              cur,
-            )}{" "}
-            (after buyer authorizes — not on fund)
+          <p className="flex justify-between gap-3">
+            <span>Item funds available for buyer-authorized release</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(
+                ticket.breakdown.releaseStructure.itemFundsReleasedEarlyMinor,
+                cur,
+              )}
+            </span>
           </p>
-          <p>
-            Remaining protected:{" "}
-            {formatMinor(
-              ticket.breakdown.releaseStructure
-                .remainingProtectedSellerShareMinor +
+          <p className="flex justify-between gap-3">
+            <span>Remaining seller funds protected</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(
+                ticket.breakdown.releaseStructure
+                  .remainingProtectedSellerShareMinor,
+                cur,
+              )}
+            </span>
+          </p>
+          <p className="text-white/40">
+            (shipping + sourcer fee — not the Source Bridge fee)
+          </p>
+          <p className="flex justify-between gap-3">
+            <span>Source Bridge fee</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(
                 ticket.breakdown.releaseStructure.platformFeeHeldMinor,
-              cur,
-            )}{" "}
-            (shipping, sourcer fee, SB fee)
+                cur,
+              )}
+            </span>
           </p>
           <p className="text-white/40">
             Shipping is never released early. Buyer must authorize item funds
@@ -1111,7 +1186,11 @@ export function PaymentTicketCard({
               <p className="flex justify-between gap-3">
                 <span>Remaining seller funds protected</span>
                 <span className="tabular-nums text-white">
-                  {formatMinor(residualProtected, cur)}
+                  {formatMinor(
+                    ticket.books?.finalResidualMinor ??
+                      remainingSellerFundsProtected,
+                    cur,
+                  )}
                 </span>
               </p>
               <p className="flex justify-between gap-3">
@@ -1384,28 +1463,17 @@ export function PaymentTicketCard({
 
       {!historical ? (
         <div className="mt-4 flex flex-wrap gap-2">
-          {canRespond ? (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void respond("accept")}
-                className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
-              >
-                Accept terms
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void respond("decline")}
-                className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:border-white/40 disabled:opacity-50"
-              >
-                Decline
-              </button>
-            </>
+          {acceptDeclineButtons}
+          {acceptance.waitingForOther ? (
+            <p className="text-xs text-white/45">{acceptance.waitingLabel}</p>
           ) : null}
-          {ticket.status === "PROPOSED" && myApproved ? (
-            <p className="text-xs text-white/45">Waiting for the other party…</p>
+          {acceptance.bothAcceptedCurrentRevision &&
+          ticket.status === "ACCEPTED" &&
+          !canPay ? (
+            <p className="text-xs text-white/45">
+              {acceptance.bothAcceptedLabel}
+              {iAmSeller ? " — waiting for buyer payment." : ""}
+            </p>
           ) : null}
           {canPay && !checkout ? (
             <button

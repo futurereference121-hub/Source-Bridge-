@@ -38,6 +38,7 @@ export type ProposedTicketTimelineMessage = {
 
 export type PaymentsProposalAccess = {
   allowlistConfigured?: boolean;
+  testRampOpen?: boolean;
   flagsOn?: boolean;
   selfAllowed?: boolean;
   peerAllowed?: boolean;
@@ -64,9 +65,8 @@ type ProposePaymentTicketButtonProps = {
   conversationId: string;
   myId: string;
   /**
-   * From conversation GET. When self is allowlisted but peer is not, the form
-   * still opens (same as before) but shows a clear pre-POST warning — create
-   * requires both parties on PAYMENTS_TEST_ALLOWLIST.
+   * From conversation GET. TEST ramp is open when Live is off — both parties
+   * may propose/accept subject to normal eligibility (not demo/admin).
    */
   proposalAccess?: PaymentsProposalAccess | null;
   onCreated?: (payload: {
@@ -83,9 +83,11 @@ type ProposePaymentTicketButtonProps = {
   activeTicketCount?: number;
   /** Server cap; defaults to 3. */
   maxActiveTickets?: number;
+  /** Dropdown opens below (header) or above (legacy composer). */
+  panelPlacement?: "above" | "below";
 };
 
-const BUILD_FINGERPRINT = "pt-propose-v5-multi-active";
+const BUILD_FINGERPRINT = "pt-propose-v6-header-open-test";
 
 function minorToMajor(minor: number | undefined): string {
   if (minor == null || !Number.isFinite(minor)) return "0";
@@ -93,8 +95,8 @@ function minorToMajor(minor: number | undefined): string {
 }
 
 /**
- * Compact composer action to propose a Payment Ticket (no funding).
- * Fees are recalculated server-side. Only visible on payments test allowlist.
+ * Compact action to propose a Payment Ticket (no funding).
+ * Visible when TEST payments are enabled for eligible authenticated users.
  *
  * IMPORTANT: Must NOT use a nested <form> inside MessagesInbox's compose <form>
  * (invalid HTML; browsers ignore the nested form and route submit to the
@@ -111,6 +113,7 @@ export function ProposePaymentTicketButton({
   hideTrigger,
   activeTicketCount = 0,
   maxActiveTickets = 3,
+  panelPlacement = "below",
 }: ProposePaymentTicketButtonProps) {
   const isEdit = Boolean(editFromTicket);
   const convId = editFromTicket?.conversationId || conversationId;
@@ -171,14 +174,18 @@ export function ProposePaymentTicketButton({
             INSTANT_PAYMENTS_ENABLED?: boolean;
             PROCUREMENT_ADVANCES_ENABLED?: boolean;
             PAYMENTS_TEST_ALLOWLIST_CONFIGURED?: boolean;
+            PAYMENTS_TEST_RAMP_OPEN?: boolean;
           };
-          paymentsAccess?: { testAccessAllowed?: boolean };
+          paymentsAccess?: { testAccessAllowed?: boolean; testRampOpen?: boolean };
         }) => {
           const flagOn = Boolean(
             j.flags?.PROTECTED_PAYMENTS_ENABLED ||
               j.flags?.INSTANT_PAYMENTS_ENABLED,
           );
-          const access = Boolean(j.paymentsAccess?.testAccessAllowed);
+          const access = Boolean(
+            j.paymentsAccess?.testAccessAllowed ??
+              j.flags?.PAYMENTS_TEST_RAMP_OPEN,
+          );
           setEnabled(isEdit || (flagOn && access));
           setProcurementFlag(Boolean(j.flags?.PROCUREMENT_ADVANCES_ENABLED));
         },
@@ -190,8 +197,10 @@ export function ProposePaymentTicketButton({
 
   if (!enabled && !isEdit) return null;
 
+  // Legacy peer-allowlist warning only when TEST ramp is not open.
   const peerMissing =
     proposalAccess != null &&
+    proposalAccess.testRampOpen !== true &&
     proposalAccess.peerPresent !== false &&
     proposalAccess.selfAllowed === true &&
     proposalAccess.peerAllowed === false;
@@ -221,14 +230,14 @@ export function ProposePaymentTicketButton({
     // Pre-flight: still call the API (authoritative), but surface both-party gate early.
     if (peerMissing) {
       setError(
-        `Your chat partner is not on the payments test allowlist. Both parties must be allowlisted before a ticket can be created. Ref: ${proposalTraceId}`,
+        `Your chat partner cannot use TEST payments yet. Ref: ${proposalTraceId}`,
       );
       setBusy(false);
       return;
     }
     if (atActiveLimit) {
       setError(
-        `3 active tickets maximum. Complete, cancel, or resolve an existing ticket first. Ref: ${proposalTraceId}`,
+        `3 active Payment Tickets maximum. Complete or cancel one before creating another. Ref: ${proposalTraceId}`,
       );
       setBusy(false);
       return;
@@ -437,21 +446,27 @@ export function ProposePaymentTicketButton({
           disabled={atActiveLimit}
           className={
             atActiveLimit
-              ? "inline-flex max-w-full items-center gap-1.5 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] font-medium text-white/35"
-              : "inline-flex items-center gap-1.5 rounded-lg border border-electric/40 px-2.5 py-1.5 text-[11px] font-medium text-electric hover:bg-electric/10"
+              ? "inline-flex max-w-[9.5rem] items-center gap-1 rounded-lg border border-white/15 px-2 py-1.5 text-[10px] font-medium text-white/35 sm:max-w-none sm:gap-1.5 sm:px-2.5 sm:text-[11px]"
+              : "inline-flex items-center gap-1 rounded-lg border border-electric/40 px-2 py-1.5 text-[10px] font-medium text-electric hover:bg-electric/10 sm:gap-1.5 sm:px-2.5 sm:text-[11px]"
           }
           title={
             atActiveLimit
-              ? "3 active tickets maximum"
-              : "Propose Protected Payment"
+              ? "3 active Payment Tickets maximum. Complete or cancel one before creating another."
+              : "Propose Protected Payment Ticket"
           }
           data-sb-build={BUILD_FINGERPRINT}
         >
           <ShieldCheck size={14} />
           <span className="truncate">
-            {atActiveLimit ? "3 active tickets maximum" : "Payment Ticket"}
+            {atActiveLimit ? "3 active max" : "Payment Ticket"}
           </span>
         </button>
+      ) : null}
+      {atActiveLimit && !isEdit && !hideTrigger ? (
+        <p className="mt-1 max-w-[11rem] text-right text-[10px] leading-snug text-white/40 sm:max-w-none">
+          3 active Payment Tickets maximum. Complete or cancel one before
+          creating another.
+        </p>
       ) : null}
       {open && (isEdit || !atActiveLimit) ? (
         // role=group (NOT form): parent MessagesInbox uses a compose <form>;
@@ -464,7 +479,9 @@ export function ProposePaymentTicketButton({
           className={
             isEdit
               ? "w-full rounded-xl border border-electric/30 bg-[#061228] p-3"
-              : "absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
+              : panelPlacement === "below"
+                ? "absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
+                : "absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
           }
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
@@ -478,10 +495,13 @@ export function ProposePaymentTicketButton({
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
             {isEdit ? "Revised Terms" : "Protected Payment"}
           </p>
+          <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-amber-200/70">
+            TEST PAYMENT · Sandbox — no real money
+          </p>
           <p className="mt-1 text-[11px] text-white/45">
             {isEdit
               ? "This creates a new revision. Prior acceptance is invalidated — both parties must re-accept. Procurement can be turned on or off."
-              : "Both parties must accept the same terms before payment. Fees are calculated by Source Bridge. TEST allowlist only."}
+              : "Both parties must accept the same terms before payment. Fees are calculated by Source Bridge."}
           </p>
           {isEdit ? (
             <p className="mt-2 text-[11px] text-amber-300/90">
@@ -491,8 +511,8 @@ export function ProposePaymentTicketButton({
           ) : null}
           {peerMissing ? (
             <p className="mt-2 text-[11px] text-amber-300">
-              Your partner is not on the payments test allowlist. Propose will
-              fail until both of you are approved for the test ramp.
+              Your partner cannot use TEST payments yet. Propose may fail until
+              both accounts are eligible.
             </p>
           ) : null}
           <label className="mt-3 block text-[11px] text-white/55">

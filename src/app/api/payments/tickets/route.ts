@@ -91,12 +91,22 @@ export async function POST(req: NextRequest) {
     }
 
     // Actor chooses role: default — creator is proposing as either party.
-    // If buyerId/sellerId omitted, assume actor is buyer and other is seller
-    // unless actor owns the listing.
+    // Prefer sourcing-request roles (fromUser=buyer/requester, toUser=seller/sourcer)
+    // then listing owner as seller; else actor=buyer, peer=seller.
     let buyerId = data.buyerId;
     let sellerId = data.sellerId;
     if (!buyerId || !sellerId) {
-      if (conversation.listingId) {
+      if (conversation.sourcingRequestId) {
+        const sr = await prisma.sourcingRequest.findUnique({
+          where: { id: conversation.sourcingRequestId },
+          select: { fromUserId: true, toUserId: true },
+        });
+        if (sr) {
+          buyerId = sr.fromUserId;
+          sellerId = sr.toUserId;
+        }
+      }
+      if ((!buyerId || !sellerId) && conversation.listingId) {
         const listing = await prisma.stockListing.findUnique({
           where: { id: conversation.listingId },
           select: { userId: true },

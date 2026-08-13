@@ -103,9 +103,12 @@ export function paymentFlagsSnapshot() {
     LIVE_PAYMENTS_ENABLED: false,
     stripeMode: getStripeMode(),
     /**
-     * When false, ticket/checkout/fund are denied even if PAYMENTS_ENABLED.
-     * Fill PAYMENTS_TEST_ALLOWLIST with test user IDs or emails.
+     * Legacy: whether PAYMENTS_TEST_ALLOWLIST has entries.
+     * When Live is off + Stripe TEST, an empty allowlist no longer denies —
+     * TEST flows are open to otherwise-eligible authenticated users.
      */
     PAYMENTS_TEST_ALLOWLIST_CONFIGURED: allowlistConfigured,
+    /** Live money remains off; TEST ramp is open for eligible accounts. */
+    PAYMENTS_TEST_RAMP_OPEN: !isLivePaymentsEnabled() && getStripeMode() === "TEST",
   };
 }

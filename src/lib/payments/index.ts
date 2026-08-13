@@ -15,6 +15,7 @@ export {
   assertPaymentsTestAllowlisted,
   userMatchesPaymentsAllowlist,
   isPaymentsTestAllowlistConfigured,
+  isPaymentsTestRampOpen,
   paymentsAllowlistGateSnapshot,
 } from "@/lib/payments/allowlist";
 export { calculateFees, assertTotalsMatch } from "@/lib/payments/fees";

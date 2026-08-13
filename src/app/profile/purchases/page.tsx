@@ -43,6 +43,7 @@ type Order = {
   procurementTransferredMinor?: number;
   books?: {
     finalResidualMinor?: number;
+    remainingProtectedSellerShareMinor?: number;
     procurementTransferredMinor?: number;
     platformFeeMinor?: number;
     sellerEntitledMinor?: number;
@@ -296,7 +297,11 @@ export default function PurchasesPage() {
                       {residual > 0 ? (
                         <p>
                           Remaining seller funds protected:{" "}
-                          {formatMinor(residual, o.currency)}
+                          {formatMinor(
+                            o.books?.remainingProtectedSellerShareMinor ??
+                              residual,
+                            o.currency,
+                          )}
                         </p>
                       ) : null}
                       <p>

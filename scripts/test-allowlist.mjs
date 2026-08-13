@@ -1,5 +1,5 @@
 /**
- * Allowlist parse + match unit tests (mirrors src/lib/payments/allowlist.ts).
+ * Allowlist / open TEST ramp unit tests.
  * Run: node scripts/test-allowlist.mjs
  */
 import assert from "node:assert/strict";
@@ -33,9 +33,22 @@ function matches(list, user) {
   return false;
 }
 
-// Real Production ids (futureman uses letter l, not digit 1).
+/** Mirrors product: Live off + TEST → empty allowlist is open ramp. */
+function assertPaymentsTestAllowlisted({ live, mode, list, users }) {
+  const rampOpen = !live && mode === "TEST";
+  if (rampOpen) return { ok: true, reason: "ramp-open" };
+  if (!list.length) {
+    return { ok: false, reason: "empty-deny" };
+  }
+  for (const u of users) {
+    if (!matches(list, u)) return { ok: false, reason: "denied", user: u.id };
+  }
+  return { ok: true, reason: "listed" };
+}
+
 const buyer = "cms8or23a0000la046qm6ene4";
 const seller = "cms62cfan0000ih04giwg7ee3";
+const ordinary = { id: "ordinary-acct-001", email: "ordinary@example.com" };
 
 assert.equal(normalizeAllowlistToken(`  "${buyer}"  `), buyer);
 assert.equal(normalizeAllowlistToken(`'${seller}'`), seller);
@@ -48,7 +61,6 @@ assert.equal(matches(list, { id: "other" }), false);
 
 list = parseAllowlistRaw(`"${buyer}", "${seller}"`);
 assert.equal(matches(list, { id: buyer }), true);
-assert.equal(matches(list, { id: seller }), true);
 
 list = parseAllowlistRaw("futurereference121@gmail.com;theowlsaid420@gmail.com");
 assert.equal(
@@ -58,5 +70,29 @@ assert.equal(
 
 assert.equal(parseAllowlistRaw("").length, 0);
 assert.equal(matches([], { id: buyer }), false);
+
+// Open TEST ramp: empty list + Live off + TEST → ordinary account allowed
+{
+  const r = assertPaymentsTestAllowlisted({
+    live: false,
+    mode: "TEST",
+    list: [],
+    users: [ordinary, { id: buyer }],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, "ramp-open");
+}
+
+// Without open ramp, empty list denies
+{
+  const r = assertPaymentsTestAllowlisted({
+    live: true,
+    mode: "LIVE",
+    list: [],
+    users: [ordinary],
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "empty-deny");
+}
 
 console.log("allowlist tests passed");

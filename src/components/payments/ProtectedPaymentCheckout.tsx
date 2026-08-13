@@ -316,6 +316,9 @@ export function ProtectedPaymentCheckout({
 
   return (
     <div className="mt-4 rounded-xl border border-electric/30 bg-[#050f20] p-3">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/80">
+        TEST PAYMENT · Sandbox — no real money
+      </p>
       <Elements stripe={stripePromise} options={options}>
         <CheckoutForm
           amountMinor={amountMinor}

@@ -15,6 +15,7 @@ type Ctx = { params: Promise<{ id: string }> };
 const respondSchema = z.object({
   action: z.enum(["accept", "decline"]),
   reason: z.string().trim().max(500).optional(),
+  expectedRevision: z.number().int().positive().optional(),
 });
 
 export async function GET(_req: NextRequest, ctx: Ctx) {
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       actorId: user.id,
       action: parsed.data.action,
       reason: parsed.data.reason,
+      expectedRevision: parsed.data.expectedRevision,
     });
     return Response.json({ ok: true, ticket });
   } catch (err) {

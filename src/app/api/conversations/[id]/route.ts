@@ -15,7 +15,7 @@ import {
   MAX_ACTIVE_PAYMENT_TICKETS,
 } from "@/lib/payments/tickets";
 import {
-  isPaymentsTestAllowlistConfigured,
+  isPaymentsTestRampOpen,
   userMatchesPaymentsAllowlist,
 } from "@/lib/payments/allowlist";
 import {
@@ -82,8 +82,8 @@ export async function GET(_req: Request, { params }: Params) {
       paymentTickets,
     );
 
-    // Dual-party allowlist gate for chat propose (UI vs POST create).
-    // Self-only allowlist is enough to *show* the form; *create* still needs both.
+    // TEST ramp: when Live is off, eligible authenticated parties can propose.
+    // Peer presence still required; demo/admin eligibility is enforced on create.
     const activeParts = conversation.participants.filter((p) => !p.leftAt);
     const peerPart = activeParts.find((p) => p.userId !== user.id);
     const identityRows = await prisma.user.findMany({
@@ -100,20 +100,20 @@ export async function GET(_req: Request, { params }: Params) {
       email: user.email,
     };
     const peerIdentity = peerPart ? byId.get(peerPart.userId) : null;
-    const allowlistConfigured = isPaymentsTestAllowlistConfigured();
-    const selfAllowed =
-      allowlistConfigured && userMatchesPaymentsAllowlist(selfIdentity);
+    const rampOpen = isPaymentsTestRampOpen();
+    const selfAllowed = rampOpen || userMatchesPaymentsAllowlist(selfIdentity);
     const peerAllowed = peerIdentity
-      ? allowlistConfigured && userMatchesPaymentsAllowlist(peerIdentity)
+      ? rampOpen || userMatchesPaymentsAllowlist(peerIdentity)
       : false;
     const paymentsProposalAccess = {
-      allowlistConfigured,
+      allowlistConfigured: rampOpen ? false : true,
+      testRampOpen: rampOpen,
       flagsOn: Boolean(
         isProtectedPaymentsEnabled() || isInstantPaymentsEnabled(),
       ),
       selfAllowed,
       peerAllowed,
-      /** True only when POST create can pass both-party allowlist. */
+      /** True when POST create can pass TEST access for both parties. */
       bothAllowed: selfAllowed && peerAllowed,
       peerPresent: Boolean(peerPart),
     };

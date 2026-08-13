@@ -19,6 +19,7 @@ import { getConnectStatus } from "@/lib/payments/stripe/connect";
 import {
   getPaymentsTestAllowlistEntryCount,
   isPaymentsTestAllowlistConfigured,
+  isPaymentsTestRampOpen,
   userMatchesPaymentsAllowlist,
 } from "@/lib/payments/allowlist";
 import { isStripeConfigured } from "@/lib/payments/stripe/client";
@@ -108,6 +109,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     const allowlistConfigured = isPaymentsTestAllowlistConfigured();
     const allowlistEntryCount = getPaymentsTestAllowlistEntryCount();
+    const testRampOpen = isPaymentsTestRampOpen();
 
     const buyerIdentity = session
       ? { id: session.id, email: session.email }
@@ -124,11 +126,12 @@ export async function GET(_req: Request, ctx: Ctx) {
       ? userMatchesPaymentsAllowlist(sellerIdentity)
       : false;
 
+    // Open TEST ramp: authenticated buyer + seller Connect readiness matter;
+    // legacy allowlist no longer blocks when Live is off.
     const allowlistOk =
-      allowlistConfigured &&
       Boolean(session) &&
-      buyerAllowlisted &&
-      sellerAllowlisted;
+      (testRampOpen ||
+        (allowlistConfigured && buyerAllowlisted && sellerAllowlisted));
 
     const notSelf = Boolean(session && session.id !== sellerUserId);
     const baseStripeGates =
@@ -165,16 +168,16 @@ export async function GET(_req: Request, ctx: Ctx) {
       } else if (!sellerConnectReady) {
         cardCheckoutBlockedReason =
           "Seller must complete Payments & Payouts before card checkout.";
-      } else if (!allowlistConfigured || allowlistEntryCount === 0) {
+      } else if (!testRampOpen && (!allowlistConfigured || allowlistEntryCount === 0)) {
         cardCheckoutBlockedReason =
           "Card checkout test allowlist is empty on this server.";
-      } else if (!buyerAllowlisted && !sellerAllowlisted) {
+      } else if (!testRampOpen && !buyerAllowlisted && !sellerAllowlisted) {
         cardCheckoutBlockedReason =
           "Card checkout is limited to approved test accounts (buyer and seller are not on the allowlist).";
-      } else if (!buyerAllowlisted) {
+      } else if (!testRampOpen && !buyerAllowlisted) {
         cardCheckoutBlockedReason =
           "Card checkout is limited to approved test accounts (your buyer account is not on the allowlist).";
-      } else if (!sellerAllowlisted) {
+      } else if (!testRampOpen && !sellerAllowlisted) {
         cardCheckoutBlockedReason =
           "Card checkout is limited to approved test accounts (the seller of this listing is not on the allowlist).";
       } else if (session.id === sellerUserId) {

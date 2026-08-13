@@ -916,14 +916,124 @@ export function MessagesInbox({
                     </p>
                   ) : null}
                 </div>
-                {activeOther?.slug ? (
-                  <Link
-                    href={`/members/${activeOther.slug}`}
-                    className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-electric hover:text-electric-hover"
-                  >
-                    View profile
-                  </Link>
-                ) : null}
+                <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-center sm:gap-2">
+                  {activeOther?.slug ? (
+                    <Link
+                      href={`/members/${activeOther.slug}`}
+                      className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-electric hover:text-electric-hover"
+                    >
+                      View profile
+                    </Link>
+                  ) : null}
+                  {activeConversation?.contextType !== "system" ? (
+                    <ProposePaymentTicketButton
+                      conversationId={activeId!}
+                      myId={myId}
+                      proposalAccess={proposalAccess}
+                      activeTicketCount={activeTicketCount}
+                      maxActiveTickets={MAX_ACTIVE_PAYMENT_TICKETS}
+                      onCreated={({ ticket, message }) => {
+                        shouldScrollRef.current = true;
+                        const now = new Date().toISOString();
+                        if (!ticket?.id) {
+                          console.error(
+                            "[payments:propose] onCreated without ticket.id",
+                          );
+                          return;
+                        }
+                        setActiveTicketCount((n) => n + 1);
+                        const msg = (message
+                          ? {
+                              id: message.id,
+                              conversationId: message.conversationId,
+                              senderId: message.senderId,
+                              body: message.body,
+                              createdAt: message.createdAt,
+                              messageType:
+                                message.messageType || "PAYMENT_TICKET",
+                              systemEventType:
+                                message.systemEventType ||
+                                "PAYMENT_TICKET_PROPOSED",
+                              replyAllowed: message.replyAllowed !== false,
+                              paymentTicketId:
+                                message.paymentTicketId ?? ticket.id,
+                              attachments: message.attachments ?? [],
+                              sender: message.sender,
+                            }
+                          : {
+                              id: `payment-ticket:${ticket.id}`,
+                              conversationId: activeId!,
+                              senderId: myId,
+                              body: "Payment Ticket",
+                              createdAt: now,
+                              messageType: "PAYMENT_TICKET",
+                              systemEventType: "PAYMENT_TICKET_PROPOSED",
+                              replyAllowed: true,
+                              paymentTicketId: ticket.id,
+                              attachments: [],
+                            }) satisfies Message;
+
+                        setMessages((prev) => {
+                          if (
+                            prev.some(
+                              (m) =>
+                                m.id === msg.id ||
+                                (msg.paymentTicketId &&
+                                  m.paymentTicketId === msg.paymentTicketId),
+                            )
+                          ) {
+                            return prev;
+                          }
+                          return [...prev, msg];
+                        });
+                        setConversations((prev) => {
+                          const updated = prev.map((c) =>
+                            c.id === activeId
+                              ? {
+                                  ...c,
+                                  lastMessage: msg,
+                                  lastMessageAt: msg.createdAt,
+                                  unread: false,
+                                }
+                              : c,
+                          );
+                          return [...updated].sort((a, b) => {
+                            const at = a.lastMessageAt
+                              ? new Date(a.lastMessageAt).getTime()
+                              : 0;
+                            const bt = b.lastMessageAt
+                              ? new Date(b.lastMessageAt).getTime()
+                              : 0;
+                            return bt - at;
+                          });
+                        });
+                        setThreadRefresh((n) => n + 1);
+                        const convId = activeId;
+                        void (async () => {
+                          try {
+                            const res = await fetch(
+                              `/api/conversations/${convId}`,
+                              { cache: "no-store" },
+                            );
+                            if (!res.ok) return;
+                            const data = (await res.json()) as {
+                              messages?: Message[];
+                              paymentTickets?: TimelineTicketLite[];
+                            };
+                            const msgs = mergePaymentTicketsClient(
+                              convId!,
+                              data.messages ?? [],
+                              data.paymentTickets,
+                            );
+                            setMessages(msgs);
+                          } catch {
+                            /* keep optimistic timeline message */
+                          }
+                        })();
+                      }}
+                    />
+                  ) : null}
+                </div>
               </header>
 
               <div
@@ -1215,117 +1325,6 @@ export function MessagesInbox({
                     ))}
                   </div>
                 ) : null}
-                {/* Payment Ticket propose sits outside the message form (no nested forms). */}
-                <div className="mb-2">
-                  <ProposePaymentTicketButton
-                    conversationId={activeId!}
-                    myId={myId}
-                    proposalAccess={proposalAccess}
-                    activeTicketCount={activeTicketCount}
-                    maxActiveTickets={MAX_ACTIVE_PAYMENT_TICKETS}
-                    onCreated={({ ticket, message }) => {
-                      shouldScrollRef.current = true;
-                      const now = new Date().toISOString();
-                      if (!ticket?.id) {
-                        console.error(
-                          "[payments:propose] onCreated without ticket.id",
-                        );
-                        return;
-                      }
-                      setActiveTicketCount((n) => n + 1);
-                      // Prefer server message; if missing, synthetic row so card renders.
-                      const msg = (message
-                        ? {
-                            id: message.id,
-                            conversationId: message.conversationId,
-                            senderId: message.senderId,
-                            body: message.body,
-                            createdAt: message.createdAt,
-                            messageType:
-                              message.messageType || "PAYMENT_TICKET",
-                            systemEventType:
-                              message.systemEventType ||
-                              "PAYMENT_TICKET_PROPOSED",
-                            replyAllowed: message.replyAllowed !== false,
-                            paymentTicketId:
-                              message.paymentTicketId ?? ticket.id,
-                            attachments: message.attachments ?? [],
-                            sender: message.sender,
-                          }
-                        : {
-                            id: `payment-ticket:${ticket.id}`,
-                            conversationId: activeId!,
-                            senderId: myId,
-                            body: "Payment Ticket",
-                            createdAt: now,
-                            messageType: "PAYMENT_TICKET",
-                            systemEventType: "PAYMENT_TICKET_PROPOSED",
-                            replyAllowed: true,
-                            paymentTicketId: ticket.id,
-                            attachments: [],
-                          }) satisfies Message;
-
-                      setMessages((prev) => {
-                        if (
-                          prev.some(
-                            (m) =>
-                              m.id === msg.id ||
-                              (msg.paymentTicketId &&
-                                m.paymentTicketId === msg.paymentTicketId),
-                          )
-                        ) {
-                          return prev;
-                        }
-                        return [...prev, msg];
-                      });
-                      setConversations((prev) => {
-                        const updated = prev.map((c) =>
-                          c.id === activeId
-                            ? {
-                                ...c,
-                                lastMessage: msg,
-                                lastMessageAt: msg.createdAt,
-                                unread: false,
-                              }
-                            : c,
-                        );
-                        return [...updated].sort((a, b) => {
-                          const at = a.lastMessageAt
-                            ? new Date(a.lastMessageAt).getTime()
-                            : 0;
-                          const bt = b.lastMessageAt
-                            ? new Date(b.lastMessageAt).getTime()
-                            : 0;
-                          return bt - at;
-                        });
-                      });
-                      // Always revalidate as backup so authoritative GET merge wins.
-                      setThreadRefresh((n) => n + 1);
-                      const convId = activeId;
-                      void (async () => {
-                        try {
-                          const res = await fetch(
-                            `/api/conversations/${convId}`,
-                            { cache: "no-store" },
-                          );
-                          if (!res.ok) return;
-                          const data = (await res.json()) as {
-                            messages?: Message[];
-                            paymentTickets?: TimelineTicketLite[];
-                          };
-                          const msgs = mergePaymentTicketsClient(
-                            convId!,
-                            data.messages ?? [],
-                            data.paymentTickets,
-                          );
-                          setMessages(msgs);
-                        } catch {
-                          /* keep optimistic timeline message */
-                        }
-                      })();
-                    }}
-                  />
-                </div>
                 <form onSubmit={onSubmit} className="flex items-end gap-2">
                   <input
                     ref={fileInputRef}

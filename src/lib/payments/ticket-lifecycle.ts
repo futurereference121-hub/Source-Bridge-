@@ -252,3 +252,104 @@ export function shouldShowItemFundsRemainingProtectedMessage(opts: {
   if (opts.protectedStatus === "RELEASED") return false;
   return true;
 }
+
+/**
+ * True when a party has approved the *current* ticket revision.
+ * Coerces numeric-ish values so JSON/DB quirks cannot hide Accept.
+ */
+export function partyAcceptedCurrentRevision(
+  approvedRevision: number | null | undefined,
+  revision: number,
+): boolean {
+  if (approvedRevision == null) return false;
+  return Number(approvedRevision) === Number(revision);
+}
+
+export type TicketAcceptanceState = {
+  buyerAcceptedCurrentRevision: boolean;
+  sellerAcceptedCurrentRevision: boolean;
+  bothAcceptedCurrentRevision: boolean;
+  iAmBuyer: boolean;
+  iAmSeller: boolean;
+  isParty: boolean;
+  myAcceptedCurrentRevision: boolean;
+  /** Outstanding party must Accept Agreement (+ Decline). */
+  canAccept: boolean;
+  canDecline: boolean;
+  /** Already-accepted party waits for the other — never the outstanding party. */
+  waitingForOther: boolean;
+  waitingForRole: "buyer" | "seller" | null;
+  waitingLabel: string | null;
+  bothAcceptedLabel: string | null;
+};
+
+/**
+ * Authoritative dual-accept UI/server derivation for the current revision.
+ * Proposer auto-approval on create is reflected in buyer/sellerApprovedRevision.
+ */
+export function deriveTicketAcceptanceState(opts: {
+  viewerId: string;
+  buyerId: string;
+  sellerId: string;
+  revision: number;
+  buyerApprovedRevision: number | null | undefined;
+  sellerApprovedRevision: number | null | undefined;
+  status: string;
+}): TicketAcceptanceState {
+  const buyerAcceptedCurrentRevision = partyAcceptedCurrentRevision(
+    opts.buyerApprovedRevision,
+    opts.revision,
+  );
+  const sellerAcceptedCurrentRevision = partyAcceptedCurrentRevision(
+    opts.sellerApprovedRevision,
+    opts.revision,
+  );
+  const bothAcceptedCurrentRevision =
+    buyerAcceptedCurrentRevision && sellerAcceptedCurrentRevision;
+  const iAmBuyer = Boolean(opts.viewerId) && opts.viewerId === opts.buyerId;
+  const iAmSeller = Boolean(opts.viewerId) && opts.viewerId === opts.sellerId;
+  const isParty = iAmBuyer || iAmSeller;
+  const myAcceptedCurrentRevision = iAmBuyer
+    ? buyerAcceptedCurrentRevision
+    : iAmSeller
+      ? sellerAcceptedCurrentRevision
+      : false;
+  const openForAccept =
+    opts.status === "PROPOSED" || opts.status === "DRAFT";
+  const canAccept = isParty && openForAccept && !myAcceptedCurrentRevision;
+  const canDecline = canAccept;
+  const waitingForOther =
+    isParty &&
+    openForAccept &&
+    myAcceptedCurrentRevision &&
+    !bothAcceptedCurrentRevision;
+  const waitingForRole: "buyer" | "seller" | null = waitingForOther
+    ? iAmBuyer
+      ? "seller"
+      : "buyer"
+    : null;
+  const waitingLabel = waitingForRole
+    ? waitingForRole === "seller"
+      ? "Waiting for seller to accept."
+      : "Waiting for buyer to accept."
+    : null;
+  const bothAcceptedLabel = bothAcceptedCurrentRevision
+    ? "Agreement accepted by both parties"
+    : null;
+
+  return {
+    buyerAcceptedCurrentRevision,
+    sellerAcceptedCurrentRevision,
+    bothAcceptedCurrentRevision,
+    iAmBuyer,
+    iAmSeller,
+    isParty,
+    myAcceptedCurrentRevision,
+    canAccept,
+    canDecline,
+    waitingForOther,
+    waitingForRole,
+    waitingLabel,
+    bothAcceptedLabel,
+  };
+}

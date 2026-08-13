@@ -424,7 +424,7 @@ function mapTicket(
               remainingProtectedSellerShareMinor:
                 books.remainingProtectedSellerShareMinor,
               platformFeeHeldMinor: books.platformFeeMinor,
-              note: "Item funds may be released early after the buyer authorizes release. Shipping, sourcer fee, and Source Bridge fee stay protected.",
+              note: "Item funds may be released early after the buyer authorizes release. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately.",
             }
           : null,
     },
@@ -841,8 +841,7 @@ export async function createOrRevisePaymentTicket(opts: {
   const seller = await loadParty(opts.sellerId);
   assertEligiblePaymentParty(buyer, "buyer");
   assertEligiblePaymentParty(seller, "seller");
-  // Controlled TEST ramp — empty allowlist = deny; BOTH buyer and seller must match.
-  // UI may show the form when only the actor is allowlisted; create still enforces both.
+  // TEST ramp: when Live is off + Stripe TEST, open to eligible parties (allowlist no-op).
   assertPaymentsTestAllowlisted([buyer, seller], {
     action: "create Payment Ticket",
     labels: ["buyer", "seller"],
@@ -1355,6 +1354,8 @@ export async function respondToPaymentTicket(opts: {
   actorId: string;
   action: "accept" | "decline";
   reason?: string;
+  /** Optional client revision guard — must match current ticket.revision. */
+  expectedRevision?: number;
 }) {
   const ticket = await prisma.paymentTicket.findUnique({
     where: { id: opts.ticketId },
@@ -1370,6 +1371,17 @@ export async function respondToPaymentTicket(opts: {
   }
   if (opts.actorId !== ticket.buyerId && opts.actorId !== ticket.sellerId) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
+  }
+  if (
+    opts.expectedRevision != null &&
+    Number(opts.expectedRevision) !== Number(ticket.revision)
+  ) {
+    throw Object.assign(
+      new Error(
+        `Revision mismatch — ticket is now v${ticket.revision}. Refresh and review the current terms.`,
+      ),
+      { status: 409, code: "REVISION_MISMATCH" },
+    );
   }
 
   if (opts.action === "accept") {
@@ -1391,6 +1403,27 @@ export async function respondToPaymentTicket(opts: {
     assertPaymentsTestAllowlisted([buyer, seller, actor], {
       action: "accept Payment Ticket",
     });
+
+    // Idempotent: already accepted this revision (alone or both) → no duplicate side effects.
+    const isBuyer = opts.actorId === ticket.buyerId;
+    const alreadyMine = isBuyer
+      ? ticket.buyerApprovedRevision === ticket.revision
+      : ticket.sellerApprovedRevision === ticket.revision;
+    if (alreadyMine) {
+      return mapTicket(ticket, {
+        viewerId: opts.actorId,
+        involvesMoney: false,
+        procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+        protectedTxnStatus: ticket.protectedTransactionId
+          ? (
+              await prisma.protectedTransaction.findUnique({
+                where: { id: ticket.protectedTransactionId },
+                select: { status: true },
+              })
+            )?.status ?? null
+          : null,
+      });
+    }
   }
 
   if (opts.action === "decline") {

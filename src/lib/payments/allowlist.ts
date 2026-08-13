@@ -1,10 +1,18 @@
 /**
- * Controlled TEST ramp for Protected Payments.
+ * TEST-mode payment access gate.
  *
- * PAYMENTS_TEST_ALLOWLIST = comma/semicolon/space-separated user IDs or emails.
- * Empty / unset → DENY all ticket create, accept-to-fund, checkout, PI create, and funding.
- * Never open platform-wide just because PAYMENTS_ENABLED is true.
+ * Product (pre-Live): when LIVE_PAYMENTS_ENABLED is false and Stripe mode is
+ * TEST, ALL otherwise-eligible authenticated users may use TEST payment flows.
+ * PAYMENTS_TEST_ALLOWLIST is legacy — an empty list no longer denies access.
+ *
+ * Normal eligibility (demo/admin/deleted, Connect for sellers receiving funds)
+ * still applies outside this module.
  */
+
+import {
+  getStripeMode,
+  isLivePaymentsEnabled,
+} from "@/lib/payments/flags";
 
 export type AllowlistIdentity = {
   id: string;
@@ -22,7 +30,9 @@ export function normalizeAllowlistToken(raw: string): string {
 }
 
 function parseAllowlistRaw(): string[] {
-  const raw = (process.env.PAYMENTS_TEST_ALLOWLIST || "").replace(/^\uFEFF/, "").trim();
+  const raw = (process.env.PAYMENTS_TEST_ALLOWLIST || "")
+    .replace(/^\uFEFF/, "")
+    .trim();
   if (!raw) return [];
   return raw
     .split(/[,;\s]+/)
@@ -30,7 +40,15 @@ function parseAllowlistRaw(): string[] {
     .filter(Boolean);
 }
 
-/** True when at least one id/email is configured. Empty = closed ramp. */
+/**
+ * True when Live is off and Stripe is TEST — open TEST ramp for eligible users.
+ * Live money ops remain blocked by LIVE_PAYMENTS_ENABLED / getStripeMode.
+ */
+export function isPaymentsTestRampOpen(): boolean {
+  return !isLivePaymentsEnabled() && getStripeMode() === "TEST";
+}
+
+/** True when at least one id/email is configured (legacy restrict list). */
 export function isPaymentsTestAllowlistConfigured(): boolean {
   return parseAllowlistRaw().length > 0;
 }
@@ -44,6 +62,8 @@ export function getPaymentsTestAllowlistEntryCount(): number {
 }
 
 export function userMatchesPaymentsAllowlist(user: AllowlistIdentity): boolean {
+  // Open TEST ramp: every identity is treated as allowed for gate checks.
+  if (isPaymentsTestRampOpen()) return true;
   const list = parseAllowlistRaw();
   if (!list.length) return false;
   const id = normalizeAllowlistToken(user.id || "");
@@ -54,14 +74,18 @@ export function userMatchesPaymentsAllowlist(user: AllowlistIdentity): boolean {
 }
 
 /**
- * Hard gate for money-path operations. Fail closed.
- * Requires a non-empty allowlist AND every provided identity to match.
- * Error message indicates which identity failed when possible.
+ * Hard gate for money-path operations in TEST.
+ * When the TEST ramp is open (Live off + Stripe TEST), this is a no-op —
+ * eligibility / Connect / party checks still apply at call sites.
+ * If Live were ever enabled without a separate gate, empty allowlist would deny.
  */
 export function assertPaymentsTestAllowlisted(
   users: AllowlistIdentity | AllowlistIdentity[],
   opts?: { action?: string; labels?: string[] },
 ): void {
+  if (isPaymentsTestRampOpen()) {
+    return;
+  }
   const list = Array.isArray(users) ? users : [users];
   if (!isPaymentsTestAllowlistConfigured()) {
     throw Object.assign(
@@ -93,11 +117,14 @@ export function assertPaymentsTestAllowlisted(
 
 /** Snapshot for client UI — never include raw allowlist entries publicly. */
 export function paymentsAllowlistGateSnapshot(user?: AllowlistIdentity | null) {
+  const rampOpen = isPaymentsTestRampOpen();
   const configured = isPaymentsTestAllowlistConfigured();
   return {
     allowlistConfigured: configured,
     allowlistEntryCount: getPaymentsTestAllowlistEntryCount(),
+    /** Open TEST ramp: any authenticated user may use TEST flows when flags are on. */
+    testRampOpen: rampOpen,
     /** Current session may create/accept tickets and fund when payments flags are on. */
-    testAccessAllowed: Boolean(user && configured && userMatchesPaymentsAllowlist(user)),
+    testAccessAllowed: Boolean(user && (rampOpen || (configured && userMatchesPaymentsAllowlist(user)))),
   };
 }
