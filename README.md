@@ -18,6 +18,11 @@ Open [http://localhost:3000](http://localhost:3000).
 - `npm run dev` — development server (Turbopack)
 - `npm run build` — production build
 - `npm start` — serve production build
+- `npm run test:payments:fast` — offline critical payment regression
+- `npm run test:payments:full` — full offline payment regression
+- `npm run test:sourcebridge` — full payment regression + typecheck
+
+Agent / Cursor workflow: `docs/AGENT_WORKFLOW.md`. Payment invariants: `docs/PAYMENT_REGRESSION.md`.
 
 ## Key routes
 

@@ -1,0 +1,31 @@
+# Cursor indexing ignore — generated/noise only.
+# Do not add src/, prisma schema/migrations, tests, or payment scripts.
+
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+.vercel/
+src/generated/prisma/
+
+# Local DBs / uploads
+prisma/dev.db
+*.db
+public/uploads/
+
+# Logs and agent/debug dumps
+*.log
+tmp-*.html
+tmp-*.json
+tmp-*.txt
+tmp-*.js
+tmp-*chunk.js
+.tmp-pw-*.png
+
+# One-off migration dumps (not runtime source)
+data/wallapop-export/
+data/wallapop-edge-profile/
+data/wallapop-edge-debug-profile/
+private/

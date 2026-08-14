@@ -1,0 +1,29 @@
+---
+description: Protected, Direct, and sourcing Payment Ticket architectures plus 2% fee
+globs: src/lib/payments/**,src/app/api/payments/**,src/app/api/checkout/**,src/app/api/webhooks/**,prisma/**
+alwaysApply: false
+---
+
+# Payment architecture
+
+Preserve these three systems. Do not rewrite proven money engines to fix ticket/UI/cache bugs.
+
+## 1. Protected product
+
+Platform charge → seller funds held → fulfilment → receipt → buyer **Release Funds Now** or **12-hour inspection** → final seller transfer.
+
+## 2. Direct product
+
+Stripe **Destination Charge**: `transfer_data.destination` + `application_fee_amount`. Do not replace with later `transfers.create` on fund.
+
+## 3. Sourcing Payment Ticket
+
+Full buyer funding → seller entitlement protected → optional **buyer-authorized** procurement/item release → fulfilment → receipt → residual release. Never auto-release procurement merely because the buyer funded.
+
+## Fee (current baseline)
+
+**2% / 200 bps** (`SOURCE_BRIDGE_FEE_BPS`). Product fee base = listing price. Sourcing fee base = item + shipping (**sourcer service fee excluded**). Platform fee is held separately from seller entitlement.
+
+Invariant: `procurementTransferredMinor + finalTransferredMinor <= sellerEntitledMinor`. On full completion they are equal. Never duplicate procurement, final, refund, or destination payment.
+
+UI must distinguish **remaining seller funds protected** from **Source Bridge fee**. When remaining seller entitlement is 0, completed state is **COMPLETED** and the yellow “remaining funds protected” banner must disappear.

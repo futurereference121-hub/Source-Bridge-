@@ -145,14 +145,14 @@ Never use “escrow” in UI. Use Protected Payment / Protected Transaction / Pr
 
 ## Payment Ticket regression (required before deploy)
 
-Any change that touches Payment Tickets, conversation timeline merge, ticket accept/cancel, chat card UI, or authenticated conversation/ticket caching **must** run the critical payment regression suite before deploy:
+Any change that touches Payment Tickets, conversation timeline merge, ticket accept/cancel, chat card UI, or authenticated conversation/ticket caching **must** run the critical payment regression suite before deploy. Manifest and commands: `docs/PAYMENT_REGRESSION.md`.
 
 ```
-npm run test:payment-journey
-npm run test:ticket-acceptance
-npm run test:payment-ticket-lifecycle
-npm run test:payment-ticket-timeline
+npm run test:payments:fast
+npm run test:payments:full
 ```
+
+(Equivalent individual scripts remain: `test:payment-journey`, `test:ticket-acceptance`, `test:payment-ticket-lifecycle`.)
 
 Do not ship isolated UI patches for Accept / cancel / timeline bugs. Ticket identity (`PaymentTicket.id`) is the hard boundary: cancelled tickets are terminal, unfunded dead tickets are hidden from chat (DB rows kept), and Accept is always derived from the current session user + current ticket + current revision.
 

@@ -1,0 +1,24 @@
+---
+description: Smallest correct change, no drive-by refactors, mandatory git diff review
+alwaysApply: true
+---
+
+# Scope and diff discipline
+
+Before editing: name the requested behaviour. Do not modify unrelated payment/chat/UI “while here.” Avoid broad refactors unless technically required.
+
+## After edits, inspect the full git diff
+
+Categorize every file:
+
+- REQUESTED IMPLEMENTATION
+- REQUIRED SUPPORTING CHANGE
+- TESTING
+- DOCUMENTATION/TOOLING
+- UNRELATED
+
+No unexplained UNRELATED behavioural changes. If an unrelated change is required, report it explicitly.
+
+Payment-system tasks: do not silently alter 2% fee, 3-active cap, Direct Destination Charges, Protected transfers, procurement, 12h inspection, Connect destination ownership, or soft-poll interval unless the task requires it — then STOP and report.
+
+Tooling tasks must not change application UI, API, payment logic, schema, or Stripe code. If a regression suite finds an app bug during a tooling task: **report it, do not fix it in that task**.

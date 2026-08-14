@@ -1,0 +1,29 @@
+---
+description: Completion statuses and live TEST browser QA requirement
+alwaysApply: true
+---
+
+# Definition of done
+
+Do not report a single vague “DONE”. Use:
+
+| Status | Meaning |
+|---|---|
+| **IMPLEMENTED** | Code landed in repo |
+| **TESTED** | Targeted + required regression passed |
+| **DEPLOYED** | TEST production is serving the commit |
+| **LIVE VERIFIED** | User-facing flow seen in deployed TEST UI |
+| **PRODUCTION READY TEST** | All of the above for TEST; Live still off |
+
+User-facing payment functionality **cannot** be Production Ready TEST from unit tests, code inspection, DB rows, build, or deploy SHA alone.
+
+If Cursor cannot authenticate to the required account: **IMPLEMENTED — LIVE QA REQUIRED**, Production Ready TEST = **NO**.
+
+Example:
+
+- Implementation: PASS
+- Unit tests: PASS
+- Regression: PASS
+- Deployment: PASS
+- Live browser QA: NOT AVAILABLE
+- Production Ready TEST: NO

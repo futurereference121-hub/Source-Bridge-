@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "node .cursor/hooks/guard-live-payments.mjs",
+        "timeout": 8
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/guard-stripe-shell.mjs",
+        "timeout": 8
+      }
+    ]
+  }
+}

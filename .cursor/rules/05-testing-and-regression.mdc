@@ -1,0 +1,28 @@
+---
+description: Fast vs full payment regression commands and generic-user tests
+globs: scripts/test-*.mjs,package.json,docs/PAYMENT_REGRESSION.md
+alwaysApply: false
+---
+
+# Testing and regression
+
+Previously working payment behaviour is never assumed unaffected. UI/chat/poll changes can break payments.
+
+## Commands
+
+- Fast (iteration): `npm run test:payments:fast`
+- Full (before payment completion): `npm run test:payments:full`
+- Pre-Live flag guard: `npm run test:live-guard`
+- Release-oriented: `npm run test:sourcebridge`
+
+Do not duplicate test logic — aggregators invoke existing `scripts/test-*.mjs`. Fast/full suites must **not** create Stripe network financial objects.
+
+## Generic users
+
+Core automated tests: User A / B / C. Permutations: A proposes A-buyer/B-sourcer; A proposes B-buyer/A-sourcer; B proposes A-buyer/B-sourcer; B proposes B-buyer/A-sourcer. Historical usernames only in explicit fixture blocks.
+
+## What full covers
+
+Ticket create/roles/accept/revise/cancel/isolation, 3-active, fees, Protected, Direct Destination Charge, sourcing funding authorization (no charge), procurement, fulfilment, receipt, 12h inspection, issue hold, final release, completed state, poll reconciliation, cross-user viewer isolation.
+
+Manifest: `docs/PAYMENT_REGRESSION.md`.

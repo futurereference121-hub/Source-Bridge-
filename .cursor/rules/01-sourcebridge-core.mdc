@@ -1,0 +1,28 @@
+---
+description: Source Bridge core architecture, roles, and account independence
+alwaysApply: true
+---
+
+# Source Bridge core
+
+User-to-user sourcing marketplace. UI language: Protected Payment / Direct Payment — never “escrow”.
+
+## Roles (never collapse)
+
+- **Proposer** (`createdById`): submitted the current Payment Ticket revision; auto-approves it.
+- **Buyer** (`buyerId`): pays; only buyer may start funding.
+- **Sourcer** (`sellerId`): seller entitlement and Stripe Connect destination.
+
+Creating a ticket does not make the creator the buyer. Any two eligible users use the same architecture.
+
+## Account independence
+
+Do not hardcode `futureman`, `theowlsaid`, their emails/IDs, conversation IDs, or transaction IDs except when a QA task names a historical fixture. Core tests use generic User A/B/C.
+
+## Money
+
+Integer minor units. Server calculation is authoritative; UI estimates are not. Historical funded records keep the fee stored at creation — never retroactively rewrite them.
+
+## This repo
+
+Next.js App Router, Prisma, Stripe TEST until a dedicated Live-activation task. Do not change product behaviour in tooling/docs tasks.

@@ -1,0 +1,28 @@
+---
+description: Parallel read-only investigation, single payment owner, two-tier verification
+alwaysApply: true
+---
+
+# Agent workflow
+
+Follow `docs/AGENT_WORKFLOW.md`.
+
+## Parallelism (good)
+
+Read-only: trace paths, search regressions, inspect tests, compare commits, review schema/UI/security/diff. These may be separate explore subagents.
+
+## Parallelism (bad)
+
+Multiple agents **editing** the same payment engine, tickets, checkout, or fulfilment. For critical payment logic: **one implementation owner** integrates the fix. Others may investigate/review only.
+
+## Worktrees
+
+Use isolated worktrees only for truly independent work (docs vs unrelated module). Do **not** split tightly coupled payment changes across worktrees.
+
+## Pre-task (payment-sensitive)
+
+Read applicable `.cursor/rules`, identify critical flows, inspect current code, confirm/run `npm run test:payments:fast` if appropriate, state exact scope, then edit.
+
+## Post-task (payment-sensitive)
+
+Targeted tests → fast suite → full suite before completion → git diff → verify Live flag untouched → typecheck/build → TEST deploy if appropriate → live browser QA → report unverified items explicitly.

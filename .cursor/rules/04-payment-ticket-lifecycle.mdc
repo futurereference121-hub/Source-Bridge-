@@ -1,0 +1,37 @@
+---
+description: Payment Ticket identity, acceptance, cancel, and chat timeline rules
+globs: src/lib/payments/ticket*.ts,src/lib/payments/tickets.ts,src/app/api/payments/tickets/**,src/components/messaging/**
+alwaysApply: false
+---
+
+# Payment Ticket lifecycle
+
+`PaymentTicket.id` is a hard boundary. Ticket A must never inherit acceptance, roles, status, transaction, viewer, or UI state from Ticket B.
+
+## Acceptance
+
+Tied to **ticket id + current revision** only — not conversation, sourcing request, or participant pair.
+
+- Proposer auto-approves their revision.
+- Counterparty = other conversation participant (`viewerId !== createdById`).
+- `viewerMayAccept` when: active unfunded, participant, not proposer, has not accepted current revision.
+- After both accept: **only `buyerId`** gets Pay CTA and may fund server-side.
+- Seller destination from `sellerId`, not proposer/buyer identity.
+
+Never render “Waiting for @currentViewer to accept.” Never render “Agreement accepted by both parties” unless **this** ticket’s **current** revision is dual-accepted **and** the ticket is not an unfunded dead state.
+
+## Terminal unfunded
+
+`CANCELLED` / `DECLINED` / `SUPERSEDED` / `VOIDED` are terminal. Accept and fund endpoints must reject them. They disappear from **normal chat** (DB audit rows may remain). Funded/refunded/disputed tickets stay as history.
+
+Max **3 ACTIVE** tickets per conversation. Inactive history does not count.
+
+## New tickets
+
+Fresh state only. Do not copy previous ticket acceptance. React keys and collapse state: `PaymentTicket.id`. Soft-poll reconciles by ticket id — do not mutate A into B.
+
+## Authoritative helpers
+
+`src/lib/payments/ticket-lifecycle.ts`: `resolveLifecycleStage`, `ticketAppearsInChatTimeline`, `viewerMayAcceptTicket`, `getPaymentTicketActions`, `deriveTicketAcceptanceState`. Do not invent a second lifecycle in components.
+
+Actions = `getPaymentTicketActions(ticket, currentSessionUserId)`. Do not persist/cache `ticket.viewer` from another user.

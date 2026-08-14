@@ -1,0 +1,30 @@
+---
+description: Pre-Live Stripe, PCI, Connect destination, and environment safety
+alwaysApply: true
+---
+
+# Payment safety (pre-Live)
+
+Until a **dedicated Live-activation task**:
+
+- `LIVE_PAYMENTS_ENABLED=false`
+- Stripe financial ops **TEST** only
+- Do not enable Live as a side effect of UI, fee, ticket, test, deploy, or env cleanup
+
+`getStripeMode()` currently forces TEST even if the env flag is flipped. Do not remove that refuse without an explicit Live task.
+
+## PCI
+
+Never put raw PAN/CVC in scripts, APIs, or tests. Browser cards: Stripe.js / Payment Element. Automated Stripe: official TEST PaymentMethod IDs, mocks, or fixtures.
+
+## Connect
+
+Sourcer/seller destination = **that user’s own** Connect account (`txn.sellerId` / `ticket.sellerId`). Never default other sellers to a historical Connect account. Buyers do not need Connect merely to buy.
+
+## QA
+
+Do not create PaymentIntent / Charge / Transfer / Refund / payout unless the task explicitly requires TEST financial verification. Ordinary ticket/UI work: no Stripe money objects.
+
+## Guard
+
+`npm run test:live-guard` must pass the pre-Live regression. Changing Live flags requires an explicit Live-activation task.

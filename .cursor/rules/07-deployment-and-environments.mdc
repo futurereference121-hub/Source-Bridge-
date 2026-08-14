@@ -1,0 +1,15 @@
+---
+description: TEST vs Live environments, deploy discipline, and Live-activation isolation
+globs: .env*,vercel.json,docs/legal/**,docs/PROTECTED_PAYMENTS.md,src/lib/payments/flags.ts
+alwaysApply: false
+---
+
+# Deployment and environments
+
+Production currently serves **TEST** Stripe. Pushing `main` may auto-deploy on Vercel — do not treat a tooling-only push as a product release, but confirm no runtime files changed.
+
+Live enablement is **never** a side effect. Checklist: `docs/legal/live-activation-checklist.md`. Until that dedicated task: `LIVE_PAYMENTS_ENABLED=false`.
+
+Do not deploy solely because Cursor rules/docs/tests changed unless runtime code changed.
+
+User-facing payment work: TEST deploy + live browser QA before **Production Ready TEST**. If you cannot log in: **IMPLEMENTED — LIVE QA REQUIRED**.

@@ -1,0 +1,24 @@
+---
+description: Chat Payment Ticket UI, collapse, polling, and viewer isolation
+globs: src/components/messaging/**,src/components/payments/**
+alwaysApply: false
+---
+
+# Chat, UI, and realtime
+
+Conversation is primarily messaging. Payment Tickets must not overwhelm chat. All tickets collapse/expand; **critical actions stay accessible**.
+
+- Unfunded cancelled/declined/superseded: hidden from normal chat.
+- Funded history: remains, compact/collapsible when completed.
+- Header **Payment Ticket** control stays near View Profile.
+- Preserve ~**2.5s** active soft-poll (or improve it). Do not add a competing realtime system.
+
+Polling / revalidation must not: clear drafts, reset collapse keyed by ticket id, jump scroll, duplicate messages/tickets, or repeat financial actions.
+
+## Viewer
+
+Actions derive from the **current authenticated session** + authoritative ticket fields. Never reuse another user’s `ticket.viewer` / actions / conversation payload. Authenticated ticket/conversation responses: `private, no-store`.
+
+## Receipt UI
+
+Protected: after item received, buyer chooses **Release Funds Now** or **Start 12-Hour Inspection**. During inspection: Release Now + Report a Problem. Issue freeze requires admin review. Do not restore a forced 48-hour period unless explicitly requested.
