@@ -50,6 +50,7 @@
     "test:payments": "node scripts/test-payments-domain.mjs",
     "test:procurement": "node scripts/test-procurement-release.mjs",
     "test:payment-ticket-timeline": "node --env-file=.env scripts/test-payment-ticket-timeline.mjs",
+    "test:ticket-acceptance": "node scripts/test-ticket-acceptance-and-access.mjs",
     "test:payment-ticket-lifecycle": "node scripts/test-payment-ticket-lifecycle.mjs",
     "test:payment-ticket-lifecycle:db": "node --env-file=.env scripts/test-payment-ticket-lifecycle.mjs",
     "test:listing-payment-options": "node scripts/test-listing-payment-options.mjs",

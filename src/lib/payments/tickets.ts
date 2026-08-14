@@ -39,15 +39,20 @@ import {
 } from "@/lib/messaging";
 import {
   ACTIVE_TICKET_STATUSES,
+  deriveTicketAcceptanceState,
   isActiveLifecycleTicket,
   lifecycleLabel,
   MAX_ACTIVE_PAYMENT_TICKETS,
   resolveLifecycleStage,
+  resolveTicketRoleModel,
+  viewerMayFundTicket,
 } from "@/lib/payments/ticket-lifecycle";
 
 export {
   ACTIVE_TICKET_STATUSES,
   INACTIVE_TICKET_STATUSES,
+  assignConversationTicketRoles,
+  deriveTicketAcceptanceState,
   isActiveLifecycleTicket,
   isActiveTicketStatus,
   isInactiveTicketStatus,
@@ -55,9 +60,12 @@ export {
   lifecycleLabel,
   MAX_ACTIVE_PAYMENT_TICKETS,
   resolveLifecycleStage,
+  resolveTicketRoleModel,
+  sellerDestinationUserId,
   isSubtleHistoricalTicket,
   isCompletedLifecycleTicket,
   subtleHistoricalLabel,
+  viewerMayFundTicket,
 } from "@/lib/payments/ticket-lifecycle";
 
 /** Protected txn statuses that mean money has, is, or may still be in flight. */
@@ -182,6 +190,37 @@ export type TicketAmountsInput = {
   currency?: string;
 };
 
+type TicketPartyUser = {
+  id: string;
+  name: string;
+  username: string | null;
+};
+
+async function loadRoleParties(
+  buyerId: string,
+  sellerId: string,
+  createdById?: string | null,
+): Promise<{
+  buyerParty: TicketPartyUser | null;
+  sellerParty: TicketPartyUser | null;
+  proposedBy: TicketPartyUser | null;
+}> {
+  const ids = [...new Set([buyerId, sellerId, createdById || ""].filter(Boolean))];
+  if (ids.length === 0) {
+    return { buyerParty: null, sellerParty: null, proposedBy: null };
+  }
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, username: true },
+  });
+  const byId = new Map(users.map((u) => [u.id, u]));
+  return {
+    buyerParty: byId.get(buyerId) ?? null,
+    sellerParty: byId.get(sellerId) ?? null,
+    proposedBy: createdById ? byId.get(createdById) ?? null : null,
+  };
+}
+
 function mapTicket(
   t: {
     id: string;
@@ -229,6 +268,16 @@ function mapTicket(
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
     proposedBy?: {
+      id: string;
+      name: string;
+      username: string | null;
+    } | null;
+    buyerParty?: {
+      id: string;
+      name: string;
+      username: string | null;
+    } | null;
+    sellerParty?: {
       id: string;
       name: string;
       username: string | null;
@@ -348,11 +397,30 @@ function mapTicket(
       residualMinor: books.finalResidualMinor,
     });
 
+  const acceptance = extras?.viewerId
+    ? deriveTicketAcceptanceState({
+        viewerId: extras.viewerId,
+        createdById: t.createdById,
+        buyerId: t.buyerId,
+        sellerId: t.sellerId,
+        revision: t.revision,
+        buyerApprovedRevision: t.buyerApprovedRevision,
+        sellerApprovedRevision: t.sellerApprovedRevision,
+        status: t.status,
+        counterpartyUsername:
+          extras.viewerId === t.buyerId
+            ? extras.sellerParty?.username
+            : extras.buyerParty?.username,
+      })
+    : null;
+
   return {
     id: t.id,
     conversationId: t.conversationId,
     createdById: t.createdById,
     proposedBy: extras?.proposedBy ?? null,
+    buyerParty: extras?.buyerParty ?? null,
+    sellerParty: extras?.sellerParty ?? null,
     buyerId: t.buyerId,
     sellerId: t.sellerId,
     listingId: t.listingId,
@@ -394,7 +462,13 @@ function mapTicket(
     actions: {
       canReleaseProcurement: procPending,
       canPay:
-        t.status === "ACCEPTED" && Boolean(t.protectedTransactionId),
+        t.status === "ACCEPTED" &&
+        Boolean(t.protectedTransactionId) &&
+        viewerMayFundTicket({
+          viewerId: extras?.viewerId || "",
+          buyerId: t.buyerId,
+        }),
+      canAccept: acceptance?.canAccept ?? false,
       canEdit: lifecycle.canEdit,
       canCancel: lifecycle.canCancel,
       canDelete: lifecycle.canDelete,
@@ -428,6 +502,21 @@ function mapTicket(
             }
           : null,
     },
+    acceptance,
+  };
+}
+
+async function extrasWithParties(
+  t: { buyerId: string; sellerId: string; createdById: string },
+  extras?: Parameters<typeof mapTicket>[1],
+): Promise<NonNullable<Parameters<typeof mapTicket>[1]>> {
+  const parties = await loadRoleParties(t.buyerId, t.sellerId, t.createdById);
+  return {
+    ...parties,
+    ...extras,
+    proposedBy: extras?.proposedBy ?? parties.proposedBy,
+    buyerParty: extras?.buyerParty ?? parties.buyerParty,
+    sellerParty: extras?.sellerParty ?? parties.sellerParty,
   };
 }
 
@@ -1131,12 +1220,12 @@ export async function createOrRevisePaymentTicket(opts: {
   });
 
   return {
-    ticket: mapTicket(ticket, {
+    ticket: mapTicket(ticket, await extrasWithParties(ticket, {
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
       proposedBy: creator,
       viewerId: opts.actorId,
       involvesMoney: false,
-    }),
+    })),
     message: messageRow ? mapMessage(messageRow) : null,
   };
 }
@@ -1242,12 +1331,15 @@ export async function cancelPaymentTicket(opts: {
     meta: { ticketId: ticket.id },
   });
 
-  return mapTicket(updated, {
-    protectedTxnStatus: "CANCELLED",
-    procurementAdvancesFlag: isProcurementAdvancesEnabled(),
-    viewerId: opts.actorId,
-    involvesMoney: false,
-  });
+  return mapTicket(
+    updated,
+    await extrasWithParties(updated, {
+      protectedTxnStatus: "CANCELLED",
+      procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+      viewerId: opts.actorId,
+      involvesMoney: false,
+    }),
+  );
 }
 
 /**
@@ -1372,6 +1464,20 @@ export async function respondToPaymentTicket(opts: {
   if (opts.actorId !== ticket.buyerId && opts.actorId !== ticket.sellerId) {
     throw Object.assign(new Error("Not a party to this ticket"), { status: 403 });
   }
+  const roleModel = resolveTicketRoleModel({
+    createdById: ticket.createdById,
+    buyerId: ticket.buyerId,
+    sellerId: ticket.sellerId,
+    viewerId: opts.actorId,
+  });
+  if (opts.action === "accept" && !roleModel.rolesValid) {
+    throw Object.assign(
+      new Error(
+        "This ticket is missing a valid Buyer/Sourcer assignment. Propose a new revision with explicit roles.",
+      ),
+      { status: 409, code: "ROLES_NEED_REVISION" },
+    );
+  }
   if (
     opts.expectedRevision != null &&
     Number(opts.expectedRevision) !== Number(ticket.revision)
@@ -1410,7 +1516,7 @@ export async function respondToPaymentTicket(opts: {
       ? ticket.buyerApprovedRevision === ticket.revision
       : ticket.sellerApprovedRevision === ticket.revision;
     if (alreadyMine) {
-      return mapTicket(ticket, {
+      return mapTicket(ticket, await extrasWithParties(ticket, {
         viewerId: opts.actorId,
         involvesMoney: false,
         procurementAdvancesFlag: isProcurementAdvancesEnabled(),
@@ -1422,7 +1528,7 @@ export async function respondToPaymentTicket(opts: {
               })
             )?.status ?? null
           : null,
-      });
+      }));
     }
   }
 
@@ -1459,11 +1565,11 @@ export async function respondToPaymentTicket(opts: {
       reason: opts.reason,
       meta: { ticketId: ticket.id },
     });
-    return mapTicket(updated, {
+    return mapTicket(updated, await extrasWithParties(updated, {
       viewerId: opts.actorId,
       involvesMoney: false,
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
-    });
+    }));
   }
 
   // Accept current revision
@@ -1562,12 +1668,12 @@ export async function respondToPaymentTicket(opts: {
     meta: { ticketId: ticket.id, revision: ticket.revision },
   });
 
-  return mapTicket(updated, {
+  return mapTicket(updated, await extrasWithParties(updated, {
     protectedTxnStatus: bothWillApprove ? "ACCEPTED" : null,
     procurementAdvancesFlag: isProcurementAdvancesEnabled(),
     viewerId: opts.actorId,
     involvesMoney: false,
-  });
+  }));
 }
 
 export async function getPaymentTicket(ticketId: string, viewerId: string) {
@@ -1618,7 +1724,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     ticketStatus: ticket.status,
     protectedTxn: pt,
   });
-  return mapTicket(ticket, {
+  return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
     procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
@@ -1638,5 +1744,5 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
       : null,
     viewerId,
     involvesMoney,
-  });
+  }));
 }

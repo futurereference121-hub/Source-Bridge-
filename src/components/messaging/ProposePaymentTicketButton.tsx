@@ -64,6 +64,10 @@ export type EditTicketPrefill = {
 type ProposePaymentTicketButtonProps = {
   conversationId: string;
   myId: string;
+  /** The other conversation participant (required for explicit Buyer selection). */
+  otherUserId?: string;
+  otherUsername?: string | null;
+  otherDisplayName?: string | null;
   /**
    * From conversation GET. TEST ramp is open when Live is off — both parties
    * may propose/accept subject to normal eligibility (not demo/admin).
@@ -87,7 +91,7 @@ type ProposePaymentTicketButtonProps = {
   panelPlacement?: "above" | "below";
 };
 
-const BUILD_FINGERPRINT = "pt-propose-v6-header-open-test";
+const BUILD_FINGERPRINT = "pt-propose-v7-explicit-roles";
 
 function minorToMajor(minor: number | undefined): string {
   if (minor == null || !Number.isFinite(minor)) return "0";
@@ -105,6 +109,9 @@ function minorToMajor(minor: number | undefined): string {
 export function ProposePaymentTicketButton({
   conversationId,
   myId,
+  otherUserId,
+  otherUsername,
+  otherDisplayName,
   proposalAccess,
   onCreated,
   editFromTicket,
@@ -137,6 +144,10 @@ export function ProposePaymentTicketButton({
   const [procurement, setProcurement] = useState(
     Boolean(editFromTicket?.procurementAdvanceAgreed),
   );
+  const [buyerIsMe, setBuyerIsMe] = useState<boolean | null>(() => {
+    if (editFromTicket?.buyerId) return editFromTicket.buyerId === myId;
+    return null;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(isEdit);
@@ -162,7 +173,8 @@ export function ProposePaymentTicketButton({
     setTitle(editFromTicket.title || "");
     setCurrency(editFromTicket.currency || "GBP");
     setProcurement(Boolean(editFromTicket.procurementAdvanceAgreed));
-  }, [editFromTicket]);
+    setBuyerIsMe(editFromTicket.buyerId ? editFromTicket.buyerId === myId : null);
+  }, [editFromTicket, myId]);
 
   useEffect(() => {
     void fetch("/api/payments/connect", { cache: "no-store" })
@@ -205,6 +217,18 @@ export function ProposePaymentTicketButton({
     proposalAccess.selfAllowed === true &&
     proposalAccess.peerAllowed === false;
 
+  const peerHandle = otherUsername
+    ? `@${otherUsername.replace(/^@/, "")}`
+    : otherDisplayName || "the other participant";
+  const selectedBuyerId =
+    buyerIsMe === true ? myId : buyerIsMe === false ? otherUserId || "" : "";
+  const selectedSellerId =
+    buyerIsMe === true ? otherUserId || "" : buyerIsMe === false ? myId : "";
+  const buyerHandle =
+    buyerIsMe === true ? "You" : buyerIsMe === false ? peerHandle : "—";
+  const sourcerHandle =
+    buyerIsMe === true ? peerHandle : buyerIsMe === false ? "You" : "—";
+
   async function submitProposal() {
     const proposalTraceId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -242,6 +266,21 @@ export function ProposePaymentTicketButton({
       setBusy(false);
       return;
     }
+    if (!otherUserId || otherUserId === myId) {
+      setError(`This conversation needs two participants. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
+    if (buyerIsMe == null || !selectedBuyerId || !selectedSellerId) {
+      setError(`Select who is buying. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
+    if (selectedBuyerId === selectedSellerId) {
+      setError(`Buyer and sourcer must be different people. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
 
     try {
       const res = await fetch("/api/payments/tickets", {
@@ -263,10 +302,8 @@ export function ProposePaymentTicketButton({
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
           proposalTraceId,
-          ...(editFromTicket?.buyerId ? { buyerId: editFromTicket.buyerId } : {}),
-          ...(editFromTicket?.sellerId
-            ? { sellerId: editFromTicket.sellerId }
-            : {}),
+          buyerId: selectedBuyerId,
+          sellerId: selectedSellerId,
           ...(editFromTicket?.reviseFromTicketId
             ? { reviseFromTicketId: editFromTicket.reviseFromTicketId }
             : {}),
@@ -480,7 +517,7 @@ export function ProposePaymentTicketButton({
             isEdit
               ? "w-full rounded-xl border border-electric/30 bg-[#061228] p-3"
               : panelPlacement === "below"
-                ? "absolute right-0 top-full z-30 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
+                ? "absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
                 : "absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
           }
           onKeyDown={(e) => {
@@ -500,8 +537,8 @@ export function ProposePaymentTicketButton({
           </p>
           <p className="mt-1 text-[11px] text-white/45">
             {isEdit
-              ? "This creates a new revision. Prior acceptance is invalidated — both parties must re-accept. Procurement can be turned on or off."
-              : "Both parties must accept the same terms before payment. Fees are calculated by Source Bridge."}
+              ? "This creates a new revision. Prior acceptance is invalidated — the other participant must accept again. Buyer and Sourcer are part of the agreement."
+              : "Choose who is buying. You approve your proposal; the other person must Accept before payment."}
           </p>
           {isEdit ? (
             <p className="mt-2 text-[11px] text-amber-300/90">
@@ -525,6 +562,47 @@ export function ProposePaymentTicketButton({
               disabled={busy}
             />
           </label>
+          <fieldset className="mt-3 min-w-0">
+            <legend className="text-[11px] font-medium text-white/70">
+              Who is buying?
+            </legend>
+            <div className="mt-1.5 grid grid-cols-1 gap-1.5">
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
+                <input
+                  type="radio"
+                  name={`ticket-buyer-${convId}`}
+                  className="h-4 w-4 accent-electric"
+                  checked={buyerIsMe === true}
+                  onChange={() => setBuyerIsMe(true)}
+                  disabled={busy}
+                />
+                <span>Me</span>
+              </label>
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
+                <input
+                  type="radio"
+                  name={`ticket-buyer-${convId}`}
+                  className="h-4 w-4 accent-electric"
+                  checked={buyerIsMe === false}
+                  onChange={() => setBuyerIsMe(false)}
+                  disabled={busy || !otherUserId}
+                />
+                <span className="min-w-0 truncate">{peerHandle}</span>
+              </label>
+            </div>
+          </fieldset>
+          {buyerIsMe != null ? (
+            <div className="mt-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11px] text-white/60">
+              <p>
+                Buyer:{" "}
+                <span className="font-medium text-white/85">{buyerHandle}</span>
+              </p>
+              <p className="mt-0.5">
+                Sourcer:{" "}
+                <span className="font-medium text-white/85">{sourcerHandle}</span>
+              </p>
+            </div>
+          ) : null}
           <label className="mt-2 block text-[11px] text-white/55">
             Currency
             <select
@@ -561,7 +639,7 @@ export function ProposePaymentTicketButton({
             />
           </label>
           <label className="mt-2 block text-[11px] text-white/55">
-            Seller Service Fee
+            Sourcer fee
             <input
               value={serviceMajor}
               onChange={(e) => setServiceMajor(e.target.value)}
@@ -581,8 +659,9 @@ export function ProposePaymentTicketButton({
                 disabled={busy || (!procurementFlag && isEdit)}
               />
               <span>
-                Request procurement advance (item cost only). Buyer authorizes
-                Release Item Funds after funding — never shipping.
+                Request procurement advance (item cost only). Allow
+                buyer-authorized item-fund release after funding — never
+                shipping.
                 {!procurementFlag && isEdit
                   ? " (Procurement advances currently disabled.)"
                   : ""}
@@ -610,7 +689,7 @@ export function ProposePaymentTicketButton({
                 ? "Submitting..."
                 : isEdit
                   ? "Propose Revised Terms"
-                  : "Propose"}
+                  : "Propose Agreement"}
             </button>
           </div>
           {/* Hidden bridge keeps unit tests that expect form onSubmit happy */}

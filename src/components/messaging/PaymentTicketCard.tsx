@@ -20,6 +20,7 @@ import {
 export type PaymentTicketView = {
   id: string;
   conversationId: string;
+  createdById?: string;
   status: string;
   revision: number;
   termsHash: string;
@@ -48,9 +49,20 @@ export type PaymentTicketView = {
     name: string;
     username: string | null;
   } | null;
+  buyerParty?: {
+    id: string;
+    name: string;
+    username: string | null;
+  } | null;
+  sellerParty?: {
+    id: string;
+    name: string;
+    username: string | null;
+  } | null;
   actions?: {
     canReleaseProcurement?: boolean;
     canPay?: boolean;
+    canAccept?: boolean;
     canEdit?: boolean;
     canCancel?: boolean;
     canDelete?: boolean;
@@ -568,14 +580,29 @@ export function PaymentTicketCard({
 
   const iAmBuyer = myId === ticket.buyerId;
   const iAmSeller = myId === ticket.sellerId;
+  const createdById = ticket.createdById || ticket.proposedBy?.id || "";
+  const partyHandle = (party: {
+    username?: string | null;
+    name?: string | null;
+  } | null | undefined) =>
+    party?.username
+      ? `@${party.username.replace(/^@/, "")}`
+      : party?.name || null;
+  const buyerHandle = partyHandle(ticket.buyerParty) || (iAmBuyer ? "You" : "Buyer");
+  const sourcerHandle =
+    partyHandle(ticket.sellerParty) || (iAmSeller ? "You" : "Sourcer");
   const acceptance = deriveTicketAcceptanceState({
     viewerId: myId,
+    createdById,
     buyerId: ticket.buyerId,
     sellerId: ticket.sellerId,
     revision: ticket.revision,
     buyerApprovedRevision: ticket.buyerApprovedRevision,
     sellerApprovedRevision: ticket.sellerApprovedRevision,
     status: ticket.status,
+    counterpartyUsername: iAmBuyer
+      ? ticket.sellerParty?.username
+      : ticket.buyerParty?.username,
   });
   const subtleHistorical = isSubtleHistoricalTicket(ticket.status);
   const lifecycleStageResolved =
@@ -752,8 +779,8 @@ export function PaymentTicketCard({
     confirmDelete ||
     editOpen;
 
-  // Outstanding acceptor always sees Accept — never hide behind a collapsed card.
-  const showExpanded = expanded || canRespond;
+  // Outstanding acceptor / designated buyer always see the action — never hide behind collapse.
+  const showExpanded = expanded || canRespond || canPay;
 
   const acceptDeclineButtons = canRespond ? (
     <>
@@ -986,6 +1013,72 @@ export function PaymentTicketCard({
         </p>
       ) : null}
 
+      <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+            Buyer
+          </p>
+          <p className="mt-0.5 truncate font-medium text-white">{buyerHandle}</p>
+        </div>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+            Sourcer
+          </p>
+          <p className="mt-0.5 truncate font-medium text-white">{sourcerHandle}</p>
+        </div>
+      </div>
+
+      {acceptance.needsRoleRevision ? (
+        <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">
+            Roles need revision
+          </p>
+          <p className="mt-1 text-xs text-white/70">
+            This agreement is missing a valid Buyer/Sourcer assignment. Do not
+            accept or pay — propose a new revision with explicit roles.
+          </p>
+        </div>
+      ) : null}
+
+      {canRespond ? (
+        <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">
+            {acceptance.viewerRoleLabel === "buyer"
+              ? "You are the Buyer"
+              : acceptance.viewerRoleLabel === "sourcer"
+                ? "You are the Sourcer"
+                : "Review agreement"}
+          </p>
+          <p className="mt-1 text-xs text-white/70">
+            Review the agreement before accepting.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">{acceptDeclineButtons}</div>
+        </div>
+      ) : null}
+
+      {acceptance.waitingForOther ? (
+        <p className="mt-3 text-xs text-white/55">{acceptance.waitingLabel}</p>
+      ) : null}
+
+      {canPay && !checkout ? (
+        <div className="mt-3 rounded-lg border border-electric/40 bg-electric/10 px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
+            You are the Buyer
+          </p>
+          <p className="mt-1 text-xs text-white/70">
+            {acceptance.bothAcceptedLabel || "Agreement accepted by both parties"}.
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void startPay()}
+            className="mt-2 rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+          >
+            Make Payment
+          </button>
+        </div>
+      ) : null}
+
       <p className="mt-2 text-xs text-white/45">
         Protected by Source Bridge ·{" "}
         {isDirect ? "Direct Payment" : "Protected"} Transaction
@@ -1030,7 +1123,7 @@ export function PaymentTicketCard({
             : "not yet accepted"}
         </p>
         <p>
-          Seller:{" "}
+          Sourcer:{" "}
           {acceptance.sellerAcceptedCurrentRevision
             ? "accepted this revision"
             : "not yet accepted"}
@@ -1472,7 +1565,7 @@ export function PaymentTicketCard({
           !canPay ? (
             <p className="text-xs text-white/45">
               {acceptance.bothAcceptedLabel}
-              {iAmSeller ? " — waiting for buyer payment." : ""}
+              {iAmSeller ? ". Waiting for buyer payment." : "."}
             </p>
           ) : null}
           {canPay && !checkout ? (
@@ -1482,7 +1575,7 @@ export function PaymentTicketCard({
               onClick={() => void startPay()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
             >
-              Pay securely
+              Make Payment
             </button>
           ) : null}
           {canRelease && !confirmRelease ? (
@@ -1587,6 +1680,15 @@ export function PaymentTicketCard({
           <ProposePaymentTicketButton
             conversationId={ticket.conversationId}
             myId={myId}
+            otherUserId={iAmBuyer ? ticket.sellerId : ticket.buyerId}
+            otherUsername={
+              iAmBuyer
+                ? ticket.sellerParty?.username
+                : ticket.buyerParty?.username
+            }
+            otherDisplayName={
+              iAmBuyer ? ticket.sellerParty?.name : ticket.buyerParty?.name
+            }
             hideTrigger
             forceOpen
             editFromTicket={{

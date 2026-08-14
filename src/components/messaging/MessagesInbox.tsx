@@ -929,6 +929,9 @@ export function MessagesInbox({
                     <ProposePaymentTicketButton
                       conversationId={activeId!}
                       myId={myId}
+                      otherUserId={activeOther?.id}
+                      otherUsername={activeOther?.username}
+                      otherDisplayName={activeOther?.name}
                       proposalAccess={proposalAccess}
                       activeTicketCount={activeTicketCount}
                       maxActiveTickets={MAX_ACTIVE_PAYMENT_TICKETS}

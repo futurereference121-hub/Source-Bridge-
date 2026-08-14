@@ -5,12 +5,14 @@ import { jsonError } from "@/lib/validation";
 import { prisma } from "@/lib/db";
 import { createOrRevisePaymentTicket } from "@/lib/payments/tickets";
 import { isProtectedPaymentsEnabled, isInstantPaymentsEnabled } from "@/lib/payments/flags";
+import { assignConversationTicketRoles } from "@/lib/payments/ticket-lifecycle";
 
 export const runtime = "nodejs";
 
 const createSchema = z.object({
   conversationId: z.string().trim().min(1),
-  buyerId: z.string().trim().min(1).optional(),
+  /** Required: explicit Buyer. Sourcer is the other conversation participant. */
+  buyerId: z.string().trim().min(1, "Select who is buying"),
   sellerId: z.string().trim().min(1).optional(),
   itemCostMinor: z.number().int().nonnegative(),
   shippingMinor: z.number().int().nonnegative().optional(),
@@ -90,37 +92,22 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Actor chooses role: default — creator is proposing as either party.
-    // Prefer sourcing-request roles (fromUser=buyer/requester, toUser=seller/sourcer)
-    // then listing owner as seller; else actor=buyer, peer=seller.
-    let buyerId = data.buyerId;
-    let sellerId = data.sellerId;
-    if (!buyerId || !sellerId) {
-      if (conversation.sourcingRequestId) {
-        const sr = await prisma.sourcingRequest.findUnique({
-          where: { id: conversation.sourcingRequestId },
-          select: { fromUserId: true, toUserId: true },
-        });
-        if (sr) {
-          buyerId = sr.fromUserId;
-          sellerId = sr.toUserId;
-        }
-      }
-      if ((!buyerId || !sellerId) && conversation.listingId) {
-        const listing = await prisma.stockListing.findUnique({
-          where: { id: conversation.listingId },
-          select: { userId: true },
-        });
-        if (listing) {
-          sellerId = listing.userId;
-          buyerId = listing.userId === user.id ? other.userId : user.id;
-        }
-      }
-      if (!buyerId || !sellerId) {
-        buyerId = user.id;
-        sellerId = other.userId;
-      }
+    // Explicit Buyer selection is required. Sourcer is always the other
+    // conversation participant — never inferred from proposer identity.
+    const roles = assignConversationTicketRoles({
+      participantIds: parts.map((p) => p.userId),
+      buyerId: data.buyerId,
+      proposedSellerId: data.sellerId,
+    });
+    if (!roles.ok) {
+      return jsonError(roles.message, 400, {
+        ok: false,
+        code: roles.code,
+        ...(proposalTraceId ? { proposalTraceId } : {}),
+      });
     }
+    const buyerId = roles.buyerId;
+    const sellerId = roles.sellerId;
 
     let ticket;
     let message;
