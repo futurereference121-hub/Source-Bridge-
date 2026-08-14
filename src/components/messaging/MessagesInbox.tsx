@@ -297,7 +297,6 @@ export function MessagesInbox({
   const [pendingUrls, setPendingUrls] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [threadRefresh, setThreadRefresh] = useState(0);
   const [proposalAccess, setProposalAccess] =
     useState<PaymentsProposalAccess | null>(null);
   const [activeTicketCount, setActiveTicketCount] = useState(0);
@@ -467,7 +466,7 @@ export function MessagesInbox({
     return () => {
       cancelled = true;
     };
-  }, [activeId, myId, showToast, threadRefresh]);
+  }, [activeId, myId, showToast]);
 
   useEffect(() => {
     if (!shouldScrollRef.current) return;
@@ -492,7 +491,7 @@ export function MessagesInbox({
       }
       softPollInFlightRef.current = true;
       try {
-        const res = await fetch(`/api/conversations/${activeId}`, {
+        const res = await fetch(`/api/conversations/${activeId}?poll=1`, {
           cache: "no-store",
         });
         if (!res.ok) return;
@@ -597,6 +596,69 @@ export function MessagesInbox({
       container.scrollHeight - container.scrollTop - container.clientHeight;
     nearBottomRef.current = distance < 80;
     if (nearBottomRef.current) setNewMessageHint(false);
+  }
+
+  /** Ticket lifecycle actions must not treat the thread as a new-message jump. */
+  async function refreshConversationPreservingViewport() {
+    if (!activeId) return;
+    const container = threadScrollRef.current;
+    const savedTop = container?.scrollTop ?? 0;
+    shouldScrollRef.current = false;
+    try {
+      const res = await fetch(`/api/conversations/${activeId}?poll=1`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      if (!data?.conversation) return;
+
+      setActiveConversation(data.conversation as Conversation);
+      setProposalAccess(
+        (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
+          null,
+      );
+      if (typeof data.activePaymentTicketCount === "number") {
+        setActiveTicketCount(data.activePaymentTicketCount);
+      }
+
+      const rawMsgs = (data.messages as Message[]) ?? [];
+      const tickets =
+        (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+      setPaymentTickets(visibleChatTickets(tickets));
+      const merged = mergePaymentTicketsClient(activeId, rawMsgs, tickets);
+      setMessages((prev) => {
+        const serverIds = new Set(merged.map((m) => m.id));
+        const optimistic = prev.filter(
+          (m) =>
+            !serverIds.has(m.id) &&
+            m.id.startsWith("tmp-") &&
+            m.conversationId === activeId,
+        );
+        const next = [...merged];
+        for (const o of optimistic) {
+          if (!next.some((m) => m.id === o.id)) next.push(o);
+        }
+        next.sort((a, b) => {
+          const at = Date.parse(a.createdAt);
+          const bt = Date.parse(b.createdAt);
+          if (at !== bt) return at - bt;
+          return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+        });
+        if (
+          next.length === prev.length &&
+          next.every((m, i) => m.id === prev[i]?.id)
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    } catch {
+      /* silent — local ticket state already updated from the action POST */
+    } finally {
+      requestAnimationFrame(() => {
+        if (container) container.scrollTop = savedTop;
+      });
+    }
   }
 
   async function loadOlderMessages() {
@@ -1055,7 +1117,6 @@ export function MessagesInbox({
                             return bt - at;
                           });
                         });
-                        setThreadRefresh((n) => n + 1);
                         const convId = activeId;
                         void (async () => {
                           try {
@@ -1165,9 +1226,9 @@ export function MessagesInbox({
                                     [m.paymentTicketId!]: next,
                                   }))
                                 }
-                                onChanged={() =>
-                                  setThreadRefresh((n) => n + 1)
-                                }
+                                onChanged={() => {
+                                  void refreshConversationPreservingViewport();
+                                }}
                               />
                             </li>
                           );

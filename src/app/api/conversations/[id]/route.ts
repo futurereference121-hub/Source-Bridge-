@@ -11,8 +11,8 @@ import {
   ensureConversationPaymentTicketMessages,
   listConversationPaymentTickets,
   mergePaymentTicketsIntoTimeline,
-  countActiveConversationTickets,
   MAX_ACTIVE_PAYMENT_TICKETS,
+  isActiveLifecycleTicket,
 } from "@/lib/payments/tickets";
 import {
   isPaymentsTestRampOpen,
@@ -35,11 +35,14 @@ export async function GET(_req: Request, { params }: Params) {
   try {
     const user = await requireSessionUser();
     const { id } = await params;
+    const isPoll = new URL(_req.url).searchParams.get("poll") === "1";
 
     await requireParticipant(id, user.id);
 
-    // Repair orphan tickets so Payment Ticket cards always appear in chat.
-    await ensureConversationPaymentTicketMessages(id);
+    // Repair orphan tickets on initial open only — polling must not delay chat.
+    if (!isPoll) {
+      await ensureConversationPaymentTicketMessages(id);
+    }
 
     const conversation = await prisma.conversation.findUnique({
       where: { id },
@@ -71,11 +74,19 @@ export async function GET(_req: Request, { params }: Params) {
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
-    await markRead(id, user.id);
+    if (!isPoll) {
+      await markRead(id, user.id);
+    }
 
     // Authoritative tickets for this conversation (all, not just recent page).
     const paymentTickets = await listConversationPaymentTickets(id);
-    const activePaymentTicketCount = await countActiveConversationTickets(id);
+    const activePaymentTicketCount = paymentTickets.filter((t) =>
+      isActiveLifecycleTicket({
+        ticketStatus: t.status,
+        protectedStatus: t.protectedTxnStatus ?? null,
+        lifecycleStage: t.lifecycleStage ?? null,
+      }),
+    ).length;
     const messagesAsc = [...conversation.messages].reverse().map(mapMessage);
     // Merge ALL tickets even when only recent N messages are loaded so older
     // ticket cards never vanish due to pagination. Dedupes by paymentTicketId.

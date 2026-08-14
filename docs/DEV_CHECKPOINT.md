@@ -4,13 +4,13 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Cursor development framework (rules, regression commands, indexing, hooks)
-- **Last verified commit:** product isolation `86f73b0`; this file lands with the Cursor framework commit
-- **Last TEST deployment:** product SHA `86f73b0` (Accept/cancel isolation) — live browser QA still outstanding
-- **Known blocker:** Payment Ticket live browser QA on dirty conversation `cms8p1pxr000cla04dm4zfp6d` (Accept CTA + cancelled tickets hidden) — product task, not this tooling task
+- **Workstream:** Chat performance + Payment Ticket create-form responsive layout + accept-scroll + ticket header stability
+- **Last verified commit:** this commit (chat/UI stability; payment engines unchanged)
+- **Last TEST deployment:** pending this push to Production TEST
+- **Known blocker:** Real-device QA of create-form on Android + HP Windows + iPhone; Accept viewport on mobile.
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST
-- **Last critical regression:** `npm run test:payments:fast` and `test:payments:full` PASS (tooling commit)
-- **Next recommended step:** After Vercel has `86f73b0` (or later product SHA), live TEST QA of Accept/cancel isolation — do not pay
+- **Last critical regression:** `npm run test:payments:fast` and `test:payments:full` PASS; typecheck PASS; `next build` PASS
+- **Next recommended step:** After TEST production serves this SHA, visual QA of Payment Ticket create on Android / Windows laptop / iPhone. Do not pay. Dirty conversation `cms8p1pxr000cla04dm4zfp6d` read-only.
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 

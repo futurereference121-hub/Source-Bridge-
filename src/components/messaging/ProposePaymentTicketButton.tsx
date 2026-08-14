@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Loader2, ShieldCheck, X } from "lucide-react";
 
 /** Deploy/build fingerprint for production diagnostics (safe, non-secret). */
 declare global {
@@ -91,7 +92,7 @@ type ProposePaymentTicketButtonProps = {
   panelPlacement?: "above" | "below";
 };
 
-const BUILD_FINGERPRINT = "pt-propose-v7-explicit-roles";
+const BUILD_FINGERPRINT = "pt-propose-v8-viewport-dialog";
 
 function minorToMajor(minor: number | undefined): string {
   if (minor == null || !Number.isFinite(minor)) return "0";
@@ -120,7 +121,6 @@ export function ProposePaymentTicketButton({
   hideTrigger,
   activeTicketCount = 0,
   maxActiveTickets = 3,
-  panelPlacement = "below",
 }: ProposePaymentTicketButtonProps) {
   const isEdit = Boolean(editFromTicket);
   const convId = editFromTicket?.conversationId || conversationId;
@@ -152,8 +152,10 @@ export function ProposePaymentTicketButton({
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(isEdit);
   const [procurementFlag, setProcurementFlag] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     if (typeof window !== "undefined") {
       window.__SB_PAYMENT_TICKET_BUILD__ = BUILD_FINGERPRINT;
     }
@@ -175,6 +177,21 @@ export function ProposePaymentTicketButton({
     setProcurement(Boolean(editFromTicket.procurementAdvanceAgreed));
     setBuyerIsMe(editFromTicket.buyerId ? editFromTicket.buyerId === myId : null);
   }, [editFromTicket, myId]);
+
+  useEffect(() => {
+    if (!open || isEdit) return;
+    if (typeof document === "undefined") return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) closeForm();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, isEdit, busy]);
 
   useEffect(() => {
     void fetch("/api/payments/connect", { cache: "no-store" })
@@ -471,6 +488,181 @@ export function ProposePaymentTicketButton({
     onCloseEdit?.();
   }
 
+  const formFields = (
+    <>
+      {isEdit ? (
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
+          Revised Terms
+        </p>
+      ) : null}
+      <p className={isEdit ? "mt-1 text-[10px] uppercase tracking-[0.12em] text-amber-200/70" : "text-[10px] uppercase tracking-[0.12em] text-amber-200/70"}>
+        TEST PAYMENT · Sandbox — no real money
+      </p>
+      <p className="mt-1 text-[11px] text-white/45">
+        {isEdit
+          ? "This creates a new revision. Prior acceptance is invalidated — the other participant must accept again. Buyer and Sourcer are part of the agreement."
+          : "Choose who is buying. You approve your proposal; the other person must Accept before payment."}
+      </p>
+      {isEdit ? (
+        <p className="mt-2 text-[11px] text-amber-300/90">
+          Warning: proposing revised terms supersedes the current ticket
+          and requires re-acceptance before funding.
+        </p>
+      ) : null}
+      {peerMissing ? (
+        <p className="mt-2 text-[11px] text-amber-300">
+          Your partner cannot use TEST payments yet. Propose may fail until
+          both accounts are eligible.
+        </p>
+      ) : null}
+      <label className="mt-3 block min-w-0 text-[11px] text-white/55">
+        Title
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          placeholder="Optional"
+          disabled={busy}
+        />
+      </label>
+      <fieldset className="mt-3 min-w-0">
+        <legend className="text-[11px] font-medium text-white/70">
+          Who is buying?
+        </legend>
+        <div className="mt-1.5 grid grid-cols-1 gap-1.5">
+          <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
+            <input
+              type="radio"
+              name={`ticket-buyer-${convId}`}
+              className="h-4 w-4 accent-electric"
+              checked={buyerIsMe === true}
+              onChange={() => setBuyerIsMe(true)}
+              disabled={busy}
+            />
+            <span>Me</span>
+          </label>
+          <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
+            <input
+              type="radio"
+              name={`ticket-buyer-${convId}`}
+              className="h-4 w-4 accent-electric"
+              checked={buyerIsMe === false}
+              onChange={() => setBuyerIsMe(false)}
+              disabled={busy || !otherUserId}
+            />
+            <span className="min-w-0 truncate">{peerHandle}</span>
+          </label>
+        </div>
+      </fieldset>
+      {buyerIsMe != null ? (
+        <div className="mt-2 min-w-0 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11px] text-white/60">
+          <p>
+            Buyer:{" "}
+            <span className="font-medium text-white/85">{buyerHandle}</span>
+          </p>
+          <p className="mt-0.5">
+            Sourcer:{" "}
+            <span className="font-medium text-white/85">{sourcerHandle}</span>
+          </p>
+        </div>
+      ) : null}
+      <label className="mt-2 block min-w-0 text-[11px] text-white/55">
+        Currency
+        <select
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          disabled={busy}
+        >
+          <option value="GBP">GBP (£)</option>
+          <option value="USD">USD ($)</option>
+        </select>
+      </label>
+      <label className="mt-2 block min-w-0 text-[11px] text-white/55">
+        Item cost
+        <input
+          value={itemMajor}
+          onChange={(e) => setItemMajor(e.target.value)}
+          inputMode="decimal"
+          required
+          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          placeholder="5.00"
+          disabled={busy}
+        />
+      </label>
+      <label className="mt-2 block min-w-0 text-[11px] text-white/55">
+        Shipping
+        <input
+          value={shippingMajor}
+          onChange={(e) => setShippingMajor(e.target.value)}
+          inputMode="decimal"
+          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          placeholder="1.00"
+          disabled={busy}
+        />
+      </label>
+      <label className="mt-2 block min-w-0 text-[11px] text-white/55">
+        Sourcer fee
+        <input
+          value={serviceMajor}
+          onChange={(e) => setServiceMajor(e.target.value)}
+          inputMode="decimal"
+          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          placeholder="1.00"
+          disabled={busy}
+        />
+      </label>
+      {procurementFlag || isEdit ? (
+        <label className="mt-3 flex min-w-0 items-start gap-2 text-[11px] text-white/60">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={procurement}
+            onChange={(e) => setProcurement(e.target.checked)}
+            disabled={busy || (!procurementFlag && isEdit)}
+          />
+          <span>
+            Request procurement advance (item cost only). Allow
+            buyer-authorized item-fund release after funding — never
+            shipping.
+            {!procurementFlag && isEdit
+              ? " (Procurement advances currently disabled.)"
+              : ""}
+          </span>
+        </label>
+      ) : null}
+      {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}
+    </>
+  );
+
+  const formActions = (
+    <div className="flex min-w-0 flex-wrap justify-end gap-2">
+      <button
+        type="button"
+        onClick={closeForm}
+        disabled={busy}
+        data-testid="ticket-propose-cancel"
+        className="min-h-11 rounded-md px-3 py-2 text-[11px] text-white/50"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void submitProposal()}
+        data-testid="ticket-propose-submit"
+        className="inline-flex min-h-11 items-center gap-1 rounded-md bg-electric px-3 py-2 text-[11px] font-medium text-app-navy disabled:opacity-50"
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : null}
+        {busy
+          ? "Submitting..."
+          : isEdit
+            ? "Propose Revised Terms"
+            : "Propose Agreement"}
+      </button>
+    </div>
+  );
+
   return (
     <div className={isEdit ? "relative w-full" : "relative"}>
       {!hideTrigger && !isEdit ? (
@@ -505,200 +697,80 @@ export function ProposePaymentTicketButton({
           creating another.
         </p>
       ) : null}
-      {open && (isEdit || !atActiveLimit) ? (
-        // role=group (NOT form): parent MessagesInbox uses a compose <form>;
-        // nested <form> is invalid HTML and can steal/drop ticket proposes.
+      {open && isEdit ? (
         <div
           role="group"
-          aria-label={
-            isEdit ? "Propose Revised Payment Terms" : "Propose Payment Ticket"
-          }
-          className={
-            isEdit
-              ? "w-full rounded-xl border border-electric/30 bg-[#061228] p-3"
-              : panelPlacement === "below"
-                ? "absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
-                : "absolute bottom-full left-0 z-20 mb-2 w-72 rounded-xl border border-white/15 bg-[#061228] p-3 shadow-xl"
-          }
+          aria-label="Propose Revised Payment Terms"
+          className="w-full min-w-0 max-w-full rounded-xl border border-electric/30 bg-[#061228] p-3"
+          data-sb-ticket-form="inline-revise"
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
-              // Enter in text inputs must not submit the parent message form.
               e.preventDefault();
               e.stopPropagation();
               if (!busy) void submitProposal();
             }
           }}
         >
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
-            {isEdit ? "Revised Terms" : "Protected Payment"}
-          </p>
-          <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-amber-200/70">
-            TEST PAYMENT · Sandbox — no real money
-          </p>
-          <p className="mt-1 text-[11px] text-white/45">
-            {isEdit
-              ? "This creates a new revision. Prior acceptance is invalidated — the other participant must accept again. Buyer and Sourcer are part of the agreement."
-              : "Choose who is buying. You approve your proposal; the other person must Accept before payment."}
-          </p>
-          {isEdit ? (
-            <p className="mt-2 text-[11px] text-amber-300/90">
-              Warning: proposing revised terms supersedes the current ticket
-              and requires re-acceptance before funding.
-            </p>
-          ) : null}
-          {peerMissing ? (
-            <p className="mt-2 text-[11px] text-amber-300">
-              Your partner cannot use TEST payments yet. Propose may fail until
-              both accounts are eligible.
-            </p>
-          ) : null}
-          <label className="mt-3 block text-[11px] text-white/55">
-            Title
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              placeholder="Optional"
-              disabled={busy}
-            />
-          </label>
-          <fieldset className="mt-3 min-w-0">
-            <legend className="text-[11px] font-medium text-white/70">
-              Who is buying?
-            </legend>
-            <div className="mt-1.5 grid grid-cols-1 gap-1.5">
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
-                <input
-                  type="radio"
-                  name={`ticket-buyer-${convId}`}
-                  className="h-4 w-4 accent-electric"
-                  checked={buyerIsMe === true}
-                  onChange={() => setBuyerIsMe(true)}
-                  disabled={busy}
-                />
-                <span>Me</span>
-              </label>
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-white/15 px-2.5 py-2 text-sm text-white/85 hover:border-electric/40">
-                <input
-                  type="radio"
-                  name={`ticket-buyer-${convId}`}
-                  className="h-4 w-4 accent-electric"
-                  checked={buyerIsMe === false}
-                  onChange={() => setBuyerIsMe(false)}
-                  disabled={busy || !otherUserId}
-                />
-                <span className="min-w-0 truncate">{peerHandle}</span>
-              </label>
-            </div>
-          </fieldset>
-          {buyerIsMe != null ? (
-            <div className="mt-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11px] text-white/60">
-              <p>
-                Buyer:{" "}
-                <span className="font-medium text-white/85">{buyerHandle}</span>
-              </p>
-              <p className="mt-0.5">
-                Sourcer:{" "}
-                <span className="font-medium text-white/85">{sourcerHandle}</span>
-              </p>
-            </div>
-          ) : null}
-          <label className="mt-2 block text-[11px] text-white/55">
-            Currency
-            <select
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              disabled={busy}
-            >
-              <option value="GBP">GBP (£)</option>
-              <option value="USD">USD ($)</option>
-            </select>
-          </label>
-          <label className="mt-2 block text-[11px] text-white/55">
-            Item cost
-            <input
-              value={itemMajor}
-              onChange={(e) => setItemMajor(e.target.value)}
-              inputMode="decimal"
-              required
-              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              placeholder="5.00"
-              disabled={busy}
-            />
-          </label>
-          <label className="mt-2 block text-[11px] text-white/55">
-            Shipping
-            <input
-              value={shippingMajor}
-              onChange={(e) => setShippingMajor(e.target.value)}
-              inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              placeholder="1.00"
-              disabled={busy}
-            />
-          </label>
-          <label className="mt-2 block text-[11px] text-white/55">
-            Sourcer fee
-            <input
-              value={serviceMajor}
-              onChange={(e) => setServiceMajor(e.target.value)}
-              inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
-              placeholder="1.00"
-              disabled={busy}
-            />
-          </label>
-          {procurementFlag || isEdit ? (
-            <label className="mt-3 flex items-start gap-2 text-[11px] text-white/60">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={procurement}
-                onChange={(e) => setProcurement(e.target.checked)}
-                disabled={busy || (!procurementFlag && isEdit)}
-              />
-              <span>
-                Request procurement advance (item cost only). Allow
-                buyer-authorized item-fund release after funding — never
-                shipping.
-                {!procurementFlag && isEdit
-                  ? " (Procurement advances currently disabled.)"
-                  : ""}
-              </span>
-            </label>
-          ) : null}
-          {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={closeForm}
-              disabled={busy}
-              className="rounded-md px-2 py-1 text-[11px] text-white/50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void submitProposal()}
-              className="inline-flex items-center gap-1 rounded-md bg-electric px-2.5 py-1 text-[11px] font-medium text-app-navy disabled:opacity-50"
-            >
-              {busy ? <Loader2 size={12} className="animate-spin" /> : null}
-              {busy
-                ? "Submitting..."
-                : isEdit
-                  ? "Propose Revised Terms"
-                  : "Propose Agreement"}
-            </button>
-          </div>
-          {/* Hidden bridge keeps unit tests that expect form onSubmit happy */}
+          {formFields}
+          <div className="mt-3">{formActions}</div>
           <form className="hidden" onSubmit={onFormSubmit} aria-hidden>
             <button type="submit" tabIndex={-1} />
           </form>
           <p className="sr-only">{myId}</p>
         </div>
       ) : null}
+      {open && !isEdit && !atActiveLimit && mounted
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[80] flex items-end justify-center bg-black/65 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] md:items-center md:p-4"
+              data-sb-ticket-form="viewport-dialog"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !busy) closeForm();
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Propose Payment Ticket"
+                className="flex max-h-[min(100dvh,100%)] w-full min-w-0 max-w-md flex-col overflow-hidden rounded-xl border border-white/15 bg-[#061228] shadow-xl md:max-h-[min(85dvh,40rem)]"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.target as HTMLElement).tagName !== "TEXTAREA") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!busy) void submitProposal();
+                  }
+                }}
+              >
+                <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/10 px-3 py-2.5">
+                  <p className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
+                    Protected Payment
+                  </p>
+                  <button
+                    type="button"
+                    onClick={closeForm}
+                    disabled={busy}
+                    className="rounded-md p-1 text-white/50 hover:text-white"
+                    aria-label="Close Payment Ticket form"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain p-3">
+                  {formFields}
+                </div>
+                <div className="shrink-0 border-t border-white/10 px-3 py-2.5">
+                  {formActions}
+                </div>
+                <form className="hidden" onSubmit={onFormSubmit} aria-hidden>
+                  <button type="submit" tabIndex={-1} />
+                </form>
+                <p className="sr-only">{myId}</p>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

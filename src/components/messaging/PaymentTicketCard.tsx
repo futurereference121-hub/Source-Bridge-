@@ -231,9 +231,10 @@ export function PaymentTicketCard({
       delete (snap as { viewer?: unknown }).viewer;
       setTicket(snap);
       setLoading(false);
-    } else {
-      setTicket(null);
+      // Conversation payload already has compact + lifecycle — skip per-ticket GET.
+      return;
     }
+    setTicket(null);
     void load();
   }, [load, ticketId, ticketSnapshot?.id]);
 
@@ -244,6 +245,18 @@ export function PaymentTicketCard({
       const snap = { ...ticketSnapshot };
       delete (snap as { viewer?: unknown }).viewer;
       if (!prev) return snap;
+      if (
+        prev.status === snap.status &&
+        prev.revision === snap.revision &&
+        prev.buyerApprovedRevision === snap.buyerApprovedRevision &&
+        prev.sellerApprovedRevision === snap.sellerApprovedRevision &&
+        prev.protectedTxnStatus === snap.protectedTxnStatus &&
+        prev.lifecycleStage === snap.lifecycleStage &&
+        prev.totalChargeMinor === snap.totalChargeMinor &&
+        prev.title === snap.title
+      ) {
+        return prev;
+      }
       return { ...prev, ...snap, viewer: undefined };
     });
   }, [ticketSnapshot, ticketId]);
@@ -299,8 +312,10 @@ export function PaymentTicketCard({
   }, [menuOpen]);
 
   // Soft revalidate ticket state while conversation is open (visibility-aware).
+  // Skip when the parent conversation poll already supplies ticketSnapshot.
   useEffect(() => {
     if (typeof window === "undefined" || !ticketId) return;
+    if (ticketSnapshot && ticketSnapshot.id === ticketId) return;
     let cancelled = false;
     let inFlight = false;
     const POLL_MS = 2500;
@@ -328,7 +343,7 @@ export function PaymentTicketCard({
       window.removeEventListener("focus", onVis);
       window.removeEventListener("online", onVis);
     };
-  }, [ticketId, load]);
+  }, [ticketId, load, ticketSnapshot?.id]);
 
   // After return from 3DS: poll — funding only when webhook sets FUNDED.
   useEffect(() => {
@@ -954,6 +969,7 @@ export function PaymentTicketCard({
           type="button"
           onClick={() => setExpanded(true)}
           className="flex w-full min-w-0 items-start justify-between gap-2 text-left sm:gap-3"
+          data-sb-ticket-header="collapsed"
         >
           <div className="flex min-w-0 items-start gap-2">
             <ShieldCheck
@@ -1041,13 +1057,20 @@ export function PaymentTicketCard({
           : "w-full min-w-0 max-w-full overflow-visible rounded-xl border border-electric/35 bg-[#07152c] px-3 py-4 sm:px-4"
       }
     >
-      <div className="flex min-w-0 items-start justify-between gap-2 sm:gap-3">
-        <div className="flex min-w-0 items-center gap-2">
+      <div
+        data-sb-ticket-header="expanded"
+        className="flex min-w-0 flex-col gap-2"
+      >
+        <div className="flex min-w-0 items-start gap-2">
           <ShieldCheck
             size={18}
-            className={historical ? "shrink-0 text-white/40" : "shrink-0 text-electric"}
+            className={
+              historical
+                ? "mt-0.5 shrink-0 text-white/40"
+                : "mt-0.5 shrink-0 text-electric"
+            }
           />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p
               className={
                 historical
@@ -1064,8 +1087,16 @@ export function PaymentTicketCard({
               TEST PAYMENT · Sandbox — no real money
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="shrink-0 rounded-md border border-white/15 p-1 text-white/55 hover:border-white/30 hover:text-white"
+            aria-label="Collapse ticket"
+          >
+            <ChevronUp size={16} />
+          </button>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <span className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
             {stageLabel}
           </span>
@@ -1122,14 +1153,6 @@ export function PaymentTicketCard({
               ) : null}
             </div>
           ) : null}
-          <button
-            type="button"
-            onClick={() => setExpanded(false)}
-            className="rounded-md border border-white/15 p-1 text-white/55 hover:border-white/30 hover:text-white"
-            aria-label="Collapse ticket"
-          >
-            <ChevronUp size={16} />
-          </button>
         </div>
       </div>
 
@@ -1144,7 +1167,7 @@ export function PaymentTicketCard({
       {canRespond ? (
         <div
           data-testid="ticket-action-required"
-          className="sticky top-0 z-20 mt-3 overflow-visible rounded-lg border border-amber-400/50 bg-amber-400/15 px-3 py-3"
+          className="mt-3 overflow-visible rounded-lg border border-amber-400/50 bg-amber-400/15 px-3 py-3"
         >
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">
             Action required
@@ -1174,7 +1197,7 @@ export function PaymentTicketCard({
       {canPay && !checkout ? (
         <div
           data-testid="ticket-make-payment"
-          className="sticky top-0 z-20 mt-3 overflow-visible rounded-lg border border-electric/40 bg-electric/10 px-3 py-3"
+          className="mt-3 overflow-visible rounded-lg border border-electric/40 bg-electric/10 px-3 py-3"
         >
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-electric">
             You are the Buyer

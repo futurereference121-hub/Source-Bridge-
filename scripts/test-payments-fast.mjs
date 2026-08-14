@@ -9,6 +9,7 @@ runNodeTestScripts(
     "scripts/test-live-payments-guard.mjs",
     "scripts/test-pci-no-raw-cards.mjs",
     "scripts/test-ticket-acceptance-and-access.mjs",
+    "scripts/test-chat-ticket-ui.mjs",
     "scripts/test-payment-journey-regression.mjs",
     "scripts/test-payment-ticket-lifecycle.mjs",
     "scripts/test-payments-domain.mjs",

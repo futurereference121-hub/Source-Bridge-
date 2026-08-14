@@ -55,6 +55,7 @@
     "test:live-guard": "node scripts/test-live-payments-guard.mjs",
     "test:procurement": "node scripts/test-procurement-release.mjs",
     "test:payment-ticket-timeline": "node --env-file=.env scripts/test-payment-ticket-timeline.mjs",
+    "test:chat-ticket-ui": "node scripts/test-chat-ticket-ui.mjs",
     "test:ticket-acceptance": "node scripts/test-ticket-acceptance-and-access.mjs",
     "test:payment-journey": "node scripts/test-payment-journey-regression.mjs",
     "test:payment-ticket-lifecycle": "node scripts/test-payment-ticket-lifecycle.mjs",
