@@ -1098,6 +1098,7 @@ export function MessagesInbox({
                               <PaymentTicketCard
                                 ticketId={m.paymentTicketId}
                                 myId={myId}
+                                myUsername={account?.username}
                                 proposedAt={m.createdAt}
                                 proposedByName={
                                   m.sender?.username

@@ -369,6 +369,9 @@ export function resolveTicketRoleModel(opts: {
     Boolean(proposerId && buyerId && sellerId) &&
     buyerId !== sellerId &&
     (proposerId === buyerId || proposerId === sellerId);
+  const isParty =
+    Boolean(viewerId) && (viewerId === buyerId || viewerId === sellerId);
+  // Counterparty = party who is NOT the proposer. Independent of Buyer/Sourcer.
   const counterpartyId = !rolesValid
     ? null
     : proposerId === buyerId
@@ -380,11 +383,36 @@ export function resolveTicketRoleModel(opts: {
     sellerId,
     counterpartyId,
     rolesValid,
-    iAmProposer: Boolean(viewerId) && viewerId === proposerId,
-    iAmCounterparty: Boolean(viewerId && counterpartyId && viewerId === counterpartyId),
+    iAmProposer: Boolean(viewerId) && Boolean(proposerId) && viewerId === proposerId,
+    iAmCounterparty: Boolean(
+      viewerId && proposerId && isParty && viewerId !== proposerId,
+    ),
     iAmBuyer: Boolean(viewerId) && viewerId === buyerId,
     iAmSeller: Boolean(viewerId) && viewerId === sellerId,
   };
+}
+
+export function normalizePartyHandle(raw?: string | null): string {
+  return (raw || "").trim().replace(/^@+/, "").toLowerCase();
+}
+
+/** True when waiting copy would tell the current viewer to wait for themselves. */
+export function waitingCopyAddressesViewer(opts: {
+  waitingLabel?: string | null;
+  viewerUsername?: string | null;
+  viewerId?: string | null;
+  waitForId?: string | null;
+}): boolean {
+  const viewerId = (opts.viewerId || "").trim();
+  const waitForId = (opts.waitForId || "").trim();
+  if (viewerId && waitForId && viewerId === waitForId) return true;
+  const handle = normalizePartyHandle(opts.viewerUsername);
+  const label = (opts.waitingLabel || "").toLowerCase();
+  if (!handle || !label) return false;
+  return (
+    label.includes(`waiting for @${handle} to accept`) ||
+    label.includes(`waiting for ${handle} to accept`)
+  );
 }
 
 export function partyApprovedForRole(
@@ -443,7 +471,11 @@ export function deriveTicketAcceptanceState(opts: {
   buyerApprovedRevision: number | null | undefined;
   sellerApprovedRevision: number | null | undefined;
   status: string;
+  /** @deprecated wait-for name is derived from createdBy vs buyer/seller usernames. */
   counterpartyUsername?: string | null;
+  buyerUsername?: string | null;
+  sellerUsername?: string | null;
+  viewerUsername?: string | null;
 }): TicketAcceptanceState {
   const roles = resolveTicketRoleModel({
     createdById: opts.createdById,
@@ -451,6 +483,7 @@ export function deriveTicketAcceptanceState(opts: {
     sellerId: opts.sellerId,
     viewerId: opts.viewerId,
   });
+  const viewerId = (opts.viewerId || "").trim();
   const buyerAcceptedCurrentRevision = partyAcceptedCurrentRevision(
     opts.buyerApprovedRevision,
     opts.revision,
@@ -470,33 +503,63 @@ export function deriveTicketAcceptanceState(opts: {
   const openForAccept =
     opts.status === "PROPOSED" || opts.status === "DRAFT";
 
-  // Counterparty = conversation peer who is not the proposer.
-  // If roles are malformed (proposer not buyer or seller), do not guess — no Accept.
-  const canAccept =
-    roles.rolesValid &&
+  const waitForId = roles.counterpartyId;
+  const waitForUsername =
+    waitForId && waitForId === roles.buyerId
+      ? opts.buyerUsername
+      : waitForId && waitForId === roles.sellerId
+        ? opts.sellerUsername
+        : opts.counterpartyUsername;
+  const waitingForRole: "buyer" | "seller" | null =
+    waitForId === roles.buyerId
+      ? "buyer"
+      : waitForId === roles.sellerId
+        ? "seller"
+        : null;
+  const waitHandle = normalizePartyHandle(waitForUsername);
+  const otherName = waitHandle
+    ? `@${waitHandle}`
+    : waitingForRole === "seller"
+      ? "the sourcer"
+      : waitingForRole === "buyer"
+        ? "the buyer"
+        : "the other participant";
+  const rawWaitingLabel = `Proposal sent. Waiting for ${otherName} to accept.`;
+  const wouldWaitForSelf = waitingCopyAddressesViewer({
+    waitingLabel: rawWaitingLabel,
+    viewerUsername: opts.viewerUsername,
+    viewerId,
+    waitForId,
+  });
+
+  let canAccept =
+    Boolean(roles.proposerId) &&
     roles.iAmCounterparty &&
     openForAccept &&
     !myAcceptedCurrentRevision;
-  const canDecline = canAccept;
-  const waitingForOther =
+  let waitingForOther =
     roles.rolesValid &&
     roles.iAmProposer &&
     openForAccept &&
     myAcceptedCurrentRevision &&
-    !bothAcceptedCurrentRevision;
-  const waitingForRole: "buyer" | "seller" | null = waitingForOther
-    ? roles.proposerId === roles.buyerId
-      ? "seller"
-      : "buyer"
-    : null;
-  const otherName = opts.counterpartyUsername
-    ? `@${opts.counterpartyUsername.replace(/^@/, "")}`
-    : waitingForRole === "seller"
-      ? "the sourcer"
-      : "the buyer";
-  const waitingLabel = waitingForOther
-    ? `Proposal sent. Waiting for ${otherName} to accept.`
-    : null;
+    !bothAcceptedCurrentRevision &&
+    !wouldWaitForSelf;
+
+  // Never render proposer waiting copy that names the current viewer.
+  if (wouldWaitForSelf) {
+    waitingForOther = false;
+    if (
+      openForAccept &&
+      isParty &&
+      !myAcceptedCurrentRevision &&
+      !bothAcceptedCurrentRevision
+    ) {
+      canAccept = true;
+    }
+  }
+
+  const canDecline = canAccept;
+  const waitingLabel = waitingForOther ? rawWaitingLabel : null;
   const bothAcceptedLabel = bothAcceptedCurrentRevision
     ? "Agreement accepted by both parties"
     : null;

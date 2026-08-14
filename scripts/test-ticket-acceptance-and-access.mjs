@@ -60,6 +60,8 @@ function resolveTicketRoleModel(opts) {
     Boolean(proposerId && buyerId && sellerId) &&
     buyerId !== sellerId &&
     (proposerId === buyerId || proposerId === sellerId);
+  const isParty =
+    Boolean(viewerId) && (viewerId === buyerId || viewerId === sellerId);
   const counterpartyId = !rolesValid
     ? null
     : proposerId === buyerId
@@ -71,13 +73,30 @@ function resolveTicketRoleModel(opts) {
     sellerId,
     counterpartyId,
     rolesValid,
-    iAmProposer: Boolean(viewerId) && viewerId === proposerId,
+    iAmProposer: Boolean(viewerId) && Boolean(proposerId) && viewerId === proposerId,
     iAmCounterparty: Boolean(
-      viewerId && counterpartyId && viewerId === counterpartyId,
+      viewerId && proposerId && isParty && viewerId !== proposerId,
     ),
     iAmBuyer: Boolean(viewerId) && viewerId === buyerId,
     iAmSeller: Boolean(viewerId) && viewerId === sellerId,
   };
+}
+
+function normalizePartyHandle(raw) {
+  return (raw || "").trim().replace(/^@+/, "").toLowerCase();
+}
+
+function waitingCopyAddressesViewer(opts) {
+  const viewerId = (opts.viewerId || "").trim();
+  const waitForId = (opts.waitForId || "").trim();
+  if (viewerId && waitForId && viewerId === waitForId) return true;
+  const handle = normalizePartyHandle(opts.viewerUsername);
+  const label = (opts.waitingLabel || "").toLowerCase();
+  if (!handle || !label) return false;
+  return (
+    label.includes(`waiting for @${handle} to accept`) ||
+    label.includes(`waiting for ${handle} to accept`)
+  );
 }
 
 function deriveTicketAcceptanceState(opts) {
@@ -87,6 +106,7 @@ function deriveTicketAcceptanceState(opts) {
     sellerId: opts.sellerId,
     viewerId: opts.viewerId,
   });
+  const viewerId = (opts.viewerId || "").trim();
   const buyerAcceptedCurrentRevision = partyAcceptedCurrentRevision(
     opts.buyerApprovedRevision,
     opts.revision,
@@ -97,6 +117,7 @@ function deriveTicketAcceptanceState(opts) {
   );
   const bothAcceptedCurrentRevision =
     buyerAcceptedCurrentRevision && sellerAcceptedCurrentRevision;
+  const isParty = roles.iAmBuyer || roles.iAmSeller;
   const myAcceptedCurrentRevision = roles.iAmBuyer
     ? buyerAcceptedCurrentRevision
     : roles.iAmSeller
@@ -104,17 +125,51 @@ function deriveTicketAcceptanceState(opts) {
       : false;
   const openForAccept =
     opts.status === "PROPOSED" || opts.status === "DRAFT";
-  const canAccept =
-    roles.rolesValid &&
+  const waitForId = roles.counterpartyId;
+  const waitForUsername =
+    waitForId && waitForId === roles.buyerId
+      ? opts.buyerUsername
+      : waitForId && waitForId === roles.sellerId
+        ? opts.sellerUsername
+        : opts.counterpartyUsername;
+  const waitHandle = normalizePartyHandle(waitForUsername);
+  const otherName = waitHandle
+    ? `@${waitHandle}`
+    : waitForId === roles.sellerId
+      ? "the sourcer"
+      : waitForId === roles.buyerId
+        ? "the buyer"
+        : "the other participant";
+  const rawWaitingLabel = `Proposal sent. Waiting for ${otherName} to accept.`;
+  const wouldWaitForSelf = waitingCopyAddressesViewer({
+    waitingLabel: rawWaitingLabel,
+    viewerUsername: opts.viewerUsername,
+    viewerId,
+    waitForId,
+  });
+  let canAccept =
+    Boolean(roles.proposerId) &&
     roles.iAmCounterparty &&
     openForAccept &&
     !myAcceptedCurrentRevision;
-  const waitingForOther =
+  let waitingForOther =
     roles.rolesValid &&
     roles.iAmProposer &&
     openForAccept &&
     myAcceptedCurrentRevision &&
-    !bothAcceptedCurrentRevision;
+    !bothAcceptedCurrentRevision &&
+    !wouldWaitForSelf;
+  if (wouldWaitForSelf) {
+    waitingForOther = false;
+    if (
+      openForAccept &&
+      isParty &&
+      !myAcceptedCurrentRevision &&
+      !bothAcceptedCurrentRevision
+    ) {
+      canAccept = true;
+    }
+  }
   return {
     buyerAcceptedCurrentRevision,
     sellerAcceptedCurrentRevision,
@@ -126,6 +181,7 @@ function deriveTicketAcceptanceState(opts) {
     rolesValid: roles.rolesValid,
     canAccept,
     waitingForOther,
+    waitingLabel: waitingForOther ? rawWaitingLabel : null,
     viewerRoleLabel: roles.iAmBuyer
       ? "buyer"
       : roles.iAmSeller
@@ -176,6 +232,53 @@ const A = "user-a";
 const B = "user-b";
 const stranger = "stranger-1";
 const revision = 1;
+const FM = "cms8or23a0000la046qm6ene4";
+const OWL = "cms62cfan0000ih04giwg7ee3";
+
+// Screenshot regression: futureman is buyer/counterparty, owl proposed.
+{
+  const ticket = {
+    createdById: OWL,
+    buyerId: FM,
+    sellerId: OWL,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    buyerUsername: "futureman",
+    sellerUsername: "theowlsaid",
+  };
+  const forFutureman = deriveTicketAcceptanceState({
+    viewerId: FM,
+    viewerUsername: "futureman",
+    ...ticket,
+  });
+  assert.equal(forFutureman.iAmProposer, false);
+  assert.equal(forFutureman.iAmCounterparty, true);
+  assert.equal(forFutureman.iAmBuyer, true);
+  assert.equal(forFutureman.canAccept, true);
+  assert.equal(forFutureman.waitingForOther, false);
+  assert.equal(forFutureman.waitingLabel, null);
+  assert.equal(
+    waitingCopyAddressesViewer({
+      waitingLabel: forFutureman.waitingLabel,
+      viewerUsername: "futureman",
+      viewerId: FM,
+    }),
+    false,
+  );
+
+  const forOwl = deriveTicketAcceptanceState({
+    viewerId: OWL,
+    viewerUsername: "theowlsaid",
+    ...ticket,
+  });
+  assert.equal(forOwl.iAmProposer, true);
+  assert.equal(forOwl.canAccept, false);
+  assert.equal(forOwl.waitingForOther, true);
+  assert.match(forOwl.waitingLabel, /@futureman/);
+  assert.doesNotMatch(forOwl.waitingLabel, /@theowlsaid to accept/);
+}
 
 // ROLE ASSIGNMENT: A creates with A as buyer → sourcer is B
 {

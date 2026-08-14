@@ -15,12 +15,17 @@ import {
   resolveLifecycleStage,
   shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
+  waitingCopyAddressesViewer,
 } from "@/lib/payments/ticket-lifecycle";
 
 export type PaymentTicketView = {
   id: string;
   conversationId: string;
   createdById?: string;
+  viewer?: {
+    id: string;
+    username: string | null;
+  } | null;
   status: string;
   revision: number;
   termsHash: string;
@@ -58,6 +63,11 @@ export type PaymentTicketView = {
     id: string;
     name: string;
     username: string | null;
+  } | null;
+  acceptance?: {
+    canAccept?: boolean;
+    waitingForOther?: boolean;
+    waitingLabel?: string | null;
   } | null;
   actions?: {
     canReleaseProcurement?: boolean;
@@ -105,6 +115,7 @@ export type PaymentTicketView = {
 type Props = {
   ticketId: string;
   myId: string;
+  myUsername?: string | null;
   proposedAt?: string | null;
   proposedByName?: string | null;
   onChanged?: () => void;
@@ -116,6 +127,7 @@ type Props = {
 export function PaymentTicketCard({
   ticketId,
   myId,
+  myUsername,
   proposedAt,
   proposedByName,
   onChanged,
@@ -578,9 +590,12 @@ export function PaymentTicketCard({
     );
   }
 
-  const iAmBuyer = myId === ticket.buyerId;
-  const iAmSeller = myId === ticket.sellerId;
-  const createdById = ticket.createdById || ticket.proposedBy?.id || "";
+  const sessionViewerId = ticket.viewer?.id || myId;
+  const sessionViewerUsername =
+    ticket.viewer?.username || myUsername || null;
+  const iAmBuyer = sessionViewerId === ticket.buyerId;
+  const iAmSeller = sessionViewerId === ticket.sellerId;
+  const createdById = ticket.createdById || "";
   const partyHandle = (party: {
     username?: string | null;
     name?: string | null;
@@ -591,8 +606,15 @@ export function PaymentTicketCard({
   const buyerHandle = partyHandle(ticket.buyerParty) || (iAmBuyer ? "You" : "Buyer");
   const sourcerHandle =
     partyHandle(ticket.sellerParty) || (iAmSeller ? "You" : "Sourcer");
+  const proposerHandle =
+    partyHandle(ticket.proposedBy) ||
+    (createdById === ticket.buyerId
+      ? buyerHandle
+      : createdById === ticket.sellerId
+        ? sourcerHandle
+        : null);
   const acceptance = deriveTicketAcceptanceState({
-    viewerId: myId,
+    viewerId: sessionViewerId,
     createdById,
     buyerId: ticket.buyerId,
     sellerId: ticket.sellerId,
@@ -600,10 +622,24 @@ export function PaymentTicketCard({
     buyerApprovedRevision: ticket.buyerApprovedRevision,
     sellerApprovedRevision: ticket.sellerApprovedRevision,
     status: ticket.status,
-    counterpartyUsername: iAmBuyer
-      ? ticket.sellerParty?.username
-      : ticket.buyerParty?.username,
+    buyerUsername: ticket.buyerParty?.username,
+    sellerUsername: ticket.sellerParty?.username,
+    viewerUsername: sessionViewerUsername,
   });
+  const waitingIsSelf = waitingCopyAddressesViewer({
+    waitingLabel: acceptance.waitingLabel,
+    viewerUsername: sessionViewerUsername,
+    viewerId: sessionViewerId,
+    waitForId: acceptance.counterpartyId,
+  });
+  if (waitingIsSelf) {
+    acceptance.waitingForOther = false;
+    acceptance.waitingLabel = null;
+    if (!acceptance.myAcceptedCurrentRevision) {
+      acceptance.canAccept = true;
+      acceptance.canDecline = true;
+    }
+  }
   const subtleHistorical = isSubtleHistoricalTicket(ticket.status);
   const lifecycleStageResolved =
     ticket.lifecycleStage ||
@@ -791,7 +827,7 @@ export function PaymentTicketCard({
           e.stopPropagation();
           void respond("accept");
         }}
-        className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+        className="min-h-11 rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
       >
         Accept Agreement
       </button>
@@ -802,7 +838,7 @@ export function PaymentTicketCard({
           e.stopPropagation();
           void respond("decline");
         }}
-        className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70 hover:border-white/40 disabled:opacity-50"
+        className="min-h-11 rounded-lg border border-white/20 px-4 py-2 text-sm text-white/70 hover:border-white/40 disabled:opacity-50"
       >
         Decline
       </button>
@@ -1041,8 +1077,11 @@ export function PaymentTicketCard({
       ) : null}
 
       {canRespond ? (
-        <div className="mt-3 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-3">
+        <div className="mt-3 rounded-lg border border-amber-400/50 bg-amber-400/15 px-3 py-3">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">
+            Action required
+          </p>
+          <p className="mt-1 text-sm font-medium text-white">
             {acceptance.viewerRoleLabel === "buyer"
               ? "You are the Buyer"
               : acceptance.viewerRoleLabel === "sourcer"
@@ -1050,7 +1089,9 @@ export function PaymentTicketCard({
                 : "Review agreement"}
           </p>
           <p className="mt-1 text-xs text-white/70">
-            Review the agreement before accepting.
+            {proposerHandle
+              ? `${proposerHandle} proposed this payment agreement. Review the terms below.`
+              : "Review the agreement before accepting."}
           </p>
           <div className="mt-2 flex flex-wrap gap-2">{acceptDeclineButtons}</div>
         </div>

@@ -62,6 +62,7 @@ export {
   resolveLifecycleStage,
   resolveTicketRoleModel,
   sellerDestinationUserId,
+  waitingCopyAddressesViewer,
   isSubtleHistoricalTicket,
   isCompletedLifecycleTicket,
   subtleHistoricalLabel,
@@ -283,6 +284,7 @@ function mapTicket(
       username: string | null;
     } | null;
     viewerId?: string | null;
+    viewerUsername?: string | null;
     involvesMoney?: boolean;
   },
 ) {
@@ -407,17 +409,37 @@ function mapTicket(
         buyerApprovedRevision: t.buyerApprovedRevision,
         sellerApprovedRevision: t.sellerApprovedRevision,
         status: t.status,
-        counterpartyUsername:
-          extras.viewerId === t.buyerId
-            ? extras.sellerParty?.username
-            : extras.buyerParty?.username,
+        buyerUsername: extras.buyerParty?.username,
+        sellerUsername: extras.sellerParty?.username,
+        viewerUsername:
+          extras.viewerUsername ||
+          (extras.viewerId === extras.buyerParty?.id
+            ? extras.buyerParty?.username
+            : extras.viewerId === extras.sellerParty?.id
+              ? extras.sellerParty?.username
+              : extras.proposedBy?.id === extras.viewerId
+                ? extras.proposedBy?.username
+                : null),
       })
     : null;
+  const viewerUsername =
+    extras?.viewerUsername ||
+    (extras?.viewerId === extras?.buyerParty?.id
+      ? extras?.buyerParty?.username
+      : extras?.viewerId === extras?.sellerParty?.id
+        ? extras?.sellerParty?.username
+        : null);
 
   return {
     id: t.id,
     conversationId: t.conversationId,
     createdById: t.createdById,
+    viewer: extras?.viewerId
+      ? {
+          id: extras.viewerId,
+          username: viewerUsername ?? null,
+        }
+      : null,
     proposedBy: extras?.proposedBy ?? null,
     buyerParty: extras?.buyerParty ?? null,
     sellerParty: extras?.sellerParty ?? null,
