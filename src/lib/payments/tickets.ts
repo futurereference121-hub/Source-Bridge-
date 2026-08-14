@@ -45,6 +45,8 @@ import {
   MAX_ACTIVE_PAYMENT_TICKETS,
   resolveLifecycleStage,
   resolveTicketRoleModel,
+  ticketAppearsInChatTimeline,
+  TICKET_STATUSES_BLOCK_ACCEPT,
   viewerMayFundTicket,
 } from "@/lib/payments/ticket-lifecycle";
 
@@ -53,6 +55,7 @@ export {
   INACTIVE_TICKET_STATUSES,
   assignConversationTicketRoles,
   deriveTicketAcceptanceState,
+  getPaymentTicketActions,
   isActiveLifecycleTicket,
   isActiveTicketStatus,
   isInactiveTicketStatus,
@@ -63,6 +66,9 @@ export {
   resolveTicketRoleModel,
   resolveAuthoritativeViewerId,
   sellerDestinationUserId,
+  ticketAppearsInChatTimeline,
+  TICKET_STATUSES_BLOCK_ACCEPT,
+  viewerMayAcceptTicket,
   waitingCopyAddressesViewer,
   isSubtleHistoricalTicket,
   isCompletedLifecycleTicket,
@@ -423,24 +429,10 @@ function mapTicket(
                 : null),
       })
     : null;
-  const viewerUsername =
-    extras?.viewerUsername ||
-    (extras?.viewerId === extras?.buyerParty?.id
-      ? extras?.buyerParty?.username
-      : extras?.viewerId === extras?.sellerParty?.id
-        ? extras?.sellerParty?.username
-        : null);
-
   return {
     id: t.id,
     conversationId: t.conversationId,
     createdById: t.createdById,
-    viewer: extras?.viewerId
-      ? {
-          id: extras.viewerId,
-          username: viewerUsername ?? null,
-        }
-      : null,
     proposedBy: extras?.proposedBy ?? null,
     buyerParty: extras?.buyerParty ?? null,
     sellerParty: extras?.sellerParty ?? null,
@@ -618,15 +610,30 @@ export async function ensureConversationPaymentTicketMessages(
       revision: true,
       createdAt: true,
       status: true,
+      protectedTransaction: {
+        select: {
+          status: true,
+          fundedAt: true,
+        },
+      },
     },
   });
   if (tickets.length === 0) return 0;
+
+  const visible = tickets.filter((t) =>
+    ticketAppearsInChatTimeline({
+      ticketStatus: t.status,
+      protectedStatus: t.protectedTransaction?.status ?? null,
+      fundedAt: t.protectedTransaction?.fundedAt ?? null,
+    }),
+  );
+  if (visible.length === 0) return 0;
 
   // Any linked timeline row counts (not only PROPOSED) so we do not double-insert.
   const existing = await prisma.message.findMany({
     where: {
       conversationId,
-      paymentTicketId: { in: tickets.map((t) => t.id) },
+      paymentTicketId: { in: visible.map((t) => t.id) },
     },
     select: { paymentTicketId: true },
   });
@@ -635,7 +642,7 @@ export async function ensureConversationPaymentTicketMessages(
   );
 
   let created = 0;
-  for (const t of tickets) {
+  for (const t of visible) {
     if (have.has(t.id)) continue;
     await prisma.message.create({
       data: {
@@ -668,6 +675,7 @@ export async function listConversationPaymentTickets(conversationId: string) {
       protectedTransaction: {
         select: {
           status: true,
+          fundedAt: true,
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
@@ -675,7 +683,19 @@ export async function listConversationPaymentTickets(conversationId: string) {
       },
     },
   });
-  return rows.map((t) =>
+  return rows
+    .filter((t) =>
+      ticketAppearsInChatTimeline({
+        ticketStatus: t.status,
+        protectedStatus: t.protectedTransaction?.status ?? null,
+        fundedAt: t.protectedTransaction?.fundedAt ?? null,
+        involvesMoney:
+          (t.protectedTransaction?.procurementTransferredMinor ?? 0) > 0 ||
+          (t.protectedTransaction?.finalTransferredMinor ?? 0) > 0 ||
+          (t.protectedTransaction?.refundedMinor ?? 0) > 0,
+      }),
+    )
+    .map((t) =>
     mapTicket(t, {
       protectedTxnStatus: t.protectedTransaction?.status ?? null,
       procurementTransferredMinor:
@@ -761,8 +781,12 @@ export function mergePaymentTicketsIntoTimeline(
     title: string;
   }>,
 ): TimelineMessageLike[] {
+  const visibleIds = new Set(tickets.map((t) => t.id));
+  const withoutDead = messages.filter(
+    (m) => !m.paymentTicketId || visibleIds.has(m.paymentTicketId),
+  );
   const covered = new Set(
-    messages
+    withoutDead
       .map((m) => m.paymentTicketId)
       .filter((id): id is string => Boolean(id)),
   );
@@ -782,7 +806,7 @@ export function mergePaymentTicketsIntoTimeline(
       attachments: [],
     });
   }
-  return [...messages, ...injected].sort((a, b) => {
+  return [...withoutDead, ...injected].sort((a, b) => {
     const at = Date.parse(a.createdAt);
     const bt = Date.parse(b.createdAt);
     if (at !== bt) return at - bt;
@@ -1477,6 +1501,14 @@ export async function respondToPaymentTicket(opts: {
   });
   if (!ticket) {
     throw Object.assign(new Error("Ticket not found"), { status: 404 });
+  }
+  if (
+    (TICKET_STATUSES_BLOCK_ACCEPT as readonly string[]).includes(ticket.status)
+  ) {
+    throw Object.assign(
+      new Error("This Payment Ticket is closed and cannot be accepted or declined"),
+      { status: 409, code: "TICKET_TERMINAL" },
+    );
   }
   if (ticket.status !== "PROPOSED" && ticket.status !== "ACCEPTED") {
     throw Object.assign(new Error("Ticket is not open for response"), {

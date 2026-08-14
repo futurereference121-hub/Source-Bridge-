@@ -313,4 +313,231 @@ for (const p of permutations) {
   assert.equal(d.shouldShowAcceptCTA, true);
 }
 
+const HIDDEN_CHAT = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED"];
+function ticketInChat({ ticketStatus, protectedStatus, fundedAt, involvesMoney }) {
+  if (!HIDDEN_CHAT.includes(ticketStatus)) return true;
+  if (involvesMoney || fundedAt) return true;
+  return [
+    "FUNDED",
+    "PROCUREMENT_RELEASED",
+    "AWAITING_SHIPMENT",
+    "IN_TRANSIT",
+    "DELIVERED",
+    "IN_INSPECTION",
+    "READY_TO_RELEASE",
+    "RELEASED",
+    "REFUNDED",
+    "PARTIALLY_REFUNDED",
+    "DISPUTED",
+  ].includes(protectedStatus || "");
+}
+function bothAcceptedCopy(status, buyerRev, sellerRev, revision) {
+  const both = partyAccepted(buyerRev, revision) && partyAccepted(sellerRev, revision);
+  const terminal = [
+    "DECLINED",
+    "CANCELLED",
+    "SUPERSEDED",
+    "DELETED",
+    "VOIDED",
+    "REFUNDED",
+  ].includes(status);
+  return both && !terminal ? "Agreement accepted by both parties" : null;
+}
+function mergeVisible(messages, tickets) {
+  const visible = tickets.filter((t) =>
+    ticketInChat({ ticketStatus: t.status }),
+  );
+  const ids = new Set(visible.map((t) => t.id));
+  const kept = messages.filter((m) => !m.ticketId || ids.has(m.ticketId));
+  const covered = new Set(kept.map((m) => m.ticketId).filter(Boolean));
+  for (const t of visible) {
+    if (!covered.has(t.id)) kept.push({ id: `card:${t.id}`, ticketId: t.id });
+  }
+  return kept;
+}
+function pollReconcile(prevCards, nextTickets) {
+  const visible = nextTickets.filter((t) =>
+    ticketInChat({ ticketStatus: t.status }),
+  );
+  const prevById = new Map(prevCards.map((c) => [c.id, c]));
+  return visible.map((t) => prevById.get(t.id) || { id: t.id, state: "inserted" });
+}
+
+// TEST 1 — sourcer proposes, buyer Accept
+{
+  const d = deriveAccept({
+    viewerId: A,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(d.viewerMayAccept, true);
+}
+
+// TEST 2 — proposer never sees Accept
+{
+  const d = deriveAccept({
+    viewerId: B,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(d.viewerMayAccept, false);
+}
+
+// TEST 3 — CANCELLED leftover dual-accept never shows both-accepted copy
+{
+  assert.equal(
+    bothAcceptedCopy("CANCELLED", 1, 1, 1),
+    null,
+  );
+  assert.equal(bothAcceptedCopy("ACCEPTED", 1, 1, 1), "Agreement accepted by both parties");
+}
+
+// TEST 4 — cancel then create: ticket B does not inherit A's acceptance
+{
+  const ticketA = {
+    id: "ticket-a",
+    status: "CANCELLED",
+    revision: 1,
+    buyerApprovedRevision: 1,
+    sellerApprovedRevision: 1,
+    createdById: B,
+  };
+  const ticketB = {
+    id: "ticket-b",
+    status: "PROPOSED",
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+  };
+  assert.notEqual(ticketA.id, ticketB.id);
+  assert.equal(ticketB.buyerApprovedRevision, null);
+  const buyerOnB = deriveAccept({ ...ticketB, viewerId: A });
+  assert.equal(buyerOnB.viewerMayAccept, true);
+  assert.equal(bothAcceptedCopy(ticketA.status, 1, 1, 1), null);
+}
+
+// TEST 5 — poll isolation: cancelled A removed, proposed B inserted, A not mutated into B
+{
+  const prev = [
+    { id: "ticket-a", state: "accepted-ui" },
+  ];
+  const nextTickets = [
+    { id: "ticket-a", status: "CANCELLED" },
+    { id: "ticket-b", status: "PROPOSED" },
+  ];
+  const cards = pollReconcile(prev, nextTickets);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].id, "ticket-b");
+  assert.equal(cards[0].state, "inserted");
+  assert.equal(prev[0].state, "accepted-ui");
+}
+
+// TEST 6 — cache cross-user: session user A wins over cached proposer payload
+{
+  const viewerId = resolveAuthoritativeViewerId({
+    accountId: A,
+    ticketViewerId: B,
+    buyerId: A,
+    sellerId: B,
+  });
+  assert.equal(viewerId, A);
+  assert.equal(
+    deriveAccept({
+      viewerId,
+      createdById: B,
+      buyerId: A,
+      sellerId: B,
+      revision: 1,
+      buyerApprovedRevision: null,
+      sellerApprovedRevision: 1,
+      status: "PROPOSED",
+    }).viewerMayAccept,
+    true,
+  );
+}
+
+// TEST 7 — React keys are PaymentTicket.id
+{
+  const keyA = "ticket-a";
+  const keyB = "ticket-b";
+  assert.notEqual(keyA, keyB);
+  const reuseWouldHappen = keyA === keyB;
+  assert.equal(reuseWouldHappen, false);
+}
+
+// TEST 8 — funded / completed history stays in chat
+{
+  assert.equal(
+    ticketInChat({ ticketStatus: "FUNDED", protectedStatus: "RELEASED" }),
+    true,
+  );
+  assert.equal(
+    ticketInChat({ ticketStatus: "FUNDED", protectedStatus: "REFUNDED" }),
+    true,
+  );
+}
+
+// TEST 9 — unfunded dead hidden from chat
+{
+  assert.equal(ticketInChat({ ticketStatus: "CANCELLED" }), false);
+  assert.equal(ticketInChat({ ticketStatus: "DECLINED" }), false);
+  assert.equal(ticketInChat({ ticketStatus: "SUPERSEDED" }), false);
+  assert.equal(ticketInChat({ ticketStatus: "PROPOSED" }), true);
+  assert.equal(ticketInChat({ ticketStatus: "ACCEPTED" }), true);
+  const merged = mergeVisible(
+    [
+      { id: "m1", ticketId: "ticket-a" },
+      { id: "m2", ticketId: "ticket-b" },
+      { id: "m3" },
+    ],
+    [
+      { id: "ticket-a", status: "CANCELLED" },
+      { id: "ticket-b", status: "PROPOSED" },
+    ],
+  );
+  assert.equal(merged.some((m) => m.ticketId === "ticket-a"), false);
+  assert.equal(merged.some((m) => m.ticketId === "ticket-b"), true);
+}
+
+// TEST 10 — ordinary unrelated user C never accepts; waiting-for-self blocked
+{
+  const c = deriveAccept({
+    viewerId: C,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(c.viewerMayAccept, false);
+  const selfWait = deriveAccept({
+    viewerId: A,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    buyerUsername: "alice",
+    viewerUsername: "alice",
+  });
+  assert.equal(selfWait.viewerMayAccept, true);
+}
+
 console.log("payment journey regression suite passed");

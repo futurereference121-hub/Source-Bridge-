@@ -24,6 +24,9 @@ import {
 } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const RECENT_MESSAGES = 30;
 
 type Params = { params: Promise<{ id: string }> };
@@ -137,7 +140,7 @@ export async function GET(_req: Request, { params }: Params) {
       },
       {
         headers: {
-          "Cache-Control": "no-store",
+          "Cache-Control": "private, no-store, no-cache, must-revalidate",
         },
       },
     );

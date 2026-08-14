@@ -16,7 +16,7 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { memberPhoto } from "@/lib/placeholders";
 import { ReviewPrompt } from "@/components/messaging/ReviewPrompt";
-import { PaymentTicketCard } from "@/components/messaging/PaymentTicketCard";
+import { PaymentTicketCard, type PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
 import {
   ProposePaymentTicketButton,
   type PaymentsProposalAccess,
@@ -24,6 +24,7 @@ import {
 import {
   isActiveLifecycleTicket,
   MAX_ACTIVE_PAYMENT_TICKETS,
+  ticketAppearsInChatTimeline,
 } from "@/lib/payments/ticket-lifecycle";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
@@ -178,7 +179,24 @@ type TimelineTicketLite = {
   title?: string;
   lifecycleStage?: string;
   protectedTxnStatus?: string | null;
+  buyerId?: string;
+  sellerId?: string;
+  buyerApprovedRevision?: number | null;
+  sellerApprovedRevision?: number | null;
+  protectedTransactionId?: string | null;
 };
+
+function visibleChatTickets(
+  tickets: TimelineTicketLite[] | null | undefined,
+): TimelineTicketLite[] {
+  if (!tickets?.length) return [];
+  return tickets.filter((t) =>
+    ticketAppearsInChatTimeline({
+      ticketStatus: t.status || "PROPOSED",
+      protectedStatus: t.protectedTxnStatus ?? null,
+    }),
+  );
+}
 
 function countActiveTicketsClient(
   tickets: TimelineTicketLite[] | null | undefined,
@@ -204,8 +222,15 @@ function mergePaymentTicketsClient(
   messages: Message[],
   tickets: TimelineTicketLite[] | null | undefined,
 ): Message[] {
-  if (!tickets?.length) {
-    return messages.slice().sort((a, b) => {
+  const visible = visibleChatTickets(tickets);
+  const visibleIds = new Set(visible.map((t) => t.id));
+  const base = tickets
+    ? messages.filter(
+        (m) => !m.paymentTicketId || visibleIds.has(m.paymentTicketId),
+      )
+    : messages.slice();
+  if (!visible.length) {
+    return base.sort((a, b) => {
       const at = Date.parse(a.createdAt);
       const bt = Date.parse(b.createdAt);
       if (at !== bt) return at - bt;
@@ -213,12 +238,12 @@ function mergePaymentTicketsClient(
     });
   }
   const covered = new Set(
-    messages
+    base
       .map((m) => m.paymentTicketId)
       .filter((id): id is string => Boolean(id)),
   );
   const injected: Message[] = [];
-  for (const t of tickets) {
+  for (const t of visible) {
     if (!t?.id || covered.has(t.id)) continue;
     injected.push({
       id: `payment-ticket:${t.id}`,
@@ -236,7 +261,7 @@ function mergePaymentTicketsClient(
       attachments: [],
     });
   }
-  return [...messages, ...injected].sort((a, b) => {
+  return [...base, ...injected].sort((a, b) => {
     const at = Date.parse(a.createdAt);
     const bt = Date.parse(b.createdAt);
     if (at !== bt) return at - bt;
@@ -276,6 +301,12 @@ export function MessagesInbox({
   const [proposalAccess, setProposalAccess] =
     useState<PaymentsProposalAccess | null>(null);
   const [activeTicketCount, setActiveTicketCount] = useState(0);
+  const [paymentTickets, setPaymentTickets] = useState<TimelineTicketLite[]>(
+    [],
+  );
+  const [ticketExpanded, setTicketExpanded] = useState<Record<string, boolean>>(
+    {},
+  );
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -365,6 +396,7 @@ export function MessagesInbox({
       setMessagesCursor(null);
       setProposalAccess(null);
       setActiveTicketCount(0);
+      setPaymentTickets([]);
       return;
     }
 
@@ -376,6 +408,7 @@ export function MessagesInbox({
       setMessages([]);
       setProposalAccess(null);
       setActiveTicketCount(0);
+      setPaymentTickets([]);
       try {
         // Single request — conversation GET already returns recent messages.
         const res = await fetch(`/api/conversations/${activeId}`, {
@@ -400,6 +433,7 @@ export function MessagesInbox({
 
         const rawMsgs = (data.messages as Message[]) ?? [];
         const tickets = (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+        setPaymentTickets(visibleChatTickets(tickets));
         // Server already merges; client re-merge is defense in depth.
         const msgs = mergePaymentTicketsClient(
           activeId!,
@@ -422,6 +456,7 @@ export function MessagesInbox({
           setMessages([]);
           setMessagesCursor(null);
           setActiveTicketCount(0);
+          setPaymentTickets([]);
         }
       } finally {
         if (!cancelled) setThreadLoading(false);
@@ -476,6 +511,7 @@ export function MessagesInbox({
         const rawMsgs = (data.messages as Message[]) ?? [];
         const tickets =
           (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+        setPaymentTickets(visibleChatTickets(tickets));
         const merged = mergePaymentTicketsClient(activeId!, rawMsgs, tickets);
 
         setMessages((prev) => {
@@ -577,6 +613,7 @@ export function MessagesInbox({
       const olderRaw = (data.messages as Message[]) ?? [];
       const tickets =
         (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
+      setPaymentTickets(visibleChatTickets(tickets));
       const older = mergePaymentTicketsClient(activeId, olderRaw, tickets);
       setMessages((prev) => {
         // Prefer real marker ids over payment-ticket: synthetic when both exist.
@@ -945,6 +982,14 @@ export function MessagesInbox({
                           return;
                         }
                         setActiveTicketCount((n) => n + 1);
+                        setPaymentTickets((prev) => {
+                          if (prev.some((t) => t.id === ticket.id)) return prev;
+                          return [...prev, ticket as TimelineTicketLite];
+                        });
+                        setTicketExpanded((prev) => ({
+                          ...prev,
+                          [ticket.id]: true,
+                        }));
                         const msg = (message
                           ? {
                               id: message.id,
@@ -1096,7 +1141,13 @@ export function MessagesInbox({
                               className="flex justify-stretch"
                             >
                               <PaymentTicketCard
+                                key={m.paymentTicketId}
                                 ticketId={m.paymentTicketId}
+                                ticketSnapshot={
+                                  (paymentTickets.find(
+                                    (t) => t.id === m.paymentTicketId,
+                                  ) as PaymentTicketView | undefined) ?? null
+                                }
                                 myId={myId}
                                 myUsername={account?.username}
                                 proposedAt={m.createdAt}
@@ -1104,6 +1155,15 @@ export function MessagesInbox({
                                   m.sender?.username
                                     ? `@${m.sender.username}`
                                     : m.sender?.name || null
+                                }
+                                expanded={
+                                  ticketExpanded[m.paymentTicketId] ?? false
+                                }
+                                onExpandedChange={(next) =>
+                                  setTicketExpanded((prev) => ({
+                                    ...prev,
+                                    [m.paymentTicketId!]: next,
+                                  }))
                                 }
                                 onChanged={() =>
                                   setThreadRefresh((n) => n + 1)

@@ -58,7 +58,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       reason: parsed.data.reason,
       expectedRevision: parsed.data.expectedRevision,
     });
-    return Response.json({ ok: true, ticket });
+    return Response.json({ ok: true, ticket }, {
+      headers: {
+        "Cache-Control": "private, no-store, no-cache, must-revalidate",
+      },
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Failed";

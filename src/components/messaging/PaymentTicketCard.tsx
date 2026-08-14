@@ -8,14 +8,14 @@ import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
 import {
-  deriveTicketAcceptanceState,
+  getPaymentTicketActions,
   isCompletedLifecycleTicket,
   isSubtleHistoricalTicket,
   isTerminalLifecycleStage,
   resolveLifecycleStage,
-  resolveAuthoritativeViewerId,
   shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
+  ticketAppearsInChatTimeline,
   waitingCopyAddressesViewer,
 } from "@/lib/payments/ticket-lifecycle";
 
@@ -123,6 +123,8 @@ type Props = {
   /** Lifted collapse state so conversation revalidation does not reset it. */
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
+  /** Role-neutral conversation payload — Accept derives from this + myId. */
+  ticketSnapshot?: PaymentTicketView | null;
 };
 
 export function PaymentTicketCard({
@@ -134,6 +136,7 @@ export function PaymentTicketCard({
   onChanged,
   expanded: expandedControlled,
   onExpandedChange,
+  ticketSnapshot = null,
 }: Props) {
   const [ticket, setTicket] = useState<PaymentTicketView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -201,70 +204,70 @@ export function PaymentTicketCard({
       if (!res.ok || !json.ticket) {
         if (!silent) {
           setError(json.error || "Could not load Payment Ticket");
-          setTicket(null);
+          if (!ticketSnapshot || ticketSnapshot.id !== ticketId) {
+            setTicket(null);
+          }
         }
       } else {
-        setTicket((prev) => {
-          const next = json.ticket as PaymentTicketView;
-          const accountIsParty =
-            Boolean(myId) &&
-            (myId === next.buyerId || myId === next.sellerId);
-          if (accountIsParty && next.viewer && next.viewer.id !== myId) {
-            return {
-              ...next,
-              viewer: {
-                id: myId,
-                username: myUsername ?? next.viewer.username,
-              },
-            };
-          }
-          if (silent && prev?.viewer && !next.viewer) {
-            return { ...next, viewer: prev.viewer };
-          }
-          return next;
-        });
+        const next = json.ticket as PaymentTicketView;
+        // Role-neutral: never persist a previous viewer's identity on the ticket.
+        delete (next as { viewer?: unknown }).viewer;
+        setTicket(next);
       }
     } catch {
       if (!silent) setError("Could not load Payment Ticket");
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [ticketId, myId, myUsername]);
+  }, [ticketId]);
 
   useEffect(() => {
+    autoExpandDone.current = false;
+    setGone(false);
+    setError("");
+    setCheckout(null);
+    if (ticketSnapshot && ticketSnapshot.id === ticketId) {
+      const snap = { ...ticketSnapshot };
+      delete (snap as { viewer?: unknown }).viewer;
+      setTicket(snap);
+      setLoading(false);
+    } else {
+      setTicket(null);
+    }
     void load();
-  }, [load]);
+  }, [load, ticketId, ticketSnapshot?.id]);
 
   useEffect(() => {
-    if (!ticket || autoExpandDone.current) return;
-    const viewerId = resolveAuthoritativeViewerId({
-      accountId: myId,
-      ticketViewerId: ticket.viewer?.id,
-      buyerId: ticket.buyerId,
-      sellerId: ticket.sellerId,
+    if (!ticketSnapshot || ticketSnapshot.id !== ticketId) return;
+    setTicket((prev) => {
+      if (prev && prev.id !== ticketSnapshot.id) return prev;
+      const snap = { ...ticketSnapshot };
+      delete (snap as { viewer?: unknown }).viewer;
+      if (!prev) return snap;
+      return { ...prev, ...snap, viewer: undefined };
     });
-    const d = deriveTicketAcceptanceState({
-      viewerId,
-      createdById: ticket.createdById || "",
-      buyerId: ticket.buyerId,
-      sellerId: ticket.sellerId,
-      revision: ticket.revision,
-      buyerApprovedRevision: ticket.buyerApprovedRevision,
-      sellerApprovedRevision: ticket.sellerApprovedRevision,
-      status: ticket.status,
-      buyerUsername: ticket.buyerParty?.username,
-      sellerUsername: ticket.sellerParty?.username,
-      viewerUsername: ticket.viewer?.username || myUsername || null,
-    });
-    if (
-      d.shouldShowAcceptCTA ||
-      ticket.actions?.canAccept ||
-      ticket.acceptance?.canAccept
-    ) {
+  }, [ticketSnapshot, ticketId]);
+
+  useEffect(() => {
+    if (!ticket || autoExpandDone.current || !myId) return;
+    const d = getPaymentTicketActions(
+      {
+        status: ticket.status,
+        createdById: ticket.createdById,
+        buyerId: ticket.buyerId,
+        sellerId: ticket.sellerId,
+        revision: ticket.revision,
+        buyerApprovedRevision: ticket.buyerApprovedRevision,
+        sellerApprovedRevision: ticket.sellerApprovedRevision,
+        protectedTransactionId: ticket.protectedTransactionId,
+      },
+      myId,
+    );
+    if (d.viewerMayAccept) {
       autoExpandDone.current = true;
       setExpanded(true);
     }
-  }, [ticket, myId, myUsername, setExpanded]);
+  }, [ticket, myId, setExpanded]);
 
   useEffect(() => {
     void fetch("/api/payments/connect")
@@ -643,17 +646,17 @@ export function PaymentTicketCard({
     );
   }
 
-  const sessionViewerId = resolveAuthoritativeViewerId({
-    accountId: myId,
-    ticketViewerId: ticket.viewer?.id,
-    buyerId: ticket.buyerId,
-    sellerId: ticket.sellerId,
-  });
-  const sessionViewerUsername =
-    (sessionViewerId === myId ? myUsername : null) ||
-    ticket.viewer?.username ||
-    myUsername ||
-    null;
+  if (
+    !ticketAppearsInChatTimeline({
+      ticketStatus: ticket.status,
+      protectedStatus: ticket.protectedTxnStatus ?? null,
+    })
+  ) {
+    return null;
+  }
+
+  const sessionViewerId = (myId || "").trim();
+  const sessionViewerUsername = myUsername || null;
   const iAmBuyer = sessionViewerId === ticket.buyerId;
   const iAmSeller = sessionViewerId === ticket.sellerId;
   const createdById =
@@ -676,19 +679,23 @@ export function PaymentTicketCard({
         ? sourcerHandle
         : proposedByName) ||
     null;
-  const acceptance = deriveTicketAcceptanceState({
-    viewerId: sessionViewerId,
-    createdById,
-    buyerId: ticket.buyerId,
-    sellerId: ticket.sellerId,
-    revision: ticket.revision,
-    buyerApprovedRevision: ticket.buyerApprovedRevision,
-    sellerApprovedRevision: ticket.sellerApprovedRevision,
-    status: ticket.status,
-    buyerUsername: ticket.buyerParty?.username,
-    sellerUsername: ticket.sellerParty?.username,
-    viewerUsername: sessionViewerUsername,
-  });
+  const ticketActions = getPaymentTicketActions(
+    {
+      status: ticket.status,
+      createdById,
+      buyerId: ticket.buyerId,
+      sellerId: ticket.sellerId,
+      revision: ticket.revision,
+      buyerApprovedRevision: ticket.buyerApprovedRevision,
+      sellerApprovedRevision: ticket.sellerApprovedRevision,
+      protectedTransactionId: ticket.protectedTransactionId,
+      buyerUsername: ticket.buyerParty?.username,
+      sellerUsername: ticket.sellerParty?.username,
+      viewerUsername: sessionViewerUsername,
+    },
+    sessionViewerId,
+  );
+  const acceptance = ticketActions.acceptance;
   const waitingIsSelf = waitingCopyAddressesViewer({
     waitingLabel: acceptance.waitingLabel,
     viewerUsername: sessionViewerUsername,
@@ -701,6 +708,8 @@ export function PaymentTicketCard({
     if (!acceptance.myAcceptedCurrentRevision) {
       acceptance.canAccept = true;
       acceptance.canDecline = true;
+      acceptance.viewerMayAccept = true;
+      acceptance.shouldShowAcceptCTA = true;
     }
   }
   const subtleHistorical = isSubtleHistoricalTicket(ticket.status);
@@ -721,17 +730,8 @@ export function PaymentTicketCard({
   // Actions / CTAs blocked for all terminal lifecycle stages.
   const historical = isTerminal;
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
-  const serverMayAccept = Boolean(
-    ticket.actions?.canAccept || ticket.acceptance?.canAccept,
-  );
-  const serverViewerMatches =
-    !ticket.viewer?.id || ticket.viewer.id === sessionViewerId;
-  const viewerMayAccept =
-    acceptance.shouldShowAcceptCTA ||
-    (serverMayAccept && serverViewerMatches);
-  const canRespond = Boolean(
-    open && viewerMayAccept && (acceptance.isParty || serverMayAccept),
-  );
+  const viewerMayAccept = Boolean(sessionViewerId) && acceptance.viewerMayAccept;
+  const canRespond = Boolean(open && viewerMayAccept && acceptance.isParty);
   const canPay =
     !historical &&
     paymentsAccess &&
@@ -901,6 +901,7 @@ export function PaymentTicketCard({
           void respond("accept");
         }}
         className="min-h-11 rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+        data-testid="ticket-accept-agreement"
       >
         Accept Agreement
       </button>
@@ -1179,7 +1180,9 @@ export function PaymentTicketCard({
             You are the Buyer
           </p>
           <p className="mt-1 text-xs text-white/70">
-            {acceptance.bothAcceptedLabel || "Agreement accepted by both parties"}.
+            {acceptance.bothAcceptedLabel
+              ? `${acceptance.bothAcceptedLabel}.`
+              : "Ready for Protected Payment."}
           </p>
           <button
             type="button"
@@ -1275,7 +1278,7 @@ export function PaymentTicketCard({
             ? "accepted this revision"
             : "not yet accepted"}
         </p>
-        {acceptance.bothAcceptedCurrentRevision ? (
+        {acceptance.bothAcceptedCurrentRevision && acceptance.bothAcceptedLabel ? (
           <p className="text-emerald-300/90">
             {acceptance.bothAcceptedLabel}
           </p>

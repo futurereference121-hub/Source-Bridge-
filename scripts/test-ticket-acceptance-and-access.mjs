@@ -162,18 +162,24 @@ function deriveTicketAcceptanceState(opts) {
     viewerId,
     waitForId,
   });
-  let canAccept =
-    Boolean(roles.proposerId) &&
-    roles.iAmCounterparty &&
-    openForAccept &&
-    !myAcceptedCurrentRevision;
+  let canAccept = viewerMayAcceptTicket({
+    status: opts.status,
+    viewerId,
+    createdById: roles.proposerId,
+    buyerId: roles.buyerId,
+    sellerId: roles.sellerId,
+    revision: opts.revision,
+    buyerApprovedRevision: opts.buyerApprovedRevision,
+    sellerApprovedRevision: opts.sellerApprovedRevision,
+  });
   let waitingForOther =
     roles.rolesValid &&
     roles.iAmProposer &&
     openForAccept &&
     myAcceptedCurrentRevision &&
     !bothAcceptedCurrentRevision &&
-    !wouldWaitForSelf;
+    !wouldWaitForSelf &&
+    !isInactiveTicketStatus(opts.status);
   if (wouldWaitForSelf) {
     waitingForOther = false;
     if (
@@ -185,6 +191,14 @@ function deriveTicketAcceptanceState(opts) {
       canAccept = true;
     }
   }
+  if (isInactiveTicketStatus(opts.status)) {
+    canAccept = false;
+    waitingForOther = false;
+  }
+  const bothAcceptedLabel =
+    bothAcceptedCurrentRevision && !isInactiveTicketStatus(opts.status)
+      ? "Agreement accepted by both parties"
+      : null;
   return {
     buyerAcceptedCurrentRevision,
     sellerAcceptedCurrentRevision,
@@ -204,13 +218,44 @@ function deriveTicketAcceptanceState(opts) {
     viewerAcceptedCurrentRevision: myAcceptedCurrentRevision,
     waitingForOther,
     waitingLabel: waitingForOther ? rawWaitingLabel : null,
+    bothAcceptedLabel,
     viewerRoleLabel: roles.iAmBuyer
       ? "buyer"
       : roles.iAmSeller
         ? "sourcer"
         : null,
-    needsRoleRevision: !roles.rolesValid && openForAccept,
+    needsRoleRevision: !roles.rolesValid && openForAccept && Boolean(roles.proposerId),
   };
+}
+
+function viewerMayAcceptTicket(opts) {
+  const viewerId = (opts.viewerId || "").trim();
+  const createdById = (opts.createdById || "").trim();
+  const buyerId = (opts.buyerId || "").trim();
+  const sellerId = (opts.sellerId || "").trim();
+  const activeUnfunded = opts.status === "PROPOSED" || opts.status === "DRAFT";
+  if (!viewerId || !activeUnfunded) return false;
+  if (
+    ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED", "FUNDED", "REFUNDED"].includes(
+      opts.status,
+    )
+  ) {
+    return false;
+  }
+  const isParty = viewerId === buyerId || viewerId === sellerId;
+  if (!isParty) return false;
+  if (createdById && viewerId === createdById) return false;
+  const mine =
+    viewerId === buyerId
+      ? partyAcceptedCurrentRevision(opts.buyerApprovedRevision, opts.revision)
+      : partyAcceptedCurrentRevision(opts.sellerApprovedRevision, opts.revision);
+  return !mine;
+}
+
+function isInactiveTicketStatus(status) {
+  return ["DECLINED", "CANCELLED", "SUPERSEDED", "DELETED", "VOIDED", "REFUNDED"].includes(
+    status,
+  );
 }
 
 function viewerMayFundTicket({ viewerId, buyerId }) {
@@ -457,7 +502,7 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   assert.equal(forStranger.canAccept, false);
 }
 
-// Missing createdById → do not guess Accept
+// Missing createdById → still Accept for the party who has not approved
 {
   const forBuyer = deriveTicketAcceptanceState({
     viewerId: A,
@@ -469,8 +514,8 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
     sellerApprovedRevision: 1,
     status: "PROPOSED",
   });
-  assert.equal(forBuyer.canAccept, false);
-  assert.equal(forBuyer.needsRoleRevision, true);
+  assert.equal(forBuyer.canAccept, true);
+  assert.equal(forBuyer.needsRoleRevision, false);
 }
 
 // Both accepted → neither sees Accept; only designated buyer may fund
@@ -695,6 +740,36 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   });
   assert.equal(stranger.shouldShowAcceptCTA, false);
   assert.equal(stranger.viewerMayAccept, false);
+}
+
+{
+  const cancelled = deriveTicketAcceptanceState({
+    viewerId: A,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: 1,
+    sellerApprovedRevision: 1,
+    status: "CANCELLED",
+  });
+  assert.equal(cancelled.viewerMayAccept, false);
+  assert.equal(cancelled.bothAcceptedLabel, null);
+  assert.equal(cancelled.bothAcceptedCurrentRevision, true);
+}
+
+{
+  const missingCreator = deriveTicketAcceptanceState({
+    viewerId: A,
+    createdById: "",
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(missingCreator.viewerMayAccept, true);
 }
 
 console.log("ticket acceptance + role model + access + fee tests passed");

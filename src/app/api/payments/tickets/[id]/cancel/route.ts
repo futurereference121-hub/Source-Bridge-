@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/validation";
 import { cancelPaymentTicket } from "@/lib/payments/tickets";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 

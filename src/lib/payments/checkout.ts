@@ -94,7 +94,14 @@ export async function createPaymentIntentForTxn(opts: {
     const ticket = await prisma.paymentTicket.findFirst({
       where: { protectedTransactionId: txn.id },
     });
-    if (!ticket || ticket.status === "SUPERSEDED" || ticket.status === "DECLINED") {
+    if (
+      !ticket ||
+      ticket.status === "SUPERSEDED" ||
+      ticket.status === "DECLINED" ||
+      ticket.status === "CANCELLED" ||
+      ticket.status === "VOIDED" ||
+      ticket.status === "DELETED"
+    ) {
       throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
         status: 409,
         code: "STALE_TERMS",

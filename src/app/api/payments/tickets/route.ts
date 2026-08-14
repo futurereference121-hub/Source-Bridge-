@@ -8,6 +8,7 @@ import { isProtectedPaymentsEnabled, isInstantPaymentsEnabled } from "@/lib/paym
 import { assignConversationTicketRoles } from "@/lib/payments/ticket-lifecycle";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   conversationId: z.string().trim().min(1),
@@ -167,7 +168,7 @@ export async function POST(req: NextRequest) {
       {
         status: 201,
         headers: {
-          "Cache-Control": "no-store",
+          "Cache-Control": "private, no-store, no-cache, must-revalidate",
           ...(proposalTraceId
             ? { "x-proposal-trace-id": proposalTraceId }
             : {}),

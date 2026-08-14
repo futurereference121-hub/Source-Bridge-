@@ -19,6 +19,9 @@ import {
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const DEFAULT_LIMIT = 30;
 const MAX_LIMIT = 100;
 
@@ -71,7 +74,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       },
       {
         headers: {
-          "Cache-Control": "no-store",
+          "Cache-Control": "private, no-store, no-cache, must-revalidate",
         },
       },
     );

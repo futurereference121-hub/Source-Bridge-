@@ -187,11 +187,17 @@ async function ensureMessages(conversationId) {
  * Mirror of mergePaymentTicketsIntoTimeline from tickets.ts
  */
 function mergePaymentTicketsIntoTimeline(conversationId, messages, tickets) {
+  const HIDDEN = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED"];
+  const visible = tickets.filter((t) => !HIDDEN.includes(t.status));
+  const visibleIds = new Set(visible.map((t) => t.id));
+  const withoutDead = messages.filter(
+    (m) => !m.paymentTicketId || visibleIds.has(m.paymentTicketId),
+  );
   const covered = new Set(
-    messages.map((m) => m.paymentTicketId).filter((id) => Boolean(id)),
+    withoutDead.map((m) => m.paymentTicketId).filter((id) => Boolean(id)),
   );
   const injected = [];
-  for (const t of tickets) {
+  for (const t of visible) {
     if (covered.has(t.id)) continue;
     injected.push({
       id: `payment-ticket:${t.id}`,
@@ -206,7 +212,7 @@ function mergePaymentTicketsIntoTimeline(conversationId, messages, tickets) {
       attachments: [],
     });
   }
-  return [...messages, ...injected].sort((a, b) => {
+  return [...withoutDead, ...injected].sort((a, b) => {
     const at = Date.parse(a.createdAt);
     const bt = Date.parse(b.createdAt);
     if (at !== bt) return at - bt;
@@ -805,13 +811,19 @@ async function main() {
     finalMsgs,
     finalTickets,
   );
-  for (const t of finalTickets) {
+  const HIDDEN_CHAT = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED"];
+  const visibleFinal = finalTickets.filter((t) => !HIDDEN_CHAT.includes(t.status));
+  for (const t of visibleFinal) {
     ok(
       `ticket ${t.id.slice(0, 8)} appears in merged timeline`,
       finalMerged.some((m) => m.paymentTicketId === t.id),
     );
   }
-  // Pagination simulation: only recent 2 messages, still merge ALL tickets
+  ok(
+    "unfunded declined ticket hidden from chat timeline",
+    !finalMerged.some((m) => m.paymentTicketId === declined.id),
+  );
+  // Pagination simulation: only recent 2 messages, still merge ALL visible tickets
   const page = finalMsgs.slice(-2);
   const pageMerged = mergePaymentTicketsIntoTimeline(
     conversation.id,
@@ -819,8 +831,8 @@ async function main() {
     finalTickets,
   );
   ok(
-    "pagination still surfaces all tickets via merge",
-    finalTickets.every((t) =>
+    "pagination still surfaces all visible tickets via merge",
+    visibleFinal.every((t) =>
       pageMerged.some((m) => m.paymentTicketId === t.id),
     ),
   );

@@ -27,6 +27,43 @@ export const INACTIVE_TICKET_STATUSES = [
   "REFUNDED",
 ] as const;
 
+/**
+ * Unfunded terminal statuses removed from the normal chat timeline.
+ * Funded / refunded / disputed tickets stay as permanent financial history.
+ */
+export const UNFUNDED_HIDDEN_CHAT_STATUSES = [
+  "CANCELLED",
+  "DECLINED",
+  "SUPERSEDED",
+  "VOIDED",
+  "DELETED",
+] as const;
+
+/** Accept/fund must reject these ticket statuses. */
+export const TICKET_STATUSES_BLOCK_ACCEPT = [
+  "CANCELLED",
+  "DECLINED",
+  "SUPERSEDED",
+  "VOIDED",
+  "DELETED",
+  "FUNDED",
+  "REFUNDED",
+] as const;
+
+const MONEY_KEEP_CHAT_PT_STATUSES = [
+  "FUNDED",
+  "PROCUREMENT_RELEASED",
+  "AWAITING_SHIPMENT",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "IN_INSPECTION",
+  "READY_TO_RELEASE",
+  "RELEASED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+  "DISPUTED",
+] as const;
+
 /** Display stages that are closed (do not count toward the active cap). */
 export const TERMINAL_LIFECYCLE_STAGES = [
   "COMPLETED",
@@ -168,6 +205,64 @@ export function isSubtleHistoricalTicket(ticketStatus: string): boolean {
     ticketStatus === "DELETED" ||
     ticketStatus === "VOIDED"
   );
+}
+
+/**
+ * Whether this ticket belongs in the normal conversation timeline.
+ * ACTIVE unfunded (PROPOSED / ACCEPTED) stay. Unfunded CANCELLED / DECLINED /
+ * SUPERSEDED / VOIDED are removed (DB rows kept). Real money history stays.
+ */
+export function ticketAppearsInChatTimeline(opts: {
+  ticketStatus: string;
+  protectedStatus?: string | null;
+  fundedAt?: Date | string | null;
+  involvesMoney?: boolean;
+}): boolean {
+  const st = opts.ticketStatus;
+  if (
+    !(UNFUNDED_HIDDEN_CHAT_STATUSES as readonly string[]).includes(st)
+  ) {
+    return true;
+  }
+  if (opts.involvesMoney) return true;
+  if (opts.fundedAt) return true;
+  const pst = opts.protectedStatus || "";
+  return (MONEY_KEEP_CHAT_PT_STATUSES as readonly string[]).includes(pst);
+}
+
+/**
+ * Authoritative Accept visibility (PART 9).
+ * viewerMayAccept = active unfunded AND participant AND not proposer
+ * AND has not accepted the current revision.
+ */
+export function viewerMayAcceptTicket(opts: {
+  status: string;
+  viewerId: string;
+  createdById?: string | null;
+  buyerId: string;
+  sellerId: string;
+  revision: number;
+  buyerApprovedRevision?: number | null;
+  sellerApprovedRevision?: number | null;
+}): boolean {
+  const viewerId = (opts.viewerId || "").trim();
+  const createdById = (opts.createdById || "").trim();
+  const buyerId = (opts.buyerId || "").trim();
+  const sellerId = (opts.sellerId || "").trim();
+  const activeUnfunded =
+    opts.status === "PROPOSED" || opts.status === "DRAFT";
+  if (!viewerId || !activeUnfunded) return false;
+  if ((TICKET_STATUSES_BLOCK_ACCEPT as readonly string[]).includes(opts.status)) {
+    return false;
+  }
+  const isParty = viewerId === buyerId || viewerId === sellerId;
+  if (!isParty) return false;
+  if (createdById && viewerId === createdById) return false;
+  const mine =
+    viewerId === buyerId
+      ? partyAcceptedCurrentRevision(opts.buyerApprovedRevision, opts.revision)
+      : partyAcceptedCurrentRevision(opts.sellerApprovedRevision, opts.revision);
+  return !mine;
 }
 
 export function isCompletedLifecycleTicket(opts: {
@@ -536,6 +631,7 @@ export function deriveTicketAcceptanceState(opts: {
       : false;
   const openForAccept =
     opts.status === "PROPOSED" || opts.status === "DRAFT";
+  const terminalUnfunded = isInactiveTicketStatus(opts.status);
 
   const waitForId = roles.counterpartyId;
   const waitForUsername =
@@ -566,18 +662,24 @@ export function deriveTicketAcceptanceState(opts: {
     waitForId,
   });
 
-  let canAccept =
-    Boolean(roles.proposerId) &&
-    roles.iAmCounterparty &&
-    openForAccept &&
-    !myAcceptedCurrentRevision;
+  let canAccept = viewerMayAcceptTicket({
+    status: opts.status,
+    viewerId,
+    createdById: roles.proposerId,
+    buyerId: roles.buyerId,
+    sellerId: roles.sellerId,
+    revision: opts.revision,
+    buyerApprovedRevision: opts.buyerApprovedRevision,
+    sellerApprovedRevision: opts.sellerApprovedRevision,
+  });
   let waitingForOther =
     roles.rolesValid &&
     roles.iAmProposer &&
     openForAccept &&
     myAcceptedCurrentRevision &&
     !bothAcceptedCurrentRevision &&
-    !wouldWaitForSelf;
+    !wouldWaitForSelf &&
+    !terminalUnfunded;
 
   // Never render proposer waiting copy that names the current viewer.
   if (wouldWaitForSelf) {
@@ -592,17 +694,28 @@ export function deriveTicketAcceptanceState(opts: {
     }
   }
 
+  if (terminalUnfunded) {
+    canAccept = false;
+    waitingForOther = false;
+  }
+
   const canDecline = canAccept;
   const waitingLabel = waitingForOther ? rawWaitingLabel : null;
-  const bothAcceptedLabel = bothAcceptedCurrentRevision
-    ? "Agreement accepted by both parties"
-    : null;
+  // Never show dual-accept copy on a terminal/cancelled ticket, even if
+  // leftover approval columns still match the last revision.
+  const bothAcceptedLabel =
+    bothAcceptedCurrentRevision && !terminalUnfunded
+      ? "Agreement accepted by both parties"
+      : null;
   const viewerRoleLabel: "buyer" | "sourcer" | null = roles.iAmBuyer
     ? "buyer"
     : roles.iAmSeller
       ? "sourcer"
       : null;
-  const needsRoleRevision = !roles.rolesValid && openForAccept;
+  const needsRoleRevision =
+    openForAccept &&
+    Boolean(roles.proposerId) &&
+    !roles.rolesValid;
 
   return {
     buyerAcceptedCurrentRevision,
@@ -632,5 +745,58 @@ export function deriveTicketAcceptanceState(opts: {
     bothAcceptedLabel,
     viewerRoleLabel,
     needsRoleRevision,
+  };
+}
+
+export type PaymentTicketActionInput = {
+  status: string;
+  createdById?: string | null;
+  buyerId: string;
+  sellerId: string;
+  revision: number;
+  buyerApprovedRevision?: number | null;
+  sellerApprovedRevision?: number | null;
+  protectedTransactionId?: string | null;
+  buyerUsername?: string | null;
+  sellerUsername?: string | null;
+  viewerUsername?: string | null;
+};
+
+/**
+ * Role-neutral ticket + current session user → actions.
+ * Never persist ticket.viewer; always evaluate fresh for this session.
+ */
+export function getPaymentTicketActions(
+  ticket: PaymentTicketActionInput,
+  currentSessionUserId: string,
+) {
+  const acceptance = deriveTicketAcceptanceState({
+    viewerId: currentSessionUserId,
+    createdById: ticket.createdById,
+    buyerId: ticket.buyerId,
+    sellerId: ticket.sellerId,
+    revision: ticket.revision,
+    buyerApprovedRevision: ticket.buyerApprovedRevision,
+    sellerApprovedRevision: ticket.sellerApprovedRevision,
+    status: ticket.status,
+    buyerUsername: ticket.buyerUsername,
+    sellerUsername: ticket.sellerUsername,
+    viewerUsername: ticket.viewerUsername,
+  });
+  const canPay =
+    !isInactiveTicketStatus(ticket.status) &&
+    ticket.status === "ACCEPTED" &&
+    Boolean(ticket.protectedTransactionId) &&
+    viewerMayFundTicket({
+      viewerId: currentSessionUserId,
+      buyerId: ticket.buyerId,
+    });
+  return {
+    canAccept: acceptance.viewerMayAccept,
+    canDecline: acceptance.canDecline,
+    canPay,
+    viewerMayAccept: acceptance.viewerMayAccept,
+    shouldShowAcceptCTA: acceptance.shouldShowAcceptCTA,
+    acceptance,
   };
 }

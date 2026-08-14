@@ -143,5 +143,18 @@ Only if you want redundant `account.updated` delivery (not required when thin ev
 ## Public language
 Never use “escrow” in UI. Use Protected Payment / Protected Transaction / Protected by Source Bridge.
 
+## Payment Ticket regression (required before deploy)
+
+Any change that touches Payment Tickets, conversation timeline merge, ticket accept/cancel, chat card UI, or authenticated conversation/ticket caching **must** run the critical payment regression suite before deploy:
+
+```
+npm run test:payment-journey
+npm run test:ticket-acceptance
+npm run test:payment-ticket-lifecycle
+npm run test:payment-ticket-timeline
+```
+
+Do not ship isolated UI patches for Accept / cancel / timeline bugs. Ticket identity (`PaymentTicket.id`) is the hard boundary: cancelled tickets are terminal, unfunded dead tickets are hidden from chat (DB rows kept), and Accept is always derived from the current session user + current ticket + current revision.
+
 ## Phase status
 Webhook foundation accepts Stripe delivery while payment flags stay off. Checkout and funding remain gated until ops enables TEST flags deliberately. TEST Connect onboarding can be enabled independently via `CONNECT_ONBOARDING_ENABLED` (with `sk_test_` keys) without turning on money movement.
