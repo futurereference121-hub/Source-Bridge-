@@ -9,6 +9,7 @@ import {
 } from "@/lib/payments/tickets";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -23,7 +24,14 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     const user = await requireSessionUser();
     const { id } = await ctx.params;
     const ticket = await getPaymentTicket(id, user.id);
-    return Response.json({ ok: true, ticket });
+    return Response.json(
+      { ok: true, ticket },
+      {
+        headers: {
+          "Cache-Control": "private, no-store, no-cache, must-revalidate",
+        },
+      },
+    );
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Failed";

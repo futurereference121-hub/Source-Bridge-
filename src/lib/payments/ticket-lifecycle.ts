@@ -392,6 +392,31 @@ export function resolveTicketRoleModel(opts: {
   };
 }
 
+/**
+ * Logged-in party identity wins over ticket.viewer.
+ * A stale/cached ticket GET from the other party must never override the
+ * account currently shown in the chrome.
+ */
+export function resolveAuthoritativeViewerId(opts: {
+  accountId?: string | null;
+  ticketViewerId?: string | null;
+  buyerId: string;
+  sellerId: string;
+}): string {
+  const accountId = (opts.accountId || "").trim();
+  const ticketViewerId = (opts.ticketViewerId || "").trim();
+  const buyerId = (opts.buyerId || "").trim();
+  const sellerId = (opts.sellerId || "").trim();
+  const accountIsParty =
+    Boolean(accountId) && (accountId === buyerId || accountId === sellerId);
+  if (accountIsParty) return accountId;
+  const ticketIsParty =
+    Boolean(ticketViewerId) &&
+    (ticketViewerId === buyerId || ticketViewerId === sellerId);
+  if (ticketIsParty) return ticketViewerId;
+  return accountId || ticketViewerId;
+}
+
 export function normalizePartyHandle(raw?: string | null): string {
   return (raw || "").trim().replace(/^@+/, "").toLowerCase();
 }
@@ -444,6 +469,15 @@ export type TicketAcceptanceState = {
   counterpartyId: string | null;
   /** Outstanding COUNTERPARTY must Accept Agreement (+ Decline). */
   canAccept: boolean;
+  /** Alias of canAccept — single Accept-visibility rule. */
+  viewerMayAccept: boolean;
+  /** Alias of canAccept — render Accept/Decline when true. */
+  shouldShowAcceptCTA: boolean;
+  viewerIsProposer: boolean;
+  viewerIsBuyer: boolean;
+  viewerIsSourcer: boolean;
+  viewerIsCounterparty: boolean;
+  viewerAcceptedCurrentRevision: boolean;
   canDecline: boolean;
   /** Proposer waits — never shown to the outstanding counterparty. */
   waitingForOther: boolean;
@@ -584,6 +618,13 @@ export function deriveTicketAcceptanceState(opts: {
     proposerId: roles.proposerId,
     counterpartyId: roles.counterpartyId,
     canAccept,
+    viewerMayAccept: canAccept,
+    shouldShowAcceptCTA: canAccept,
+    viewerIsProposer: roles.iAmProposer,
+    viewerIsBuyer: roles.iAmBuyer,
+    viewerIsSourcer: roles.iAmSeller,
+    viewerIsCounterparty: roles.iAmCounterparty,
+    viewerAcceptedCurrentRevision: myAcceptedCurrentRevision,
     canDecline,
     waitingForOther,
     waitingForRole,

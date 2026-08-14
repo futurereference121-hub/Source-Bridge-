@@ -82,6 +82,21 @@ function resolveTicketRoleModel(opts) {
   };
 }
 
+function resolveAuthoritativeViewerId(opts) {
+  const accountId = (opts.accountId || "").trim();
+  const ticketViewerId = (opts.ticketViewerId || "").trim();
+  const buyerId = (opts.buyerId || "").trim();
+  const sellerId = (opts.sellerId || "").trim();
+  const accountIsParty =
+    Boolean(accountId) && (accountId === buyerId || accountId === sellerId);
+  if (accountIsParty) return accountId;
+  const ticketIsParty =
+    Boolean(ticketViewerId) &&
+    (ticketViewerId === buyerId || ticketViewerId === sellerId);
+  if (ticketIsParty) return ticketViewerId;
+  return accountId || ticketViewerId;
+}
+
 function normalizePartyHandle(raw) {
   return (raw || "").trim().replace(/^@+/, "").toLowerCase();
 }
@@ -180,6 +195,13 @@ function deriveTicketAcceptanceState(opts) {
     iAmCounterparty: roles.iAmCounterparty,
     rolesValid: roles.rolesValid,
     canAccept,
+    viewerMayAccept: canAccept,
+    shouldShowAcceptCTA: canAccept,
+    viewerIsProposer: roles.iAmProposer,
+    viewerIsBuyer: roles.iAmBuyer,
+    viewerIsSourcer: roles.iAmSeller,
+    viewerIsCounterparty: roles.iAmCounterparty,
+    viewerAcceptedCurrentRevision: myAcceptedCurrentRevision,
     waitingForOther,
     waitingLabel: waitingForOther ? rawWaitingLabel : null,
     viewerRoleLabel: roles.iAmBuyer
@@ -257,6 +279,13 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   assert.equal(forFutureman.iAmCounterparty, true);
   assert.equal(forFutureman.iAmBuyer, true);
   assert.equal(forFutureman.canAccept, true);
+  assert.equal(forFutureman.viewerIsProposer, false);
+  assert.equal(forFutureman.viewerIsBuyer, true);
+  assert.equal(forFutureman.viewerIsSourcer, false);
+  assert.equal(forFutureman.viewerIsCounterparty, true);
+  assert.equal(forFutureman.viewerAcceptedCurrentRevision, false);
+  assert.equal(forFutureman.viewerMayAccept, true);
+  assert.equal(forFutureman.shouldShowAcceptCTA, true);
   assert.equal(forFutureman.waitingForOther, false);
   assert.equal(forFutureman.waitingLabel, null);
   assert.equal(
@@ -593,6 +622,79 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   const ordinary = { id: "ordinary-user-xyz", email: "ordinary@example.com" };
   assert.ok(ordinary.id !== "cms8or23a0000la046qm6ene4");
   assert.ok(!/futureman|theowlsaid/i.test(ordinary.email));
+}
+
+// Logged-in party identity wins over a stale ticket.viewer (cached GET).
+{
+  const stale = resolveAuthoritativeViewerId({
+    accountId: A,
+    ticketViewerId: B,
+    buyerId: A,
+    sellerId: B,
+  });
+  assert.equal(stale, A);
+  const fromTicket = resolveAuthoritativeViewerId({
+    accountId: "",
+    ticketViewerId: A,
+    buyerId: A,
+    sellerId: B,
+  });
+  assert.equal(fromTicket, A);
+}
+
+// Generic A/B/C: financial role does not decide who must accept.
+{
+  const C = "user-c";
+  const owlProposesBuyerA = deriveTicketAcceptanceState({
+    viewerId: A,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    buyerUsername: "alice",
+    sellerUsername: "bob",
+    viewerUsername: "alice",
+  });
+  assert.equal(owlProposesBuyerA.viewerIsProposer, false);
+  assert.equal(owlProposesBuyerA.viewerIsBuyer, true);
+  assert.equal(owlProposesBuyerA.viewerIsSourcer, false);
+  assert.equal(owlProposesBuyerA.viewerIsCounterparty, true);
+  assert.equal(owlProposesBuyerA.viewerAcceptedCurrentRevision, false);
+  assert.equal(owlProposesBuyerA.viewerMayAccept, true);
+  assert.equal(owlProposesBuyerA.shouldShowAcceptCTA, true);
+
+  const aProposesBuyerB = deriveTicketAcceptanceState({
+    viewerId: B,
+    createdById: A,
+    buyerId: B,
+    sellerId: A,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    buyerUsername: "bob",
+    sellerUsername: "alice",
+    viewerUsername: "bob",
+  });
+  assert.equal(aProposesBuyerB.viewerIsBuyer, true);
+  assert.equal(aProposesBuyerB.viewerIsSourcer, false);
+  assert.equal(aProposesBuyerB.shouldShowAcceptCTA, true);
+
+  const stranger = deriveTicketAcceptanceState({
+    viewerId: C,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision: 1,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(stranger.shouldShowAcceptCTA, false);
+  assert.equal(stranger.viewerMayAccept, false);
 }
 
 console.log("ticket acceptance + role model + access + fee tests passed");

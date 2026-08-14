@@ -61,6 +61,7 @@ export {
   MAX_ACTIVE_PAYMENT_TICKETS,
   resolveLifecycleStage,
   resolveTicketRoleModel,
+  resolveAuthoritativeViewerId,
   sellerDestinationUserId,
   waitingCopyAddressesViewer,
   isSubtleHistoricalTicket,

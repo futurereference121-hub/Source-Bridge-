@@ -1042,7 +1042,7 @@ export function MessagesInbox({
               <div
                 ref={threadScrollRef}
                 onScroll={onThreadScroll}
-                className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-4 py-4"
+                className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4"
               >
                 {messagesCursor ? (
                   <button
