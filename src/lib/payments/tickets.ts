@@ -667,7 +667,10 @@ export async function ensureConversationPaymentTicketMessages(
  * Used to merge ticket cards into the chat timeline even if a marker Message is missing.
  * Includes ProtectedTransaction so lifecycleStage is COMPLETED when RELEASED.
  */
-export async function listConversationPaymentTickets(conversationId: string) {
+export async function listConversationPaymentTickets(
+  conversationId: string,
+  viewerId?: string | null,
+) {
   const rows = await prisma.paymentTicket.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
@@ -704,6 +707,7 @@ export async function listConversationPaymentTickets(conversationId: string) {
         t.protectedTransaction?.finalTransferredMinor ?? 0,
       refundedMinor: t.protectedTransaction?.refundedMinor ?? 0,
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+      viewerId: viewerId || undefined,
     }),
   );
 }

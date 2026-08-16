@@ -59,7 +59,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     const mapped = [...slice].reverse().map(mapMessage);
     // Authoritative tickets for this conversation (all, not just page).
     // Merge so paginated window cannot hide older tickets.
-    const paymentTickets = await listConversationPaymentTickets(id);
+    const paymentTickets = await listConversationPaymentTickets(id, user.id);
     const messages = mergePaymentTicketsIntoTimeline(
       id,
       mapped,
@@ -75,6 +75,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       {
         headers: {
           "Cache-Control": "private, no-store, no-cache, must-revalidate",
+          Vary: "Cookie",
         },
       },
     );

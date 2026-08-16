@@ -18,6 +18,9 @@ const propose = read("src/components/messaging/ProposePaymentTicketButton.tsx");
 const inbox = read("src/components/messaging/MessagesInbox.tsx");
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
 const convGet = read("src/app/api/conversations/[id]/route.ts");
+const authMe = read("src/app/api/auth/me/route.ts");
+const appProviders = read("src/components/providers/AppProviders.tsx");
+const messagesGet = read("src/app/api/conversations/[id]/messages/route.ts");
 
 // --- RESPONSIVE PAYMENT TICKET FORM ---
 assert.match(propose, /pt-propose-v8-viewport-dialog/);
@@ -114,5 +117,35 @@ assert.doesNotMatch(propose, /userAgent|navigator\.userAgent/);
 assert.doesNotMatch(card, /userAgent|navigator\.userAgent/);
 assert.match(propose, /md:items-center/);
 assert.match(propose, /items-end/);
+
+// --- VIEWER IDENTITY / CACHE ISOLATION ---
+assert.match(
+  authMe,
+  /Cache-Control": "private, no-store/,
+  "/api/auth/me must not be shared-cached across accounts",
+);
+assert.match(authMe, /Vary: "Cookie"/);
+assert.match(appProviders, /fetch\("\/api\/auth\/me", \{ cache: "no-store" \}/);
+assert.match(convGet, /viewerUserId: user\.id/);
+assert.match(convGet, /viewerUsername: user\.username/);
+assert.match(convGet, /listConversationPaymentTickets\(id, user\.id\)/);
+assert.match(messagesGet, /listConversationPaymentTickets\(id, user\.id\)/);
+assert.match(inbox, /threadViewerUserId/);
+assert.match(inbox, /ticketViewerId/);
+assert.match(inbox, /setThreadViewerUserId\(data\.viewerUserId \|\| myId\)/);
+assert.match(inbox, /myId=\{ticketViewerId\}/);
+assert.match(
+  card,
+  /conversationSessionUserId: myId/,
+  "PaymentTicketCard must prefer conversation session viewer over cached account.id",
+);
+assert.match(card, /resolveAuthoritativeViewerId/);
+assert.doesNotMatch(
+  card,
+  /canRespond = Boolean\(open && viewerMayAccept && acceptance\.isParty && paymentsAccess\)/,
+  "Accept must not be gated on Connect / paymentsAccess",
+);
+assert.doesNotMatch(card, /trustLevel/);
+assert.doesNotMatch(card, /matchMedia|pointer:\s*coarse|ontouchstart/);
 
 console.log("[test-chat-ticket-ui] passed");

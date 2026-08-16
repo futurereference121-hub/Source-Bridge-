@@ -17,7 +17,9 @@ Creating a ticket does not make the creator the buyer. Any two eligible users us
 
 ## Account independence
 
-Do not hardcode `futureman`, `theowlsaid`, their emails/IDs, conversation IDs, or transaction IDs except when a QA task names a historical fixture. Core tests use generic User A/B/C.
+CORE MARKETPLACE FUNCTIONALITY MUST BE ACCOUNT-INDEPENDENT. No feature is complete if it only works for historical test accounts. Critical flows use generic-user fixtures. Canonical identity is `User.id`.
+
+Do not hardcode `futureman`, `theowlsaid`, their emails/IDs, conversation IDs, or transaction IDs except when a QA task names a historical fixture. Core tests use generic User A/B/C/D.
 
 ## Money
 

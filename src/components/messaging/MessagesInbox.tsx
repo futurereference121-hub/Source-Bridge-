@@ -306,6 +306,12 @@ export function MessagesInbox({
   const [ticketExpanded, setTicketExpanded] = useState<Record<string, boolean>>(
     {},
   );
+  const [threadViewerUserId, setThreadViewerUserId] = useState<string | null>(
+    null,
+  );
+  const [threadViewerUsername, setThreadViewerUsername] = useState<
+    string | null
+  >(null);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const threadScrollRef = useRef<HTMLDivElement>(null);
@@ -316,6 +322,8 @@ export function MessagesInbox({
   const [newMessageHint, setNewMessageHint] = useState(false);
 
   const myId = account?.id ?? "";
+  const ticketViewerId = threadViewerUserId || myId;
+  const ticketViewerUsername = threadViewerUsername || account?.username || null;
   const draft = activeId ? draftByConversation[activeId] ?? "" : "";
 
   function setDraft(value: string) {
@@ -396,6 +404,8 @@ export function MessagesInbox({
       setProposalAccess(null);
       setActiveTicketCount(0);
       setPaymentTickets([]);
+      setThreadViewerUserId(null);
+      setThreadViewerUsername(null);
       return;
     }
 
@@ -419,6 +429,10 @@ export function MessagesInbox({
         }
         if (cancelled) return;
 
+        setThreadViewerUserId(data.viewerUserId || myId);
+        setThreadViewerUsername(
+          data.viewerUsername || account?.username || null,
+        );
         setActiveConversation(data.conversation as Conversation);
         setProposalAccess(
           (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
@@ -498,6 +512,10 @@ export function MessagesInbox({
         const data = await res.json().catch(() => ({}));
         if (cancelled || !data?.conversation) return;
 
+        setThreadViewerUserId(data.viewerUserId || myId);
+        setThreadViewerUsername(
+          data.viewerUsername || account?.username || null,
+        );
         setActiveConversation(data.conversation as Conversation);
         setProposalAccess(
           (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
@@ -612,6 +630,10 @@ export function MessagesInbox({
       const data = await res.json().catch(() => ({}));
       if (!data?.conversation) return;
 
+      setThreadViewerUserId(data.viewerUserId || myId);
+      setThreadViewerUsername(
+        data.viewerUsername || account?.username || null,
+      );
       setActiveConversation(data.conversation as Conversation);
       setProposalAccess(
         (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
@@ -1128,7 +1150,13 @@ export function MessagesInbox({
                             const data = (await res.json()) as {
                               messages?: Message[];
                               paymentTickets?: TimelineTicketLite[];
+                              viewerUserId?: string;
+                              viewerUsername?: string | null;
                             };
+                            setThreadViewerUserId(data.viewerUserId || myId);
+                            setThreadViewerUsername(
+                              data.viewerUsername || account?.username || null,
+                            );
                             const msgs = mergePaymentTicketsClient(
                               convId!,
                               data.messages ?? [],
@@ -1209,8 +1237,10 @@ export function MessagesInbox({
                                     (t) => t.id === m.paymentTicketId,
                                   ) as PaymentTicketView | undefined) ?? null
                                 }
-                                myId={myId}
-                                myUsername={account?.username}
+                                myId={ticketViewerId}
+                                myUsername={
+                                  ticketViewerUsername || account?.username
+                                }
                                 proposedAt={m.createdAt}
                                 proposedByName={
                                   m.sender?.username

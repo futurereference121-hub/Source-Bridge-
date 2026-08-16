@@ -83,6 +83,8 @@ function resolveTicketRoleModel(opts) {
 }
 
 function resolveAuthoritativeViewerId(opts) {
+  const fromConversation = (opts.conversationSessionUserId || "").trim();
+  if (fromConversation) return fromConversation;
   const accountId = (opts.accountId || "").trim();
   const ticketViewerId = (opts.ticketViewerId || "").trim();
   const buyerId = (opts.buyerId || "").trim();
@@ -297,6 +299,8 @@ function remainingProtectedSellerShareMinor({
 
 const A = "user-a";
 const B = "user-b";
+const C = "user-c";
+const D = "user-d";
 const stranger = "stranger-1";
 const revision = 1;
 const FM = "cms8or23a0000la046qm6ene4";
@@ -687,9 +691,38 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   assert.equal(fromTicket, A);
 }
 
+// Conversation session User.id WINS even if cached /api/auth/me is the other party.
+{
+  const sessionWins = resolveAuthoritativeViewerId({
+    conversationSessionUserId: A,
+    accountId: B,
+    ticketViewerId: B,
+    buyerId: A,
+    sellerId: B,
+  });
+  assert.equal(sessionWins, A);
+  const recipientSeesAccept = deriveTicketAcceptanceState({
+    viewerId: sessionWins,
+    createdById: B,
+    buyerId: A,
+    sellerId: B,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(recipientSeesAccept.canAccept, true);
+  const withoutSessionWouldLeakProposer = resolveAuthoritativeViewerId({
+    accountId: B,
+    ticketViewerId: B,
+    buyerId: A,
+    sellerId: B,
+  });
+  assert.equal(withoutSessionWouldLeakProposer, B);
+}
+
 // Generic A/B/C: financial role does not decide who must accept.
 {
-  const C = "user-c";
   const owlProposesBuyerA = deriveTicketAcceptanceState({
     viewerId: A,
     createdById: B,
@@ -770,6 +803,117 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
     status: "PROPOSED",
   });
   assert.equal(missingCreator.viewerMayAccept, true);
+}
+
+// Generic C proposes → D accepts; D proposes → C accepts (any two eligible accounts).
+{
+  const cProposes = {
+    createdById: C,
+    buyerId: D,
+    sellerId: C,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  };
+  assert.equal(
+    deriveTicketAcceptanceState({ viewerId: D, ...cProposes }).canAccept,
+    true,
+  );
+  assert.equal(
+    deriveTicketAcceptanceState({ viewerId: C, ...cProposes }).canAccept,
+    false,
+  );
+  const dProposes = {
+    createdById: D,
+    buyerId: C,
+    sellerId: D,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  };
+  assert.equal(
+    deriveTicketAcceptanceState({ viewerId: C, ...dProposes }).canAccept,
+    true,
+  );
+  assert.equal(
+    deriveTicketAcceptanceState({ viewerId: D, ...dProposes }).canAccept,
+    false,
+  );
+}
+
+// trustLevel is not an Accept input — low-trust recipient still sees Accept.
+{
+  const lowTrust = deriveTicketAcceptanceState({
+    viewerId: D,
+    createdById: C,
+    buyerId: D,
+    sellerId: C,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    trustLevel: 0,
+  });
+  const highTrust = deriveTicketAcceptanceState({
+    viewerId: D,
+    createdById: C,
+    buyerId: D,
+    sellerId: C,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+    trustLevel: 9,
+  });
+  assert.equal(lowTrust.canAccept, true);
+  assert.equal(highTrust.canAccept, true);
+  assert.equal(lowTrust.canAccept, highTrust.canAccept);
+  assert.equal(
+    viewerMayAcceptTicket.toString().includes("trustLevel"),
+    false,
+  );
+  assert.equal(
+    deriveTicketAcceptanceState.toString().includes("trustLevel"),
+    false,
+  );
+}
+
+// Older vs newer account records: Accept uses User.id only, not createdAt/trust.
+{
+  const older = {
+    id: "user-older-record",
+    createdAt: "2024-01-15T00:00:00.000Z",
+    trustLevel: 3,
+  };
+  const newer = {
+    id: "user-newer-record",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    trustLevel: 0,
+  };
+  const olderProposes = deriveTicketAcceptanceState({
+    viewerId: newer.id,
+    createdById: older.id,
+    buyerId: newer.id,
+    sellerId: older.id,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(olderProposes.canAccept, true);
+  const newerProposes = deriveTicketAcceptanceState({
+    viewerId: older.id,
+    createdById: newer.id,
+    buyerId: older.id,
+    sellerId: newer.id,
+    revision,
+    buyerApprovedRevision: null,
+    sellerApprovedRevision: 1,
+    status: "PROPOSED",
+  });
+  assert.equal(newerProposes.canAccept, true);
 }
 
 console.log("ticket acceptance + role model + access + fee tests passed");

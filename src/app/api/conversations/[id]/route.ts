@@ -79,7 +79,7 @@ export async function GET(_req: Request, { params }: Params) {
     }
 
     // Authoritative tickets for this conversation (all, not just recent page).
-    const paymentTickets = await listConversationPaymentTickets(id);
+    const paymentTickets = await listConversationPaymentTickets(id, user.id);
     const activePaymentTicketCount = paymentTickets.filter((t) =>
       isActiveLifecycleTicket({
         ticketStatus: t.status,
@@ -141,6 +141,9 @@ export async function GET(_req: Request, { params }: Params) {
           },
           user.id,
         ),
+        /** Canonical User.id for this cookie session — not /api/auth/me. */
+        viewerUserId: user.id,
+        viewerUsername: user.username ?? null,
         messages,
         paymentTickets,
         activePaymentTicketCount,
@@ -152,6 +155,7 @@ export async function GET(_req: Request, { params }: Params) {
       {
         headers: {
           "Cache-Control": "private, no-store, no-cache, must-revalidate",
+          Vary: "Cookie",
         },
       },
     );

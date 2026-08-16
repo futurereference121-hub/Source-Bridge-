@@ -6,7 +6,7 @@ This file is the short always-on map. Detailed rules live in `.cursor/rules/`. W
 
 User-to-user sourcing marketplace. Public language: **Protected Payment** / **Direct Payment** — never “escrow”.
 
-Financial roles are distinct: **Proposer** (current revision), **Buyer** (`buyerId`, pays), **Sourcer** (`sellerId`, seller entitlement / Connect destination). Do not infer one from another. Do not hardcode `futureman` / `theowlsaid` except explicit QA fixtures.
+Financial roles are distinct: **Proposer** (current revision), **Buyer** (`buyerId`, pays), **Sourcer** (`sellerId`, seller entitlement / Connect destination). Do not infer one from another. Marketplace flows must work for any eligible accounts (generic-user fixtures), not only historical test accounts. Do not hardcode `futureman` / `theowlsaid` except explicit QA fixtures.
 
 ## Pre-Live
 

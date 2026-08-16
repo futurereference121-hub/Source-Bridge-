@@ -38,6 +38,11 @@ export async function GET() {
       flags: paymentFlagsSnapshot(),
       paymentsAccess: allowlist,
       connect: status,
+    }, {
+      headers: {
+        "Cache-Control": "private, no-store, no-cache, must-revalidate",
+        Vary: "Cookie",
+      },
     });
   } catch (err) {
     const status = (err as { status?: number }).status;

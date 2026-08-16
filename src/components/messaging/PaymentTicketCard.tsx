@@ -12,6 +12,7 @@ import {
   isCompletedLifecycleTicket,
   isSubtleHistoricalTicket,
   isTerminalLifecycleStage,
+  resolveAuthoritativeViewerId,
   resolveLifecycleStage,
   shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
@@ -263,6 +264,13 @@ export function PaymentTicketCard({
 
   useEffect(() => {
     if (!ticket || autoExpandDone.current || !myId) return;
+    const viewerId = resolveAuthoritativeViewerId({
+      conversationSessionUserId: myId,
+      accountId: myId,
+      ticketViewerId: ticket.viewer?.id,
+      buyerId: ticket.buyerId,
+      sellerId: ticket.sellerId,
+    });
     const d = getPaymentTicketActions(
       {
         status: ticket.status,
@@ -274,7 +282,7 @@ export function PaymentTicketCard({
         sellerApprovedRevision: ticket.sellerApprovedRevision,
         protectedTransactionId: ticket.protectedTransactionId,
       },
-      myId,
+      viewerId,
     );
     if (d.viewerMayAccept) {
       autoExpandDone.current = true;
@@ -670,7 +678,13 @@ export function PaymentTicketCard({
     return null;
   }
 
-  const sessionViewerId = (myId || "").trim();
+  const sessionViewerId = resolveAuthoritativeViewerId({
+    conversationSessionUserId: myId,
+    accountId: myId,
+    ticketViewerId: ticket.viewer?.id,
+    buyerId: ticket.buyerId,
+    sellerId: ticket.sellerId,
+  });
   const sessionViewerUsername = myUsername || null;
   const iAmBuyer = sessionViewerId === ticket.buyerId;
   const iAmSeller = sessionViewerId === ticket.sellerId;

@@ -59,6 +59,11 @@ export async function GET(req: NextRequest) {
       conversations: slice.map((c) => mapConversation(c, user.id)),
       nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
       unreadCount,
+    }, {
+      headers: {
+        "Cache-Control": "private, no-store, no-cache, must-revalidate",
+        Vary: "Cookie",
+      },
     });
   } catch (err) {
     const status = (err as { status?: number }).status;

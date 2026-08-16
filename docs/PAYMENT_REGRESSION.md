@@ -45,3 +45,7 @@ Not Production Ready TEST from unit tests alone.
 ## Generic users
 
 A/B/C permutations in `scripts/test-payment-journey-regression.mjs` and `scripts/test-ticket-acceptance-and-access.mjs`. Do not add core tests that require `futureman` / `theowlsaid`.
+
+## Account independence
+
+CORE MARKETPLACE FUNCTIONALITY MUST BE ACCOUNT-INDEPENDENT. Accept uses conversation-session `User.id` (`viewerUserId` on conversation GET), not a cached `/api/auth/me` account from another party. No feature is complete if it only works for historical test accounts. Critical flows use generic A/B/C/D fixtures.

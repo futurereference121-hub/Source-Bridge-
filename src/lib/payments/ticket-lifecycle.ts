@@ -488,16 +488,20 @@ export function resolveTicketRoleModel(opts: {
 }
 
 /**
- * Logged-in party identity wins over ticket.viewer.
- * A stale/cached ticket GET from the other party must never override the
- * account currently shown in the chrome.
+ * Canonical Payment Ticket viewer = this request's authenticated User.id.
+ * Conversation/ticket GET `viewerUserId` (cookie session) always wins.
+ * Never prefer a cached /api/auth/me id: both parties are on the ticket, so a
+ * stale proposer identity would hide Accept for the real counterparty.
  */
 export function resolveAuthoritativeViewerId(opts: {
+  conversationSessionUserId?: string | null;
   accountId?: string | null;
   ticketViewerId?: string | null;
   buyerId: string;
   sellerId: string;
 }): string {
+  const fromConversation = (opts.conversationSessionUserId || "").trim();
+  if (fromConversation) return fromConversation;
   const accountId = (opts.accountId || "").trim();
   const ticketViewerId = (opts.ticketViewerId || "").trim();
   const buyerId = (opts.buyerId || "").trim();

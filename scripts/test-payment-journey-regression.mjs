@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 const A = "user-a";
 const B = "user-b";
 const C = "user-c";
+const D = "user-d";
 const MAX_ACTIVE = 3;
 const FEE_BPS = 200;
 
@@ -24,6 +25,8 @@ function partyAccepted(approved, revision) {
 }
 
 function resolveAuthoritativeViewerId(opts) {
+  const fromConversation = (opts.conversationSessionUserId || "").trim();
+  if (fromConversation) return fromConversation;
   const accountId = (opts.accountId || "").trim();
   const ticketViewerId = (opts.ticketViewerId || "").trim();
   const buyerId = (opts.buyerId || "").trim();
@@ -147,6 +150,8 @@ const permutations = [
   { createdById: A, buyerId: B, sellerId: A, viewer: A, expectAccept: false },
   { createdById: A, buyerId: A, sellerId: B, viewer: B, expectAccept: true },
   { createdById: B, buyerId: B, sellerId: A, viewer: A, expectAccept: true },
+  { createdById: C, buyerId: D, sellerId: C, viewer: D, expectAccept: true },
+  { createdById: D, buyerId: C, sellerId: D, viewer: C, expectAccept: true },
 ];
 for (const p of permutations) {
   const sellerApproved = p.createdById === p.sellerId ? 1 : null;
@@ -445,10 +450,11 @@ function pollReconcile(prevCards, nextTickets) {
   assert.equal(prev[0].state, "accepted-ui");
 }
 
-// TEST 6 — cache cross-user: session user A wins over cached proposer payload
+// TEST 6 — cache cross-user: conversation session wins over stale other-party account
 {
   const viewerId = resolveAuthoritativeViewerId({
-    accountId: A,
+    conversationSessionUserId: A,
+    accountId: B,
     ticketViewerId: B,
     buyerId: A,
     sellerId: B,

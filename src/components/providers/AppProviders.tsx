@@ -109,7 +109,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   const refreshAccount = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetch("/api/auth/me", { cache: "no-store" });
       const data = (await res.json()) as { account: AccountSession | null };
       setAccount(data.account);
       if (data.account) {
@@ -130,7 +130,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     (async () => {
       setSavedProfiles(getSavedProfiles());
       try {
-        const res = await fetch("/api/auth/me");
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
         const data = (await res.json()) as { account: AccountSession | null };
         if (cancelled) return;
         setAccount(data.account);
