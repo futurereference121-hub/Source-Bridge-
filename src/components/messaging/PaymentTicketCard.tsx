@@ -66,6 +66,10 @@ export type PaymentTicketView = {
     name: string;
     username: string | null;
   } | null;
+  sellerConnect?: {
+    ready?: boolean;
+    hasAccount?: boolean;
+  } | null;
   acceptance?: {
     canAccept?: boolean;
     waitingForOther?: boolean;
@@ -172,6 +176,8 @@ export function PaymentTicketCard({
     amountMinor: number;
     currency: string;
   } | null>(null);
+  const [payFailed, setPayFailed] = useState(false);
+  const [connectBusy, setConnectBusy] = useState(false);
   const [paymentsAccess, setPaymentsAccess] = useState(false);
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
@@ -456,6 +462,28 @@ export function PaymentTicketCard({
     }
   }
 
+  async function startConnectSetup() {
+    setConnectBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/payments/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "onboard" }),
+      });
+      const json = (await res.json()) as { ok?: boolean; url?: string; error?: string };
+      if (!res.ok || !json.url) {
+        setError(json.error || "Could not start TEST payment setup");
+        return;
+      }
+      window.location.href = json.url;
+    } catch {
+      setError("Could not start TEST payment setup");
+    } finally {
+      setConnectBusy(false);
+    }
+  }
+
   async function startPay() {
     if (!ticket?.protectedTransactionId) return;
     setBusy(true);
@@ -476,14 +504,21 @@ export function PaymentTicketCard({
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
+        code?: string;
         clientSecret?: string;
         publishableKey?: string;
         amountMinor?: number;
         currency?: string;
       };
       if (!res.ok) {
-        setError(json.error || "Checkout unavailable");
+        if (json.code === "CONNECT_NOT_READY") {
+          setError("");
+          setPayFailed(false);
+        } else {
+          setError(json.error || "Checkout unavailable");
+        }
       } else if (json.clientSecret && json.publishableKey) {
+        setPayFailed(false);
         setCheckout({
           clientSecret: json.clientSecret,
           publishableKey: json.publishableKey,
@@ -761,13 +796,34 @@ export function PaymentTicketCard({
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
   const viewerMayAccept = Boolean(sessionViewerId) && acceptance.viewerMayAccept;
   const canRespond = Boolean(open && viewerMayAccept && acceptance.isParty);
+  const sellerConnectReady = Boolean(ticket.sellerConnect?.ready);
+  const sellerHandle =
+    ticket.sellerParty?.username
+      ? `@${ticket.sellerParty.username.replace(/^@/, "")}`
+      : "the Sourcer";
   const canPay =
     !historical &&
     paymentsAccess &&
     iAmBuyer &&
     (ticket.status === "ACCEPTED" ||
       ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT") &&
-    Boolean(ticket.protectedTransactionId);
+    Boolean(ticket.protectedTransactionId) &&
+    sellerConnectReady;
+  const needsSellerConnectSetup =
+    !historical &&
+    Boolean(ticket.protectedTransactionId) &&
+    !sellerConnectReady &&
+    (ticket.status === "ACCEPTED" ||
+      ticket.status === "FUNDED" ||
+      ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT" ||
+      ticket.lifecycleStage === "FUNDED");
+  const buyerWaitingOnSellerConnect =
+    needsSellerConnectSetup &&
+    iAmBuyer &&
+    (ticket.status === "ACCEPTED" ||
+      ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT");
+  const sellerMustOnboard =
+    needsSellerConnectSetup && iAmSeller;
   const isDirect =
     ticket.paymentOption === "INSTANT" || ticket.paymentOption === "DIRECT";
   const procAgreed =
@@ -948,6 +1004,39 @@ export function PaymentTicketCard({
     </>
   ) : null;
 
+  const connectSetupBlock =
+    sellerMustOnboard || buyerWaitingOnSellerConnect ? (
+    <div className="relative z-20 mt-2 space-y-2">
+      {sellerMustOnboard ? (
+        <>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/80">
+            Payment setup required
+          </p>
+          <p className="text-xs text-white/65">
+            To receive TEST payments, complete your Source Bridge TEST payout
+            setup.
+          </p>
+          <button
+            type="button"
+            disabled={connectBusy}
+            onClick={(e) => {
+              e.stopPropagation();
+              void startConnectSetup();
+            }}
+            className="min-h-11 w-full rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+          >
+            {connectBusy ? "Opening setup…" : "Complete Test Payment Setup"}
+          </button>
+        </>
+      ) : (
+        <p className="text-xs text-white/55">
+          Waiting for {sellerHandle} to complete TEST payment setup before this
+          agreement can be funded.
+        </p>
+      )}
+    </div>
+  ) : null;
+
   // --- Collapsed: subtle system-message style for cancelled/declined/superseded ---
   if (subtleHistorical && !showExpanded) {
     return (
@@ -1046,6 +1135,7 @@ export function PaymentTicketCard({
             </div>
           </div>
         ) : null}
+        {connectSetupBlock}
         {canPay && !checkout ? (
           <button
             type="button"
@@ -1056,7 +1146,7 @@ export function PaymentTicketCard({
             }}
             className="relative z-20 mt-2 min-h-11 w-full rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
           >
-            Make Payment
+            {payFailed ? "Try Payment Again" : "Make Payment"}
           </button>
         ) : null}
       </div>
@@ -1208,6 +1298,8 @@ export function PaymentTicketCard({
         <p className="mt-3 text-xs text-white/55">{acceptance.waitingLabel}</p>
       ) : null}
 
+      {connectSetupBlock}
+
       {canPay && !checkout ? (
         <div
           data-testid="ticket-make-payment"
@@ -1227,7 +1319,7 @@ export function PaymentTicketCard({
             onClick={() => void startPay()}
             className="mt-2 min-h-11 rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
           >
-            Make Payment
+            {payFailed ? "Try Payment Again" : "Make Payment"}
           </button>
         </div>
       ) : null}
@@ -1749,12 +1841,14 @@ export function PaymentTicketCard({
           ) : null}
           {acceptance.bothAcceptedCurrentRevision &&
           ticket.status === "ACCEPTED" &&
-          !canPay ? (
+          !canPay &&
+          !sellerMustOnboard ? (
             <p className="text-xs text-white/45">
               {acceptance.bothAcceptedLabel}
               {iAmSeller ? ". Waiting for buyer payment." : "."}
             </p>
           ) : null}
+          {connectSetupBlock}
           {canPay && !checkout ? (
             <button
               type="button"
@@ -1762,7 +1856,7 @@ export function PaymentTicketCard({
               onClick={() => void startPay()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
             >
-              Make Payment
+              {payFailed ? "Try Payment Again" : "Make Payment"}
             </button>
           ) : null}
           {canRelease && !confirmRelease ? (
@@ -1913,12 +2007,14 @@ export function PaymentTicketCard({
           returnPath="/inbox?payment=return"
           onDismiss={() => setCheckout(null)}
           onPaymentSubmitted={() => {
+            setPayFailed(false);
             setPayNotice(
               "Payment received. Funds stay on the platform until release rules. Do not pay again.",
             );
             void load();
             onChanged?.();
           }}
+          onPaymentFailed={() => setPayFailed(true)}
         />
       ) : null}
     </div>

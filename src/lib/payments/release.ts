@@ -82,10 +82,12 @@ export async function releaseProcurement(opts: {
     where: { userId: txn.sellerId },
   });
   if (!connect?.chargesEnabled || !connect.payoutsEnabled) {
-    throw Object.assign(new Error("Seller Connect account not ready for transfers"), {
-      status: 409,
-      code: "CONNECT_NOT_READY",
-    });
+    throw Object.assign(
+      new Error(
+        "Sourcer must complete payment onboarding before funds can be transferred.",
+      ),
+      { status: 409, code: "CONNECT_NOT_READY" },
+    );
   }
 
   const books = computeProtectedFinancials(txn);
@@ -283,10 +285,12 @@ export async function releaseFinal(opts: {
     where: { userId: txn.sellerId },
   });
   if (!connect?.payoutsEnabled) {
-    throw Object.assign(new Error("Seller Connect account not ready for transfers"), {
-      status: 409,
-      code: "CONNECT_NOT_READY",
-    });
+    throw Object.assign(
+      new Error(
+        "Sourcer must complete payment onboarding before funds can be transferred.",
+      ),
+      { status: 409, code: "CONNECT_NOT_READY" },
+    );
   }
 
   const books = computeProtectedFinancials(txn);

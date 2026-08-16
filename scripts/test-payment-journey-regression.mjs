@@ -318,7 +318,7 @@ for (const p of permutations) {
   assert.equal(d.shouldShowAcceptCTA, true);
 }
 
-const HIDDEN_CHAT = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED"];
+const HIDDEN_CHAT = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED", "EXPIRED"];
 function ticketInChat({ ticketStatus, protectedStatus, fundedAt, involvesMoney }) {
   if (!HIDDEN_CHAT.includes(ticketStatus)) return true;
   if (involvesMoney || fundedAt) return true;

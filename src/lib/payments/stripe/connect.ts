@@ -209,6 +209,33 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   }
 }
 
+export async function getSellerConnectFundingState(sellerId: string): Promise<{
+  ready: boolean;
+  hasAccount: boolean;
+  stripeAccountId: string | null;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+}> {
+  const row = await prisma.stripeConnectAccount.findUnique({
+    where: { userId: sellerId },
+    select: {
+      stripeAccountId: true,
+      chargesEnabled: true,
+      payoutsEnabled: true,
+    },
+  });
+  const stripeAccountId = row?.stripeAccountId || null;
+  const chargesEnabled = Boolean(row?.chargesEnabled);
+  const payoutsEnabled = Boolean(row?.payoutsEnabled);
+  return {
+    ready: Boolean(stripeAccountId && chargesEnabled && payoutsEnabled),
+    hasAccount: Boolean(stripeAccountId),
+    stripeAccountId,
+    chargesEnabled,
+    payoutsEnabled,
+  };
+}
+
 export async function getConnectStatus(userId: string): Promise<ConnectStatus> {
   const row = await prisma.stripeConnectAccount.findUnique({
     where: { userId },

@@ -1,7 +1,6 @@
 import Stripe from "stripe";
 import {
   getStripeMode,
-  isConnectOnboardingEnabled,
   isLivePaymentsEnabled,
   isPaymentsEnabled,
 } from "@/lib/payments/flags";
@@ -86,7 +85,9 @@ export function isConnectOnboardingApiReady(): boolean {
   if (isLivePaymentsEnabled()) return false;
   if (getStripeMode() !== "TEST") return false;
   if (hasStripeLiveSecretKey()) return false;
-  return hasStripeTestSecretKey() && isConnectOnboardingEnabled();
+  // TEST: any eligible account may start seller onboarding when TEST keys exist.
+  // CONNECT_ONBOARDING_ENABLED remains a Live-era switch; do not require it in TEST.
+  return hasStripeTestSecretKey();
 }
 
 /**

@@ -30,6 +30,7 @@ type CheckoutInnerProps = {
   returnPath: string;
   onDismiss: () => void;
   onSubmitted: () => void;
+  onFailed?: () => void;
   paymentMode?: "protected" | "direct";
   protectedTxnId?: string;
   ordersHref?: string;
@@ -72,6 +73,7 @@ function CheckoutForm({
   returnPath,
   onDismiss,
   onSubmitted,
+  onFailed,
   paymentMode = "protected",
   protectedTxnId,
   ordersHref = "/profile/purchases",
@@ -133,8 +135,9 @@ function CheckoutForm({
         redirect: "if_required",
       });
       if (confirmError) {
-        setError(confirmError.message || "Payment failed");
+        setError(confirmError.message || "Payment could not be completed. Try again.");
         setPhase("error");
+        onFailed?.();
         return;
       }
       // Card path may succeed without redirect. Do NOT claim FUNDED; poll SB.
@@ -145,8 +148,9 @@ function CheckoutForm({
         setPhase("received_pending");
       }
     } catch {
-      setError("Payment failed");
+      setError("Payment could not be completed. Try again.");
       setPhase("error");
+      onFailed?.();
     }
   }
 
@@ -192,6 +196,17 @@ function CheckoutForm({
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
+      {phase === "error" ? (
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/80">
+            Payment not completed
+          </p>
+          <p className="text-xs text-white/60">
+            The agreement is still awaiting payment. You can try another payment
+            method.
+          </p>
+        </div>
+      ) : null}
       <p className="text-sm text-white/70">
         Total due:{" "}
         <span className="font-medium text-white">
@@ -228,7 +243,9 @@ function CheckoutForm({
             ? "Processing…"
             : phase === "polling"
               ? "Confirming…"
-              : "Pay securely (TEST)"}
+              : phase === "error"
+                ? "Try Payment Again"
+                : "Pay securely (TEST)"}
         </button>
         <button
           type="button"
@@ -256,6 +273,7 @@ export type ProtectedPaymentCheckoutProps = {
   ordersHref?: string;
   onDismiss: () => void;
   onPaymentSubmitted: () => void;
+  onPaymentFailed?: () => void;
 };
 
 export function ProtectedPaymentCheckout({
@@ -269,6 +287,7 @@ export function ProtectedPaymentCheckout({
   ordersHref,
   onDismiss,
   onPaymentSubmitted,
+  onPaymentFailed,
 }: ProtectedPaymentCheckoutProps) {
   const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(
     null,
@@ -329,6 +348,7 @@ export function ProtectedPaymentCheckout({
           ordersHref={ordersHref}
           onDismiss={onDismiss}
           onSubmitted={onPaymentSubmitted}
+          onFailed={onPaymentFailed}
         />
       </Elements>
     </div>

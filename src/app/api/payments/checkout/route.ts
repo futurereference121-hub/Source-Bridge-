@@ -83,7 +83,11 @@ export async function POST(req: NextRequest) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Checkout failed";
     if (status === 401) return jsonError("Sign in required", 401);
-    if (status >= 400 && status < 500) return jsonError(message, status);
+    if (status >= 400 && status < 500) {
+      return jsonError(message, status, {
+        code: (err as { code?: string }).code,
+      });
+    }
     console.error("[payments:checkout]", err);
     return jsonError("Checkout failed", 500);
   }

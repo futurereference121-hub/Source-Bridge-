@@ -47,8 +47,11 @@ import {
   resolveTicketRoleModel,
   ticketAppearsInChatTimeline,
   TICKET_STATUSES_BLOCK_ACCEPT,
+  UNFUNDED_TICKET_INACTIVITY_MS,
+  unfundedTicketShouldExpire,
   viewerMayFundTicket,
 } from "@/lib/payments/ticket-lifecycle";
+import { getStripe, isStripeConfigured } from "@/lib/payments/stripe/client";
 
 export {
   ACTIVE_TICKET_STATUSES,
@@ -66,8 +69,11 @@ export {
   resolveTicketRoleModel,
   resolveAuthoritativeViewerId,
   sellerDestinationUserId,
+  isSellerConnectTransferReady,
   ticketAppearsInChatTimeline,
   TICKET_STATUSES_BLOCK_ACCEPT,
+  UNFUNDED_TICKET_INACTIVITY_MS,
+  unfundedTicketShouldExpire,
   viewerMayAcceptTicket,
   waitingCopyAddressesViewer,
   isSubtleHistoricalTicket,
@@ -263,6 +269,7 @@ function mapTicket(
     stripeMode: string;
     createdAt: Date;
     updatedAt: Date;
+    lastMeaningfulActivityAt?: Date;
   },
   extras?: {
     protectedTxnStatus?: string | null;
@@ -293,6 +300,8 @@ function mapTicket(
     viewerId?: string | null;
     viewerUsername?: string | null;
     involvesMoney?: boolean;
+    sellerConnectReady?: boolean;
+    sellerConnectHasAccount?: boolean;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -466,6 +475,13 @@ function mapTicket(
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
+    lastMeaningfulActivityAt: (
+      t.lastMeaningfulActivityAt || t.updatedAt
+    ).toISOString(),
+    sellerConnect: {
+      ready: Boolean(extras?.sellerConnectReady),
+      hasAccount: Boolean(extras?.sellerConnectHasAccount),
+    },
     lifecycleStage,
     lifecycleLabel: lifecycleLabel(lifecycleStage),
     trackingNumber,
@@ -482,7 +498,8 @@ function mapTicket(
         viewerMayFundTicket({
           viewerId: extras?.viewerId || "",
           buyerId: t.buyerId,
-        }),
+        }) &&
+        Boolean(extras?.sellerConnectReady),
       canAccept: acceptance?.canAccept ?? false,
       canEdit: lifecycle.canEdit,
       canCancel: lifecycle.canCancel,
@@ -526,12 +543,33 @@ async function extrasWithParties(
   extras?: Parameters<typeof mapTicket>[1],
 ): Promise<NonNullable<Parameters<typeof mapTicket>[1]>> {
   const parties = await loadRoleParties(t.buyerId, t.sellerId, t.createdById);
+  const connect = extras?.sellerConnectReady == null
+    ? await prisma.stripeConnectAccount.findUnique({
+        where: { userId: t.sellerId },
+        select: {
+          stripeAccountId: true,
+          chargesEnabled: true,
+          payoutsEnabled: true,
+        },
+      })
+    : null;
+  const sellerConnectReady =
+    extras?.sellerConnectReady ??
+    Boolean(
+      connect?.stripeAccountId &&
+        connect.chargesEnabled &&
+        connect.payoutsEnabled,
+    );
+  const sellerConnectHasAccount =
+    extras?.sellerConnectHasAccount ?? Boolean(connect?.stripeAccountId);
   return {
     ...parties,
     ...extras,
     proposedBy: extras?.proposedBy ?? parties.proposedBy,
     buyerParty: extras?.buyerParty ?? parties.buyerParty,
     sellerParty: extras?.sellerParty ?? parties.sellerParty,
+    sellerConnectReady,
+    sellerConnectHasAccount,
   };
 }
 
@@ -667,10 +705,155 @@ export async function ensureConversationPaymentTicketMessages(
  * Used to merge ticket cards into the chat timeline even if a marker Message is missing.
  * Includes ProtectedTransaction so lifecycleStage is COMPLETED when RELEASED.
  */
+export async function expireStaleUnfundedTickets(opts?: {
+  conversationId?: string;
+  now?: Date;
+  limit?: number;
+}): Promise<{ expired: number; skippedProcessing: number }> {
+  const now = opts?.now ?? new Date();
+  const cutoff = new Date(now.getTime() - UNFUNDED_TICKET_INACTIVITY_MS);
+  const candidates = await prisma.paymentTicket.findMany({
+    where: {
+      ...(opts?.conversationId ? { conversationId: opts.conversationId } : {}),
+      status: { in: ["DRAFT", "PROPOSED", "ACCEPTED"] },
+      lastMeaningfulActivityAt: { lte: cutoff },
+    },
+    include: {
+      protectedTransaction: {
+        select: {
+          id: true,
+          status: true,
+          fundedAt: true,
+          stripePaymentIntentId: true,
+          procurementTransferredMinor: true,
+          finalTransferredMinor: true,
+          refundedMinor: true,
+        },
+      },
+    },
+    take: opts?.limit ?? 80,
+    orderBy: { lastMeaningfulActivityAt: "asc" },
+  });
+
+  let expired = 0;
+  let skippedProcessing = 0;
+  const stripeReady = isStripeConfigured();
+  const stripe = stripeReady ? getStripe() : null;
+
+  for (const ticket of candidates) {
+    const pt = ticket.protectedTransaction;
+    const involvesMoney =
+      Boolean(pt?.fundedAt) ||
+      (pt?.procurementTransferredMinor ?? 0) > 0 ||
+      (pt?.finalTransferredMinor ?? 0) > 0 ||
+      (pt?.refundedMinor ?? 0) > 0 ||
+      ticket.status === "FUNDED" ||
+      (pt?.status
+        ? [
+            "FUNDED",
+            "PROCUREMENT_RELEASED",
+            "AWAITING_SHIPMENT",
+            "IN_TRANSIT",
+            "DELIVERED",
+            "IN_INSPECTION",
+            "READY_TO_RELEASE",
+            "RELEASED",
+            "REFUNDED",
+            "PARTIALLY_REFUNDED",
+            "DISPUTED",
+          ].includes(pt.status)
+        : false);
+
+    let piStatus: string | null = null;
+    const piId = (pt?.stripePaymentIntentId || "").trim();
+    if (piId && stripe) {
+      try {
+        const pi = await stripe.paymentIntents.retrieve(piId);
+        piStatus = pi.status;
+      } catch {
+        piStatus = null;
+      }
+    }
+
+    if (
+      !unfundedTicketShouldExpire({
+        ticketStatus: ticket.status,
+        lastMeaningfulActivityAt: ticket.lastMeaningfulActivityAt,
+        involvesMoney,
+        fundedAt: pt?.fundedAt ?? null,
+        paymentIntentStatus: piStatus,
+        now,
+      })
+    ) {
+      if (
+        piStatus &&
+        ["processing", "requires_action", "requires_capture", "succeeded"].includes(
+          piStatus,
+        )
+      ) {
+        skippedProcessing += 1;
+      }
+      continue;
+    }
+
+    if (piId && stripe && piStatus && piStatus !== "canceled" && piStatus !== "succeeded") {
+      try {
+        await stripe.paymentIntents.cancel(piId);
+      } catch {
+        // If cancel races with a succeed/processing webhook, skip this ticket.
+        skippedProcessing += 1;
+        continue;
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const fresh = await tx.paymentTicket.findUnique({
+        where: { id: ticket.id },
+        select: { status: true, protectedTransactionId: true },
+      });
+      if (!fresh || !["DRAFT", "PROPOSED", "ACCEPTED"].includes(fresh.status)) {
+        return;
+      }
+      await tx.paymentTicket.update({
+        where: { id: ticket.id },
+        data: { status: "EXPIRED" },
+      });
+      if (fresh.protectedTransactionId) {
+        const open = await tx.protectedTransaction.findUnique({
+          where: { id: fresh.protectedTransactionId },
+          select: { status: true, fundedAt: true },
+        });
+        if (
+          open &&
+          !open.fundedAt &&
+          ["ACCEPTED", "AWAITING_PAYMENT", "DRAFT"].includes(open.status)
+        ) {
+          await tx.protectedTransaction.update({
+            where: { id: fresh.protectedTransactionId },
+            data: { status: "CANCELLED", cancelledAt: now },
+          });
+        }
+      }
+    });
+    await recordAuditEvent({
+      actorUserId: ticket.createdById,
+      action: "PAYMENT_TICKET_EXPIRED",
+      meta: { ticketId: ticket.id, conversationId: ticket.conversationId },
+    });
+    expired += 1;
+  }
+  return { expired, skippedProcessing };
+}
+
 export async function listConversationPaymentTickets(
   conversationId: string,
   viewerId?: string | null,
 ) {
+  try {
+    await expireStaleUnfundedTickets({ conversationId, limit: 20 });
+  } catch (err) {
+    console.error("[tickets:expire-lazy]", err);
+  }
   const rows = await prisma.paymentTicket.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
@@ -686,6 +869,28 @@ export async function listConversationPaymentTickets(
       },
     },
   });
+  const sellerIds = [...new Set(rows.map((r) => r.sellerId))];
+  const connectRows =
+    sellerIds.length === 0
+      ? []
+      : await prisma.stripeConnectAccount.findMany({
+          where: { userId: { in: sellerIds } },
+          select: {
+            userId: true,
+            stripeAccountId: true,
+            chargesEnabled: true,
+            payoutsEnabled: true,
+          },
+        });
+  const connectBySeller = new Map(
+    connectRows.map((c) => [
+      c.userId,
+      {
+        ready: Boolean(c.stripeAccountId && c.chargesEnabled && c.payoutsEnabled),
+        hasAccount: Boolean(c.stripeAccountId),
+      },
+    ]),
+  );
   return rows
     .filter((t) =>
       ticketAppearsInChatTimeline({
@@ -708,6 +913,8 @@ export async function listConversationPaymentTickets(
       refundedMinor: t.protectedTransaction?.refundedMinor ?? 0,
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
       viewerId: viewerId || undefined,
+      sellerConnectReady: connectBySeller.get(t.sellerId)?.ready ?? false,
+      sellerConnectHasAccount: connectBySeller.get(t.sellerId)?.hasAccount ?? false,
     }),
   );
 }
@@ -1220,6 +1427,7 @@ export async function createOrRevisePaymentTicket(opts: {
         procurementAdvanceMinor: procurementMinor,
         notes: opts.amounts.notes || "",
         stripeMode: getStripeMode(),
+        lastMeaningfulActivityAt: new Date(),
         // Creator auto-approves their own revision
         ...(opts.actorId === opts.buyerId
           ? { buyerApprovedRevision: revision, buyerApprovedAt: new Date() }
@@ -1663,6 +1871,7 @@ export async function respondToPaymentTicket(opts: {
       data: {
         ...data,
         status: bothWillApprove ? "ACCEPTED" : "PROPOSED",
+        lastMeaningfulActivityAt: new Date(),
       },
     });
 

@@ -38,9 +38,10 @@ function payoutsHelpCopy(connect: ConnectStatus | null, flags: Flags | null): st
   if (!connect?.stripeTestConfigured) {
     return "Stripe test configuration is unavailable.";
   }
-  if (!flags?.CONNECT_ONBOARDING_ENABLED || !connect.onboardingReady) {
+  if (!connect.onboardingReady) {
     return "Payout setup is not currently available.";
   }
+  void flags;
   return "Set up payouts securely through Stripe.";
 }
 

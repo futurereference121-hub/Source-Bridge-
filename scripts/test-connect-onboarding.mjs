@@ -42,10 +42,11 @@ function isConnectOnboardingApiReady({
   secretKey,
 }) {
   void paymentsEnabled;
+  void connectOnboardingEnabled;
   if (envBool(livePaymentsEnabled)) return false;
   if (stripeMode !== "TEST") return false;
   if (hasLiveKey(secretKey)) return false;
-  return hasTestKey(secretKey) && envBool(connectOnboardingEnabled);
+  return hasTestKey(secretKey);
 }
 
 function checkoutAllowed({ paymentsEnabled, secretKey }) {
@@ -113,7 +114,7 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
   );
 }
 
-// ── Blocked when onboarding flag false (even with test keys)
+// ── TEST keys enable onboarding even if CONNECT_ONBOARDING_ENABLED is unset
 {
   const secretKey = "sk_test_unit_only";
   assert.equal(
@@ -124,15 +125,15 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
       stripeMode: "TEST",
       secretKey,
     }),
-    false,
+    true,
   );
   assert.equal(
-    payoutsHelpCopy({
-      stripeTestConfigured: true,
+    canStartOnboardingUi({
       connectOnboardingEnabled: "false",
-      onboardingReady: false,
+      secretKey,
+      livePaymentsEnabled: "false",
     }),
-    "Payout setup is not currently available.",
+    true,
   );
 }
 
@@ -244,7 +245,7 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
   );
 }
 
-// ── PAYMENTS_ENABLED alone does not unlock Connect onboarding
+// ── PAYMENTS_ENABLED is not required for TEST Connect onboarding
 {
   assert.equal(
     isConnectOnboardingApiReady({
@@ -254,7 +255,7 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
       stripeMode: "TEST",
       secretKey: "sk_test_unit_only",
     }),
-    false,
+    true,
   );
   assert.equal(
     isStripeConfiguredForPayments({

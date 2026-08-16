@@ -25,12 +25,15 @@ Critical Source Bridge payment flows, invariants, and which command covers them.
 - Buyer-authorized procurement only; 12-hour inspection; issue freezes release; final release idempotent
 - Direct = Destination Charge (`transfer_data.destination` + `application_fee_amount`)
 - Protected = platform hold + delayed transfer
-- Unfunded CANCELLED/DECLINED/SUPERSEDED hidden from normal chat; funded history retained
+- Unfunded CANCELLED/DECLINED/SUPERSEDED/**EXPIRED** hidden from normal chat; funded history retained
 - Authenticated ticket/conversation: no shared viewer cache
+- TEST Connect onboarding is available to any eligible account (seller's own connected account only)
+- Failed PaymentIntent remains retryable (`requires_payment_method`); funding is webhook-authoritative
+- Unfunded tickets with no meaningful activity for **72 hours** expire and leave the 3-active count
 
 ## Fast suite covers
 
-Fee math, roles, proposal/counterparty, acceptance, buyer-only fund *authorization*, 3-active, ticket isolation, cancel terminal, completed derivation, seller residual, Direct architecture, protected release invariants, PCI scan, Live-flag source guard, allowlist/TEST ramp.
+Fee math, roles, proposal/counterparty, acceptance, buyer-only fund *authorization*, 3-active, ticket isolation, cancel terminal, completed derivation, seller residual, Direct architecture, protected release invariants, PCI scan, Live-flag source guard, allowlist/TEST ramp, 72h unfunded expiry, Connect funding gate vs Accept.
 
 ## Full suite adds
 

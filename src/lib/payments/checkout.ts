@@ -18,6 +18,7 @@ import {
 import { nextStatus, type ProtectedStatus } from "@/lib/payments/state-machine";
 import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
 
 /**
  * Create a PaymentIntent for a ProtectedTransaction.
@@ -119,19 +120,16 @@ export async function createPaymentIntentForTxn(opts: {
   const isDirect =
     isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
 
-  let sellerConnectId = "";
-  if (isDirect) {
-    const connect = await prisma.stripeConnectAccount.findUnique({
-      where: { userId: txn.sellerId },
-    });
-    if (!connect?.chargesEnabled || !connect.payoutsEnabled || !connect.stripeAccountId) {
-      throw Object.assign(
-        new Error("Seller Connect account not ready for Direct Payment"),
-        { status: 409, code: "CONNECT_NOT_READY" },
-      );
-    }
-    sellerConnectId = connect.stripeAccountId;
+  const connectState = await getSellerConnectFundingState(txn.sellerId);
+  if (!connectState.ready || !connectState.stripeAccountId) {
+    throw Object.assign(
+      new Error(
+        "Sourcer must complete payment onboarding before this agreement can be funded.",
+      ),
+      { status: 409, code: "CONNECT_NOT_READY" },
+    );
   }
+  const sellerConnectId = connectState.stripeAccountId;
 
   const sellerShareMinor =
     txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
@@ -177,6 +175,10 @@ export async function createPaymentIntentForTxn(opts: {
             data: { status: nextStatus("ACCEPTED", "START_CHECKOUT") },
           });
         }
+        await prisma.paymentTicket.updateMany({
+          where: { protectedTransactionId: txn.id },
+          data: { lastMeaningfulActivityAt: new Date() },
+        });
         return {
           clientSecret: existing.client_secret,
           paymentIntentId: existing.id,
@@ -277,6 +279,10 @@ export async function createPaymentIntentForTxn(opts: {
       destination: isDirect ? sellerConnectId : null,
       applicationFeeMinor: isDirect ? platformFeeMinor : null,
     },
+  });
+  await prisma.paymentTicket.updateMany({
+    where: { protectedTransactionId: txn.id },
+    data: { lastMeaningfulActivityAt: new Date() },
   });
 
   return {

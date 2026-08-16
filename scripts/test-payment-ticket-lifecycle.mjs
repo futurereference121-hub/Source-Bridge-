@@ -18,6 +18,7 @@ const INACTIVE_TICKET_STATUSES = [
   "DELETED",
   "VOIDED",
   "REFUNDED",
+  "EXPIRED",
 ];
 const TERMINAL_LIFECYCLE_STAGES = [
   "COMPLETED",
@@ -29,6 +30,7 @@ const TERMINAL_LIFECYCLE_STAGES = [
   "VOIDED",
   "REFUNDED",
   "PARTIALLY_REFUNDED",
+  "EXPIRED",
 ];
 const MONEY_TXN_STATUSES = [
   "FUNDED",
@@ -71,7 +73,7 @@ function ticketInvolvesMoney(input) {
 
 function resolveLifecycleStage(ticketStatus, protectedStatus, procReleased) {
   if (
-    ["DECLINED", "SUPERSEDED", "CANCELLED", "DELETED", "VOIDED"].includes(
+    ["DECLINED", "SUPERSEDED", "CANCELLED", "DELETED", "VOIDED", "EXPIRED"].includes(
       ticketStatus,
     )
   ) {

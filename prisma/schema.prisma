@@ -801,7 +801,7 @@ model PaymentTicket {
   /// Optional link to sourcing flow (one active agreement at a time per request).
   sourcingRequestId     String?
   sourcingRequest       SourcingRequest? @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
-  /// DRAFT | PROPOSED | ACCEPTED | DECLINED | SUPERSEDED | CANCELLED | FUNDED
+  /// DRAFT | PROPOSED | ACCEPTED | DECLINED | SUPERSEDED | CANCELLED | FUNDED | EXPIRED
   status                String    @default("DRAFT")
   revision              Int       @default(1)
   /// SHA-256 of canonical terms JSON — pay only against matching hash.
@@ -829,6 +829,8 @@ model PaymentTicket {
   protectedTransactionId String?  @unique
   protectedTransaction  ProtectedTransaction? @relation(fields: [protectedTransactionId], references: [id], onDelete: SetNull)
   stripeMode            String    @default("TEST")
+  /// Last explicit ticket action (propose/revise/accept/pay attempt). Not poll/GET.
+  lastMeaningfulActivityAt DateTime @default(now())
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   messages              Message[]
@@ -837,6 +839,7 @@ model PaymentTicket {
   @@index([buyerId, status])
   @@index([sellerId, status])
   @@index([status, updatedAt])
+  @@index([status, lastMeaningfulActivityAt])
   @@index([termsHash])
   @@index([sourcingRequestId, status])
 }

@@ -238,7 +238,7 @@ function viewerMayAcceptTicket(opts) {
   const activeUnfunded = opts.status === "PROPOSED" || opts.status === "DRAFT";
   if (!viewerId || !activeUnfunded) return false;
   if (
-    ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED", "FUNDED", "REFUNDED"].includes(
+    ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED", "FUNDED", "REFUNDED", "EXPIRED"].includes(
       opts.status,
     )
   ) {

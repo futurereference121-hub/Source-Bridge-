@@ -25,6 +25,7 @@ export const INACTIVE_TICKET_STATUSES = [
   "DELETED",
   "VOIDED",
   "REFUNDED",
+  "EXPIRED",
 ] as const;
 
 /**
@@ -37,6 +38,7 @@ export const UNFUNDED_HIDDEN_CHAT_STATUSES = [
   "SUPERSEDED",
   "VOIDED",
   "DELETED",
+  "EXPIRED",
 ] as const;
 
 /** Accept/fund must reject these ticket statuses. */
@@ -48,6 +50,7 @@ export const TICKET_STATUSES_BLOCK_ACCEPT = [
   "DELETED",
   "FUNDED",
   "REFUNDED",
+  "EXPIRED",
 ] as const;
 
 const MONEY_KEEP_CHAT_PT_STATUSES = [
@@ -75,6 +78,18 @@ export const TERMINAL_LIFECYCLE_STAGES = [
   "VOIDED",
   "REFUNDED",
   "PARTIALLY_REFUNDED",
+  "EXPIRED",
+] as const;
+
+/** Unfunded tickets with no meaningful activity expire after this window. */
+export const UNFUNDED_TICKET_INACTIVITY_MS = 72 * 60 * 60 * 1000;
+
+/** Stripe PI states that must be reconciled before unfunded expiry. */
+export const PAYMENT_INTENT_STATUSES_BLOCK_EXPIRY = [
+  "processing",
+  "requires_action",
+  "requires_capture",
+  "succeeded",
 ] as const;
 
 /**
@@ -91,7 +106,8 @@ export function resolveLifecycleStage(
     ticketStatus === "SUPERSEDED" ||
     ticketStatus === "CANCELLED" ||
     ticketStatus === "DELETED" ||
-    ticketStatus === "VOIDED"
+    ticketStatus === "VOIDED" ||
+    ticketStatus === "EXPIRED"
   ) {
     return ticketStatus;
   }
@@ -151,6 +167,8 @@ export function lifecycleLabel(stage: string): string {
       return "DECLINED";
     case "CANCELLED":
       return "CANCELLED";
+    case "EXPIRED":
+      return "EXPIRED";
     case "DELETED":
     case "VOIDED":
       return "DELETED";
@@ -203,14 +221,15 @@ export function isSubtleHistoricalTicket(ticketStatus: string): boolean {
     ticketStatus === "SUPERSEDED" ||
     ticketStatus === "CANCELLED" ||
     ticketStatus === "DELETED" ||
-    ticketStatus === "VOIDED"
+    ticketStatus === "VOIDED" ||
+    ticketStatus === "EXPIRED"
   );
 }
 
 /**
  * Whether this ticket belongs in the normal conversation timeline.
  * ACTIVE unfunded (PROPOSED / ACCEPTED) stay. Unfunded CANCELLED / DECLINED /
- * SUPERSEDED / VOIDED are removed (DB rows kept). Real money history stays.
+ * SUPERSEDED / VOIDED / EXPIRED are removed (DB rows kept). Real money history stays.
  */
 export function ticketAppearsInChatTimeline(opts: {
   ticketStatus: string;
@@ -292,6 +311,8 @@ export function subtleHistoricalLabel(ticketStatus: string): string {
     case "DELETED":
     case "VOIDED":
       return "Payment agreement removed";
+    case "EXPIRED":
+      return "Payment agreement expired";
     default:
       return "Payment agreement closed";
   }
@@ -427,6 +448,57 @@ export function sellerDestinationUserId(opts: {
   buyerId?: string | null;
 }): string {
   return (opts.sellerId || "").trim();
+}
+
+/** Stripe-confirmed transfer readiness for that seller only — never another user's account. */
+export function isSellerConnectTransferReady(opts: {
+  stripeAccountId?: string | null;
+  chargesEnabled?: boolean | null;
+  payoutsEnabled?: boolean | null;
+}): boolean {
+  return Boolean(
+    (opts.stripeAccountId || "").trim() &&
+      opts.chargesEnabled &&
+      opts.payoutsEnabled,
+  );
+}
+
+/**
+ * Unfunded stale tickets expire. Funded / processing payments never expire by age.
+ */
+export function unfundedTicketShouldExpire(opts: {
+  ticketStatus: string;
+  lastMeaningfulActivityAt?: Date | string | null;
+  involvesMoney?: boolean;
+  fundedAt?: Date | string | null;
+  paymentIntentStatus?: string | null;
+  now?: Date | number;
+}): boolean {
+  const status = (opts.ticketStatus || "").trim();
+  if (!status) return false;
+  if (isInactiveTicketStatus(status)) return false;
+  if (status === "FUNDED") return false;
+  if (opts.involvesMoney) return false;
+  if (opts.fundedAt) return false;
+  const pi = (opts.paymentIntentStatus || "").trim();
+  if (
+    pi &&
+    (PAYMENT_INTENT_STATUSES_BLOCK_EXPIRY as readonly string[]).includes(pi)
+  ) {
+    return false;
+  }
+  const raw = opts.lastMeaningfulActivityAt;
+  if (!raw) return false;
+  const activity =
+    raw instanceof Date ? raw.getTime() : new Date(raw).getTime();
+  if (!Number.isFinite(activity)) return false;
+  const now =
+    opts.now instanceof Date
+      ? opts.now.getTime()
+      : typeof opts.now === "number"
+        ? opts.now
+        : Date.now();
+  return now - activity >= UNFUNDED_TICKET_INACTIVITY_MS;
 }
 
 /**

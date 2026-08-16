@@ -1,4 +1,5 @@
 import { processInspectionReleases } from "@/lib/payments/release";
+import { expireStaleUnfundedTickets } from "@/lib/payments/tickets";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -29,7 +30,8 @@ export async function POST(req: Request) {
     if (denied) return denied;
 
     const results = await processInspectionReleases(50);
-    return Response.json({ ok: true, results });
+    const expiry = await expireStaleUnfundedTickets({ limit: 50 });
+    return Response.json({ ok: true, results, expiry });
   } catch (err) {
     console.error("[payments-release]", err);
     return jsonError("Payments release failed", 500);
