@@ -150,7 +150,7 @@ export function lifecycleLabel(stage: string): string {
     case "AWAITING_SHIPMENT":
     case "IN_TRANSIT":
     case "SHIPPED":
-      return "SHIPPED";
+      return "ITEM SHIPPED";
     case "DELIVERED":
       return "AWAITING BUYER";
     case "ITEM_RECEIVED":

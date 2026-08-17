@@ -49,6 +49,7 @@ export type PaymentTicketView = {
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
   fundedAt?: string | null;
+  paymentIntentStatus?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;
   createdAt?: string;
@@ -268,6 +269,7 @@ export function PaymentTicketCard({
         prev.deliveredAt === snap.deliveredAt &&
         prev.trackingNumber === snap.trackingNumber &&
         prev.fundedAt === snap.fundedAt &&
+        prev.paymentIntentStatus === snap.paymentIntentStatus &&
         prev.actions?.canPay === snap.actions?.canPay &&
         prev.actions?.canConfirmReceipt === snap.actions?.canConfirmReceipt &&
         prev.actions?.canReleaseNow === snap.actions?.canReleaseNow
@@ -397,6 +399,7 @@ export function PaymentTicketCard({
       ticketStatus: ticket.status,
       protectedStatus: ticket.protectedTxnStatus ?? null,
       fundedAt: ticket.fundedAt ?? null,
+      paymentIntentStatus: ticket.paymentIntentStatus ?? null,
       lifecycleStage: ticket.lifecycleStage ?? null,
     });
     if (!showPay) {
@@ -543,7 +546,22 @@ export function PaymentTicketCard({
         currency?: string;
       };
       if (!res.ok) {
-        if (json.code === "CONNECT_NOT_READY") {
+        if (
+          json.code === "ALREADY_FUNDED" ||
+          json.code === "PI_ALREADY_SUCCEEDED" ||
+          json.code === "PI_PROCESSING"
+        ) {
+          setCheckout(null);
+          setPaymentSubmitted(true);
+          setPayFailed(false);
+          setPayNotice(
+            json.code === "PI_PROCESSING"
+              ? "Payment is processing. Funds stay on the platform until release rules. Do not pay again."
+              : "Payment received. Funds stay on the platform until release rules. Do not pay again.",
+          );
+          await load();
+          onChanged?.();
+        } else if (json.code === "CONNECT_NOT_READY") {
           setError("");
           setPayFailed(false);
         } else {
@@ -849,6 +867,7 @@ export function PaymentTicketCard({
       ticketStatus: ticket.status,
       protectedStatus: ticket.protectedTxnStatus ?? null,
       fundedAt: ticket.fundedAt ?? null,
+      paymentIntentStatus: ticket.paymentIntentStatus ?? null,
       lifecycleStage: ticket.lifecycleStage ?? null,
     }) &&
     ticket.actions?.canPay !== false &&
@@ -2032,6 +2051,7 @@ export function PaymentTicketCard({
         ticketStatus: ticket.status,
         protectedStatus: ticket.protectedTxnStatus ?? null,
         fundedAt: ticket.fundedAt ?? null,
+        paymentIntentStatus: ticket.paymentIntentStatus ?? null,
         lifecycleStage: ticket.lifecycleStage ?? null,
       }) ? (
         <ProtectedPaymentCheckout

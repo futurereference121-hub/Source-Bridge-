@@ -37,8 +37,6 @@ const TRANSITIONS = {
     DELIVERED: "DELIVERED",
   },
   BUYER_RELEASE_NOW: {
-    AWAITING_SHIPMENT: "READY_TO_RELEASE",
-    IN_TRANSIT: "READY_TO_RELEASE",
     DELIVERED: "READY_TO_RELEASE",
     IN_INSPECTION: "READY_TO_RELEASE",
     READY_TO_RELEASE: "READY_TO_RELEASE",
@@ -440,6 +438,14 @@ assert.equal(
       deliveredAt: new Date(),
     }),
     true,
+  );
+  assert.equal(
+    canTransition("AWAITING_SHIPMENT", "BUYER_RELEASE_NOW"),
+    false,
+  );
+  assert.equal(
+    canTransition("IN_TRANSIT", "BUYER_RELEASE_NOW"),
+    false,
   );
   assert.equal(nextStatus("IN_INSPECTION", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
 }

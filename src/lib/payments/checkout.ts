@@ -101,7 +101,11 @@ export async function createPaymentIntentForTxn(opts: {
       ticket.status === "DECLINED" ||
       ticket.status === "CANCELLED" ||
       ticket.status === "VOIDED" ||
-      ticket.status === "DELETED"
+      ticket.status === "DELETED" ||
+      ticket.status === "EXPIRED" ||
+      ticket.status === "FUNDED" ||
+      ticket.status === "REFUNDED" ||
+      ticket.hiddenFromChatAt
     ) {
       throw Object.assign(new Error("Terms have changed — reopen Payment Ticket"), {
         status: 409,
@@ -196,9 +200,15 @@ export async function createPaymentIntentForTxn(opts: {
           { status: 409, code: "PI_ALREADY_SUCCEEDED" },
         );
       }
+      if (existing.status === "processing") {
+        throw Object.assign(
+          new Error("Payment is processing — wait for funding confirmation"),
+          { status: 409, code: "PI_PROCESSING" },
+        );
+      }
     } catch (err) {
       const code = (err as { code?: string }).code;
-      if (code === "PI_ALREADY_SUCCEEDED") throw err;
+      if (code === "PI_ALREADY_SUCCEEDED" || code === "PI_PROCESSING") throw err;
       // Missing PI or architecture mismatch — fall through to create
     }
   }

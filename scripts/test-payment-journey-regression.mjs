@@ -101,6 +101,12 @@ const TRANSITIONS = {
     DELIVERED: "DELIVERED",
   },
   START_INSPECTION: { DELIVERED: "IN_INSPECTION" },
+  BUYER_RELEASE_NOW: {
+    DELIVERED: "READY_TO_RELEASE",
+    IN_INSPECTION: "READY_TO_RELEASE",
+    READY_TO_RELEASE: "READY_TO_RELEASE",
+  },
+  OPEN_DISPUTE: { IN_INSPECTION: "DISPUTED" },
   COMPLETE_INSPECTION: { IN_INSPECTION: "READY_TO_RELEASE" },
   RELEASE_FINAL: {
     READY_TO_RELEASE: "RELEASED",
@@ -552,7 +558,12 @@ function pollReconcile(prevCards, nextTickets) {
 
 // TEST 11 — Pay UI gone after FUNDED (ticket row may still say ACCEPTED)
 {
-  function ticketMayShowPayUi({ ticketStatus, protectedStatus, fundedAt }) {
+  function ticketMayShowPayUi({
+    ticketStatus,
+    protectedStatus,
+    fundedAt,
+    paymentIntentStatus,
+  }) {
     if (["CANCELLED", "DECLINED", "EXPIRED", "VOIDED"].includes(ticketStatus)) {
       return false;
     }
@@ -573,6 +584,8 @@ function pollReconcile(prevCards, nextTickets) {
     ) {
       return false;
     }
+    const pi = paymentIntentStatus || "";
+    if (pi === "succeeded" || pi === "processing") return false;
     return ticketStatus === "ACCEPTED" || pst === "AWAITING_PAYMENT";
   }
   assert.equal(
@@ -604,38 +617,85 @@ function pollReconcile(prevCards, nextTickets) {
     }),
     false,
   );
-}
-
-// TEST 12 — generic A buyer / B sourcer: ship → confirm → release/inspect; tickets isolated
-{
-  const ticketA = { id: "ticket-a", status: "FUNDED" };
-  const ticketB = { id: "ticket-b", status: "ACCEPTED" };
-  assert.notEqual(ticketA.id, ticketB.id);
   assert.equal(
-    ticketMayShowPayUiFor(ticketA.status, "FUNDED"),
+    ticketMayShowPayUi({
+      ticketStatus: "ACCEPTED",
+      protectedStatus: "AWAITING_PAYMENT",
+      paymentIntentStatus: "succeeded",
+    }),
     false,
   );
   assert.equal(
-    ticketMayShowPayUiFor(ticketB.status, "AWAITING_PAYMENT"),
-    true,
+    ticketMayShowPayUi({
+      ticketStatus: "ACCEPTED",
+      protectedStatus: "AWAITING_PAYMENT",
+      paymentIntentStatus: "processing",
+    }),
+    false,
   );
+}
+
+// TEST 12 — generic User A buyer / User B sourcer lifecycle, isolated from ticket C
+{
+  const userA = "user-a-buyer";
+  const userB = "user-b-sourcer";
+  const ticketA = { id: "ticket-a", buyerId: userA, sellerId: userB, status: "FUNDED" };
+  const ticketB = { id: "ticket-b", buyerId: userA, sellerId: userB, status: "ACCEPTED" };
+  const ticketC = { id: "ticket-c", buyerId: userA, sellerId: userB, status: "PROPOSED" };
+  assert.notEqual(ticketA.id, ticketB.id);
+  assert.notEqual(ticketA.id, ticketC.id);
+  assert.equal(ticketMayShowPayUiFor(ticketA.status, "FUNDED"), false);
+  assert.equal(ticketMayShowPayUiFor(ticketB.status, "AWAITING_PAYMENT"), true);
+  assert.equal(ticketMayShowPayUiFor(ticketC.status, null), false);
+
   let s = "FUNDED";
   s = apply(s, "ADD_TRACKING");
   assert.equal(s, "AWAITING_SHIPMENT");
-  const afterShipChoices = s === "AWAITING_SHIPMENT" ? ["CONFIRM_RECEIPT"] : [];
-  assert.deepEqual(afterShipChoices, ["CONFIRM_RECEIPT"]);
+  assert.deepEqual(
+    s === "AWAITING_SHIPMENT" ? ["CONFIRM_RECEIPT"] : [],
+    ["CONFIRM_RECEIPT"],
+  );
   s = apply(s, "CONFIRM_RECEIPT");
   assert.equal(s, "DELIVERED");
   const afterReceiptChoices = ["RELEASE_NOW", "START_INSPECTION"];
+  assert.equal(afterReceiptChoices.length, 2);
   assert.equal(afterReceiptChoices.includes("REPORT_ISSUE"), false);
-  s = apply(s, "START_INSPECTION");
-  assert.equal(s, "IN_INSPECTION");
-  s = apply(s, "COMPLETE_INSPECTION");
-  s = apply(s, "RELEASE_FINAL");
-  assert.equal(s, "RELEASED");
+
+  // Path 1: release remaining seller entitlement once → COMPLETED
+  let releasePath = apply("DELIVERED", "BUYER_RELEASE_NOW");
+  assert.equal(releasePath, "READY_TO_RELEASE");
+  releasePath = apply(releasePath, "RELEASE_FINAL");
+  assert.equal(releasePath, "RELEASED");
+  const sellerEntitled = 12_000;
+  const procurementTransferred = 10_000;
+  const finalTransferred = 2_000;
+  assert.equal(procurementTransferred + finalTransferred, sellerEntitled);
+  assert.equal(ticketMayShowPayUiFor("FUNDED", "RELEASED"), false);
+
+  // Path 2: inspection then buyer release during inspection
+  let inspectPath = apply("DELIVERED", "START_INSPECTION");
+  assert.equal(inspectPath, "IN_INSPECTION");
+  inspectPath = apply(inspectPath, "BUYER_RELEASE_NOW");
+  inspectPath = apply(inspectPath, "RELEASE_FINAL");
+  assert.equal(inspectPath, "RELEASED");
+
+  // Path 3: inspection then report issue — auto-release blocked
+  let issuePath = apply("DELIVERED", "START_INSPECTION");
+  assert.equal(issuePath, "IN_INSPECTION");
+  issuePath = apply(issuePath, "OPEN_DISPUTE");
+  assert.equal(issuePath, "DISPUTED");
+  assert.equal(TRANSITIONS.RELEASE_FINAL[issuePath], undefined);
+  assert.equal(TRANSITIONS.COMPLETE_INSPECTION[issuePath], undefined);
+
+  // Ticket B/C unchanged by A's shipping/receipt/release
+  assert.equal(ticketB.status, "ACCEPTED");
+  assert.equal(ticketC.status, "PROPOSED");
 }
 
 function ticketMayShowPayUiFor(ticketStatus, protectedStatus) {
+  if (["CANCELLED", "DECLINED", "EXPIRED", "VOIDED", "PROPOSED", "DRAFT"].includes(ticketStatus)) {
+    return ticketStatus === "ACCEPTED";
+  }
   if (ticketStatus === "FUNDED") return false;
   const pst = protectedStatus || "";
   if (

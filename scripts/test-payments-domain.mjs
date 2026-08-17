@@ -48,8 +48,6 @@ const TRANSITIONS = {
     DELIVERED: "IN_INSPECTION",
   },
   BUYER_RELEASE_NOW: {
-    AWAITING_SHIPMENT: "READY_TO_RELEASE",
-    IN_TRANSIT: "READY_TO_RELEASE",
     DELIVERED: "READY_TO_RELEASE",
     IN_INSPECTION: "READY_TO_RELEASE",
     READY_TO_RELEASE: "READY_TO_RELEASE",
@@ -264,7 +262,8 @@ assert.equal(canTransition("FUNDED", "CONFIRM_RECEIPT"), false);
 assert.equal(canTransition("AWAITING_SHIPMENT", "CONFIRM_RECEIPT"), true);
 assert.equal(canTransition("IN_INSPECTION", "COMPLETE_INSPECTION"), true);
 assert.equal(canTransition("IN_INSPECTION", "BUYER_RELEASE_NOW"), true);
-assert.equal(canTransition("AWAITING_SHIPMENT", "BUYER_RELEASE_NOW"), true);
+assert.equal(canTransition("DELIVERED", "BUYER_RELEASE_NOW"), true);
+assert.equal(canTransition("AWAITING_SHIPMENT", "BUYER_RELEASE_NOW"), false);
 
 // ── Tracking normalize
 assert.equal(normalizeTrackingStatus("Delivered"), "DELIVERED");

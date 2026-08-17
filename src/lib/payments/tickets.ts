@@ -286,6 +286,7 @@ function mapTicket(
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
     fundedAt?: Date | string | null;
+    paymentIntentStatus?: string | null;
     proposedBy?: {
       id: string;
       name: string;
@@ -488,6 +489,7 @@ function mapTicket(
     hiddenFromChatAt: t.hiddenFromChatAt
       ? t.hiddenFromChatAt.toISOString()
       : null,
+    paymentIntentStatus: extras?.paymentIntentStatus ?? null,
     fundedAt: extras?.fundedAt
       ? extras.fundedAt instanceof Date
         ? extras.fundedAt.toISOString()
@@ -512,6 +514,7 @@ function mapTicket(
           ticketStatus: t.status,
           protectedStatus: protectedStatus,
           fundedAt: extras?.fundedAt ?? null,
+          paymentIntentStatus: extras?.paymentIntentStatus ?? null,
           lifecycleStage,
         }) &&
         Boolean(t.protectedTransactionId) &&
@@ -591,6 +594,44 @@ async function extrasWithParties(
     sellerConnectReady,
     sellerConnectHasAccount,
   };
+}
+
+/** PI status for unfunded checkout only — skip Stripe when already funded. */
+async function peekOpenPaymentIntentStatus(opts: {
+  stripePaymentIntentId?: string | null;
+  fundedAt?: Date | string | null;
+  protectedStatus?: string | null;
+}): Promise<string | null> {
+  if (opts.fundedAt) return null;
+  const pst = (opts.protectedStatus || "").trim();
+  if (
+    pst &&
+    [
+      "FUNDED",
+      "PROCUREMENT_RELEASED",
+      "AWAITING_SHIPMENT",
+      "IN_TRANSIT",
+      "DELIVERED",
+      "IN_INSPECTION",
+      "READY_TO_RELEASE",
+      "RELEASED",
+      "REFUNDED",
+      "PARTIALLY_REFUNDED",
+      "DISPUTED",
+      "CANCELLED",
+      "FAILED",
+    ].includes(pst)
+  ) {
+    return null;
+  }
+  const piId = (opts.stripePaymentIntentId || "").trim();
+  if (!piId || !isStripeConfigured()) return null;
+  try {
+    const pi = await getStripe().paymentIntents.retrieve(piId);
+    return pi.status || null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadProtectedTxnForGuard(protectedTransactionId: string | null) {
@@ -2033,8 +2074,14 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     ticketStatus: ticket.status,
     protectedTxn: pt,
   });
+  const paymentIntentStatus = await peekOpenPaymentIntentStatus({
+    stripePaymentIntentId: pt?.stripePaymentIntentId,
+    fundedAt: pt?.fundedAt ?? null,
+    protectedStatus: pt?.status ?? null,
+  });
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
+    paymentIntentStatus,
     procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
     refundedMinor: pt?.refundedMinor ?? 0,

@@ -101,11 +101,11 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
   },
   /**
    * Buyer “Release funds now” — marks ready for residual releaseFinal only.
+   * Only after buyer receipt (DELIVERED) or during/after inspection.
+   * Shipping itself must not allow residual release.
    * Never jumps straight to RELEASED (money path stays in releaseFinal).
    */
   BUYER_RELEASE_NOW: {
-    AWAITING_SHIPMENT: "READY_TO_RELEASE",
-    IN_TRANSIT: "READY_TO_RELEASE",
     DELIVERED: "READY_TO_RELEASE",
     IN_INSPECTION: "READY_TO_RELEASE",
     READY_TO_RELEASE: "READY_TO_RELEASE",

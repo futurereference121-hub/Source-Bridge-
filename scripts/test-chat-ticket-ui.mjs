@@ -149,6 +149,9 @@ assert.match(card, /ticketMayShowPayUi/);
 assert.match(card, /ACKNOWLEDGE/);
 assert.match(card, /Confirm Item Received/);
 assert.match(card, /Start 12-Hour Inspection/);
+assert.match(card, /Release Funds Now/);
+assert.match(card, /ALREADY_FUNDED/);
+assert.match(card, /paymentIntentStatus/);
 assert.doesNotMatch(card, /trustLevel/);
 assert.doesNotMatch(card, /matchMedia|pointer:\s*coarse|ontouchstart/);
 
