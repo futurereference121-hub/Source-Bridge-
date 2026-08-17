@@ -21,6 +21,7 @@ const schema = z.object({
     .optional()
     .default("ACKNOWLEDGE"),
   reason: z.string().trim().min(3).max(200).optional(),
+  category: z.string().trim().max(120).optional(),
   details: z.string().trim().max(4000).optional(),
 });
 
@@ -52,6 +53,7 @@ export async function POST(req: NextRequest) {
       buyerEmail: user.email,
       decision: parsed.data.decision,
       reason: parsed.data.reason,
+      category: parsed.data.category,
       details: parsed.data.details,
     });
 

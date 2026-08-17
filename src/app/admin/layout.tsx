@@ -32,6 +32,12 @@ export default async function AdminLayout({
           >
             Protected Payments
           </Link>
+          <Link
+            href="/admin/reviews"
+            className="font-medium text-electric hover:text-electric-hover"
+          >
+            Reviews & Disputes
+          </Link>
           <AdminSignOutButton />
         </nav>
       ) : null}

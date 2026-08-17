@@ -1242,6 +1242,15 @@ export function MessagesInbox({
                                     (t) => t.id === m.paymentTicketId,
                                   ) as PaymentTicketView | undefined) ?? null
                                 }
+                                conversationPeer={
+                                  activeOther
+                                    ? {
+                                        id: activeOther.id,
+                                        username: activeOther.username,
+                                        name: activeOther.name,
+                                      }
+                                    : null
+                                }
                                 myId={ticketViewerId}
                                 myUsername={
                                   ticketViewerUsername || account?.username

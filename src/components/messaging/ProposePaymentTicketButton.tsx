@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, ShieldCheck, X } from "lucide-react";
+import type { PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
 
 /** Deploy/build fingerprint for production diagnostics (safe, non-secret). */
 declare global {
@@ -75,7 +76,7 @@ type ProposePaymentTicketButtonProps = {
    */
   proposalAccess?: PaymentsProposalAccess | null;
   onCreated?: (payload: {
-    ticket: { id: string; conversationId?: string };
+    ticket: PaymentTicketView;
     message: ProposedTicketTimelineMessage | null;
   }) => void;
   /** Prefill + revise mode (supersedes the given ticket via createOrRevise). */
@@ -333,7 +334,7 @@ export function ProposePaymentTicketButton({
         code?: string;
         allowlistParty?: string;
         proposalTraceId?: string;
-        ticket?: { id: string; conversationId?: string };
+        ticket?: PaymentTicketView;
         message?: ProposedTicketTimelineMessage | null;
       } = {};
       const rawText = await res.text();
@@ -436,7 +437,7 @@ export function ProposePaymentTicketButton({
         return;
       }
 
-      if (!ticketId) {
+      if (!ticketId || !json.ticket) {
         setError(`Ticket created but missing id. Ref: ${ref}`);
         return;
       }
@@ -451,10 +452,7 @@ export function ProposePaymentTicketButton({
       }
       onCloseEdit?.();
       onCreated?.({
-        ticket: {
-          id: ticketId,
-          conversationId: ticketConv ?? convId,
-        },
+        ticket: json.ticket,
         // message may be null; parent synthesizes a timeline row from ticket.
         message: json.message ?? null,
       });

@@ -219,6 +219,10 @@ export type NotificationType =
   | "SOURCING_REQUEST"
   | "LISTING_ENQUIRY"
   | "OPPORTUNITY_ENQUIRY"
+  | "PAYMENT_TICKET"
+  | "PAYMENT_STATUS"
+  | "PAYMENT_SHIPPING"
+  | "PAYMENT_DISPUTE"
   | "SYSTEM";
 
 /** Client-facing notification — never carries private message bodies. */

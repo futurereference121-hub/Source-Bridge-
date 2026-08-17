@@ -8,6 +8,7 @@ import {
   CircleDot,
   Mail,
   MessageSquare,
+  ShieldCheck,
 } from "lucide-react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { formatRelativeTime } from "@/lib/format";
@@ -25,6 +26,11 @@ function iconForType(type: NotificationType) {
     case "LISTING_ENQUIRY":
     case "OPPORTUNITY_ENQUIRY":
       return { Icon: Mail, className: "text-electric" };
+    case "PAYMENT_TICKET":
+    case "PAYMENT_STATUS":
+    case "PAYMENT_SHIPPING":
+    case "PAYMENT_DISPUTE":
+      return { Icon: ShieldCheck, className: "text-emerald-300/90" };
     default:
       return { Icon: Bell, className: "text-white/55" };
   }
@@ -119,6 +125,15 @@ export function NotificationBell() {
                 No notifications yet.
               </p>
             )}
+          </div>
+          <div className="border-t border-white/10 px-4 py-2 text-center">
+            <Link
+              href="/notifications"
+              onClick={() => setOpen(false)}
+              className="text-[11px] uppercase tracking-[0.12em] text-electric hover:text-electric-hover"
+            >
+              View all notifications
+            </Link>
           </div>
         </div>
       ) : null}

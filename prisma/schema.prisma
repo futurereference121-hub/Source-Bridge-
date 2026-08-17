@@ -166,9 +166,12 @@ model Notification {
   href      String    @default("")
   actorId   String?
   actorName String    @default("")
+  /// Optional dedupe key — one notification per user per key (payment lifecycle).
+  dedupeKey String?
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
+  @@unique([userId, dedupeKey])
   @@index([userId, createdAt])
   @@index([userId, readAt])
   @@index([userId, type, createdAt])
@@ -833,6 +836,8 @@ model PaymentTicket {
   lastMeaningfulActivityAt DateTime @default(now())
   /// Hide from chat timeline and the active cap without deleting money records.
   hiddenFromChatAt      DateTime?
+  /// Client idempotency key for propose — prevents duplicate tickets on retry.
+  proposalTraceId       String?   @unique
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   messages              Message[]
@@ -1017,8 +1022,12 @@ model DisputeCase {
   openedBy       User      @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: Restrict)
   /// OPEN | UNDER_REVIEW | RESOLVED_BUYER | RESOLVED_SELLER | RESOLVED_SPLIT | CLOSED
   status         String    @default("OPEN")
+  /// Buyer-selected category (e.g. Item not as agreed).
+  category       String    @default("")
   reason         String    @default("")
   details        String    @default("")
+  /// Internal admin notes (not shown to parties).
+  adminNotes     String    @default("")
   resolutionNote String    @default("")
   resolvedById   String?
   resolvedAt     DateTime?

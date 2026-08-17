@@ -39,6 +39,10 @@ export function soundKindForNotificationType(
     case "SOURCING_REQUEST":
     case "LISTING_ENQUIRY":
     case "OPPORTUNITY_ENQUIRY":
+    case "PAYMENT_TICKET":
+    case "PAYMENT_STATUS":
+    case "PAYMENT_SHIPPING":
+    case "PAYMENT_DISPUTE":
       return "message";
     default:
       return null;

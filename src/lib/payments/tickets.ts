@@ -1241,6 +1241,8 @@ export async function createOrRevisePaymentTicket(opts: {
   amounts: TicketAmountsInput;
   /** When set, supersede this specific ticket only (edit terms). */
   reviseFromTicketId?: string | null;
+  /** Client idempotency key — safe retries return the same ticket. */
+  proposalTraceId?: string | null;
 }) {
   if (!isProtectedPaymentsEnabled() && !isDirectPaymentsEnabled()) {
     throw Object.assign(new Error("Protected Payments are not enabled"), {
@@ -1277,6 +1279,39 @@ export async function createOrRevisePaymentTicket(opts: {
     throw Object.assign(new Error("Only buyer or seller can propose terms"), {
       status: 403,
     });
+  }
+
+  const traceId = (opts.proposalTraceId || "").trim().slice(0, 80) || null;
+  if (traceId && !opts.reviseFromTicketId) {
+    const prior = await prisma.paymentTicket.findUnique({
+      where: { proposalTraceId: traceId },
+    });
+    if (prior && prior.conversationId === opts.conversationId) {
+      const messageRow = await prisma.message.findFirst({
+        where: {
+          paymentTicketId: prior.id,
+          systemEventType: "PAYMENT_TICKET_PROPOSED",
+        },
+        orderBy: { createdAt: "desc" },
+        include: {
+          attachments: true,
+          sender: { select: participantUserSelect },
+        },
+      });
+      const creator = await prisma.user.findUnique({
+        where: { id: prior.createdById },
+        select: { id: true, name: true, username: true },
+      });
+      return {
+        ticket: mapTicket(prior, await extrasWithParties(prior, {
+          procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+          proposedBy: creator,
+          viewerId: opts.actorId,
+          involvesMoney: false,
+        })),
+        message: messageRow ? mapMessage(messageRow) : null,
+      };
+    }
   }
 
   const conversation = await prisma.conversation.findUnique({
@@ -1510,6 +1545,7 @@ export async function createOrRevisePaymentTicket(opts: {
         notes: opts.amounts.notes || "",
         stripeMode: getStripeMode(),
         lastMeaningfulActivityAt: new Date(),
+        ...(traceId ? { proposalTraceId: traceId } : {}),
         // Creator auto-approves their own revision
         ...(opts.actorId === opts.buyerId
           ? { buyerApprovedRevision: revision, buyerApprovedAt: new Date() }
@@ -1559,6 +1595,20 @@ export async function createOrRevisePaymentTicket(opts: {
     where: { id: opts.actorId },
     select: { id: true, name: true, username: true },
   });
+
+  const counterpartyId =
+    opts.actorId === opts.buyerId ? opts.sellerId : opts.buyerId;
+  void import("@/lib/payment-notifications").then(({ notifyPaymentTicketProposed }) =>
+    notifyPaymentTicketProposed({
+      ticketId: ticket.id,
+      conversationId: opts.conversationId,
+      counterpartyId,
+      actorId: opts.actorId,
+      actorName: creator?.name || "",
+      actorUsername: creator?.username,
+      title: ticket.title,
+    }),
+  );
 
   return {
     ticket: mapTicket(ticket, await extrasWithParties(ticket, {
@@ -2017,6 +2067,24 @@ export async function respondToPaymentTicket(opts: {
       : "PAYMENT_TICKET_APPROVED",
     meta: { ticketId: ticket.id, revision: ticket.revision },
   });
+
+  const actorUser = await prisma.user.findUnique({
+    where: { id: opts.actorId },
+    select: { id: true, name: true, username: true },
+  });
+  const notifyUserId =
+    opts.actorId === ticket.buyerId ? ticket.sellerId : ticket.buyerId;
+  void import("@/lib/payment-notifications").then(({ notifyPaymentTicketAccepted }) =>
+    notifyPaymentTicketAccepted({
+      ticketId: ticket.id,
+      conversationId: ticket.conversationId,
+      notifyUserId,
+      actorId: opts.actorId,
+      actorName: actorUser?.name || "",
+      actorUsername: actorUser?.username,
+      bothAccepted: bothWillApprove,
+    }),
+  );
 
   return mapTicket(updated, await extrasWithParties(updated, {
     protectedTxnStatus: bothWillApprove ? "ACCEPTED" : null,

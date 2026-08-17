@@ -436,6 +436,18 @@ export async function markTxnFundedFromWebhook(opts: {
     data: { status: "FUNDED" },
   });
 
+  if (!directPath && updated.conversationId) {
+    void import("@/lib/payment-notifications").then(({ notifyPaymentFunded }) =>
+      notifyPaymentFunded({
+        protectedTxnId: updated.id,
+        conversationId: updated.conversationId || "",
+        sellerId: updated.sellerId,
+        buyerId: updated.buyerId,
+        title: updated.title || "Protected Payment",
+      }),
+    );
+  }
+
   // Direct: Destination Charges only — verify routing, mark RELEASED, NO transfers.create.
   if (directPath) {
     const release = await finalizeDirectDestinationFromWebhook({

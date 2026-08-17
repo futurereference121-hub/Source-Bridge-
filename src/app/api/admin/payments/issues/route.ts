@@ -161,7 +161,7 @@ export async function PATCH(req: NextRequest) {
       include: { protectedTxn: true },
     });
     if (!dispute) return jsonError("Dispute not found", 404);
-    if (dispute.status !== "OPEN") {
+    if (!["OPEN", "UNDER_REVIEW"].includes(dispute.status)) {
       return jsonError(`Dispute already ${dispute.status}`, 409, {
         code: "NOT_OPEN",
       });
@@ -363,6 +363,18 @@ export async function PATCH(req: NextRequest) {
         },
       },
     });
+
+    if (txn.conversationId) {
+      void import("@/lib/payment-notifications").then(({ notifyDisputeResolved }) =>
+        notifyDisputeResolved({
+          disputeId: dispute.id,
+          conversationId: txn.conversationId || "",
+          buyerId: txn.buyerId,
+          sellerId: txn.sellerId,
+          resolution: parsed.data.resolution,
+        }),
+      );
+    }
 
     return Response.json({
       ok: true,

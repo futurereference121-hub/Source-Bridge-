@@ -470,6 +470,7 @@ export async function confirmReceipt(opts: {
   buyerEmail?: string | null;
   decision?: ConfirmReceiptDecision;
   reason?: string;
+  category?: string;
   details?: string;
 }) {
   assertFulfilmentAccess();
@@ -522,6 +523,7 @@ export async function confirmReceipt(opts: {
       txn,
       buyerId: opts.buyerId,
       reason: opts.reason,
+      category: opts.category,
       details: opts.details,
     });
   }
@@ -542,6 +544,7 @@ type TxnRow = {
   status: string;
   buyerId: string;
   sellerId: string;
+  conversationId?: string | null;
   paymentOption: string;
   shippedAt: Date | null;
   trackingNumber: string;
@@ -828,11 +831,13 @@ async function reportIssueAfterReceipt(opts: {
   };
   buyerId: string;
   reason?: string;
+  category?: string;
   details?: string;
 }) {
   const txn = opts.txn;
   const status = txn.status as ProtectedStatus;
   const reason = (opts.reason || "").trim();
+  const category = (opts.category || reason).trim();
 
   if (status === "DISPUTED") {
     const existing = await prisma.disputeCase.findFirst({
@@ -917,6 +922,7 @@ async function reportIssueAfterReceipt(opts: {
       data: {
         protectedTxnId: txn.id,
         openedById: opts.buyerId,
+        category: category.slice(0, 120),
         reason: reason.slice(0, 200),
         details: (opts.details || "").slice(0, 4000),
         status: "OPEN",
@@ -953,11 +959,24 @@ async function reportIssueAfterReceipt(opts: {
     meta: {
       decision: "REPORT_ISSUE",
       disputeId: dispute.id,
+      category,
       transferTriggered: false,
       autoReleaseFrozen: true,
       financialSnapshot,
     },
   });
+
+  void import("@/lib/payment-notifications").then(({ notifyDisputeOpened }) =>
+    notifyDisputeOpened({
+      disputeId: dispute.id,
+      protectedTxnId: txn.id,
+      conversationId: txn.conversationId || "",
+      buyerId: txn.buyerId,
+      sellerId: txn.sellerId,
+      category,
+      openedById: opts.buyerId,
+    }),
+  );
 
   return {
     alreadyConfirmed: false,

@@ -13,6 +13,8 @@ export type CreateNotificationInput = {
   href?: string;
   actorId?: string | null;
   actorName?: string;
+  /** When set, skip insert if this user already has a row with the same key. */
+  dedupeKey?: string | null;
 };
 
 function clip(value: string, max: number): string {
@@ -27,7 +29,15 @@ export async function createNotification(
 ): Promise<void> {
   if (!input.userId) return;
   if (input.actorId && input.actorId === input.userId) return;
+  const dedupeKey = (input.dedupeKey || "").trim() || null;
   try {
+    if (dedupeKey) {
+      const existing = await prisma.notification.findFirst({
+        where: { userId: input.userId, dedupeKey },
+        select: { id: true },
+      });
+      if (existing) return;
+    }
     await prisma.notification.create({
       data: {
         userId: input.userId,
@@ -37,6 +47,7 @@ export async function createNotification(
         href: input.href || "",
         actorId: input.actorId || null,
         actorName: input.actorName || "",
+        dedupeKey,
       },
     });
   } catch (err) {
@@ -53,17 +64,42 @@ export async function createNotifications(
   );
   if (!rows.length) return;
   try {
-    await prisma.notification.createMany({
-      data: rows.map((i) => ({
-        userId: i.userId,
-        type: i.type,
-        title: clip(i.title, TITLE_MAX),
-        body: clip(i.body || "", BODY_MAX),
-        href: i.href || "",
-        actorId: i.actorId || null,
-        actorName: i.actorName || "",
-      })),
-    });
+    const withDedupe = rows.filter((i) => (i.dedupeKey || "").trim());
+    const withoutDedupe = rows.filter((i) => !(i.dedupeKey || "").trim());
+    if (withDedupe.length) {
+      const existing = await prisma.notification.findMany({
+        where: {
+          OR: withDedupe.map((i) => ({
+            userId: i.userId,
+            dedupeKey: (i.dedupeKey || "").trim(),
+          })),
+        },
+        select: { userId: true, dedupeKey: true },
+      });
+      const seen = new Set(
+        existing.map((e) => `${e.userId}:${e.dedupeKey || ""}`),
+      );
+      for (const i of withDedupe) {
+        const key = `${i.userId}:${(i.dedupeKey || "").trim()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await createNotification(i);
+      }
+    }
+    if (withoutDedupe.length) {
+      await prisma.notification.createMany({
+        data: withoutDedupe.map((i) => ({
+          userId: i.userId,
+          type: i.type,
+          title: clip(i.title, TITLE_MAX),
+          body: clip(i.body || "", BODY_MAX),
+          href: i.href || "",
+          actorId: i.actorId || null,
+          actorName: i.actorName || "",
+          dedupeKey: null,
+        })),
+      });
+    }
   } catch (err) {
     console.error("[notifications] createNotifications failed", err);
   }

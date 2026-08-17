@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { subscribeToNewNotifications, useNotifications } from "@/hooks/useNotifications";
 import {
@@ -16,8 +16,20 @@ import {
  * sound whenever a genuinely new notification arrives (never on refresh).
  */
 export function NotificationListener() {
-  const { account, signedIn, refreshAccount } = useAppUi();
-  useNotifications();
+  const { account, signedIn, refreshAccount, showToast } = useAppUi();
+  const { unreadCount } = useNotifications();
+  const loginToastShown = useRef(false);
+
+  useEffect(() => {
+    if (!signedIn || loginToastShown.current) return;
+    if (unreadCount <= 0) return;
+    loginToastShown.current = true;
+    showToast(
+      unreadCount === 1
+        ? "You have 1 unread notification"
+        : `You have ${unreadCount > 9 ? "9+" : unreadCount} unread notifications`,
+    );
+  }, [signedIn, unreadCount, showToast]);
 
   useEffect(() => {
     configureNotificationSounds({

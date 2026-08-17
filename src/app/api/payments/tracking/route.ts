@@ -175,6 +175,19 @@ export async function POST(req: NextRequest) {
       meta: { trackingNumber: parsed.data.trackingNumber },
     });
 
+    if (txn.conversationId) {
+      const conversationId = txn.conversationId;
+      void import("@/lib/payment-notifications").then(({ notifyShipmentUpdate }) =>
+        notifyShipmentUpdate({
+          protectedTxnId: txn.id,
+          conversationId,
+          buyerId: txn.buyerId,
+          sellerId: txn.sellerId,
+          trackingNumber: parsed.data.trackingNumber,
+        }),
+      );
+    }
+
     return Response.json({
       ok: true,
       transaction: {

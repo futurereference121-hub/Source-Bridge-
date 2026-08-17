@@ -21,6 +21,58 @@ import {
   waitingCopyAddressesViewer,
 } from "@/lib/payments/ticket-lifecycle";
 
+const DEFAULT_BREAKDOWN_LABELS = {
+  itemCost: "Item / procurement budget",
+  shipping: "Shipping",
+  sellerServiceFee: "Sourcer fee",
+  sourceBridgeProtectionFee: "Source Bridge fee",
+} as const;
+
+const PAYMENT_ISSUE_CATEGORIES = [
+  "Item not as agreed",
+  "Wrong item received",
+  "Damaged in transit",
+  "Missing parts or accessories",
+  "Not as described",
+  "Other",
+] as const;
+
+function normalizeTicketView(raw: PaymentTicketView): PaymentTicketView {
+  const labels = raw.breakdown?.labels ?? DEFAULT_BREAKDOWN_LABELS;
+  return {
+    ...raw,
+    breakdown: {
+      labels,
+      releaseStructure: raw.breakdown?.releaseStructure ?? null,
+    },
+  };
+}
+
+function resolveRoleHandle(opts: {
+  party: { username?: string | null; name?: string | null } | null | undefined;
+  roleUserId: string;
+  myId: string;
+  peer?: {
+    id: string;
+    username?: string | null;
+    name?: string | null;
+  } | null;
+  youLabel: string;
+  genericLabel: string;
+}): string {
+  const fromParty = opts.party?.username
+    ? `@${opts.party.username.replace(/^@/, "")}`
+    : opts.party?.name || null;
+  if (fromParty) return fromParty;
+  if (opts.roleUserId === opts.myId) return opts.youLabel;
+  if (opts.peer && opts.roleUserId === opts.peer.id) {
+    return opts.peer.username
+      ? `@${opts.peer.username.replace(/^@/, "")}`
+      : opts.peer.name || opts.genericLabel;
+  }
+  return opts.genericLabel;
+}
+
 export type PaymentTicketView = {
   id: string;
   conversationId: string;
@@ -133,6 +185,12 @@ type Props = {
   onExpandedChange?: (expanded: boolean) => void;
   /** Role-neutral conversation payload — Accept derives from this + myId. */
   ticketSnapshot?: PaymentTicketView | null;
+  /** Other chat participant — fallback when party snapshots are missing. */
+  conversationPeer?: {
+    id: string;
+    username?: string | null;
+    name?: string | null;
+  } | null;
 };
 
 export function PaymentTicketCard({
@@ -145,6 +203,7 @@ export function PaymentTicketCard({
   expanded: expandedControlled,
   onExpandedChange,
   ticketSnapshot = null,
+  conversationPeer = null,
 }: Props) {
   const [ticket, setTicket] = useState<PaymentTicketView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -186,6 +245,9 @@ export function PaymentTicketCard({
   const [trackingInput, setTrackingInput] = useState("");
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
+  const [issueCategory, setIssueCategory] = useState<string>(
+    PAYMENT_ISSUE_CATEGORIES[0],
+  );
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
 
@@ -219,7 +281,7 @@ export function PaymentTicketCard({
           }
         }
       } else {
-        const next = json.ticket as PaymentTicketView;
+        const next = normalizeTicketView(json.ticket as PaymentTicketView);
         // Role-neutral: never persist a previous viewer's identity on the ticket.
         delete (next as { viewer?: unknown }).viewer;
         setTicket(next);
@@ -238,7 +300,7 @@ export function PaymentTicketCard({
     setCheckout(null);
     setPaymentSubmitted(false);
     if (ticketSnapshot && ticketSnapshot.id === ticketId) {
-      const snap = { ...ticketSnapshot };
+      const snap = normalizeTicketView({ ...ticketSnapshot });
       delete (snap as { viewer?: unknown }).viewer;
       setTicket(snap);
       setLoading(false);
@@ -253,7 +315,7 @@ export function PaymentTicketCard({
     if (!ticketSnapshot || ticketSnapshot.id !== ticketId) return;
     setTicket((prev) => {
       if (prev && prev.id !== ticketSnapshot.id) return prev;
-      const snap = { ...ticketSnapshot };
+      const snap = normalizeTicketView({ ...ticketSnapshot });
       delete (snap as { viewer?: unknown }).viewer;
       if (!prev) return snap;
       if (
@@ -670,8 +732,21 @@ export function PaymentTicketCard({
     decision: "ACKNOWLEDGE" | "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE",
   ) {
     if (!ticket?.protectedTransactionId) return;
-    if (decision === "REPORT_ISSUE" && issueReason.trim().length < 3) {
-      setError("Describe the issue (min 3 characters)");
+    const issueSummary =
+      issueCategory === "Other"
+        ? issueReason.trim()
+        : issueCategory;
+    if (
+      decision === "REPORT_ISSUE" &&
+      (issueCategory === "Other"
+        ? issueReason.trim().length < 3
+        : !issueCategory.trim())
+    ) {
+      setError(
+        issueCategory === "Other"
+          ? "Describe the issue (min 3 characters)"
+          : "Select an issue category",
+      );
       return;
     }
     setBusy(true);
@@ -683,8 +758,10 @@ export function PaymentTicketCard({
         body: JSON.stringify({
           protectedTxnId: ticket.protectedTransactionId,
           decision,
+          category:
+            decision === "REPORT_ISSUE" ? issueCategory : undefined,
           reason:
-            decision === "REPORT_ISSUE" ? issueReason.trim() : undefined,
+            decision === "REPORT_ISSUE" ? issueSummary : undefined,
           details:
             decision === "REPORT_ISSUE"
               ? issueDetails.trim() || undefined
@@ -727,6 +804,7 @@ export function PaymentTicketCard({
           );
         }
         setIssueOpen(false);
+        setIssueCategory(PAYMENT_ISSUE_CATEGORIES[0]);
         setIssueReason("");
         setIssueDetails("");
         await load();
@@ -787,9 +865,35 @@ export function PaymentTicketCard({
     party?.username
       ? `@${party.username.replace(/^@/, "")}`
       : party?.name || null;
-  const buyerHandle = partyHandle(ticket.buyerParty) || (iAmBuyer ? "You" : "Buyer");
-  const sourcerHandle =
-    partyHandle(ticket.sellerParty) || (iAmSeller ? "You" : "Sourcer");
+  const peer =
+    conversationPeer ??
+    (iAmBuyer
+      ? {
+          id: ticket.sellerId,
+          username: ticket.sellerParty?.username ?? null,
+          name: ticket.sellerParty?.name ?? null,
+        }
+      : {
+          id: ticket.buyerId,
+          username: ticket.buyerParty?.username ?? null,
+          name: ticket.buyerParty?.name ?? null,
+        });
+  const buyerHandle = resolveRoleHandle({
+    party: ticket.buyerParty,
+    roleUserId: ticket.buyerId,
+    myId: sessionViewerId,
+    peer,
+    youLabel: "You",
+    genericLabel: "Buyer",
+  });
+  const sourcerHandle = resolveRoleHandle({
+    party: ticket.sellerParty,
+    roleUserId: ticket.sellerId,
+    myId: sessionViewerId,
+    peer,
+    youLabel: "You",
+    genericLabel: "Sourcer",
+  });
   const proposerHandle =
     partyHandle(ticket.proposedBy) ||
     (createdById === ticket.buyerId
@@ -1812,16 +1916,33 @@ export function PaymentTicketCard({
               {issueOpen ? (
                 <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
                   <label className="block text-xs text-white/60">
-                    What went wrong?
-                    <input
-                      value={issueReason}
-                      onChange={(e) => setIssueReason(e.target.value)}
+                    Issue category
+                    <select
+                      value={issueCategory}
+                      onChange={(e) => setIssueCategory(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-                      placeholder="e.g. Damaged in transit"
                       disabled={busy}
-                      maxLength={200}
-                    />
+                    >
+                      {PAYMENT_ISSUE_CATEGORIES.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
                   </label>
+                  {issueCategory === "Other" ? (
+                    <label className="block text-xs text-white/60">
+                      Describe the issue
+                      <input
+                        value={issueReason}
+                        onChange={(e) => setIssueReason(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                        placeholder="Brief summary"
+                        disabled={busy}
+                        maxLength={200}
+                      />
+                    </label>
+                  ) : null}
                   <label className="block text-xs text-white/60">
                     Details (optional)
                     <textarea
@@ -1836,7 +1957,12 @@ export function PaymentTicketCard({
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      disabled={busy || issueReason.trim().length < 3}
+                      disabled={
+                        busy ||
+                        (issueCategory === "Other"
+                          ? issueReason.trim().length < 3
+                          : !issueCategory.trim())
+                      }
                       onClick={() => void submitReceiptDecision("REPORT_ISSUE")}
                       className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
                     >

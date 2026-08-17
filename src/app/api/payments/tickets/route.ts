@@ -130,6 +130,7 @@ export async function POST(req: NextRequest) {
           currency: data.currency,
         },
         reviseFromTicketId: data.reviseFromTicketId ?? null,
+        proposalTraceId,
       }));
     } catch (inner) {
       // Attach conversationId + peer for safe denial logs below.

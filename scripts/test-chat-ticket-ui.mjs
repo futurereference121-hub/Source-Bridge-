@@ -50,6 +50,21 @@ assert.match(
   /z-\[80\]/,
   "create overlay must sit above the fixed mobile nav (z-50)",
 );
+assert.match(
+  propose,
+  /ticket: json\.ticket/,
+  "successful propose must pass full ticket snapshot to onCreated (not id-only stub)",
+);
+assert.match(
+  card,
+  /normalizeTicketView/,
+  "ticket card must tolerate partial snapshots without throwing on breakdown",
+);
+assert.match(
+  card,
+  /PAYMENT_ISSUE_CATEGORIES/,
+  "buyer issue report must offer predefined categories",
+);
 
 // --- CHAT PERFORMANCE ---
 assert.match(convGet, /searchParams\.get\("poll"\) === "1"/);
