@@ -28,6 +28,7 @@ import {
 } from "@/lib/payments/ticket-lifecycle";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { SourceBridgeLoader } from "@/components/ui/SourceBridgeLoader";
 
 type ParticipantUser = {
   id: string;
@@ -187,6 +188,41 @@ type TimelineTicketLite = {
   sellerApprovedRevision?: number | null;
   protectedTransactionId?: string | null;
 };
+
+/** Merge ticket snapshots by id — keep the richest payload (breakdown + parties). */
+function mergeTicketSnapshots(
+  prev: TimelineTicketLite[],
+  incoming: TimelineTicketLite[] | null | undefined,
+): TimelineTicketLite[] {
+  if (!incoming?.length) return prev;
+  const byId = new Map<string, TimelineTicketLite>();
+  for (const t of prev) {
+    if (t?.id) byId.set(t.id, t);
+  }
+  for (const t of incoming) {
+    if (!t?.id) continue;
+    const existing = byId.get(t.id);
+    if (!existing) {
+      byId.set(t.id, t);
+      continue;
+    }
+    const existingRich =
+      Boolean((existing as PaymentTicketView).breakdown?.labels) ||
+      Boolean((existing as PaymentTicketView).buyerParty);
+    const incomingRich =
+      Boolean((t as PaymentTicketView).breakdown?.labels) ||
+      Boolean((t as PaymentTicketView).buyerParty);
+    byId.set(
+      t.id,
+      incomingRich && !existingRich ? t : { ...t, ...existing },
+    );
+  }
+  return [...byId.values()].sort((a, b) => {
+    const at = Date.parse(a.createdAt || "");
+    const bt = Date.parse(b.createdAt || "");
+    return at - bt;
+  });
+}
 
 function visibleChatTickets(
   tickets: TimelineTicketLite[] | null | undefined,
@@ -451,7 +487,9 @@ export function MessagesInbox({
 
         const rawMsgs = (data.messages as Message[]) ?? [];
         const tickets = (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
-        setPaymentTickets(visibleChatTickets(tickets));
+        setPaymentTickets((prev) =>
+          visibleChatTickets(mergeTicketSnapshots(prev, tickets)),
+        );
         // Server already merges; client re-merge is defense in depth.
         const msgs = mergePaymentTicketsClient(
           activeId!,
@@ -533,7 +571,9 @@ export function MessagesInbox({
         const rawMsgs = (data.messages as Message[]) ?? [];
         const tickets =
           (data.paymentTickets as TimelineTicketLite[] | undefined) ?? [];
-        setPaymentTickets(visibleChatTickets(tickets));
+        setPaymentTickets((prev) =>
+          visibleChatTickets(mergeTicketSnapshots(prev, tickets)),
+        );
         const merged = mergePaymentTicketsClient(activeId!, rawMsgs, tickets);
 
         setMessages((prev) => {
@@ -860,7 +900,7 @@ export function MessagesInbox({
           </div>
           <div className="flex-1 overflow-y-auto">
             {listLoading ? (
-              <p className="px-4 py-8 text-sm text-white/45">Loading…</p>
+              <SourceBridgeLoader label="Loading inbox…" className="py-6" />
             ) : conversations.length === 0 ? (
               <div className="px-4 py-10 text-center">
                 <p className="text-sm text-white/70">No conversations yet</p>
@@ -1072,8 +1112,11 @@ export function MessagesInbox({
                         }
                         setActiveTicketCount((n) => n + 1);
                         setPaymentTickets((prev) => {
-                          if (prev.some((t) => t.id === ticket.id)) return prev;
-                          return [...prev, ticket as TimelineTicketLite];
+                          const merged = mergeTicketSnapshots(prev, [
+                            ticket as TimelineTicketLite,
+                          ]);
+                          if (merged.some((t) => t.id === ticket.id)) return merged;
+                          return [...merged, ticket as TimelineTicketLite];
                         });
                         setTicketExpanded((prev) => ({
                           ...prev,
@@ -1157,11 +1200,22 @@ export function MessagesInbox({
                               paymentTickets?: TimelineTicketLite[];
                               viewerUserId?: string;
                               viewerUsername?: string | null;
+                              activePaymentTicketCount?: number;
                             };
                             setThreadViewerUserId(data.viewerUserId || myId);
                             setThreadViewerUsername(
                               data.viewerUsername || account?.username || null,
                             );
+                            if (typeof data.activePaymentTicketCount === "number") {
+                              setActiveTicketCount(data.activePaymentTicketCount);
+                            }
+                            if (data.paymentTickets?.length) {
+                              setPaymentTickets((prev) =>
+                                visibleChatTickets(
+                                  mergeTicketSnapshots(prev, data.paymentTickets),
+                                ),
+                              );
+                            }
                             const msgs = mergePaymentTicketsClient(
                               convId!,
                               data.messages ?? [],
@@ -1195,11 +1249,7 @@ export function MessagesInbox({
                 ) : null}
 
                 {threadLoading ? (
-                  <div className="space-y-3 py-4" aria-busy="true">
-                    <div className="h-16 animate-pulse rounded-xl bg-white/[0.04]" />
-                    <div className="ml-auto h-12 w-2/3 animate-pulse rounded-xl bg-white/[0.06]" />
-                    <div className="h-14 w-3/4 animate-pulse rounded-xl bg-white/[0.04]" />
-                  </div>
+                  <SourceBridgeLoader label="Loading conversation…" />
                 ) : messages.length === 0 ? (
                   <div className="flex flex-1 flex-col items-center justify-center py-10 text-center">
                     <p className="text-sm text-white/70">No messages yet</p>

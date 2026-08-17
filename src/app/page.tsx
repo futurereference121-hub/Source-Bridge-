@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { HeroMission } from "@/components/home/HeroMission";
 import { HeroActions } from "@/components/home/HeroActions";
+import { HomeAuthRedirect } from "@/components/home/HomeAuthRedirect";
 import { GlobalConnectionVisual } from "@/components/home/GlobalConnectionVisual";
 import { EmailContactStrip } from "@/components/home/EmailContactStrip";
 import { DeletedAccountNotice } from "@/components/home/DeletedAccountNotice";
@@ -14,6 +16,9 @@ export const metadata: Metadata = {
 export default function HomePage() {
   return (
     <div className="relative flex min-h-[100svh] flex-col bg-hero-navy">
+      <Suspense fallback={null}>
+        <HomeAuthRedirect />
+      </Suspense>
       <DeletedAccountNotice />
       <section className="relative isolate flex min-h-[100svh] flex-1 flex-col overflow-hidden">
         <GlobalConnectionVisual />

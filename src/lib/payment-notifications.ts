@@ -129,6 +129,33 @@ export async function notifyDisputeOpened(opts: {
   ]);
 }
 
+export async function notifyDisputeUnderReview(opts: {
+  disputeId: string;
+  conversationId: string;
+  buyerId: string;
+  sellerId: string;
+}): Promise<void> {
+  const body = "An admin is reviewing the reported payment issue.";
+  await createNotifications([
+    {
+      userId: opts.buyerId,
+      type: "PAYMENT_DISPUTE",
+      title: "Payment issue under review",
+      body,
+      href: inboxHref(opts.conversationId),
+      dedupeKey: `dispute-review:${opts.disputeId}:buyer`,
+    },
+    {
+      userId: opts.sellerId,
+      type: "PAYMENT_DISPUTE",
+      title: "Payment issue under review",
+      body,
+      href: inboxHref(opts.conversationId),
+      dedupeKey: `dispute-review:${opts.disputeId}:seller`,
+    },
+  ]);
+}
+
 export async function notifyDisputeResolved(opts: {
   disputeId: string;
   conversationId: string;

@@ -172,6 +172,9 @@ export default async function AdminReviewsPage() {
                   disputeId={issue.id}
                   status={issue.status}
                   adminNotes={issue.adminNotes}
+                  conversationId={t.conversationId}
+                  buyerId={t.buyerId}
+                  sellerId={t.sellerId}
                 />
                 {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
                   <PaymentIssueActions

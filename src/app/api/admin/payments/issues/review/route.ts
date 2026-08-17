@@ -25,7 +25,16 @@ export async function POST(req: NextRequest) {
 
     const dispute = await prisma.disputeCase.findUnique({
       where: { id: parsed.data.disputeId },
-      include: { protectedTxn: { select: { id: true } } },
+      include: {
+        protectedTxn: {
+          select: {
+            id: true,
+            conversationId: true,
+            buyerId: true,
+            sellerId: true,
+          },
+        },
+      },
     });
     if (!dispute) return jsonError("Dispute not found", 404);
     if (dispute.status !== "OPEN") {
@@ -48,6 +57,19 @@ export async function POST(req: NextRequest) {
       action: "ADMIN_DISPUTE_UNDER_REVIEW",
       meta: { disputeId: dispute.id },
     });
+
+    const txn = dispute.protectedTxn;
+    if (txn?.conversationId && txn.buyerId && txn.sellerId) {
+      void import("@/lib/payment-notifications").then(
+        ({ notifyDisputeUnderReview }) =>
+          notifyDisputeUnderReview({
+            disputeId: dispute.id,
+            conversationId: txn.conversationId!,
+            buyerId: txn.buyerId,
+            sellerId: txn.sellerId,
+          }),
+      );
+    }
 
     return Response.json({ ok: true, dispute: updated });
   } catch (err) {

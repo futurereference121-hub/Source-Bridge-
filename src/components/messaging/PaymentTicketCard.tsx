@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, ShieldCheck } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, ShieldCheck, X } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import {
@@ -39,13 +40,23 @@ const PAYMENT_ISSUE_CATEGORIES = [
 
 function normalizeTicketView(raw: PaymentTicketView): PaymentTicketView {
   const labels = raw.breakdown?.labels ?? DEFAULT_BREAKDOWN_LABELS;
+  const existing = raw.breakdown ?? {};
   return {
     ...raw,
+    currency: (raw.currency || "GBP").toUpperCase(),
     breakdown: {
+      ...existing,
       labels,
-      releaseStructure: raw.breakdown?.releaseStructure ?? null,
+      releaseStructure: existing.releaseStructure ?? null,
     },
   };
+}
+
+function safeUsernameHandle(
+  username: string | null | undefined,
+): string | null {
+  if (typeof username !== "string" || !username.trim()) return null;
+  return `@${username.replace(/^@/, "")}`;
 }
 
 function resolveRoleHandle(opts: {
@@ -171,6 +182,8 @@ export type PaymentTicketView = {
       note: string;
     } | null;
   };
+  /** Authoritative open dispute — frozen banner only when OPEN / UNDER_REVIEW. */
+  openDisputeStatus?: string | null;
 };
 
 type Props = {
@@ -250,6 +263,11 @@ export function PaymentTicketCard({
   );
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = Boolean(opts?.silent);
@@ -862,9 +880,7 @@ export function PaymentTicketCard({
     username?: string | null;
     name?: string | null;
   } | null | undefined) =>
-    party?.username
-      ? `@${party.username.replace(/^@/, "")}`
-      : party?.name || null;
+    safeUsernameHandle(party?.username) || party?.name || null;
   const peer =
     conversationPeer ??
     (iAmBuyer
@@ -918,7 +934,7 @@ export function PaymentTicketCard({
     },
     sessionViewerId,
   );
-  const acceptance = ticketActions.acceptance;
+  const acceptance = { ...ticketActions.acceptance };
   const waitingIsSelf = waitingCopyAddressesViewer({
     waitingLabel: acceptance.waitingLabel,
     viewerUsername: sessionViewerUsername,
@@ -958,9 +974,7 @@ export function PaymentTicketCard({
   const canRespond = Boolean(open && viewerMayAccept && acceptance.isParty);
   const sellerConnectReady = Boolean(ticket.sellerConnect?.ready);
   const sellerHandle =
-    ticket.sellerParty?.username
-      ? `@${ticket.sellerParty.username.replace(/^@/, "")}`
-      : "the Sourcer";
+    safeUsernameHandle(ticket.sellerParty?.username) || "the Sourcer";
   const canPay =
     !historical &&
     paymentsAccess &&
@@ -1029,9 +1043,17 @@ export function PaymentTicketCard({
   const inInspection =
     ticket.protectedTxnStatus === "IN_INSPECTION" ||
     ticket.lifecycleStage === "IN_INSPECTION";
+  const openDispute = ["OPEN", "UNDER_REVIEW"].includes(
+    ticket.openDisputeStatus || "",
+  );
   const issueHold =
-    ticket.protectedTxnStatus === "DISPUTED" ||
-    ticket.lifecycleStage === "DISPUTED";
+    openDispute ||
+    ((ticket.protectedTxnStatus === "DISPUTED" ||
+      ticket.lifecycleStage === "DISPUTED") &&
+      ticket.openDisputeStatus !== "RESOLVED_BUYER" &&
+      ticket.openDisputeStatus !== "RESOLVED_SELLER" &&
+      ticket.openDisputeStatus !== "RESOLVED_SPLIT" &&
+      ticket.openDisputeStatus !== "CLOSED");
   const hasTracking = Boolean(ticket.trackingNumber);
   const showFulfilment =
     !historical &&
@@ -1115,7 +1137,7 @@ export function PaymentTicketCard({
     });
   }
 
-  const cur = ticket.currency;
+  const cur = (ticket.currency || "GBP").toUpperCase();
   const rows = [
     [ticket.breakdown.labels.itemCost, ticket.itemCostMinor],
     [ticket.breakdown.labels.shipping, ticket.shippingMinor],
@@ -2049,60 +2071,127 @@ export function PaymentTicketCard({
         </div>
       ) : null}
 
-      {confirmCancel ? (
-        <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-3 text-xs text-white/80">
-          <p>
-            Cancel this payment agreement? It becomes non-actionable. No funds
-            will move. You can propose a new Payment Ticket afterward.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void cancelAgreement()}
-              className="rounded-lg bg-amber-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+      {confirmCancel && mounted
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[80] flex items-end justify-center bg-black/65 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] md:items-center md:p-4"
+              data-sb-ticket-confirm="cancel"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !busy) setConfirmCancel(false);
+              }}
             >
-              {busy ? "Cancelling…" : "Confirm cancel"}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirmCancel(false)}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
-            >
-              Keep agreement
-            </button>
-          </div>
-        </div>
-      ) : null}
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Cancel payment agreement"
+                className="flex max-h-[min(100dvh,100%)] w-full min-w-0 max-w-md flex-col overflow-hidden rounded-xl border border-amber-400/30 bg-[#061228] shadow-xl md:max-h-[min(85dvh,24rem)]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/10 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/90">
+                    Cancel agreement
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmCancel(false)}
+                    disabled={busy}
+                    className="rounded-md p-1 text-white/50 hover:text-white"
+                    aria-label="Close"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 text-xs text-white/80">
+                  <p>
+                    Cancel this payment agreement? It becomes non-actionable. No
+                    funds will move. You can propose a new Payment Ticket
+                    afterward.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2 border-t border-white/10 px-4 py-3">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void cancelAgreement()}
+                    className="min-h-11 flex-1 rounded-lg bg-amber-400/90 px-3 py-2 text-xs font-medium text-app-navy disabled:opacity-50"
+                  >
+                    {busy ? "Cancelling…" : "Confirm cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmCancel(false)}
+                    className="min-h-11 flex-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white/70"
+                  >
+                    Keep agreement
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
-      {confirmDelete ? (
-        <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/5 px-3 py-3 text-xs text-white/80">
-          <p>
-            Delete this proposed Payment Ticket? It will disappear from the
-            timeline. This only works for unfunded tickets that were never
-            fully accepted.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void deleteTicket()}
-              className="rounded-lg bg-red-400/90 px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+      {confirmDelete && mounted
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[80] flex items-end justify-center bg-black/65 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] md:items-center md:p-4"
+              data-sb-ticket-confirm="delete"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !busy) setConfirmDelete(false);
+              }}
             >
-              {busy ? "Deleting…" : "Confirm delete"}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirmDelete(false)}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
-            >
-              Keep ticket
-            </button>
-          </div>
-        </div>
-      ) : null}
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Delete proposed Payment Ticket"
+                className="flex max-h-[min(100dvh,100%)] w-full min-w-0 max-w-md flex-col overflow-hidden rounded-xl border border-red-400/30 bg-[#061228] shadow-xl md:max-h-[min(85dvh,24rem)]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-start justify-between gap-2 border-b border-white/10 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-red-300/90">
+                    Delete ticket
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={busy}
+                    className="rounded-md p-1 text-white/50 hover:text-white"
+                    aria-label="Close"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 text-xs text-white/80">
+                  <p>
+                    Delete this proposed Payment Ticket? It will disappear from
+                    the timeline. This only works for unfunded tickets that were
+                    never fully accepted.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2 border-t border-white/10 px-4 py-3">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void deleteTicket()}
+                    className="min-h-11 flex-1 rounded-lg bg-red-400/90 px-3 py-2 text-xs font-medium text-app-navy disabled:opacity-50"
+                  >
+                    {busy ? "Deleting…" : "Confirm delete"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmDelete(false)}
+                    className="min-h-11 flex-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white/70"
+                  >
+                    Keep ticket
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {confirmRelease ? (
         <div className="mt-3 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-3 text-xs text-white/80">

@@ -307,6 +307,8 @@ function mapTicket(
     involvesMoney?: boolean;
     sellerConnectReady?: boolean;
     sellerConnectHasAccount?: boolean;
+    /** Latest DisputeCase.status for banner derivation (generic). */
+    openDisputeStatus?: string | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -558,6 +560,7 @@ function mapTicket(
           : null,
     },
     acceptance,
+    openDisputeStatus: extras?.openDisputeStatus ?? null,
   };
 }
 
@@ -960,6 +963,23 @@ export async function listConversationPaymentTickets(
       },
     ]),
   );
+  const ptIds = rows
+    .map((r) => r.protectedTransactionId)
+    .filter((id): id is string => Boolean(id));
+  const disputeRows =
+    ptIds.length === 0
+      ? []
+      : await prisma.disputeCase.findMany({
+          where: { protectedTxnId: { in: ptIds } },
+          orderBy: { createdAt: "desc" },
+          select: { protectedTxnId: true, status: true },
+        });
+  const disputeStatusByTxn = new Map<string, string>();
+  for (const d of disputeRows) {
+    if (!disputeStatusByTxn.has(d.protectedTxnId)) {
+      disputeStatusByTxn.set(d.protectedTxnId, d.status);
+    }
+  }
   return rows
     .filter((t) =>
       ticketAppearsInChatTimeline({
@@ -991,6 +1011,9 @@ export async function listConversationPaymentTickets(
       viewerId: viewerId || undefined,
       sellerConnectReady: connectBySeller.get(t.sellerId)?.ready ?? false,
       sellerConnectHasAccount: connectBySeller.get(t.sellerId)?.hasAccount ?? false,
+      openDisputeStatus: t.protectedTransactionId
+        ? disputeStatusByTxn.get(t.protectedTransactionId) ?? null
+        : null,
     }),
   );
 }

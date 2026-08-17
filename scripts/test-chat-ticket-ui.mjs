@@ -170,4 +170,35 @@ assert.match(card, /paymentIntentStatus/);
 assert.doesNotMatch(card, /trustLevel/);
 assert.doesNotMatch(card, /matchMedia|pointer:\s*coarse|ontouchstart/);
 
+assert.match(
+  inbox,
+  /mergeTicketSnapshots/,
+  "post-create must merge full ticket snapshots without dropping breakdown",
+);
+assert.match(
+  inbox,
+  /setPaymentTickets\(\(prev\) =>[\s\S]*mergeTicketSnapshots/,
+  "post-create conversation refresh must merge paymentTickets",
+);
+assert.match(
+  card,
+  /safeUsernameHandle/,
+  "ticket card must tolerate non-string usernames without throwing",
+);
+assert.match(
+  card,
+  /openDisputeStatus/,
+  "dispute banner must use authoritative DisputeCase status",
+);
+assert.match(
+  card,
+  /data-sb-ticket-confirm="cancel"/,
+  "cancel confirm must use viewport-contained portal dialog",
+);
+assert.match(
+  card,
+  /createPortal/,
+  "delete/cancel confirms must portal to document body",
+);
+
 console.log("[test-chat-ticket-ui] passed");

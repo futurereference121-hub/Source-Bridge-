@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { FeedItem, Member } from "@/lib/types";
 import { SearchBar } from "@/components/search/SearchBar";
-import { LiveFeed } from "@/components/explore/LiveFeed";
+import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
 import { MemberCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
@@ -171,7 +171,10 @@ export function ExploreClient({
               </Link>
             </div>
             <div className="mt-3">
-              <LiveFeed items={feed.slice(0, FEED_PREVIEW_LIMIT)} />
+              <LiveFeedSplit
+                items={feed.slice(0, FEED_PREVIEW_LIMIT * 2)}
+                perColumnLimit={FEED_PREVIEW_LIMIT}
+              />
             </div>
           </div>
         </section>

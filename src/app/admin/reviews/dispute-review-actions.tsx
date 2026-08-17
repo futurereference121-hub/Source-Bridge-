@@ -7,12 +7,18 @@ type Props = {
   disputeId: string;
   status: string;
   adminNotes?: string;
+  conversationId?: string | null;
+  buyerId?: string;
+  sellerId?: string;
 };
 
 export default function DisputeReviewActions({
   disputeId,
   status,
   adminNotes = "",
+  conversationId,
+  buyerId,
+  sellerId,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -47,8 +53,26 @@ export default function DisputeReviewActions({
 
   if (status !== "OPEN") return null;
 
+  const inboxBase = conversationId ? `/inbox/${conversationId}` : null;
+
   return (
     <div className="mt-3 space-y-2 border-t border-white/10 pt-3 text-xs">
+      {inboxBase && buyerId && sellerId ? (
+        <div className="flex flex-wrap gap-2">
+          <a
+            href={inboxBase}
+            className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
+          >
+            Message buyer (private thread)
+          </a>
+          <a
+            href={inboxBase}
+            className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
+          >
+            Message sourcer (private thread)
+          </a>
+        </div>
+      ) : null}
       <label className="block text-white/50">
         Internal admin notes
         <textarea

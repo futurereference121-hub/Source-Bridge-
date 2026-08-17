@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { FeedItem } from "@/lib/types";
-import { LiveFeed } from "@/components/explore/LiveFeed";
+import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
 import { Container } from "@/components/ui/Container";
+import { SourceBridgeLoader } from "@/components/ui/SourceBridgeLoader";
 
 export function ActivityClient() {
   const [items, setItems] = useState<FeedItem[] | null>(null);
@@ -42,9 +43,9 @@ export function ActivityClient() {
         <section className="mx-auto mt-10 max-w-2xl sm:mt-12">
           <div className="panel-navy rounded-xl px-4 py-4 sm:px-5 sm:py-5">
             {items === null ? (
-              <p className="px-1 py-2 text-sm text-white/45">Loading…</p>
+              <SourceBridgeLoader label="Loading activity…" />
             ) : (
-              <LiveFeed items={items} />
+              <LiveFeedSplit items={items} />
             )}
           </div>
         </section>

@@ -31,6 +31,8 @@ const addSchema = z
     transactionId: z.string().trim().min(1).optional(),
     trackingNumber: z.string().trim().min(4).max(64),
     carrier: z.string().trim().max(64).optional(),
+    /** Product listing protected path — proof-of-shipment photo URL. */
+    shipmentPhotoUrl: z.string().trim().url().max(2048).optional(),
   })
   .refine((d) => Boolean(d.protectedTxnId || d.transactionId), {
     message: "protectedTxnId or transactionId required",
@@ -86,6 +88,24 @@ export async function POST(req: NextRequest) {
       return jsonError("Only the seller can add tracking", 403);
     }
     await assertTestPartyGate(txn.buyerId, txn.sellerId, "add tracking");
+
+    if (
+      txn.origin === "PRODUCT_CHECKOUT" &&
+      txn.paymentOption === "PROTECTED"
+    ) {
+      if (!(parsed.data.carrier || "").trim()) {
+        return jsonError("Carrier is required for listing shipments", 400, {
+          code: "CARRIER_REQUIRED",
+        });
+      }
+      if (!(parsed.data.shipmentPhotoUrl || "").trim()) {
+        return jsonError(
+          "Shipment photo is required for protected listing sales",
+          400,
+          { code: "SHIPMENT_PHOTO_REQUIRED" },
+        );
+      }
+    }
 
     // Eligibility: origin-agnostic; procurement-agreed waits for item-fund release.
     if (
@@ -150,6 +170,7 @@ export async function POST(req: NextRequest) {
           rawPayloadJson: JSON.stringify({
             trackingNumber: parsed.data.trackingNumber,
             carrier: parsed.data.carrier || "",
+            shipmentPhotoUrl: parsed.data.shipmentPhotoUrl || "",
             note: "seller_added",
           }),
           occurredAt: new Date(),
