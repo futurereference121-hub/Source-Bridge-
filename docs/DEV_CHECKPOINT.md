@@ -5,9 +5,9 @@ Update only when finishing a meaningful workstream. Keep this short.
 ## Current
 
 - **Workstream:** QA ticket reset + Pay CTA after fund + shipped → Confirm Item Received → Release/Inspect
-- **Last verified commit:** pending this push to Production TEST
-- **Last TEST deployment:** pending this push
-- **Known blocker:** User must run live TEST browser QA (create one new ticket, fund, ship, confirm receipt, release). Do not seed tickets.
+- **Last verified commit:** `1a9f892` (on `1350627`)
+- **Last TEST deployment:** Production Ready — https://www.sourcebridge.app (`source-bridge-52npd5pbq`)
+- **Known blocker:** User must run live TEST browser QA (create one new ticket, fund, ship, confirm receipt, release). Do not seed tickets for the three QA accounts.
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST
 - **Last critical regression:** `npm run test:payments:fast` and `test:payments:full` PASS; typecheck PASS; `next build` PASS
 - **QA reset:** futureman / theowlsaid / bellahap chats have 0 visible tickets and 0 counting toward the 3-active cap. Funded PT/PI/Charge rows kept, `hiddenFromChatAt` set. Unfunded proposed ticket expired. No refunds/new charges.
