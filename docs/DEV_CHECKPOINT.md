@@ -4,13 +4,13 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Ticket create UX + role labels + admin Reviews/Disputes + in-app notifications
-- **Last verified commit:** pending push (`92dcfbc` baseline + this workstream)
-- **Last TEST deployment:** pending push after migration `20260817140000_payment_trace_notifications_disputes`
-- **Known blocker:** Manual E2E on TEST — propose ticket (no error page), role labels, notifications centre, dispute report → `/admin/reviews`
+- **Workstream:** Manual-QA correction pass (P1–P8)
+- **Last verified commit:** `b995039` (pending deploy verify)
+- **Last TEST deployment:** pending `vercel deploy --prod`
+- **Known blocker:** Manual E2E on TEST — propose ticket (no error page), inbox loader, dispute banner after resolve, protected listing ship photo UI
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST
 - **Last critical regression:** `test:payments:fast` + `full` PASS; typecheck PASS; build PASS
-- **Migration required:** `proposalTraceId`, `Notification.dedupeKey`, `DisputeCase.category` + `adminNotes`
+- **Migration required:** none new (uses existing `proposalTraceId`, `Notification.dedupeKey`, `DisputeCase.category`)
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 
