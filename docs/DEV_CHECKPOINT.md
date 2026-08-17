@@ -4,13 +4,13 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Manual-QA correction pass (P1–P8)
-- **Last verified commit:** `b995039` (pending deploy verify)
-- **Last TEST deployment:** pending `vercel deploy --prod`
-- **Known blocker:** Manual E2E on TEST — propose ticket (no error page), inbox loader, dispute banner after resolve, protected listing ship photo UI
+- **Workstream:** Manual-QA remaining gaps (P6 ship photo, inactivity release, P7 private admin threads)
+- **Last verified commit:** `fdf5ba6`
+- **Last TEST deployment:** `dpl_BRysRDKUJX1D89m4GkHZTcyMRZdu` → www.sourcebridge.app
+- **Known blocker:** Manual E2E on TEST — listing ship photo, admin private threads, human-currency resolve, inactivity release
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST
 - **Last critical regression:** `test:payments:fast` + `full` PASS; typecheck PASS; build PASS
-- **Migration required:** none new (uses existing `proposalTraceId`, `Notification.dedupeKey`, `DisputeCase.category`)
+- **Migration required:** applied `20260817190000_admin_dispute_private_threads`
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 
