@@ -50,6 +50,25 @@ export function minorToMajor(minor: number, currency: string): number {
   return minor / 100;
 }
 
+/**
+ * Parse a human currency amount ("100.00", "50") into integer minor units.
+ * Rejects raw minor-unit integers disguised as pounds (no more than 2 decimals).
+ */
+export function parseHumanAmountToMinor(
+  raw: string,
+  currency: string,
+): number | null {
+  const trimmed = String(raw ?? "")
+    .trim()
+    .replace(/,/g, "")
+    .replace(/^[£$€]\s?/, "");
+  if (!trimmed) return null;
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  const major = Number(trimmed);
+  if (!Number.isFinite(major) || major < 0) return null;
+  return majorToMinor(major, currency);
+}
+
 export function formatMinor(minor: number, currency: string): string {
   const major = minorToMajor(minor, currency);
   try {

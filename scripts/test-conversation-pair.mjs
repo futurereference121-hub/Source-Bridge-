@@ -20,6 +20,22 @@ assert.notEqual(conversationPairKey(a, b), conversationPairKey(a, c));
 assert.throws(() => conversationPairKey(a, a));
 assert.throws(() => conversationPairKey("", b));
 
+function adminDisputeThreadPairKey(disputeCaseId, role) {
+  if (!disputeCaseId) throw new Error("disputeCaseId is required");
+  if (role !== "BUYER" && role !== "SELLER") throw new Error("role");
+  return `admin-dispute:${disputeCaseId}:${role}`;
+}
+
+const disputeId = "disp_aaa";
+assert.notEqual(
+  adminDisputeThreadPairKey(disputeId, "BUYER"),
+  conversationPairKey(a, b),
+);
+assert.notEqual(
+  adminDisputeThreadPairKey(disputeId, "BUYER"),
+  adminDisputeThreadPairKey(disputeId, "SELLER"),
+);
+
 // Inbox routing contracts
 assert.equal("/inbox", "/inbox");
 assert.match(`/inbox/${a}`, /^\/inbox\/.+/);

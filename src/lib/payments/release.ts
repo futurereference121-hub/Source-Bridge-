@@ -561,7 +561,10 @@ export async function processInspectionReleases(limit = 25) {
         continue;
       }
       const openIssue = await prisma.disputeCase.findFirst({
-        where: { protectedTxnId: fresh.id, status: "OPEN" },
+        where: {
+          protectedTxnId: fresh.id,
+          status: { in: ["OPEN", "UNDER_REVIEW"] },
+        },
         select: { id: true },
       });
       if (openIssue) {

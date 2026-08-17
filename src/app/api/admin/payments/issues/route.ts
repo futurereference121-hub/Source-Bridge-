@@ -4,6 +4,7 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { parseHumanAmountToMinor } from "@/lib/payments/money";
 import { planProtectedRefund } from "@/lib/payments/refunds";
 import {
   canTransition,
@@ -33,7 +34,9 @@ const resolveSchema = z.object({
   ]),
   resolutionNote: z.string().trim().max(2000).optional(),
   refundMinor: z.number().int().nonnegative().optional(),
+  refundMajor: z.string().trim().max(32).optional(),
   releaseRemaining: z.boolean().optional().default(false),
+  confirmed: z.literal(true),
 });
 
 function booksForTxn(txn: {
@@ -207,10 +210,25 @@ export async function PATCH(req: NextRequest) {
       parsed.data.resolution === "RESOLVED_SPLIT"
     ) {
       const books = booksForTxn(working);
-      const requested =
-        parsed.data.resolution === "RESOLVED_BUYER"
-          ? books.refundableMinor
-          : Math.max(0, Math.floor(parsed.data.refundMinor ?? 0));
+      let requested = 0;
+      if (parsed.data.resolution === "RESOLVED_BUYER") {
+        requested = books.refundableMinor;
+      } else if (parsed.data.refundMajor) {
+        const parsedMajor = parseHumanAmountToMinor(
+          parsed.data.refundMajor,
+          working.currency,
+        );
+        if (parsedMajor == null) {
+          return jsonError(
+            "Enter a valid currency amount (e.g. 50.00), not minor units",
+            400,
+            { code: "INVALID_AMOUNT" },
+          );
+        }
+        requested = parsedMajor;
+      } else {
+        requested = Math.max(0, Math.floor(parsed.data.refundMinor ?? 0));
+      }
 
       if (requested > 0) {
         if (!isStripeConfigured() || !working.stripePaymentIntentId) {

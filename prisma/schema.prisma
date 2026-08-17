@@ -460,9 +460,10 @@ model VerificationAuditEvent {
 model Conversation {
   id                String                    @id @default(cuid())
   subject           String                    @default("")
-  /// listing | opportunity | sourcing | direct | trip | system
+  /// listing | opportunity | sourcing | direct | trip | system | admin_dispute
   contextType       String                    @default("direct")
   /// Canonical sorted "userA:userB" for 1:1 threads. Null for system/broadcast threads.
+  /// Admin dispute threads use "admin-dispute:{disputeCaseId}:{BUYER|SELLER}".
   pairKey           String?                   @unique
   listingId         String?
   listing           StockListing?             @relation(fields: [listingId], references: [id], onDelete: SetNull)
@@ -471,6 +472,13 @@ model Conversation {
   tripId            String?
   sourcingRequestId String?                   @unique
   sourcingRequest   SourcingRequest?          @relation(fields: [sourcingRequestId], references: [id], onDelete: SetNull)
+  /// Private Admin↔party thread for a payment dispute (not the Buyer↔Sourcer chat).
+  disputeCaseId     String?
+  disputeCase       DisputeCase?              @relation("DisputeAdminThreads", fields: [disputeCaseId], references: [id], onDelete: SetNull)
+  /// Denormalized PaymentTicket.id for admin_dispute threads (ticket still lives on the party chat).
+  paymentTicketId   String?
+  /// BUYER | SELLER — which party this admin_dispute thread is with.
+  adminPartyRole    String?
   closedAt          DateTime?
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @updatedAt
@@ -482,10 +490,12 @@ model Conversation {
   paymentTickets    PaymentTicket[]
   protectedTxns     ProtectedTransaction[]
 
+  @@unique([disputeCaseId, adminPartyRole])
   @@index([updatedAt])
   @@index([listingId])
   @@index([opportunityId])
   @@index([lastMessageAt])
+  @@index([disputeCaseId])
 }
 
 model ConversationParticipant {
@@ -1034,6 +1044,7 @@ model DisputeCase {
   stripeDisputeId String   @default("")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  adminThreads   Conversation[] @relation("DisputeAdminThreads")
 
   @@index([protectedTxnId])
   @@index([status, createdAt])

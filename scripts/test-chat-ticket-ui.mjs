@@ -21,6 +21,11 @@ const convGet = read("src/app/api/conversations/[id]/route.ts");
 const authMe = read("src/app/api/auth/me/route.ts");
 const appProviders = read("src/components/providers/AppProviders.tsx");
 const messagesGet = read("src/app/api/conversations/[id]/messages/route.ts");
+const fulfilmentRules = read("src/lib/payments/fulfilment-rules.ts");
+const cronRelease = read("src/app/api/cron/payments-release/route.ts");
+const reviewActions = read("src/app/admin/reviews/dispute-review-actions.tsx");
+const issueActions = read("src/app/admin/payments/issue-actions.tsx");
+const threadsApi = read("src/app/api/admin/payments/issues/threads/route.ts");
 
 // --- RESPONSIVE PAYMENT TICKET FORM ---
 assert.match(propose, /pt-propose-v8-viewport-dialog/);
@@ -199,6 +204,71 @@ assert.match(
   card,
   /createPortal/,
   "delete/cancel confirms must portal to document body",
+);
+assert.match(
+  inbox,
+  /ticket: json\.ticket|mergeTicketSnapshots/,
+  "create succeeds then conversation refresh must keep ticket snapshots",
+);
+assert.match(
+  card,
+  /shouldShowFundsFrozenBanner/,
+  "frozen banner must use shared COMPLETED-safe helper",
+);
+assert.match(
+  card,
+  /UNDER REVIEW BY SOURCE BRIDGE/,
+  "under-review copy must be participant-visible",
+);
+assert.match(
+  card,
+  /listingProtectedShipmentPhotoRequired/,
+  "protected listing ship UI must require shipment photo",
+);
+assert.doesNotMatch(
+  card,
+  /isCompleted[\s\S]{0,80}issueHold/,
+  "COMPLETED tickets must not pair completed badge with issueHold in one expression",
+);
+assert.match(
+  card,
+  /!isCompleted/,
+  "under-review badge must not render on COMPLETED tickets",
+);
+assert.match(
+  fulfilmentRules,
+  /export const BUYER_INACTIVITY_ADMIN_RELEASE_MS = 72 \* 60 \* 60 \* 1000/,
+  "inactivity release must use one documented TEST constant (72h)",
+);
+assert.doesNotMatch(
+  cronRelease,
+  /BUYER_INACTIVITY_ADMIN_RELEASE_MS|inactivity-release/,
+  "cron must not auto-release on the admin inactivity path",
+);
+assert.match(
+  reviewActions,
+  /\/admin\/reviews\/\$\{disputeId\}/,
+  "Message Buyer/Sourcer must open the dispute case page, not the party chat",
+);
+assert.doesNotMatch(
+  reviewActions,
+  /inboxBase/,
+  "admin messaging must not reuse the Buyer↔Sourcer inbox URL",
+);
+assert.match(
+  threadsApi,
+  /getOrCreateAdminDisputeThread/,
+  "admin threads API must create private Admin↔party conversations",
+);
+assert.match(
+  issueActions,
+  /parseHumanAmountToMinor/,
+  "admin resolution must accept human currency amounts",
+);
+assert.match(
+  issueActions,
+  /Confirm resolution/,
+  "admin resolution must require confirmation",
 );
 
 console.log("[test-chat-ticket-ui] passed");

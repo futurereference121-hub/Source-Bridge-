@@ -16,6 +16,12 @@ import {
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 
+export {
+  BUYER_INACTIVITY_ADMIN_RELEASE_MS,
+  adminMayReleaseAfterBuyerInactivity,
+  listingProtectedShipmentPhotoRequired,
+} from "@/lib/payments/fulfilment-rules";
+
 export type ProtectedTxnListRole = "buyer" | "seller";
 
 function assertFulfilmentAccess() {

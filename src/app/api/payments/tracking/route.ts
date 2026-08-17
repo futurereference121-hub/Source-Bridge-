@@ -20,6 +20,7 @@ import {
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import { sellerCanAddTracking } from "@/lib/payments/fulfilment";
+import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 
 export const runtime = "nodejs";
 
@@ -90,8 +91,10 @@ export async function POST(req: NextRequest) {
     await assertTestPartyGate(txn.buyerId, txn.sellerId, "add tracking");
 
     if (
-      txn.origin === "PRODUCT_CHECKOUT" &&
-      txn.paymentOption === "PROTECTED"
+      listingProtectedShipmentPhotoRequired({
+        origin: txn.origin,
+        paymentOption: txn.paymentOption,
+      })
     ) {
       if (!(parsed.data.carrier || "").trim()) {
         return jsonError("Carrier is required for listing shipments", 400, {

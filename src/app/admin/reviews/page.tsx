@@ -139,18 +139,16 @@ export default async function AdminReviewsPage() {
                       {new Date(issue.createdAt).toLocaleString()}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <Link
+                        href={`/admin/reviews/${issue.id}`}
+                        className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
+                      >
+                        Open case
+                      </Link>
                       {t.conversationId ? (
-                        <>
-                          <Link
-                            href={`/inbox/${t.conversationId}`}
-                            className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
-                          >
-                            Open conversation
-                          </Link>
-                          <span className="text-white/35">
-                            Buyer {buyerLabel} · Sourcer {sellerLabel}
-                          </span>
-                        </>
+                        <span className="text-white/35">
+                          Buyer {buyerLabel} · Sourcer {sellerLabel}
+                        </span>
                       ) : null}
                     </div>
                   </div>
@@ -172,9 +170,6 @@ export default async function AdminReviewsPage() {
                   disputeId={issue.id}
                   status={issue.status}
                   adminNotes={issue.adminNotes}
-                  conversationId={t.conversationId}
-                  buyerId={t.buyerId}
-                  sellerId={t.sellerId}
                 />
                 {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
                   <PaymentIssueActions

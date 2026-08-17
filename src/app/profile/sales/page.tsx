@@ -7,10 +7,14 @@ import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
+import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
+import { uploadProfileImageFile } from "@/lib/client-image-upload";
+import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 
 type Order = {
   id: string;
   status: string;
+  paymentOption: string;
   origin?: string;
   title: string;
   currency: string;
@@ -64,6 +68,8 @@ export default function SalesFulfilmentPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
+  const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -93,6 +99,18 @@ export default function SalesFulfilmentPage() {
 
   async function submitTracking(e: FormEvent, orderId: string) {
     e.preventDefault();
+    const order = orders.find((o) => o.id === orderId);
+    if (
+      order &&
+      listingProtectedShipmentPhotoRequired({
+        origin: order.origin,
+        paymentOption: order.paymentOption,
+      }) &&
+      !shipmentPhotoUrl
+    ) {
+      showToast("Upload a shipment photo before saving tracking");
+      return;
+    }
     setBusyId(orderId);
     try {
       const res = await fetch("/api/payments/tracking", {
@@ -102,6 +120,7 @@ export default function SalesFulfilmentPage() {
           protectedTxnId: orderId,
           carrier: carrier.trim() || undefined,
           trackingNumber: trackingNumber.trim(),
+          shipmentPhotoUrl: shipmentPhotoUrl || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -110,6 +129,7 @@ export default function SalesFulfilmentPage() {
       setOpenId(null);
       setCarrier("");
       setTrackingNumber("");
+      setShipmentPhotoUrl("");
       await load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed");
@@ -368,6 +388,55 @@ export default function SalesFulfilmentPage() {
                             placeholder="Tracking number"
                           />
                         </label>
+                        {listingProtectedShipmentPhotoRequired({
+                          origin: o.origin,
+                          paymentOption: o.paymentOption,
+                        }) ? (
+                          <label className="block text-sm">
+                            <span className="text-white/55">
+                              Shipment photo (required)
+                            </span>
+                            <input
+                              type="file"
+                              accept={IMAGE_ACCEPT_ATTR}
+                              required={!shipmentPhotoUrl}
+                              className="mt-1 block w-full text-sm text-white/70"
+                              disabled={busyId === o.id || photoBusy}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                e.target.value = "";
+                                if (!file || !account) return;
+                                void (async () => {
+                                  setPhotoBusy(true);
+                                  try {
+                                    const result = await uploadProfileImageFile({
+                                      file,
+                                      folder: "misc",
+                                      kind: "stock",
+                                      userId: account.id,
+                                    });
+                                    setShipmentPhotoUrl(result.url);
+                                    URL.revokeObjectURL(result.previewUrl);
+                                    showToast("Shipment photo attached");
+                                  } catch (err) {
+                                    showToast(
+                                      err instanceof Error
+                                        ? err.message
+                                        : "Photo upload failed",
+                                    );
+                                  } finally {
+                                    setPhotoBusy(false);
+                                  }
+                                })();
+                              }}
+                            />
+                            <span className="mt-1 block text-xs text-white/40">
+                              {shipmentPhotoUrl
+                                ? "Photo attached"
+                                : "Photo of the packed item is required for protected listing sales."}
+                            </span>
+                          </label>
+                        ) : null}
                         <p className="text-xs text-white/40">
                           Ship date is recorded automatically. You cannot mark
                           this delivered.
@@ -376,7 +445,15 @@ export default function SalesFulfilmentPage() {
                           <PrimaryButton
                             type="submit"
                             showArrow={false}
-                            disabled={busyId === o.id}
+                            disabled={
+                              busyId === o.id ||
+                              photoBusy ||
+                              (listingProtectedShipmentPhotoRequired({
+                                origin: o.origin,
+                                paymentOption: o.paymentOption,
+                              }) &&
+                                !shipmentPhotoUrl)
+                            }
                             className="rounded-lg"
                           >
                             {busyId === o.id ? "Saving…" : "Save tracking"}
@@ -399,6 +476,7 @@ export default function SalesFulfilmentPage() {
                           setOpenId(o.id);
                           setCarrier("");
                           setTrackingNumber("");
+                          setShipmentPhotoUrl("");
                         }}
                       >
                         Add tracking

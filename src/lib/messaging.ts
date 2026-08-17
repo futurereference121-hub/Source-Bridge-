@@ -263,7 +263,12 @@ async function findExistingDirectConversation(opts: {
       },
     },
   });
-  if (byKey && !byKey.closedAt && byKey.contextType !== "system") {
+  if (
+    byKey &&
+    !byKey.closedAt &&
+    byKey.contextType !== "system" &&
+    byKey.contextType !== "admin_dispute"
+  ) {
     return byKey;
   }
 
@@ -271,7 +276,7 @@ async function findExistingDirectConversation(opts: {
   return prisma.conversation.findFirst({
     where: {
       closedAt: null,
-      contextType: { not: "system" },
+      contextType: { notIn: ["system", "admin_dispute"] },
       AND: [
         { participants: { some: { userId: opts.fromUserId, leftAt: null } } },
         { participants: { some: { userId: opts.toUserId, leftAt: null } } },
@@ -586,6 +591,8 @@ export function conversationTypeLabel(contextType: string): string {
       return "Opportunity Enquiry";
     case "system":
       return "Official";
+    case "admin_dispute":
+      return "Source Bridge support";
     case "direct":
       return "General Message";
     default:

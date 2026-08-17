@@ -156,5 +156,9 @@ npm run test:payments:full
 
 Do not ship isolated UI patches for Accept / cancel / timeline bugs. Ticket identity (`PaymentTicket.id`) is the hard boundary: cancelled tickets are terminal, unfunded dead tickets are hidden from chat (DB rows kept), and Accept is always derived from the current session user + current ticket + current revision.
 
+## Admin inactivity release (listed Protected items, TEST)
+
+`BUYER_INACTIVITY_ADMIN_RELEASE_MS` = **72 hours** (`src/lib/payments/fulfilment-rules.ts`). After a protected listing shipment, if the buyer has not confirmed receipt, an admin may authorize residual release. Not seller self-release. Not inspection-cron auto-release.
+
 ## Phase status
 Webhook foundation accepts Stripe delivery while payment flags stay off. Checkout and funding remain gated until ops enables TEST flags deliberately. TEST Connect onboarding can be enabled independently via `CONNECT_ONBOARDING_ENABLED` (with `sk_test_` keys) without turning on money movement.

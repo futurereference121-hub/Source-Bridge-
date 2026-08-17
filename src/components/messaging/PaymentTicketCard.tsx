@@ -4,10 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, ShieldCheck, X } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
+import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
+import { uploadProfileImageFile } from "@/lib/client-image-upload";
+import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 import {
   getPaymentTicketActions,
   isCompletedLifecycleTicket,
@@ -15,6 +18,7 @@ import {
   isTerminalLifecycleStage,
   resolveAuthoritativeViewerId,
   resolveLifecycleStage,
+  shouldShowFundsFrozenBanner,
   shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
   ticketAppearsInChatTimeline,
@@ -103,6 +107,7 @@ export type PaymentTicketView = {
   protectionFeeMinor: number;
   totalChargeMinor: number;
   paymentOption: string;
+  origin?: string | null;
   procurementAdvanceAgreed: boolean;
   procurementAdvanceMinor: number;
   buyerId: string;
@@ -256,6 +261,8 @@ export function PaymentTicketCard({
   const [paymentsAccess, setPaymentsAccess] = useState(false);
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
+  const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
   const [issueCategory, setIssueCategory] = useState<string>(
@@ -716,6 +723,14 @@ export function PaymentTicketCard({
       setError("Enter a valid tracking number");
       return;
     }
+    const needsPhoto = listingProtectedShipmentPhotoRequired({
+      origin: ticket.origin,
+      paymentOption: ticket.paymentOption,
+    });
+    if (needsPhoto && !shipmentPhotoUrl) {
+      setError("Upload a shipment photo before marking shipped");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -727,6 +742,7 @@ export function PaymentTicketCard({
           transactionId: ticket.protectedTransactionId,
           carrier: carrier.trim() || undefined,
           trackingNumber,
+          shipmentPhotoUrl: shipmentPhotoUrl || undefined,
         }),
       });
       const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -736,6 +752,7 @@ export function PaymentTicketCard({
         setPayNotice("Marked as shipped. Remaining earnings stay protected.");
         setCarrier("");
         setTrackingInput("");
+        setShipmentPhotoUrl("");
         await load();
         onChanged?.();
       }
@@ -1043,17 +1060,12 @@ export function PaymentTicketCard({
   const inInspection =
     ticket.protectedTxnStatus === "IN_INSPECTION" ||
     ticket.lifecycleStage === "IN_INSPECTION";
-  const openDispute = ["OPEN", "UNDER_REVIEW"].includes(
-    ticket.openDisputeStatus || "",
-  );
-  const issueHold =
-    openDispute ||
-    ((ticket.protectedTxnStatus === "DISPUTED" ||
-      ticket.lifecycleStage === "DISPUTED") &&
-      ticket.openDisputeStatus !== "RESOLVED_BUYER" &&
-      ticket.openDisputeStatus !== "RESOLVED_SELLER" &&
-      ticket.openDisputeStatus !== "RESOLVED_SPLIT" &&
-      ticket.openDisputeStatus !== "CLOSED");
+  const issueHold = shouldShowFundsFrozenBanner({
+    ticketStatus: ticket.status,
+    protectedStatus: ticket.protectedTxnStatus,
+    lifecycleStage: lifecycleStageResolved,
+    openDisputeStatus: ticket.openDisputeStatus,
+  });
   const hasTracking = Boolean(ticket.trackingNumber);
   const showFulfilment =
     !historical &&
@@ -1283,6 +1295,11 @@ export function PaymentTicketCard({
                 >
                   {isCompleted ? "COMPLETED" : stageLabel}
                 </span>
+                {ticket.openDisputeStatus === "UNDER_REVIEW" && !isCompleted ? (
+                  <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200/90">
+                    UNDER REVIEW BY SOURCE BRIDGE
+                  </span>
+                ) : null}
                 {needsAction || canRespond ? (
                   <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200/90">
                     {canRespond
@@ -1826,13 +1843,73 @@ export function PaymentTicketCard({
                   disabled={busy}
                 />
               </label>
+              {listingProtectedShipmentPhotoRequired({
+                origin: ticket.origin,
+                paymentOption: ticket.paymentOption,
+              }) ? (
+                <label className="block text-xs text-white/55">
+                  Shipment photo (required)
+                  <input
+                    type="file"
+                    accept={IMAGE_ACCEPT_ATTR}
+                    className="mt-1 block w-full text-xs text-white/70"
+                    disabled={busy || photoBusy}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      void (async () => {
+                        setPhotoBusy(true);
+                        setError("");
+                        try {
+                          const result = await uploadProfileImageFile({
+                            file,
+                            folder: "misc",
+                            kind: "stock",
+                            userId: sessionViewerId || "seller",
+                          });
+                          setShipmentPhotoUrl(result.url);
+                          URL.revokeObjectURL(result.previewUrl);
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : "Could not upload shipment photo",
+                          );
+                        } finally {
+                          setPhotoBusy(false);
+                        }
+                      })();
+                    }}
+                  />
+                  {shipmentPhotoUrl ? (
+                    <span className="mt-1 block text-[11px] text-electric">
+                      Photo attached
+                    </span>
+                  ) : (
+                    <span className="mt-1 block text-[11px] text-white/40">
+                      Photo of the packed item is required for protected listing
+                      sales.
+                    </span>
+                  )}
+                </label>
+              ) : null}
               <p className="text-[11px] text-white/40">
                 You cannot mark delivered. Residual stays protected until buyer
                 confirmation / inspection.
               </p>
               <button
                 type="button"
-                disabled={busy || trackingInput.trim().length < 4}
+                disabled={
+                  busy ||
+                  photoBusy ||
+                  trackingInput.trim().length < 4 ||
+                  (listingProtectedShipmentPhotoRequired({
+                    origin: ticket.origin,
+                    paymentOption: ticket.paymentOption,
+                  }) &&
+                    !shipmentPhotoUrl)
+                }
                 onClick={() => void markShipped()}
                 className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
               >
@@ -2005,13 +2082,21 @@ export function PaymentTicketCard({
           ) : null}
 
           {issueHold ? (
-            <p className="border-t border-white/10 pt-2 text-xs text-amber-200/90">
-              Issue reported — remaining seller funds stay protected; auto-release
-              is frozen
-              {itemFundsReceived > 0
-                ? ` (earlier item funds ${formatMinor(itemFundsReceived, cur)} already released stay with the sourcer)`
-                : ""}
-              .
+            <p
+              className="border-t border-white/10 pt-2 text-xs text-amber-200/90"
+              data-sb-dispute-banner={
+                ticket.openDisputeStatus === "UNDER_REVIEW"
+                  ? "under-review"
+                  : "frozen"
+              }
+            >
+              {ticket.openDisputeStatus === "UNDER_REVIEW"
+                ? "UNDER REVIEW BY SOURCE BRIDGE"
+                : `Issue reported — remaining seller funds stay protected; auto-release is frozen${
+                    itemFundsReceived > 0
+                      ? ` (earlier item funds ${formatMinor(itemFundsReceived, cur)} already released stay with the sourcer)`
+                      : ""
+                  }.`}
             </p>
           ) : null}
 

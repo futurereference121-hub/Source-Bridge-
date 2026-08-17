@@ -675,4 +675,159 @@ assert.equal(
   assert.equal(s, "RELEASED");
 }
 
+// ── listing shipment photo + admin inactivity (mirrors fulfilment-rules.ts)
+{
+  const BUYER_INACTIVITY_ADMIN_RELEASE_MS = 72 * 60 * 60 * 1000;
+  function listingProtectedShipmentPhotoRequired({ origin, paymentOption }) {
+    const direct = paymentOption === "INSTANT" || paymentOption === "DIRECT";
+    return origin === "PRODUCT_CHECKOUT" && !direct;
+  }
+  function adminMayReleaseAfterBuyerInactivity(opts) {
+    if (opts.origin !== "PRODUCT_CHECKOUT") return { ok: false, code: "NOT_LISTING" };
+    if (opts.paymentOption === "DIRECT" || opts.paymentOption === "INSTANT") {
+      return { ok: false, code: "DIRECT" };
+    }
+    if (opts.openDispute) return { ok: false, code: "OPEN_DISPUTE" };
+    if (opts.deliveredAt) return { ok: false, code: "BUYER_ALREADY_RECEIVED" };
+    if ((opts.remainingSellerShareMinor ?? 0) <= 0) return { ok: false, code: "NOTHING_TO_RELEASE" };
+    if (!["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(opts.status)) {
+      return { ok: false, code: "INVALID_STATUS" };
+    }
+    if (!opts.shippedAt) return { ok: false, code: "NOT_SHIPPED" };
+    const windowEndsAt = new Date(new Date(opts.shippedAt).getTime() + BUYER_INACTIVITY_ADMIN_RELEASE_MS);
+    if ((opts.now || new Date()).getTime() < windowEndsAt.getTime()) {
+      return { ok: false, code: "WINDOW_OPEN", windowEndsAt };
+    }
+    return { ok: true, windowEndsAt };
+  }
+
+  assert.equal(
+    listingProtectedShipmentPhotoRequired({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "PROTECTED",
+    }),
+    true,
+  );
+  assert.equal(
+    listingProtectedShipmentPhotoRequired({
+      origin: "CHAT_TICKET",
+      paymentOption: "PROTECTED",
+    }),
+    false,
+  );
+  assert.equal(
+    listingProtectedShipmentPhotoRequired({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "DIRECT",
+    }),
+    false,
+  );
+
+  const shipped = new Date("2026-01-01T00:00:00Z");
+  const tooSoon = new Date(shipped.getTime() + 24 * 60 * 60 * 1000);
+  const afterWindow = new Date(shipped.getTime() + BUYER_INACTIVITY_ADMIN_RELEASE_MS + 1000);
+  assert.equal(
+    adminMayReleaseAfterBuyerInactivity({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "PROTECTED",
+      status: "IN_TRANSIT",
+      shippedAt: shipped,
+      remainingSellerShareMinor: 5000,
+      now: tooSoon,
+    }).ok,
+    false,
+  );
+  assert.equal(
+    adminMayReleaseAfterBuyerInactivity({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "PROTECTED",
+      status: "IN_TRANSIT",
+      shippedAt: shipped,
+      remainingSellerShareMinor: 5000,
+      now: afterWindow,
+    }).ok,
+    true,
+  );
+  assert.equal(
+    adminMayReleaseAfterBuyerInactivity({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "PROTECTED",
+      status: "IN_TRANSIT",
+      shippedAt: shipped,
+      remainingSellerShareMinor: 5000,
+      now: afterWindow,
+      openDispute: true,
+    }).ok,
+    false,
+  );
+  assert.equal(
+    adminMayReleaseAfterBuyerInactivity({
+      origin: "PRODUCT_CHECKOUT",
+      paymentOption: "PROTECTED",
+      status: "IN_INSPECTION",
+      shippedAt: shipped,
+      remainingSellerShareMinor: 5000,
+      now: afterWindow,
+    }).ok,
+    false,
+  );
+}
+
+// ── resolved-state cleanup: COMPLETED never shows frozen banner
+{
+  function shouldShowFundsFrozenBanner(opts) {
+    const stage = opts.lifecycleStage || "";
+    if (stage === "COMPLETED" || stage === "RELEASED" || opts.protectedStatus === "RELEASED") {
+      return false;
+    }
+    const dispute = opts.openDisputeStatus || "";
+    if (["RESOLVED_BUYER", "RESOLVED_SELLER", "RESOLVED_SPLIT", "CLOSED"].includes(dispute)) {
+      return false;
+    }
+    if (["OPEN", "UNDER_REVIEW"].includes(dispute)) return true;
+    return opts.protectedStatus === "DISPUTED" || stage === "DISPUTED";
+  }
+  assert.equal(
+    shouldShowFundsFrozenBanner({
+      lifecycleStage: "COMPLETED",
+      protectedStatus: "RELEASED",
+      openDisputeStatus: "OPEN",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowFundsFrozenBanner({
+      lifecycleStage: "DISPUTED",
+      protectedStatus: "DISPUTED",
+      openDisputeStatus: "RESOLVED_SELLER",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowFundsFrozenBanner({
+      lifecycleStage: "DISPUTED",
+      protectedStatus: "DISPUTED",
+      openDisputeStatus: "UNDER_REVIEW",
+    }),
+    true,
+  );
+}
+
+// ── human currency parse (GBP £50.00 → 5000 minor, not raw 10000)
+{
+  function parseHumanAmountToMinor(raw, currency) {
+    const trimmed = String(raw ?? "").trim().replace(/,/g, "").replace(/^[£$€]\s?/, "");
+    if (!trimmed) return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+    const major = Number(trimmed);
+    if (!Number.isFinite(major) || major < 0) return null;
+    return currency.toUpperCase() === "JPY" ? Math.round(major) : Math.round(major * 100);
+  }
+  assert.equal(parseHumanAmountToMinor("50.00", "GBP"), 5000);
+  assert.equal(parseHumanAmountToMinor("£50.00", "GBP"), 5000);
+  assert.equal(parseHumanAmountToMinor("10000", "GBP"), 1_000_000);
+  assert.equal(parseHumanAmountToMinor("50.123", "GBP"), null);
+  assert.equal(adminRefundBound({ requestedMinor: 5000, refundableMinor: 2000 }).ok, false);
+}
+
 console.log("test-fulfilment: all assertions passed");

@@ -115,6 +115,9 @@ function conversationTitle(
   if (conversation.contextType === "system") {
     return conversation.subject || "Source Bridge";
   }
+  if (conversation.contextType === "admin_dispute") {
+    return conversation.subject || "Source Bridge support";
+  }
   return displayName(otherParticipant(conversation, myId));
 }
 
@@ -1091,7 +1094,8 @@ export function MessagesInbox({
                       View profile
                     </Link>
                   ) : null}
-                  {activeConversation?.contextType !== "system" ? (
+                  {activeConversation?.contextType !== "system" &&
+                  activeConversation?.contextType !== "admin_dispute" ? (
                     <ProposePaymentTicketButton
                       conversationId={activeId!}
                       myId={myId}

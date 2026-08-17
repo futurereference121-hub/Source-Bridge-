@@ -309,6 +309,7 @@ function mapTicket(
     sellerConnectHasAccount?: boolean;
     /** Latest DisputeCase.status for banner derivation (generic). */
     openDisputeStatus?: string | null;
+    origin?: string | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -470,6 +471,7 @@ function mapTicket(
     protectionFeeMinor: t.protectionFeeMinor,
     totalChargeMinor: t.totalChargeMinor,
     paymentOption: t.paymentOption,
+    origin: extras?.origin ?? null,
     procurementAdvanceAgreed: t.procurementAdvanceAgreed,
     procurementAdvanceMinor: t.procurementAdvanceMinor,
     notes: t.notes,
@@ -937,6 +939,7 @@ export async function listConversationPaymentTickets(
           shippedAt: true,
           deliveredAt: true,
           inspectionEndsAt: true,
+          origin: true,
         },
       },
     },
@@ -1014,6 +1017,7 @@ export async function listConversationPaymentTickets(
       openDisputeStatus: t.protectedTransactionId
         ? disputeStatusByTxn.get(t.protectedTransactionId) ?? null
         : null,
+      origin: t.protectedTransaction?.origin ?? null,
     }),
   );
 }
@@ -2137,6 +2141,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           shippedAt: true,
           deliveredAt: true,
           inspectionEndsAt: true,
+          origin: true,
         },
       },
     },
@@ -2183,6 +2188,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     deliveredAt: pt?.deliveredAt ?? null,
     inspectionEndsAt: pt?.inspectionEndsAt ?? null,
     fundedAt: pt?.fundedAt ?? null,
+    origin: pt?.origin ?? null,
     proposedBy: ticket.createdBy
       ? {
           id: ticket.createdBy.id,

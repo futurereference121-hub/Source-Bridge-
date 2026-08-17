@@ -19,6 +19,7 @@ runNodeTestScripts(
     "scripts/test-listing-payment-options.mjs",
     "scripts/test-allowlist.mjs",
     "scripts/test-ticket-expiry-connect-retry.mjs",
+    "scripts/test-conversation-pair.mjs",
   ],
   { label: "payments:fast" },
 );

@@ -307,6 +307,40 @@ export function isCompletedLifecycleTicket(opts: {
   return stage === "COMPLETED" || stage === "RELEASED";
 }
 
+const OPEN_DISPUTE_STATUSES = new Set(["OPEN", "UNDER_REVIEW"]);
+const RESOLVED_DISPUTE_STATUSES = new Set([
+  "RESOLVED_BUYER",
+  "RESOLVED_SELLER",
+  "RESOLVED_SPLIT",
+  "CLOSED",
+]);
+
+/**
+ * Frozen-funds banner: never with COMPLETED/RELEASED, never after a resolved
+ * DisputeCase, only while DisputeCase is OPEN/UNDER_REVIEW (or PT still DISPUTED).
+ */
+export function shouldShowFundsFrozenBanner(opts: {
+  ticketStatus?: string | null;
+  protectedStatus?: string | null;
+  lifecycleStage?: string | null;
+  openDisputeStatus?: string | null;
+}): boolean {
+  if (
+    isCompletedLifecycleTicket({
+      ticketStatus: opts.ticketStatus || opts.protectedStatus || "",
+      protectedStatus: opts.protectedStatus ?? null,
+      lifecycleStage: opts.lifecycleStage ?? null,
+    })
+  ) {
+    return false;
+  }
+  const dispute = opts.openDisputeStatus || "";
+  if (RESOLVED_DISPUTE_STATUSES.has(dispute)) return false;
+  if (OPEN_DISPUTE_STATUSES.has(dispute)) return true;
+  const st = opts.protectedStatus || opts.lifecycleStage || "";
+  return st === "DISPUTED";
+}
+
 /** Subtle system-message copy for collapsed terminal tickets. */
 export function subtleHistoricalLabel(ticketStatus: string): string {
   switch (ticketStatus) {

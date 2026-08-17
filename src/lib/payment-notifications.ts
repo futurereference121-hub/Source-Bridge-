@@ -135,12 +135,12 @@ export async function notifyDisputeUnderReview(opts: {
   buyerId: string;
   sellerId: string;
 }): Promise<void> {
-  const body = "An admin is reviewing the reported payment issue.";
+  const body = "UNDER REVIEW BY SOURCE BRIDGE";
   await createNotifications([
     {
       userId: opts.buyerId,
       type: "PAYMENT_DISPUTE",
-      title: "Payment issue under review",
+      title: "UNDER REVIEW BY SOURCE BRIDGE",
       body,
       href: inboxHref(opts.conversationId),
       dedupeKey: `dispute-review:${opts.disputeId}:buyer`,
@@ -148,7 +148,7 @@ export async function notifyDisputeUnderReview(opts: {
     {
       userId: opts.sellerId,
       type: "PAYMENT_DISPUTE",
-      title: "Payment issue under review",
+      title: "UNDER REVIEW BY SOURCE BRIDGE",
       body,
       href: inboxHref(opts.conversationId),
       dedupeKey: `dispute-review:${opts.disputeId}:seller`,

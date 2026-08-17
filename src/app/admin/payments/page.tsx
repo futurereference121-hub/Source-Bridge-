@@ -8,6 +8,7 @@ import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import PaymentIssueActions from "./issue-actions";
+import InactivityReleasePanel from "./inactivity-release-panel";
 
 export default async function AdminPaymentsPage() {
   const user = await getSessionUser();
@@ -263,6 +264,8 @@ export default async function AdminPaymentsPage() {
           })
         )}
       </div>
+
+      <InactivityReleasePanel />
 
       <h2 className="mt-10 text-lg font-semibold">Recent protected transactions</h2>
       <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
