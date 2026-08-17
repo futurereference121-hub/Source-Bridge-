@@ -90,13 +90,14 @@ const TRANSITIONS: Record<DomainAction, Partial<Record<ProtectedStatus, Protecte
     DELIVERED: "IN_INSPECTION",
   },
   /**
-   * Buyer manual “Confirm item received” after seller shipped.
+   * Buyer “Confirm item received” after seller shipped.
+   * Records receipt only (DELIVERED). Does not start inspection or release.
    * Never from FUNDED without shipment. Never jumps to RELEASED.
    */
   CONFIRM_RECEIPT: {
-    AWAITING_SHIPMENT: "IN_INSPECTION",
-    IN_TRANSIT: "IN_INSPECTION",
-    DELIVERED: "IN_INSPECTION",
+    AWAITING_SHIPMENT: "DELIVERED",
+    IN_TRANSIT: "DELIVERED",
+    DELIVERED: "DELIVERED",
   },
   /**
    * Buyer “Release funds now” — marks ready for residual releaseFinal only.

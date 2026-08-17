@@ -32,9 +32,9 @@ const TRANSITIONS = {
     DELIVERED: "IN_INSPECTION",
   },
   CONFIRM_RECEIPT: {
-    AWAITING_SHIPMENT: "IN_INSPECTION",
-    IN_TRANSIT: "IN_INSPECTION",
-    DELIVERED: "IN_INSPECTION",
+    AWAITING_SHIPMENT: "DELIVERED",
+    IN_TRANSIT: "DELIVERED",
+    DELIVERED: "DELIVERED",
   },
   BUYER_RELEASE_NOW: {
     AWAITING_SHIPMENT: "READY_TO_RELEASE",
@@ -129,20 +129,23 @@ function canConfirmReceipt({
   role,
   txnStatus,
   shipped,
+  deliveredAt = null,
   alreadyInspectionOrLater,
 }) {
   if (role !== "buyer") return false;
   if (alreadyInspectionOrLater) return "idempotent";
   if (!shipped) return false;
+  if (deliveredAt) return false;
   if (!canTransition(txnStatus, "CONFIRM_RECEIPT")) return false;
   return true;
 }
 
-function canReleaseNow({ role, txnStatus, shipped }) {
+function canReleaseNow({ role, txnStatus, shipped, deliveredAt = null }) {
   if (role !== "buyer") return false;
   if (txnStatus === "IN_INSPECTION" || txnStatus === "READY_TO_RELEASE") return true;
   if (!shipped) return false;
-  return canTransition(txnStatus, "BUYER_RELEASE_NOW");
+  if (!deliveredAt) return false;
+  return txnStatus === "DELIVERED";
 }
 
 /** Report a Problem only during IN_INSPECTION with residual remaining. */
@@ -151,6 +154,20 @@ function canReportIssue({ role, txnStatus, residualMinor = 1 }) {
   if (txnStatus !== "IN_INSPECTION") return false;
   if (residualMinor <= 0) return false;
   return canTransition(txnStatus, "OPEN_DISPUTE");
+}
+
+/** After ship: Confirm Item Received only. After ACK: Release + Inspect. */
+function postShipBuyerChoices({ shipped, deliveredAt, txnStatus }) {
+  if (!shipped || deliveredAt) return [];
+  if (!["AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED"].includes(txnStatus)) {
+    return [];
+  }
+  return ["CONFIRM_RECEIPT"];
+}
+
+function postReceiptBuyerChoices({ deliveredAt, txnStatus }) {
+  if (!deliveredAt || txnStatus !== "DELIVERED") return [];
+  return ["RELEASE_NOW", "START_INSPECTION"];
 }
 
 /** Initial receipt modal — only two choices (Report reserved for inspection). */
@@ -241,11 +258,9 @@ const DEFAULT_INSPECTION_HOURS = 12;
 
 function onProviderDelivered(status) {
   assert.equal(canTransition(status, "TRACKING_DELIVERED"), true);
-  let s = nextStatus(status, "TRACKING_DELIVERED");
+  const s = nextStatus(status, "TRACKING_DELIVERED");
   assert.equal(s, "DELIVERED");
-  s = nextStatus(s, "START_INSPECTION");
-  assert.equal(s, "IN_INSPECTION");
-  return { status: s, transferTriggered: false, inspectionHours: DEFAULT_INSPECTION_HOURS };
+  return { status: s, transferTriggered: false, inspectionHours: null };
 }
 
 function listingStatusAfter({ event, current }) {
@@ -356,12 +371,34 @@ assert.equal(
   "idempotent",
 );
 
-// ── two-choice initial receipt modal (Report removed)
+// ── two-choice after receipt (Report removed)
 {
   const choices = initialReceiptChoices();
   assert.deepEqual(choices, ["RELEASE_NOW", "START_INSPECTION"]);
   assert.equal(choices.includes("REPORT_ISSUE"), false);
   assert.equal(choices.length, 2);
+  assert.deepEqual(
+    postShipBuyerChoices({
+      shipped: true,
+      deliveredAt: null,
+      txnStatus: "AWAITING_SHIPMENT",
+    }),
+    ["CONFIRM_RECEIPT"],
+  );
+  assert.deepEqual(
+    postReceiptBuyerChoices({
+      deliveredAt: null,
+      txnStatus: "AWAITING_SHIPMENT",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    postReceiptBuyerChoices({
+      deliveredAt: new Date(),
+      txnStatus: "DELIVERED",
+    }),
+    ["RELEASE_NOW", "START_INSPECTION"],
+  );
 }
 
 // ── START_INSPECTION — no Stripe transfer
@@ -369,7 +406,8 @@ assert.equal(
   const fx = startInspectionSideEffects();
   assert.equal(fx.nextStatus, "IN_INSPECTION");
   assert.equal(fx.transferTriggered, false);
-  assert.equal(nextStatus("IN_TRANSIT", "CONFIRM_RECEIPT"), "IN_INSPECTION");
+  assert.equal(nextStatus("IN_TRANSIT", "CONFIRM_RECEIPT"), "DELIVERED");
+  assert.equal(nextStatus("DELIVERED", "START_INSPECTION"), "IN_INSPECTION");
   assert.equal(
     canReleaseFinalProtected("IN_INSPECTION", "PROTECTED"),
     false,
@@ -378,13 +416,31 @@ assert.equal(
 
 // ── RELEASE_NOW residual via releaseFinal only
 {
-  const fx = releaseNowSideEffects("AWAITING_SHIPMENT");
+  const fx = releaseNowSideEffects("DELIVERED");
   assert.equal(fx.nextStatus, "READY_TO_RELEASE");
   assert.equal(fx.transferPath, "releaseFinal");
   assert.equal(fx.residualOnly, true);
   assert.equal(canReleaseFinalProtected(fx.nextStatus, "PROTECTED"), true);
   assert.equal(canReleaseNow({ role: "buyer", txnStatus: "IN_INSPECTION", shipped: true }), true);
   assert.equal(canReleaseNow({ role: "seller", txnStatus: "IN_INSPECTION", shipped: true }), false);
+  assert.equal(
+    canReleaseNow({
+      role: "buyer",
+      txnStatus: "AWAITING_SHIPMENT",
+      shipped: true,
+      deliveredAt: null,
+    }),
+    false,
+  );
+  assert.equal(
+    canReleaseNow({
+      role: "buyer",
+      txnStatus: "DELIVERED",
+      shipped: true,
+      deliveredAt: new Date(),
+    }),
+    true,
+  );
   assert.equal(nextStatus("IN_INSPECTION", "BUYER_RELEASE_NOW"), "READY_TO_RELEASE");
 }
 
@@ -516,9 +572,9 @@ assert.equal(canTransition("RELEASED", "BUYER_RELEASE_NOW"), false);
 // ── DELIVERED enters inspection state
 {
   const r = onProviderDelivered("IN_TRANSIT");
-  assert.equal(r.status, "IN_INSPECTION");
+  assert.equal(r.status, "DELIVERED");
   assert.equal(r.transferTriggered, false);
-  assert.equal(r.inspectionHours, 12);
+  assert.equal(r.inspectionHours, null);
 }
 
 // ── releaseFinal requires READY_TO_RELEASE (or admin partial) for PROTECTED
@@ -552,6 +608,8 @@ assert.equal(
   s = nextStatus(s, "ADD_TRACKING");
   assert.equal(s, "AWAITING_SHIPMENT");
   s = nextStatus(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "DELIVERED");
+  s = nextStatus(s, "START_INSPECTION");
   assert.equal(s, "IN_INSPECTION");
   s = nextStatus(s, "COMPLETE_INSPECTION");
   assert.equal(s, "READY_TO_RELEASE");
@@ -560,10 +618,12 @@ assert.equal(
   assert.equal(s, "RELEASED");
 }
 
-// Immediate RELEASE_NOW product path
+// Immediate RELEASE_NOW after buyer confirms receipt
 {
   let s = "FUNDED";
   s = nextStatus(s, "ADD_TRACKING");
+  s = nextStatus(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "DELIVERED");
   s = nextStatus(s, "BUYER_RELEASE_NOW");
   assert.equal(s, "READY_TO_RELEASE");
   s = nextStatus(s, "RELEASE_FINAL");
@@ -578,7 +638,7 @@ assert.equal(
   s = nextStatus(s, "ADD_TRACKING");
   assert.equal(s, "AWAITING_SHIPMENT");
   s = nextStatus(s, "CONFIRM_RECEIPT");
-  assert.equal(s, "IN_INSPECTION");
+  assert.equal(s, "DELIVERED");
   s = nextStatus(s, "BUYER_RELEASE_NOW");
   assert.equal(s, "READY_TO_RELEASE");
   assert.equal(canReleaseFinalProtected(s, "PROTECTED"), true);
@@ -597,6 +657,8 @@ assert.equal(
   let s = "FUNDED";
   s = nextStatus(s, "ADD_TRACKING");
   s = nextStatus(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "DELIVERED");
+  s = nextStatus(s, "START_INSPECTION");
   assert.equal(s, "IN_INSPECTION");
   assert.equal(canReportIssue({ role: "buyer", txnStatus: s, residualMinor: 100 }), true);
   s = nextStatus(s, "OPEN_DISPUTE");

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { requireSessionUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { prisma } from "@/lib/db";
-import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import {
   getTrackingProvider,
@@ -239,13 +238,9 @@ export async function PATCH(req: NextRequest) {
 
     if (normalized === "DELIVERED" && canTransition(status, "TRACKING_DELIVERED")) {
       status = nextStatus(status, "TRACKING_DELIVERED");
-      const config = await getPlatformPaymentConfig();
-      const inspectionEnds = new Date();
-      inspectionEnds.setHours(inspectionEnds.getHours() + config.inspectionHours);
-      updates.status = nextStatus(status, "START_INSPECTION");
-      updates.deliveredAt = new Date();
+      updates.status = status;
       updates.trackingDeliveredAt = new Date();
-      updates.inspectionEndsAt = inspectionEnds;
+      // Carrier delivered ≠ buyer receipt. Do not set deliveredAt or start inspection.
     }
 
     await prisma.trackingEvent.create({

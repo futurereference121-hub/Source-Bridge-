@@ -63,7 +63,7 @@ assert.match(
 );
 assert.match(
   card,
-  /Skip when the parent conversation poll already supplies ticketSnapshot/,
+  /Skip GET only when the parent poll supplies a snapshot/,
 );
 assert.doesNotMatch(
   inbox,
@@ -145,6 +145,10 @@ assert.doesNotMatch(
   /canRespond = Boolean\(open && viewerMayAccept && acceptance\.isParty && paymentsAccess\)/,
   "Accept must not be gated on Connect / paymentsAccess",
 );
+assert.match(card, /ticketMayShowPayUi/);
+assert.match(card, /ACKNOWLEDGE/);
+assert.match(card, /Confirm Item Received/);
+assert.match(card, /Start 12-Hour Inspection/);
 assert.doesNotMatch(card, /trustLevel/);
 assert.doesNotMatch(card, /matchMedia|pointer:\s*coarse|ontouchstart/);
 

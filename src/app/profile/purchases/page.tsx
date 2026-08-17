@@ -18,6 +18,7 @@ type Order = {
   protectionFeeMinor: number;
   fundedAt: string | null;
   shippedAt: string | null;
+  deliveredAt?: string | null;
   trackingNumber: string;
   trackingCarrier: string;
   inspectionEndsAt: string | null;
@@ -50,7 +51,7 @@ type Order = {
   };
 };
 
-type Decision = "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE";
+type Decision = "ACKNOWLEDGE" | "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE";
 
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
@@ -68,7 +69,6 @@ export default function PurchasesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [decideId, setDecideId] = useState<string | null>(null);
   const [issueId, setIssueId] = useState<string | null>(null);
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
@@ -135,6 +135,12 @@ export default function PurchasesPage() {
             ? "Inspection already active"
             : "Inspection started — funds stay protected",
         );
+      } else if (decision === "ACKNOWLEDGE") {
+        showToast(
+          data.alreadyConfirmed
+            ? "Item already marked received"
+            : "Item received — choose release or inspection",
+        );
       } else {
         showToast(
           data.alreadyConfirmed
@@ -142,7 +148,6 @@ export default function PurchasesPage() {
             : "Issue reported — remaining funds held",
         );
       }
-      setDecideId(null);
       setIssueId(null);
       setIssueReason("");
       setIssueDetails("");
@@ -237,7 +242,9 @@ export default function PurchasesPage() {
                 o.books?.procurementTransferredMinor ??
                 o.procurementTransferredMinor ??
                 0;
-              const showDecision = o.actions.canConfirmReceipt;
+              const showConfirmReceipt = o.actions.canConfirmReceipt;
+              const showPostReceipt =
+                o.status === "DELIVERED" && Boolean(o.actions.canReleaseNow);
               const showInsp =
                 o.status === "IN_INSPECTION" && Boolean(o.actions.canReleaseNow);
               const showIssueHold = o.status === "DISPUTED";
@@ -384,68 +391,54 @@ export default function PurchasesPage() {
                   </div>
                 ) : null}
 
-                {showDecision ? (
+                {showConfirmReceipt ? (
                   <div className="mt-5 border-t border-white/10 pt-4">
-                    {decideId !== o.id ? (
-                      <>
+                    <PrimaryButton
+                      type="button"
+                      showArrow={false}
+                      disabled={busyId === o.id}
+                      className="rounded-lg"
+                      onClick={() => void submitDecision(o.id, "ACKNOWLEDGE")}
+                    >
+                      {busyId === o.id ? "Saving…" : "Confirm item received"}
+                    </PrimaryButton>
+                    <p className="mt-2 text-xs text-white/40">
+                      Confirm receipt first. You can then release funds now or
+                      start a 12-hour inspection.
+                    </p>
+                  </div>
+                ) : null}
+
+                {showPostReceipt ? (
+                  <div className="mt-5 border-t border-white/10 pt-4">
+                    <div className="space-y-3 text-sm">
+                      <p className="font-medium text-white/90">
+                        Item received — choose one
+                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                         <PrimaryButton
                           type="button"
                           showArrow={false}
                           disabled={busyId === o.id}
                           className="rounded-lg"
-                          onClick={() => {
-                            setDecideId(o.id);
-                            setIssueId(null);
-                          }}
+                          onClick={() =>
+                            void submitDecision(o.id, "RELEASE_NOW")
+                          }
                         >
-                          Confirm item received
+                          {busyId === o.id ? "Working…" : "Release Funds Now"}
                         </PrimaryButton>
-                        <p className="mt-2 text-xs text-white/40">
-                          Choose release funds now or start a 12-hour inspection.
-                          You can report a problem once inspection is active.
-                        </p>
-                      </>
-                    ) : (
-                      <div className="space-y-3 text-sm">
-                        <p className="font-medium text-white/90">
-                          Item received — choose one
-                        </p>
-                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                          <PrimaryButton
-                            type="button"
-                            showArrow={false}
-                            disabled={busyId === o.id}
-                            className="rounded-lg"
-                            onClick={() =>
-                              void submitDecision(o.id, "RELEASE_NOW")
-                            }
-                          >
-                            {busyId === o.id ? "Working…" : "Release Funds Now"}
-                          </PrimaryButton>
-                          <button
-                            type="button"
-                            disabled={busyId === o.id}
-                            onClick={() =>
-                              void submitDecision(o.id, "START_INSPECTION")
-                            }
-                            className="rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50"
-                          >
-                            Start 12-Hour Inspection
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busyId === o.id}
-                            onClick={() => {
-                              setDecideId(null);
-                              setIssueId(null);
-                            }}
-                            className="rounded-lg border border-white/15 px-4 py-2 text-sm text-white/60"
-                          >
-                            Cancel
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          disabled={busyId === o.id}
+                          onClick={() =>
+                            void submitDecision(o.id, "START_INSPECTION")
+                          }
+                          className="rounded-lg border border-white/25 px-4 py-2 text-sm text-white disabled:opacity-50"
+                        >
+                          Start 12-Hour Inspection
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 ) : null}
 

@@ -12,21 +12,22 @@ const schema = z.object({
   protectedTxnId: z.string().trim().min(1),
   /**
    * Protected receipt decision.
-   * Initial UI: RELEASE_NOW | START_INSPECTION.
-   * REPORT_ISSUE only allowed server-side while IN_INSPECTION (not initial modal).
-   * Default START_INSPECTION preserves older clients that only confirmed receipt.
+   * ACKNOWLEDGE = confirm received only.
+   * Then RELEASE_NOW | START_INSPECTION.
+   * REPORT_ISSUE only while IN_INSPECTION.
    */
   decision: z
-    .enum(["RELEASE_NOW", "START_INSPECTION", "REPORT_ISSUE"])
+    .enum(["ACKNOWLEDGE", "RELEASE_NOW", "START_INSPECTION", "REPORT_ISSUE"])
     .optional()
-    .default("START_INSPECTION"),
+    .default("ACKNOWLEDGE"),
   reason: z.string().trim().min(3).max(200).optional(),
   details: z.string().trim().max(4000).optional(),
 });
 
 /**
  * Buyer confirms item received for Protected Payments:
- * RELEASE_NOW | START_INSPECTION (initial), REPORT_ISSUE (during inspection only).
+ * ACKNOWLEDGE (receipt only), then RELEASE_NOW | START_INSPECTION,
+ * REPORT_ISSUE (during inspection only).
  * Never used for Direct Payment money paths.
  */
 export async function POST(req: NextRequest) {

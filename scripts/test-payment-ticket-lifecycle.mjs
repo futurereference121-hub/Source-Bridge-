@@ -111,6 +111,7 @@ function isTerminalLifecycleStage(stage) {
 }
 
 function isActiveLifecycleTicket(opts) {
+  if (opts.hiddenFromChatAt) return false;
   if (isInactiveTicketStatus(opts.ticketStatus)) return false;
   const stage =
     opts.lifecycleStage ||

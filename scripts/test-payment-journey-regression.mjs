@@ -96,10 +96,11 @@ const TRANSITIONS = {
     PROCUREMENT_RELEASED: "AWAITING_SHIPMENT",
   },
   CONFIRM_RECEIPT: {
-    AWAITING_SHIPMENT: "IN_INSPECTION",
-    IN_TRANSIT: "IN_INSPECTION",
-    DELIVERED: "IN_INSPECTION",
+    AWAITING_SHIPMENT: "DELIVERED",
+    IN_TRANSIT: "DELIVERED",
+    DELIVERED: "DELIVERED",
   },
+  START_INSPECTION: { DELIVERED: "IN_INSPECTION" },
   COMPLETE_INSPECTION: { IN_INSPECTION: "READY_TO_RELEASE" },
   RELEASE_FINAL: {
     READY_TO_RELEASE: "RELEASED",
@@ -246,6 +247,8 @@ for (const p of permutations) {
   s = apply(s, "RELEASE_PROCUREMENT");
   s = apply(s, "ADD_TRACKING");
   s = apply(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "DELIVERED");
+  s = apply(s, "START_INSPECTION");
   s = apply(s, "COMPLETE_INSPECTION");
   s = apply(s, "RELEASE_FINAL");
   assert.equal(s, "RELEASED");
@@ -319,7 +322,8 @@ for (const p of permutations) {
 }
 
 const HIDDEN_CHAT = ["CANCELLED", "DECLINED", "SUPERSEDED", "VOIDED", "DELETED", "EXPIRED"];
-function ticketInChat({ ticketStatus, protectedStatus, fundedAt, involvesMoney }) {
+function ticketInChat({ ticketStatus, protectedStatus, fundedAt, involvesMoney, hiddenFromChatAt }) {
+  if (hiddenFromChatAt) return false;
   if (!HIDDEN_CHAT.includes(ticketStatus)) return true;
   if (involvesMoney || fundedAt) return true;
   return [
@@ -544,6 +548,136 @@ function pollReconcile(prevCards, nextTickets) {
     viewerUsername: "alice",
   });
   assert.equal(selfWait.viewerMayAccept, true);
+}
+
+// TEST 11 — Pay UI gone after FUNDED (ticket row may still say ACCEPTED)
+{
+  function ticketMayShowPayUi({ ticketStatus, protectedStatus, fundedAt }) {
+    if (["CANCELLED", "DECLINED", "EXPIRED", "VOIDED"].includes(ticketStatus)) {
+      return false;
+    }
+    if (ticketStatus === "FUNDED") return false;
+    if (fundedAt) return false;
+    const pst = protectedStatus || "";
+    if (
+      [
+        "FUNDED",
+        "PROCUREMENT_RELEASED",
+        "AWAITING_SHIPMENT",
+        "IN_TRANSIT",
+        "DELIVERED",
+        "IN_INSPECTION",
+        "READY_TO_RELEASE",
+        "RELEASED",
+      ].includes(pst)
+    ) {
+      return false;
+    }
+    return ticketStatus === "ACCEPTED" || pst === "AWAITING_PAYMENT";
+  }
+  assert.equal(
+    ticketMayShowPayUi({
+      ticketStatus: "ACCEPTED",
+      protectedStatus: "AWAITING_PAYMENT",
+    }),
+    true,
+  );
+  assert.equal(
+    ticketMayShowPayUi({
+      ticketStatus: "ACCEPTED",
+      protectedStatus: "FUNDED",
+    }),
+    false,
+  );
+  assert.equal(
+    ticketMayShowPayUi({
+      ticketStatus: "FUNDED",
+      protectedStatus: "FUNDED",
+    }),
+    false,
+  );
+  assert.equal(
+    ticketMayShowPayUi({
+      ticketStatus: "ACCEPTED",
+      protectedStatus: "AWAITING_PAYMENT",
+      fundedAt: "2026-08-16T00:00:00.000Z",
+    }),
+    false,
+  );
+}
+
+// TEST 12 — generic A buyer / B sourcer: ship → confirm → release/inspect; tickets isolated
+{
+  const ticketA = { id: "ticket-a", status: "FUNDED" };
+  const ticketB = { id: "ticket-b", status: "ACCEPTED" };
+  assert.notEqual(ticketA.id, ticketB.id);
+  assert.equal(
+    ticketMayShowPayUiFor(ticketA.status, "FUNDED"),
+    false,
+  );
+  assert.equal(
+    ticketMayShowPayUiFor(ticketB.status, "AWAITING_PAYMENT"),
+    true,
+  );
+  let s = "FUNDED";
+  s = apply(s, "ADD_TRACKING");
+  assert.equal(s, "AWAITING_SHIPMENT");
+  const afterShipChoices = s === "AWAITING_SHIPMENT" ? ["CONFIRM_RECEIPT"] : [];
+  assert.deepEqual(afterShipChoices, ["CONFIRM_RECEIPT"]);
+  s = apply(s, "CONFIRM_RECEIPT");
+  assert.equal(s, "DELIVERED");
+  const afterReceiptChoices = ["RELEASE_NOW", "START_INSPECTION"];
+  assert.equal(afterReceiptChoices.includes("REPORT_ISSUE"), false);
+  s = apply(s, "START_INSPECTION");
+  assert.equal(s, "IN_INSPECTION");
+  s = apply(s, "COMPLETE_INSPECTION");
+  s = apply(s, "RELEASE_FINAL");
+  assert.equal(s, "RELEASED");
+}
+
+function ticketMayShowPayUiFor(ticketStatus, protectedStatus) {
+  if (ticketStatus === "FUNDED") return false;
+  const pst = protectedStatus || "";
+  if (
+    [
+      "FUNDED",
+      "PROCUREMENT_RELEASED",
+      "AWAITING_SHIPMENT",
+      "IN_TRANSIT",
+      "DELIVERED",
+      "IN_INSPECTION",
+      "READY_TO_RELEASE",
+      "RELEASED",
+    ].includes(pst)
+  ) {
+    return false;
+  }
+  return ticketStatus === "ACCEPTED" || pst === "AWAITING_PAYMENT";
+}
+
+// TEST 13 — archived funded tickets leave chat and the active cap
+{
+  assert.equal(
+    ticketInChat({
+      ticketStatus: "FUNDED",
+      protectedStatus: "FUNDED",
+      hiddenFromChatAt: "2026-08-16T00:00:00.000Z",
+    }),
+    false,
+  );
+  assert.equal(
+    ticketInChat({ ticketStatus: "FUNDED", protectedStatus: "RELEASED" }),
+    true,
+  );
+  const statuses = ["FUNDED", "FUNDED", "PROPOSED"];
+  const hidden = new Set(["ticket-funded-1", "ticket-funded-2"]);
+  const active = [
+    { id: "ticket-funded-1", status: "FUNDED" },
+    { id: "ticket-funded-2", status: "FUNDED" },
+    { id: "ticket-proposed", status: "PROPOSED" },
+  ].filter((t) => !hidden.has(t.id) && ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"].includes(t.status));
+  assert.equal(active.length, 1);
+  void statuses;
 }
 
 console.log("payment journey regression suite passed");

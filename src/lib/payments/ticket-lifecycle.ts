@@ -100,6 +100,7 @@ export function resolveLifecycleStage(
   ticketStatus: string,
   protectedStatus: string | null,
   procReleased: boolean,
+  deliveredAt?: Date | string | null,
 ): string {
   if (
     ticketStatus === "DECLINED" ||
@@ -116,6 +117,7 @@ export function resolveLifecycleStage(
   if (st === "REFUNDED" || st === "PARTIALLY_REFUNDED") return st;
   if (st === "DISPUTED") return "DISPUTED";
   if (["IN_INSPECTION", "READY_TO_RELEASE"].includes(st)) return st;
+  if (st === "DELIVERED" && deliveredAt) return "ITEM_RECEIVED";
   if (["IN_TRANSIT", "DELIVERED", "AWAITING_SHIPMENT"].includes(st)) return st;
   if (procReleased || st === "PROCUREMENT_RELEASED") return "ITEM_FUNDS_RELEASED";
   if (st === "FUNDED" || ticketStatus === "FUNDED") return "FUNDED";
@@ -151,6 +153,8 @@ export function lifecycleLabel(stage: string): string {
       return "SHIPPED";
     case "DELIVERED":
       return "AWAITING BUYER";
+    case "ITEM_RECEIVED":
+      return "ITEM RECEIVED";
     case "IN_INSPECTION":
     case "INSPECTION":
       return "INSPECTION";
@@ -201,7 +205,9 @@ export function isActiveLifecycleTicket(opts: {
   protectedStatus?: string | null;
   procReleased?: boolean;
   lifecycleStage?: string | null;
+  hiddenFromChatAt?: Date | string | null;
 }): boolean {
+  if (opts.hiddenFromChatAt) return false;
   if (isInactiveTicketStatus(opts.ticketStatus)) return false;
   const stage =
     opts.lifecycleStage ||
@@ -236,7 +242,9 @@ export function ticketAppearsInChatTimeline(opts: {
   protectedStatus?: string | null;
   fundedAt?: Date | string | null;
   involvesMoney?: boolean;
+  hiddenFromChatAt?: Date | string | null;
 }): boolean {
+  if (opts.hiddenFromChatAt) return false;
   const st = opts.ticketStatus;
   if (
     !(UNFUNDED_HIDDEN_CHAT_STATUSES as readonly string[]).includes(st)
@@ -439,6 +447,78 @@ export function viewerMayFundTicket(opts: {
   const viewerId = (opts.viewerId || "").trim();
   const buyerId = (opts.buyerId || "").trim();
   return Boolean(viewerId && buyerId && viewerId === buyerId);
+}
+
+/** Protected / ticket states that mean funding already happened or is in flight. */
+export const PAY_BLOCKING_PT_STATUSES = [
+  "FUNDED",
+  "PROCUREMENT_RELEASED",
+  "AWAITING_SHIPMENT",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "IN_INSPECTION",
+  "READY_TO_RELEASE",
+  "RELEASED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+  "DISPUTED",
+  "CANCELLED",
+  "FAILED",
+] as const;
+
+const PAY_BLOCKING_LIFECYCLE_STAGES = [
+  "FUNDED",
+  "ITEM_FUNDS_RELEASED",
+  "AWAITING_SHIPMENT",
+  "IN_TRANSIT",
+  "DELIVERED",
+  "ITEM_RECEIVED",
+  "IN_INSPECTION",
+  "READY_TO_RELEASE",
+  "COMPLETED",
+  "RELEASED",
+  "DISPUTED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+] as const;
+
+/**
+ * Authoritative Pay UI gate. Pay only while accepted, unfunded, and the PI
+ * has not already succeeded / started processing as funded.
+ */
+export function ticketMayShowPayUi(opts: {
+  ticketStatus: string;
+  protectedStatus?: string | null;
+  fundedAt?: Date | string | null;
+  paymentIntentStatus?: string | null;
+  lifecycleStage?: string | null;
+}): boolean {
+  if (isInactiveTicketStatus(opts.ticketStatus)) return false;
+  if (opts.ticketStatus === "FUNDED") return false;
+  if (opts.fundedAt) return false;
+  const pst = (opts.protectedStatus || "").trim();
+  if ((PAY_BLOCKING_PT_STATUSES as readonly string[]).includes(pst)) {
+    return false;
+  }
+  const pi = (opts.paymentIntentStatus || "").trim();
+  if (pi === "succeeded" || pi === "processing") return false;
+  const stage =
+    opts.lifecycleStage ||
+    resolveLifecycleStage(
+      opts.ticketStatus,
+      opts.protectedStatus ?? null,
+      false,
+    );
+  if ((PAY_BLOCKING_LIFECYCLE_STAGES as readonly string[]).includes(stage)) {
+    return false;
+  }
+  if (isTerminalLifecycleStage(stage)) return false;
+  return (
+    opts.ticketStatus === "ACCEPTED" ||
+    stage === "AGREED_AWAITING_PAYMENT" ||
+    pst === "ACCEPTED" ||
+    pst === "AWAITING_PAYMENT"
+  );
 }
 
 /** Seller-side Stripe destination / entitlement always follows sellerId (sourcer). */
@@ -833,6 +913,10 @@ export type PaymentTicketActionInput = {
   buyerApprovedRevision?: number | null;
   sellerApprovedRevision?: number | null;
   protectedTransactionId?: string | null;
+  protectedStatus?: string | null;
+  fundedAt?: Date | string | null;
+  paymentIntentStatus?: string | null;
+  lifecycleStage?: string | null;
   buyerUsername?: string | null;
   sellerUsername?: string | null;
   viewerUsername?: string | null;
@@ -860,9 +944,14 @@ export function getPaymentTicketActions(
     viewerUsername: ticket.viewerUsername,
   });
   const canPay =
-    !isInactiveTicketStatus(ticket.status) &&
-    ticket.status === "ACCEPTED" &&
     Boolean(ticket.protectedTransactionId) &&
+    ticketMayShowPayUi({
+      ticketStatus: ticket.status,
+      protectedStatus: ticket.protectedStatus,
+      fundedAt: ticket.fundedAt,
+      paymentIntentStatus: ticket.paymentIntentStatus,
+      lifecycleStage: ticket.lifecycleStage,
+    }) &&
     viewerMayFundTicket({
       viewerId: currentSessionUserId,
       buyerId: ticket.buyerId,

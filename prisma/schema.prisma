@@ -831,6 +831,8 @@ model PaymentTicket {
   stripeMode            String    @default("TEST")
   /// Last explicit ticket action (propose/revise/accept/pay attempt). Not poll/GET.
   lastMeaningfulActivityAt DateTime @default(now())
+  /// Hide from chat timeline and the active cap without deleting money records.
+  hiddenFromChatAt      DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   messages              Message[]
@@ -840,6 +842,7 @@ model PaymentTicket {
   @@index([sellerId, status])
   @@index([status, updatedAt])
   @@index([status, lastMeaningfulActivityAt])
+  @@index([hiddenFromChatAt])
   @@index([termsHash])
   @@index([sourcingRequestId, status])
 }

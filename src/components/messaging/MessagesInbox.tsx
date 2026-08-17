@@ -179,6 +179,8 @@ type TimelineTicketLite = {
   title?: string;
   lifecycleStage?: string;
   protectedTxnStatus?: string | null;
+  hiddenFromChatAt?: string | null;
+  fundedAt?: string | null;
   buyerId?: string;
   sellerId?: string;
   buyerApprovedRevision?: number | null;
@@ -194,6 +196,8 @@ function visibleChatTickets(
     ticketAppearsInChatTimeline({
       ticketStatus: t.status || "PROPOSED",
       protectedStatus: t.protectedTxnStatus ?? null,
+      fundedAt: t.fundedAt ?? null,
+      hiddenFromChatAt: t.hiddenFromChatAt ?? null,
     }),
   );
 }
@@ -209,6 +213,7 @@ function countActiveTicketsClient(
         ticketStatus: t.status || "PROPOSED",
         protectedStatus: t.protectedTxnStatus ?? null,
         lifecycleStage: t.lifecycleStage ?? null,
+        hiddenFromChatAt: t.hiddenFromChatAt ?? null,
       })
     ) {
       n += 1;

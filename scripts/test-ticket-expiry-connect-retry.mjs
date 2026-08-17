@@ -22,6 +22,7 @@ function isInactiveTicketStatus(status) {
 }
 
 function ticketAppearsInChatTimeline(opts) {
+  if (opts.hiddenFromChatAt) return false;
   const hidden = [
     "CANCELLED",
     "DECLINED",
@@ -302,9 +303,32 @@ const h72 = new Date(now - 72 * HOUR);
   const card = readFileSync("src/components/messaging/PaymentTicketCard.tsx", "utf8");
   assert.match(card, /Complete Test Payment Setup/);
   assert.match(card, /Try Payment Again/);
+  assert.match(card, /ticketMayShowPayUi/);
+  assert.match(card, /ACKNOWLEDGE/);
+  assert.match(card, /setCheckout\(null\)/);
   assert.doesNotMatch(card, /futureman|theowlsaid|bellahap/);
   const allow = readFileSync("src/lib/payments/allowlist.ts", "utf8");
   assert.match(allow, /isPaymentsTestRampOpen/);
+  const life = readFileSync("src/lib/payments/ticket-lifecycle.ts", "utf8");
+  assert.match(life, /hiddenFromChatAt/);
+  assert.match(life, /export function ticketMayShowPayUi/);
+  const tickets = readFileSync("src/lib/payments/tickets.ts", "utf8");
+  assert.match(tickets, /trackingNumber: t\.protectedTransaction\?\.trackingNumber/);
+  assert.match(tickets, /shippedAt: t\.protectedTransaction\?\.shippedAt/);
+}
+
+{
+  assert.equal(
+    ticketAppearsInChatTimeline({
+      ticketStatus: "FUNDED",
+      hiddenFromChatAt: new Date(),
+    }),
+    false,
+  );
+  assert.equal(
+    ticketAppearsInChatTimeline({ ticketStatus: "FUNDED" }),
+    true,
+  );
 }
 
 console.log("test-ticket-expiry-connect-retry: PASS");

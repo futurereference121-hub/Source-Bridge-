@@ -17,6 +17,7 @@ import {
   shouldShowItemFundsRemainingProtectedMessage,
   subtleHistoricalLabel,
   ticketAppearsInChatTimeline,
+  ticketMayShowPayUi,
   waitingCopyAddressesViewer,
 } from "@/lib/payments/ticket-lifecycle";
 
@@ -47,6 +48,7 @@ export type PaymentTicketView = {
   sellerApprovedRevision: number | null;
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
+  fundedAt?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;
   createdAt?: string;
@@ -181,7 +183,7 @@ export function PaymentTicketCard({
   const [paymentsAccess, setPaymentsAccess] = useState(false);
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
-  const [confirmReceiptOpen, setConfirmReceiptOpen] = useState(false);
+  const [paymentSubmitted, setPaymentSubmitted] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
@@ -233,6 +235,7 @@ export function PaymentTicketCard({
     setGone(false);
     setError("");
     setCheckout(null);
+    setPaymentSubmitted(false);
     if (ticketSnapshot && ticketSnapshot.id === ticketId) {
       const snap = { ...ticketSnapshot };
       delete (snap as { viewer?: unknown }).viewer;
@@ -260,7 +263,14 @@ export function PaymentTicketCard({
         prev.protectedTxnStatus === snap.protectedTxnStatus &&
         prev.lifecycleStage === snap.lifecycleStage &&
         prev.totalChargeMinor === snap.totalChargeMinor &&
-        prev.title === snap.title
+        prev.title === snap.title &&
+        prev.shippedAt === snap.shippedAt &&
+        prev.deliveredAt === snap.deliveredAt &&
+        prev.trackingNumber === snap.trackingNumber &&
+        prev.fundedAt === snap.fundedAt &&
+        prev.actions?.canPay === snap.actions?.canPay &&
+        prev.actions?.canConfirmReceipt === snap.actions?.canConfirmReceipt &&
+        prev.actions?.canReleaseNow === snap.actions?.canReleaseNow
       ) {
         return prev;
       }
@@ -326,10 +336,18 @@ export function PaymentTicketCard({
   }, [menuOpen]);
 
   // Soft revalidate ticket state while conversation is open (visibility-aware).
-  // Skip when the parent conversation poll already supplies ticketSnapshot.
+  // Skip GET only when the parent poll supplies a snapshot AND we are not in
+  // an in-flight checkout / post-submit funding wait.
   useEffect(() => {
     if (typeof window === "undefined" || !ticketId) return;
-    if (ticketSnapshot && ticketSnapshot.id === ticketId) return;
+    if (
+      ticketSnapshot &&
+      ticketSnapshot.id === ticketId &&
+      !checkout &&
+      !paymentSubmitted
+    ) {
+      return;
+    }
     let cancelled = false;
     let inFlight = false;
     const POLL_MS = 2500;
@@ -357,7 +375,7 @@ export function PaymentTicketCard({
       window.removeEventListener("focus", onVis);
       window.removeEventListener("online", onVis);
     };
-  }, [ticketId, load, ticketSnapshot?.id]);
+  }, [ticketId, load, ticketSnapshot?.id, checkout, paymentSubmitted]);
 
   // After return from 3DS: poll — funding only when webhook sets FUNDED.
   useEffect(() => {
@@ -372,6 +390,20 @@ export function PaymentTicketCard({
     }, 2500);
     return () => window.clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    if (!ticket) return;
+    const showPay = ticketMayShowPayUi({
+      ticketStatus: ticket.status,
+      protectedStatus: ticket.protectedTxnStatus ?? null,
+      fundedAt: ticket.fundedAt ?? null,
+      lifecycleStage: ticket.lifecycleStage ?? null,
+    });
+    if (!showPay) {
+      setCheckout(null);
+      setPaymentSubmitted(false);
+    }
+  }, [ticket]);
 
   async function respond(action: "accept" | "decline") {
     setBusy(true);
@@ -617,7 +649,7 @@ export function PaymentTicketCard({
   }
 
   async function submitReceiptDecision(
-    decision: "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE",
+    decision: "ACKNOWLEDGE" | "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE",
   ) {
     if (!ticket?.protectedTransactionId) return;
     if (decision === "REPORT_ISSUE" && issueReason.trim().length < 3) {
@@ -663,6 +695,12 @@ export function PaymentTicketCard({
               ? "Inspection period already active — no funds released."
               : "Inspection started — remaining seller funds stay protected. You can still release early.",
           );
+        } else if (decision === "ACKNOWLEDGE") {
+          setPayNotice(
+            json.alreadyConfirmed
+              ? "Item already marked received."
+              : "Item received. Choose release funds now or start a 12-hour inspection.",
+          );
         } else {
           setPayNotice(
             json.alreadyConfirmed
@@ -670,7 +708,6 @@ export function PaymentTicketCard({
               : "Issue reported — remaining funds held; auto-release frozen.",
           );
         }
-        setConfirmReceiptOpen(false);
         setIssueOpen(false);
         setIssueReason("");
         setIssueDetails("");
@@ -783,6 +820,7 @@ export function PaymentTicketCard({
       ticket.status,
       ticket.protectedTxnStatus ?? null,
       (ticket.books?.procurementTransferredMinor ?? 0) > 0,
+      ticket.deliveredAt ?? null,
     );
   const isCompleted = isCompletedLifecycleTicket({
     ticketStatus: ticket.status,
@@ -805,10 +843,16 @@ export function PaymentTicketCard({
     !historical &&
     paymentsAccess &&
     iAmBuyer &&
-    (ticket.status === "ACCEPTED" ||
-      ticket.lifecycleStage === "AGREED_AWAITING_PAYMENT") &&
+    sellerConnectReady &&
     Boolean(ticket.protectedTransactionId) &&
-    sellerConnectReady;
+    ticketMayShowPayUi({
+      ticketStatus: ticket.status,
+      protectedStatus: ticket.protectedTxnStatus ?? null,
+      fundedAt: ticket.fundedAt ?? null,
+      lifecycleStage: ticket.lifecycleStage ?? null,
+    }) &&
+    ticket.actions?.canPay !== false &&
+    !paymentSubmitted;
   const needsSellerConnectSetup =
     !historical &&
     Boolean(ticket.protectedTransactionId) &&
@@ -1654,70 +1698,58 @@ export function PaymentTicketCard({
 
           {canConfirmReceipt ? (
             <div className="border-t border-white/10 pt-2">
-              {!confirmReceiptOpen ? (
+              <p className="mb-2 text-xs font-medium text-white/90">
+                Item shipped
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void submitReceiptDecision("ACKNOWLEDGE")}
+                className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+              >
+                {busy ? "Saving…" : "Confirm Item Received"}
+              </button>
+            </div>
+          ) : null}
+
+          {canReleaseNow &&
+          !inInspection &&
+          !canConfirmReceipt &&
+          ticket.protectedTxnStatus === "DELIVERED" ? (
+            <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
+              <p className="font-medium text-white/90">Item received — choose one:</p>
+              {residualProtected > 0 ? (
+                <p className="text-white/45">
+                  Remaining seller residual{" "}
+                  {formatMinor(residualProtected, cur)}
+                  {itemFundsReceived > 0
+                    ? ` (after ${formatMinor(itemFundsReceived, cur)} item funds already released)`
+                    : ""}
+                  . Source Bridge fee stays on platform.
+                </p>
+              ) : null}
+              <div className="flex flex-col gap-2">
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => {
-                    setConfirmReceiptOpen(true);
-                    setIssueOpen(false);
-                  }}
-                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
+                  onClick={() => void submitReceiptDecision("RELEASE_NOW")}
+                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
                 >
-                  Confirm Item Received
+                  {busy ? "Working…" : "Release Funds Now"}
                 </button>
-              ) : (
-                <div className="space-y-2 text-xs text-white/75">
-                  <p className="font-medium text-white/90">
-                    Item received — choose one:
-                  </p>
-                  {residualProtected > 0 ? (
-                    <p className="text-white/45">
-                      Remaining seller residual{" "}
-                      {formatMinor(residualProtected, cur)}
-                      {itemFundsReceived > 0
-                        ? ` (after ${formatMinor(itemFundsReceived, cur)} item funds already released)`
-                        : ""}
-                      . Source Bridge fee stays on platform.
-                    </p>
-                  ) : null}
-                  <div className="flex flex-col gap-2">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void submitReceiptDecision("RELEASE_NOW")}
-                      className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-                    >
-                      {busy ? "Working…" : "Release Funds Now"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        void submitReceiptDecision("START_INSPECTION")
-                      }
-                      className="rounded-lg border border-white/25 bg-white/5 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-                    >
-                      Start 12-Hour Inspection
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setConfirmReceiptOpen(false);
-                        setIssueOpen(false);
-                      }}
-                      className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-white/60"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-white/40">
-                    If something is wrong after you start inspection, you can
-                    report a problem during the inspection window.
-                  </p>
-                </div>
-              )}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void submitReceiptDecision("START_INSPECTION")}
+                  className="rounded-lg border border-white/25 bg-white/5 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                >
+                  Start 12-Hour Inspection
+                </button>
+              </div>
+              <p className="text-[11px] text-white/40">
+                If something is wrong after you start inspection, you can
+                report a problem during the inspection window.
+              </p>
             </div>
           ) : null}
 
@@ -1995,7 +2027,13 @@ export function PaymentTicketCard({
         </div>
       ) : null}
 
-      {checkout ? (
+      {checkout &&
+      ticketMayShowPayUi({
+        ticketStatus: ticket.status,
+        protectedStatus: ticket.protectedTxnStatus ?? null,
+        fundedAt: ticket.fundedAt ?? null,
+        lifecycleStage: ticket.lifecycleStage ?? null,
+      }) ? (
         <ProtectedPaymentCheckout
           clientSecret={checkout.clientSecret}
           publishableKey={checkout.publishableKey}
@@ -2007,6 +2045,8 @@ export function PaymentTicketCard({
           returnPath="/inbox?payment=return"
           onDismiss={() => setCheckout(null)}
           onPaymentSubmitted={() => {
+            setCheckout(null);
+            setPaymentSubmitted(true);
             setPayFailed(false);
             setPayNotice(
               "Payment received. Funds stay on the platform until release rules. Do not pay again.",
@@ -2014,7 +2054,10 @@ export function PaymentTicketCard({
             void load();
             onChanged?.();
           }}
-          onPaymentFailed={() => setPayFailed(true)}
+          onPaymentFailed={() => {
+            setPayFailed(true);
+            setPaymentSubmitted(false);
+          }}
         />
       ) : null}
     </div>

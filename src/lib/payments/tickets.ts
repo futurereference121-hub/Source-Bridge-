@@ -50,6 +50,7 @@ import {
   UNFUNDED_TICKET_INACTIVITY_MS,
   unfundedTicketShouldExpire,
   viewerMayFundTicket,
+  ticketMayShowPayUi,
 } from "@/lib/payments/ticket-lifecycle";
 import { getStripe, isStripeConfigured } from "@/lib/payments/stripe/client";
 
@@ -80,6 +81,7 @@ export {
   isCompletedLifecycleTicket,
   subtleHistoricalLabel,
   viewerMayFundTicket,
+  ticketMayShowPayUi,
 } from "@/lib/payments/ticket-lifecycle";
 
 /** Protected txn statuses that mean money has, is, or may still be in flight. */
@@ -117,7 +119,7 @@ type FundingGuardInputs = {
   ticketStatus: string;
   protectedTxn?: {
     status: string;
-    fundedAt: Date | null;
+    fundedAt: Date | string | null;
     stripePaymentIntentId?: string | null;
     procurementTransferredMinor?: number;
     finalTransferredMinor?: number;
@@ -270,6 +272,7 @@ function mapTicket(
     createdAt: Date;
     updatedAt: Date;
     lastMeaningfulActivityAt?: Date;
+    hiddenFromChatAt?: Date | null;
   },
   extras?: {
     protectedTxnStatus?: string | null;
@@ -282,6 +285,7 @@ function mapTicket(
     shippedAt?: Date | string | null;
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
+    fundedAt?: Date | string | null;
     proposedBy?: {
       id: string;
       name: string;
@@ -331,6 +335,7 @@ function mapTicket(
     t.status,
     protectedStatus,
     procReleased,
+    extras?.deliveredAt ?? null,
   );
 
   const involvesMoney =
@@ -340,7 +345,7 @@ function mapTicket(
       protectedTxn: extras
         ? {
             status: protectedStatus || "",
-            fundedAt: null,
+            fundedAt: extras.fundedAt ?? null,
             // mapTicket often lacks PI/fundedAt — GET path passes involvesMoney
             procurementTransferredMinor: extras.procurementTransferredMinor,
             finalTransferredMinor: extras.finalTransferredMinor,
@@ -399,6 +404,7 @@ function mapTicket(
       paymentOption: t.paymentOption,
       status: ptStatus,
       shipped,
+      deliveredAt: deliveredAtIso,
     });
   const canReleaseNow =
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
@@ -406,6 +412,7 @@ function mapTicket(
       paymentOption: t.paymentOption,
       status: ptStatus,
       shipped,
+      deliveredAt: deliveredAtIso,
     });
   const canReportIssue =
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
@@ -478,6 +485,14 @@ function mapTicket(
     lastMeaningfulActivityAt: (
       t.lastMeaningfulActivityAt || t.updatedAt
     ).toISOString(),
+    hiddenFromChatAt: t.hiddenFromChatAt
+      ? t.hiddenFromChatAt.toISOString()
+      : null,
+    fundedAt: extras?.fundedAt
+      ? extras.fundedAt instanceof Date
+        ? extras.fundedAt.toISOString()
+        : String(extras.fundedAt)
+      : null,
     sellerConnect: {
       ready: Boolean(extras?.sellerConnectReady),
       hasAccount: Boolean(extras?.sellerConnectHasAccount),
@@ -493,7 +508,12 @@ function mapTicket(
     actions: {
       canReleaseProcurement: procPending,
       canPay:
-        t.status === "ACCEPTED" &&
+        ticketMayShowPayUi({
+          ticketStatus: t.status,
+          protectedStatus: protectedStatus,
+          fundedAt: extras?.fundedAt ?? null,
+          lifecycleStage,
+        }) &&
         Boolean(t.protectedTransactionId) &&
         viewerMayFundTicket({
           viewerId: extras?.viewerId || "",
@@ -648,6 +668,7 @@ export async function ensureConversationPaymentTicketMessages(
       revision: true,
       createdAt: true,
       status: true,
+      hiddenFromChatAt: true,
       protectedTransaction: {
         select: {
           status: true,
@@ -663,6 +684,7 @@ export async function ensureConversationPaymentTicketMessages(
       ticketStatus: t.status,
       protectedStatus: t.protectedTransaction?.status ?? null,
       fundedAt: t.protectedTransaction?.fundedAt ?? null,
+      hiddenFromChatAt: t.hiddenFromChatAt ?? null,
     }),
   );
   if (visible.length === 0) return 0;
@@ -862,9 +884,15 @@ export async function listConversationPaymentTickets(
         select: {
           status: true,
           fundedAt: true,
+          stripePaymentIntentId: true,
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
+          trackingNumber: true,
+          trackingCarrier: true,
+          shippedAt: true,
+          deliveredAt: true,
+          inspectionEndsAt: true,
         },
       },
     },
@@ -901,6 +929,7 @@ export async function listConversationPaymentTickets(
           (t.protectedTransaction?.procurementTransferredMinor ?? 0) > 0 ||
           (t.protectedTransaction?.finalTransferredMinor ?? 0) > 0 ||
           (t.protectedTransaction?.refundedMinor ?? 0) > 0,
+        hiddenFromChatAt: t.hiddenFromChatAt ?? null,
       }),
     )
     .map((t) =>
@@ -912,6 +941,12 @@ export async function listConversationPaymentTickets(
         t.protectedTransaction?.finalTransferredMinor ?? 0,
       refundedMinor: t.protectedTransaction?.refundedMinor ?? 0,
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
+      trackingNumber: t.protectedTransaction?.trackingNumber ?? "",
+      trackingCarrier: t.protectedTransaction?.trackingCarrier ?? "",
+      shippedAt: t.protectedTransaction?.shippedAt ?? null,
+      deliveredAt: t.protectedTransaction?.deliveredAt ?? null,
+      inspectionEndsAt: t.protectedTransaction?.inspectionEndsAt ?? null,
+      fundedAt: t.protectedTransaction?.fundedAt ?? null,
       viewerId: viewerId || undefined,
       sellerConnectReady: connectBySeller.get(t.sellerId)?.ready ?? false,
       sellerConnectHasAccount: connectBySeller.get(t.sellerId)?.hasAccount ?? false,
@@ -935,6 +970,7 @@ export async function countActiveConversationTickets(
     select: {
       id: true,
       status: true,
+      hiddenFromChatAt: true,
       protectedTransaction: {
         select: {
           status: true,
@@ -953,6 +989,7 @@ export async function countActiveConversationTickets(
         ticketStatus: r.status,
         protectedStatus: r.protectedTransaction?.status ?? null,
         procReleased,
+        hiddenFromChatAt: r.hiddenFromChatAt,
       })
     ) {
       n += 1;
@@ -1044,7 +1081,7 @@ async function assertNoConcurrentSourcingAgreement(opts: {
       // Same-conversation multi-ticket independence: only other threads.
       conversationId: { not: opts.conversationId },
     },
-    select: { id: true, protectedTransactionId: true, status: true },
+    select: { id: true, protectedTransactionId: true, status: true, hiddenFromChatAt: true },
   });
   if (activeTicket) {
     // COMPLETED (RELEASED PT) does not block — only true active lifecycles.
@@ -1061,10 +1098,12 @@ async function assertNoConcurrentSourcingAgreement(opts: {
         ticketStatus: activeTicket.status,
         protectedStatus: pt?.status ?? null,
         procReleased,
+        hiddenFromChatAt: activeTicket.hiddenFromChatAt,
       });
     } else {
       stillActive = isActiveLifecycleTicket({
         ticketStatus: activeTicket.status,
+        hiddenFromChatAt: activeTicket.hiddenFromChatAt,
       });
     }
     if (stillActive) {
@@ -1300,6 +1339,7 @@ export async function createOrRevisePaymentTicket(opts: {
       },
       select: {
         status: true,
+        hiddenFromChatAt: true,
         protectedTransaction: {
           select: {
             status: true,
@@ -1319,6 +1359,7 @@ export async function createOrRevisePaymentTicket(opts: {
           ticketStatus: row.status,
           protectedStatus: st,
           procReleased,
+          hiddenFromChatAt: row.hiddenFromChatAt,
         })
       ) {
         return false;
@@ -2003,6 +2044,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     shippedAt: pt?.shippedAt ?? null,
     deliveredAt: pt?.deliveredAt ?? null,
     inspectionEndsAt: pt?.inspectionEndsAt ?? null,
+    fundedAt: pt?.fundedAt ?? null,
     proposedBy: ticket.createdBy
       ? {
           id: ticket.createdBy.id,
