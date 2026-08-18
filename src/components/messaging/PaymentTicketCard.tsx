@@ -173,6 +173,7 @@ export type PaymentTicketView = {
     finalTransferredMinor?: number;
     finalResidualMinor?: number;
     sellerEntitledMinor?: number;
+    refundedMinor?: number;
   };
   breakdown: {
     labels: {
@@ -190,6 +191,9 @@ export type PaymentTicketView = {
   };
   /** Authoritative open dispute — frozen banner only when OPEN / UNDER_REVIEW. */
   openDisputeStatus?: string | null;
+  openDisputeResolutionNote?: string | null;
+  openDisputeResolvedAt?: string | null;
+  platformFeeIncludedInPrice?: boolean;
 };
 
 type Props = {
@@ -277,6 +281,7 @@ export function PaymentTicketCard({
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
   const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
+  const [shipmentPhotoPreview, setShipmentPhotoPreview] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
@@ -286,6 +291,7 @@ export function PaymentTicketCard({
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
   const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
+  const [issueEvidencePreviews, setIssueEvidencePreviews] = useState<string[]>([]);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -540,6 +546,7 @@ export function PaymentTicketCard({
         delete (next as { viewer?: unknown }).viewer;
         setTicket(next);
         onTicketUpdated?.(next);
+        onChanged?.();
       }
     } catch {
       setError("Action failed");
@@ -878,25 +885,33 @@ export function PaymentTicketCard({
         setIssueReason("");
         setIssueDetails("");
         setIssueEvidenceUrls([]);
-        if (json.transaction?.status) {
-          setTicket((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  protectedTxnStatus: json.transaction?.status || prev.protectedTxnStatus,
-                  inspectionEndsAt:
-                    json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
-                  deliveredAt:
-                    json.transaction?.deliveredAt ?? prev.deliveredAt,
-                  openDisputeStatus:
-                    decision === "REPORT_ISSUE"
-                      ? prev.openDisputeStatus || "OPEN"
-                      : prev.openDisputeStatus,
-                }
-              : prev,
-          );
+        let nextLocal: PaymentTicketView | null = null;
+        setTicket((prev) => {
+          if (!prev) return prev;
+          nextLocal = {
+            ...prev,
+            protectedTxnStatus: json.transaction?.status || prev.protectedTxnStatus,
+            inspectionEndsAt:
+              json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
+            deliveredAt:
+              json.transaction?.deliveredAt ?? prev.deliveredAt,
+            lifecycleStage:
+              decision === "START_INSPECTION"
+                ? "IN_INSPECTION"
+                : decision === "RELEASE_NOW"
+                  ? "READY_TO_RELEASE"
+                  : prev.lifecycleStage,
+            openDisputeStatus:
+              decision === "REPORT_ISSUE"
+                ? "OPEN"
+                : prev.openDisputeStatus,
+          };
+          return nextLocal;
+        });
+        if (nextLocal) {
+          onTicketUpdated?.(nextLocal);
         }
-        onTicketUpdated?.(ticket);
+        onChanged?.();
         void load({ silent: true });
       }
     } catch {
@@ -1125,6 +1140,15 @@ export function PaymentTicketCard({
     lifecycleStage: lifecycleStageResolved,
     openDisputeStatus: ticket.openDisputeStatus,
   });
+  const disputeResolved =
+    Boolean(ticket.openDisputeStatus) &&
+    ["RESOLVED_BUYER", "RESOLVED_SELLER", "RESOLVED_SPLIT", "CLOSED"].includes(
+      ticket.openDisputeStatus || "",
+    );
+  const refundedMinor = ticket.books?.refundedMinor ?? 0;
+  const releasedMinor =
+    (ticket.books?.procurementTransferredMinor ?? 0) +
+    (ticket.books?.finalTransferredMinor ?? 0);
   const hasTracking = Boolean(ticket.trackingNumber);
   const showFulfilment =
     !historical &&
@@ -1480,46 +1504,58 @@ export function PaymentTicketCard({
               >
                 <MoreHorizontal size={16} />
               </button>
-              {menuOpen ? (
-                <div className="absolute right-0 z-30 mt-1 w-44 overflow-hidden rounded-lg border border-white/15 bg-[#061228] py-1 shadow-xl">
-                  {canEdit ? (
-                    <button
-                      type="button"
-                      className="block w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/5"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setEditOpen(true);
-                      }}
+              {menuOpen && mounted
+                ? createPortal(
+                    <div
+                      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:items-start md:justify-end md:bg-transparent md:p-0"
+                      onClick={() => setMenuOpen(false)}
                     >
-                      Edit Terms
-                    </button>
-                  ) : null}
-                  {canCancel ? (
-                    <button
-                      type="button"
-                      className="block w-full px-3 py-2 text-left text-xs text-amber-200/90 hover:bg-white/5"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setConfirmCancel(true);
-                      }}
-                    >
-                      Cancel Agreement
-                    </button>
-                  ) : null}
-                  {canDelete ? (
-                    <button
-                      type="button"
-                      className="block w-full px-3 py-2 text-left text-xs text-red-300/90 hover:bg-white/5"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        setConfirmDelete(true);
-                      }}
-                    >
-                      Delete Ticket
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
+                      <div
+                        role="menu"
+                        className="w-full max-w-xs overflow-hidden rounded-xl border border-white/15 bg-[#061228] py-1 shadow-xl md:absolute md:right-4 md:top-24 md:w-44"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            className="block w-full px-3 py-2.5 text-left text-xs text-white/80 hover:bg-white/5"
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setEditOpen(true);
+                            }}
+                          >
+                            Edit Terms
+                          </button>
+                        ) : null}
+                        {canCancel ? (
+                          <button
+                            type="button"
+                            className="block w-full px-3 py-2.5 text-left text-xs text-amber-200/90 hover:bg-white/5"
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setConfirmCancel(true);
+                            }}
+                          >
+                            Cancel Agreement
+                          </button>
+                        ) : null}
+                        {canDelete ? (
+                          <button
+                            type="button"
+                            className="block w-full px-3 py-2.5 text-left text-xs text-red-300/90 hover:bg-white/5"
+                            onClick={() => {
+                              setMenuOpen(false);
+                              setConfirmDelete(true);
+                            }}
+                          >
+                            Delete Ticket
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>,
+                    document.body,
+                  )
+                : null}
             </div>
           ) : null}
         </div>
@@ -1911,6 +1947,7 @@ export function PaymentTicketCard({
                   <input
                     type="file"
                     accept={IMAGE_ACCEPT_ATTR}
+                    capture="environment"
                     className="mt-1 block w-full text-xs text-white/70"
                     disabled={busy || photoBusy}
                     onChange={(e) => {
@@ -1928,7 +1965,7 @@ export function PaymentTicketCard({
                             userId: sessionViewerId || "seller",
                           });
                           setShipmentPhotoUrl(result.url);
-                          URL.revokeObjectURL(result.previewUrl);
+                          setShipmentPhotoPreview(result.previewUrl);
                         } catch (err) {
                           setError(
                             err instanceof Error
@@ -1941,9 +1978,14 @@ export function PaymentTicketCard({
                       })();
                     }}
                   />
-                  {shipmentPhotoUrl ? (
-                    <span className="mt-1 block text-[11px] text-electric">
-                      Photo attached
+                  {shipmentPhotoPreview || shipmentPhotoUrl ? (
+                    <span className="mt-2 block overflow-hidden rounded-md border border-white/15">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={shipmentPhotoPreview || shipmentPhotoUrl}
+                        alt="Shipment preview"
+                        className="max-h-24 w-full object-cover"
+                      />
                     </span>
                   ) : (
                     <span className="mt-1 block text-[11px] text-white/40">
@@ -1994,6 +2036,7 @@ export function PaymentTicketCard({
           ) : null}
 
           {canReleaseNow &&
+          !disputeResolved &&
           !inInspection &&
           !canConfirmReceipt &&
           ticket.protectedTxnStatus === "DELIVERED" ? (
@@ -2036,7 +2079,9 @@ export function PaymentTicketCard({
             </div>
           ) : null}
 
-          {inInspection && (canReleaseNow || canReportIssue) ? (
+          {inInspection &&
+          !disputeResolved &&
+          (canReleaseNow || canReportIssue) ? (
             <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
               {ticket.inspectionEndsAt ? (
                 <p className="text-white/50">
@@ -2119,6 +2164,7 @@ export function PaymentTicketCard({
                     <input
                       type="file"
                       accept={IMAGE_ACCEPT_ATTR}
+                      capture="environment"
                       disabled={busy || photoBusy || issueEvidenceUrls.length >= 3}
                       className="mt-1 block w-full text-xs text-white/70"
                       onChange={async (e) => {
@@ -2136,7 +2182,9 @@ export function PaymentTicketCard({
                           setIssueEvidenceUrls((prev) =>
                             [...prev, result.url].slice(0, 3),
                           );
-                          URL.revokeObjectURL(result.previewUrl);
+                          setIssueEvidencePreviews((prev) =>
+                            [...prev, result.previewUrl].slice(0, 3),
+                          );
                         } catch (err) {
                           setError(
                             err instanceof Error
@@ -2149,11 +2197,22 @@ export function PaymentTicketCard({
                       }}
                     />
                   </label>
-                  {issueEvidenceUrls.length ? (
-                    <p className="text-[11px] text-white/45">
-                      {issueEvidenceUrls.length} photo
-                      {issueEvidenceUrls.length === 1 ? "" : "s"} attached
-                    </p>
+                  {issueEvidencePreviews.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {issueEvidencePreviews.map((url, i) => (
+                        <span
+                          key={`${url}-${i}`}
+                          className="block h-16 w-16 overflow-hidden rounded-md border border-white/15"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={`Evidence ${i + 1}`}
+                            className="h-full w-full object-cover"
+                          />
+                        </span>
+                      ))}
+                    </div>
                   ) : null}
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -2202,7 +2261,34 @@ export function PaymentTicketCard({
             </p>
           ) : null}
 
-          {!inInspection &&
+          {disputeResolved ? (
+            <div
+              className="space-y-1 border-t border-white/10 pt-2 text-xs text-white/75"
+              data-testid="ticket-dispute-receipt"
+            >
+              <p className="font-medium text-white/90">Issue resolved</p>
+              <p>
+                Outcome: {(ticket.openDisputeStatus || "").replace(/_/g, " ")}
+              </p>
+              {refundedMinor > 0 ? (
+                <p>Refunded to buyer: {formatMinor(refundedMinor, cur)}</p>
+              ) : null}
+              {releasedMinor > 0 ? (
+                <p>Released to sourcer: {formatMinor(releasedMinor, cur)}</p>
+              ) : null}
+              {platformFeeHeld > 0 ? (
+                <p>
+                  Source Bridge fee retained: {formatMinor(platformFeeHeld, cur)}
+                </p>
+              ) : null}
+              {ticket.openDisputeResolutionNote ? (
+                <p className="text-white/50">{ticket.openDisputeResolutionNote}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!disputeResolved &&
+          !inInspection &&
           !canConfirmReceipt &&
           ticket.inspectionEndsAt &&
           (ticket.protectedTxnStatus === "READY_TO_RELEASE" ||

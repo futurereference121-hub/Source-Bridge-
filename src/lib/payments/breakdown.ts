@@ -16,6 +16,8 @@ export type ProtectedFinancialInput = {
   procurementTransferredMinor?: number;
   finalTransferredMinor?: number;
   refundedMinor?: number;
+  /** Quoted item/shipping already include the platform fee — seller net is reduced. */
+  platformFeeIncludedInPrice?: boolean;
 };
 
 export type ProtectedFinancialBreakdown = {
@@ -88,8 +90,13 @@ export function computeProtectedFinancials(
       ? assertNonNegativeInt(input.totalChargeMinor, "totalChargeMinor")
       : expectedTotal;
 
-  const sellerEntitledMinor =
-    itemCostMinor + shippingMinor + sellerServiceFeeMinor;
+  const sellerEntitledMinor = Math.max(
+    0,
+    itemCostMinor +
+      shippingMinor +
+      sellerServiceFeeMinor -
+      (input.platformFeeIncludedInPrice ? platformFeeMinor : 0),
+  );
 
   const procurementAdvanceAgreed = Boolean(input.procurementAdvanceAgreed);
   const procurementAdvanceMinor = Math.min(

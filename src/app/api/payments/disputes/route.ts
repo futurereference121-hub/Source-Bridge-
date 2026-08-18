@@ -9,10 +9,7 @@ import {
   nextStatus,
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
-import { getStripe, isStripeConfigured } from "@/lib/payments/stripe/client";
-import { appendLedgerEntry } from "@/lib/payments/ledger";
 import { isPaymentsEnabled } from "@/lib/payments/flags";
-import { planProtectedRefund } from "@/lib/payments/refunds";
 
 export const runtime = "nodejs";
 
@@ -90,7 +87,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Admin resolve — also used later from admin financial UI. */
+/** Admin resolve — status/notes only. Money moves via /api/admin/payments/issues PATCH. */
 export async function PATCH(req: NextRequest) {
   try {
     const user = await requireSessionUser();
@@ -105,6 +102,14 @@ export async function PATCH(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
+    if (parsed.data.refundMinor && parsed.data.refundMinor > 0) {
+      return jsonError(
+        "Use /api/admin/payments/issues for refunds and releases",
+        410,
+        { code: "USE_ADMIN_ISSUES_ROUTE" },
+      );
+    }
+
     const dispute = await prisma.disputeCase.findUnique({
       where: { id: parsed.data.disputeId },
       include: { protectedTxn: true },
@@ -114,60 +119,7 @@ export async function PATCH(req: NextRequest) {
     const txn = dispute.protectedTxn;
     const status = txn.status as ProtectedStatus;
 
-    if (parsed.data.refundMinor && parsed.data.refundMinor > 0) {
-      if (!isStripeConfigured() || !txn.stripePaymentIntentId) {
-        return jsonError("Cannot refund without Stripe payment", 409);
-      }
-      const plan = planProtectedRefund({
-        ...txn,
-        status: txn.status,
-        requestedMinor: parsed.data.refundMinor,
-      });
-      if (plan.amountMinor <= 0) {
-        return jsonError(
-          plan.blockedReason ||
-            "No safe refundable amount (seller transfers already released)",
-          409,
-          { code: "REFUND_NOT_SAFE", refundableMinor: plan.refundableMinor },
-        );
-      }
-      if (parsed.data.refundMinor > plan.refundableMinor) {
-        return jsonError(
-          `Refund capped at platform remainder (${plan.refundableMinor} minor units); cannot reverse seller transfers automatically`,
-          409,
-          {
-            code: "REFUND_EXCEEDS_PLATFORM",
-            refundableMinor: plan.refundableMinor,
-          },
-        );
-      }
-      const stripe = getStripe();
-      const refund = await stripe.refunds.create(
-        {
-          payment_intent: txn.stripePaymentIntentId,
-          amount: plan.amountMinor,
-          metadata: { disputeId: dispute.id, protectedTxnId: txn.id },
-        },
-        { idempotencyKey: `refund_${dispute.id}_${plan.amountMinor}` },
-      );
-      await appendLedgerEntry({
-        protectedTxnId: txn.id,
-        entryType: "REFUND",
-        direction: "DEBIT",
-        amountMinor: plan.amountMinor,
-        currency: txn.currency,
-        idempotencyKey: `ledger_refund_${refund.id}`,
-        stripeObjectId: refund.id,
-        stripeObjectType: "refund",
-      });
-      await prisma.protectedTransaction.update({
-        where: { id: txn.id },
-        data: {
-          refundedMinor: txn.refundedMinor + plan.amountMinor,
-          status: plan.nextStatus,
-        },
-      });
-    } else if (canTransition(status, "RESOLVE_DISPUTE")) {
+    if (canTransition(status, "RESOLVE_DISPUTE")) {
       await prisma.protectedTransaction.update({
         where: { id: txn.id },
         data: { status: nextStatus(status, "RESOLVE_DISPUTE") },
@@ -192,7 +144,8 @@ export async function PATCH(req: NextRequest) {
       meta: {
         disputeId: dispute.id,
         resolution: parsed.data.resolution,
-        refundMinor: parsed.data.refundMinor || 0,
+        refundMinor: 0,
+        via: "disputes-route-status-only",
       },
     });
 

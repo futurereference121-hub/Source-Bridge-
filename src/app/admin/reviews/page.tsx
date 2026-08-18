@@ -6,6 +6,14 @@ import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import PaymentIssueActions from "../payments/issue-actions";
 import DisputeReviewActions from "./dispute-review-actions";
+import AdminDisputeMessageLink from "./admin-dispute-message-link";
+
+const resolvedStatuses = [
+  "RESOLVED_BUYER",
+  "RESOLVED_SELLER",
+  "RESOLVED_SPLIT",
+  "CLOSED",
+] as const;
 
 export default async function AdminReviewsPage() {
   const user = await getSessionUser();
@@ -49,6 +57,23 @@ export default async function AdminReviewsPage() {
           seller: {
             select: { id: true, username: true, name: true, email: true },
           },
+        },
+      },
+    },
+  });
+
+  const resolvedDisputes = await prisma.disputeCase.findMany({
+    where: { status: { in: [...resolvedStatuses] } },
+    orderBy: { resolvedAt: "desc" },
+    take: 20,
+    include: {
+      protectedTxn: {
+        select: {
+          title: true,
+          currency: true,
+          refundedMinor: true,
+          finalTransferredMinor: true,
+          procurementTransferredMinor: true,
         },
       },
     },
@@ -145,11 +170,16 @@ export default async function AdminReviewsPage() {
                       >
                         Open case
                       </Link>
-                      {t.conversationId ? (
-                        <span className="text-white/35">
-                          Buyer {buyerLabel} · Sourcer {sellerLabel}
-                        </span>
-                      ) : null}
+                      <AdminDisputeMessageLink
+                        disputeId={issue.id}
+                        role="BUYER"
+                        label={`Message buyer (${buyerLabel})`}
+                      />
+                      <AdminDisputeMessageLink
+                        disputeId={issue.id}
+                        role="SELLER"
+                        label={`Message sourcer (${sellerLabel})`}
+                      />
                     </div>
                   </div>
                   <div className="text-right text-xs text-white/55">
@@ -189,6 +219,41 @@ export default async function AdminReviewsPage() {
           })
         )}
       </div>
+
+      {resolvedDisputes.length > 0 ? (
+        <details className="mt-10 rounded-xl border border-white/10 bg-white/[0.03]">
+          <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-white/70">
+            Resolved disputes ({resolvedDisputes.length})
+          </summary>
+          <ul className="divide-y divide-white/10 border-t border-white/10">
+            {resolvedDisputes.map((issue) => {
+              const t = issue.protectedTxn;
+              const released =
+                t.procurementTransferredMinor + t.finalTransferredMinor;
+              return (
+                <li key={issue.id} className="px-5 py-3 text-sm">
+                  <Link
+                    href={`/admin/reviews/${issue.id}`}
+                    className="font-medium text-white hover:text-electric"
+                  >
+                    {t.title}
+                  </Link>
+                  <p className="mt-1 text-xs text-white/45">
+                    {issue.status.replace(/_/g, " ")}
+                    {issue.resolutionNote
+                      ? ` — ${issue.resolutionNote.slice(0, 120)}`
+                      : ""}
+                  </p>
+                  <p className="mt-1 text-xs text-white/35">
+                    Refunded {formatMinor(t.refundedMinor, t.currency)} ·
+                    Released {formatMinor(released, t.currency)}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      ) : null}
     </>
   );
 }

@@ -24,6 +24,7 @@ import {
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ const RECENT_MESSAGES = 30;
 type Params = { params: Promise<{ id: string }> };
 
 async function conversationActivityAt(conversationId: string): Promise<string> {
-  const [conv, ticketMax] = await Promise.all([
+  const [conv, ticketMax, protectedTxnMax, disputeMax] = await Promise.all([
     prisma.conversation.findUnique({
       where: { id: conversationId },
       select: { lastMessageAt: true, updatedAt: true },
@@ -42,11 +43,25 @@ async function conversationActivityAt(conversationId: string): Promise<string> {
       where: { conversationId },
       _max: { updatedAt: true },
     }),
+    prisma.protectedTransaction.aggregate({
+      where: { conversationId },
+      _max: { updatedAt: true },
+    }),
+    prisma.disputeCase.aggregate({
+      where: {
+        protectedTxn: {
+          conversationId,
+        },
+      },
+      _max: { updatedAt: true },
+    }),
   ]);
   const latest = Math.max(
     conv?.lastMessageAt?.getTime() ?? 0,
     conv?.updatedAt?.getTime() ?? 0,
     ticketMax._max.updatedAt?.getTime() ?? 0,
+    protectedTxnMax._max.updatedAt?.getTime() ?? 0,
+    disputeMax._max.updatedAt?.getTime() ?? 0,
   );
   return new Date(latest || Date.now()).toISOString();
 }
@@ -71,8 +86,9 @@ export async function GET(_req: Request, { params }: Params) {
       ]);
     }
 
-    const activityAt = await conversationActivityAt(id);
+    let activityAt: string | null = null;
     if (isPoll && since) {
+      activityAt = await conversationActivityAt(id);
       const sinceMs = Date.parse(since);
       const activityMs = Date.parse(activityAt);
       if (Number.isFinite(sinceMs) && Number.isFinite(activityMs) && activityMs <= sinceMs) {
@@ -93,36 +109,45 @@ export async function GET(_req: Request, { params }: Params) {
       }
     }
 
-    const [conversation, paymentTickets] = await Promise.all([
-      prisma.conversation.findUnique({
-        where: { id },
-        include: {
-          participants: {
-            include: { user: { select: participantUserSelect } },
-          },
-          messages: {
-            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-            take: RECENT_MESSAGES,
-            include: {
-              attachments: true,
-              sender: { select: participantUserSelect },
-            },
-          },
-          sourcingRequest: true,
-          listing: {
-            select: {
-              id: true,
-              name: true,
-              images: true,
-              price: true,
-              currency: true,
-              slug: true,
-            },
+    const conversationPromise = prisma.conversation.findUnique({
+      where: { id },
+      include: {
+        participants: {
+          include: { user: { select: participantUserSelect } },
+        },
+        messages: {
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: RECENT_MESSAGES,
+          include: {
+            attachments: true,
+            sender: { select: participantUserSelect },
           },
         },
-      }),
-      listConversationPaymentTickets(id, user.id, { skipExpire: isPoll }),
-    ]);
+        sourcingRequest: true,
+        listing: {
+          select: {
+            id: true,
+            name: true,
+            images: true,
+            price: true,
+            currency: true,
+            slug: true,
+          },
+        },
+      },
+    });
+    const ticketsPromise = listConversationPaymentTickets(id, user.id, { skipExpire: isPoll });
+
+    const [conversation, paymentTickets, activityResolved] = activityAt
+      ? [
+          ...(await Promise.all([conversationPromise, ticketsPromise])),
+          activityAt,
+        ]
+      : await Promise.all([
+          conversationPromise,
+          ticketsPromise,
+          conversationActivityAt(id),
+        ]);
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
@@ -186,7 +211,7 @@ export async function GET(_req: Request, { params }: Params) {
         canCreatePaymentTicket:
           activePaymentTicketCount < MAX_ACTIVE_PAYMENT_TICKETS,
         paymentsProposalAccess,
-        activityAt,
+        activityAt: activityResolved,
       },
       {
         headers: {
@@ -203,5 +228,43 @@ export async function GET(_req: Request, { params }: Params) {
     if (status >= 400 && status < 500) return jsonError(message, status);
     console.error("[conversations:get]", err);
     return jsonError(message, status);
+  }
+}
+
+const patchSchema = z.object({
+  hidden: z.boolean(),
+});
+
+/** Per-user hide/unhide conversation from inbox (P7). */
+export async function PATCH(req: Request, { params }: Params) {
+  try {
+    const user = await requireSessionUser();
+    const { id } = await params;
+    await requireParticipant(id, user.id);
+
+    const body = await req.json();
+    const parsed = patchSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
+    }
+
+    await prisma.conversationParticipant.update({
+      where: {
+        conversationId_userId: { conversationId: id, userId: user.id },
+      },
+      data: {
+        hiddenAt: parsed.data.hidden ? new Date() : null,
+      },
+    });
+
+    return Response.json({ ok: true, hidden: parsed.data.hidden });
+  } catch (err) {
+    const status = (err as { status?: number }).status || 500;
+    if (status === 401) return jsonError("Sign in required", 401);
+    if (status >= 400 && status < 500) {
+      return jsonError(err instanceof Error ? err.message : "Failed", status);
+    }
+    console.error("[conversations:patch]", err);
+    return jsonError("Failed to update conversation", status);
   }
 }

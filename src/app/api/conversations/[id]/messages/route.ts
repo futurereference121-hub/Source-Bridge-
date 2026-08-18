@@ -179,6 +179,10 @@ export async function POST(req: NextRequest, { params }: Params) {
         where: { id },
         data: { lastMessageAt: now, updatedAt: now },
       });
+      await tx.conversationParticipant.updateMany({
+        where: { conversationId: id, hiddenAt: { not: null } },
+        data: { hiddenAt: null },
+      });
       await markRead(id, user.id, tx);
       return msg;
     });

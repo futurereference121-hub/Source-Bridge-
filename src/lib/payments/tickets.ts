@@ -205,6 +205,8 @@ export type TicketAmountsInput = {
   procurementAdvanceAgreed?: boolean;
   listingId?: string | null;
   currency?: string;
+  /** When true, buyer total excludes add-on SB fee; sourcer absorbs from entitlement. */
+  platformFeeIncludedInPrice?: boolean;
 };
 
 type TicketPartyUser = {
@@ -260,6 +262,7 @@ function mapTicket(
     paymentOption: string;
     procurementAdvanceAgreed: boolean;
     procurementAdvanceMinor: number;
+    platformFeeIncludedInPrice?: boolean;
     notes: string;
     buyerApprovedRevision: number | null;
     sellerApprovedRevision: number | null;
@@ -310,6 +313,8 @@ function mapTicket(
     sellerConnectHasAccount?: boolean;
     /** Latest DisputeCase.status for banner derivation (generic). */
     openDisputeStatus?: string | null;
+    openDisputeResolutionNote?: string | null;
+    openDisputeResolvedAt?: string | null;
     origin?: string | null;
   },
 ) {
@@ -324,6 +329,7 @@ function mapTicket(
     procurementTransferredMinor: extras?.procurementTransferredMinor ?? 0,
     finalTransferredMinor: extras?.finalTransferredMinor ?? 0,
     refundedMinor: extras?.refundedMinor ?? 0,
+    platformFeeIncludedInPrice: Boolean(t.platformFeeIncludedInPrice),
   });
   const protectedStatus = extras?.protectedTxnStatus ?? null;
   const procPending =
@@ -475,6 +481,7 @@ function mapTicket(
     origin: extras?.origin ?? null,
     procurementAdvanceAgreed: t.procurementAdvanceAgreed,
     procurementAdvanceMinor: t.procurementAdvanceMinor,
+    platformFeeIncludedInPrice: Boolean(t.platformFeeIncludedInPrice),
     notes: t.notes,
     buyerApprovedRevision: t.buyerApprovedRevision,
     sellerApprovedRevision: t.sellerApprovedRevision,
@@ -564,6 +571,8 @@ function mapTicket(
     },
     acceptance,
     openDisputeStatus: extras?.openDisputeStatus ?? null,
+    openDisputeResolutionNote: extras?.openDisputeResolutionNote ?? null,
+    openDisputeResolvedAt: extras?.openDisputeResolvedAt ?? null,
   };
 }
 
@@ -949,10 +958,14 @@ export async function listConversationPaymentTickets(
     },
   });
   const sellerIds = [...new Set(rows.map((r) => r.sellerId))];
-  const connectRows =
+  const ptIds = rows
+    .map((r) => r.protectedTransactionId)
+    .filter((id): id is string => Boolean(id));
+
+  const [connectRows, disputeRows] = await Promise.all([
     sellerIds.length === 0
-      ? []
-      : await prisma.stripeConnectAccount.findMany({
+      ? Promise.resolve([])
+      : prisma.stripeConnectAccount.findMany({
           where: { userId: { in: sellerIds } },
           select: {
             userId: true,
@@ -960,7 +973,20 @@ export async function listConversationPaymentTickets(
             chargesEnabled: true,
             payoutsEnabled: true,
           },
-        });
+        }),
+    ptIds.length === 0
+      ? Promise.resolve([])
+      : prisma.disputeCase.findMany({
+          where: { protectedTxnId: { in: ptIds } },
+          orderBy: { createdAt: "desc" },
+          select: {
+            protectedTxnId: true,
+            status: true,
+            resolutionNote: true,
+            resolvedAt: true,
+          },
+        }),
+  ]);
   const connectBySeller = new Map(
     connectRows.map((c) => [
       c.userId,
@@ -970,21 +996,18 @@ export async function listConversationPaymentTickets(
       },
     ]),
   );
-  const ptIds = rows
-    .map((r) => r.protectedTransactionId)
-    .filter((id): id is string => Boolean(id));
-  const disputeRows =
-    ptIds.length === 0
-      ? []
-      : await prisma.disputeCase.findMany({
-          where: { protectedTxnId: { in: ptIds } },
-          orderBy: { createdAt: "desc" },
-          select: { protectedTxnId: true, status: true },
-        });
   const disputeStatusByTxn = new Map<string, string>();
+  const disputeMetaByTxn = new Map<
+    string,
+    { resolutionNote: string; resolvedAt: string | null }
+  >();
   for (const d of disputeRows) {
     if (!disputeStatusByTxn.has(d.protectedTxnId)) {
       disputeStatusByTxn.set(d.protectedTxnId, d.status);
+      disputeMetaByTxn.set(d.protectedTxnId, {
+        resolutionNote: d.resolutionNote || "",
+        resolvedAt: d.resolvedAt?.toISOString() ?? null,
+      });
     }
   }
   return rows
@@ -1020,6 +1043,12 @@ export async function listConversationPaymentTickets(
       sellerConnectHasAccount: connectBySeller.get(t.sellerId)?.hasAccount ?? false,
       openDisputeStatus: t.protectedTransactionId
         ? disputeStatusByTxn.get(t.protectedTransactionId) ?? null
+        : null,
+      openDisputeResolutionNote: t.protectedTransactionId
+        ? disputeMetaByTxn.get(t.protectedTransactionId)?.resolutionNote ?? null
+        : null,
+      openDisputeResolvedAt: t.protectedTransactionId
+        ? disputeMetaByTxn.get(t.protectedTransactionId)?.resolvedAt ?? null
         : null,
       origin: t.protectedTransaction?.origin ?? null,
     }),
@@ -1262,8 +1291,11 @@ async function resolveAmounts(
     itemCostMinor: fees.itemCostMinor,
     eligible,
   });
-  const total = totalChargeMinor(fees);
-  return { fees, currency, procurementMinor, total, config };
+  const included = Boolean(input.platformFeeIncludedInPrice);
+  const total = included
+    ? fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor
+    : totalChargeMinor(fees);
+  return { fees, currency, procurementMinor, total, config, platformFeeIncludedInPrice: included };
 }
 
 export async function createOrRevisePaymentTicket(opts: {
@@ -1368,11 +1400,8 @@ export async function createOrRevisePaymentTicket(opts: {
     });
   }
 
-  const { fees, currency, procurementMinor, total } = await resolveAmounts(
-    opts.amounts,
-    seller,
-    paymentOption,
-  );
+  const { fees, currency, procurementMinor, total, platformFeeIncludedInPrice } =
+    await resolveAmounts(opts.amounts, seller, paymentOption);
 
   // Edit path: supersede one specific open ticket. New proposes never auto-
   // supersede siblings — multi-ticket independence for B/C after A is funded.
@@ -1575,6 +1604,7 @@ export async function createOrRevisePaymentTicket(opts: {
         paymentOption,
         procurementAdvanceAgreed: terms.procurementAdvanceAgreed,
         procurementAdvanceMinor: procurementMinor,
+        platformFeeIncludedInPrice,
         notes: opts.amounts.notes || "",
         stripeMode: getStripeMode(),
         lastMeaningfulActivityAt: new Date(),

@@ -109,7 +109,7 @@ export async function markRead(
 /** Count unread messages across all of the user's open participations. */
 export async function getUnreadCount(userId: string): Promise<number> {
   const participations = await prisma.conversationParticipant.findMany({
-    where: { userId, leftAt: null },
+    where: { userId, leftAt: null, hiddenAt: null },
     select: { conversationId: true, lastReadAt: true },
   });
   if (participations.length === 0) return 0;

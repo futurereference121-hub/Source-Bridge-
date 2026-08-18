@@ -28,6 +28,7 @@ assert.match(api, /searchParams.get\("page"\)/);
 assert.match(api, /hasMore/);
 assert.match(service, /listDirectoryMembersPage/);
 assert.match(card, /export function MemberDirectoryCard/);
+assert.match(card, /line-clamp-2/);
 assert.match(split, /Independent floating Status \+ Opportunities cards/);
 assert.doesNotMatch(
   explore,

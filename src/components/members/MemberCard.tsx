@@ -181,6 +181,8 @@ export function MemberCard({ member }: MemberCardProps) {
 export function MemberDirectoryCard({ member }: MemberCardProps) {
   const verified = isIdentityVerified(member);
   const photo = memberPhoto(member.photo);
+  const message = displayMessage(member);
+  const networkPreview = member.network.slice(0, 2);
 
   return (
     <Link
@@ -210,6 +212,16 @@ export function MemberDirectoryCard({ member }: MemberCardProps) {
           </p>
         </div>
       </div>
+      {message ? (
+        <p className="mt-2 line-clamp-2 text-[11px] leading-snug text-white/65">
+          {message}
+        </p>
+      ) : null}
+      {networkPreview.length ? (
+        <p className="mt-1.5 truncate text-[10px] text-white/35">
+          {networkPreview.map((n) => n.city).join(" · ")}
+        </p>
+      ) : null}
     </Link>
   );
 }

@@ -204,14 +204,42 @@ export default function PaymentIssueActions({
         </label>
       </div>
       {!confirmText ? (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={askConfirm}
-          className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-        >
-          Review confirmation
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {refundableMinor > 0 ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setRefundMajor(minorToMajor(refundableMinor, currency).toFixed(2));
+                setReleaseMajor("0.00");
+              }}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
+            >
+              Refund buyer (max {formatMinor(refundableMinor, currency)})
+            </button>
+          ) : null}
+          {finalResidualMinor > 0 ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setReleaseMajor(minorToMajor(finalResidualMinor, currency).toFixed(2));
+                setRefundMajor("0.00");
+              }}
+              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
+            >
+              Release to sourcer (max {formatMinor(finalResidualMinor, currency)})
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={askConfirm}
+            className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+          >
+            Review confirmation
+          </button>
+        </div>
       ) : (
         <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-amber-50">
           <p>{confirmText}</p>

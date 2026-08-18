@@ -22,9 +22,11 @@ export async function GET(req: NextRequest) {
       MAX_LIMIT,
     );
 
-    const rows = await prisma.conversation.findMany({
+    const rowsPromise = prisma.conversation.findMany({
       where: {
-        participants: { some: { userId: user.id, leftAt: null } },
+        participants: {
+          some: { userId: user.id, leftAt: null, hiddenAt: null },
+        },
       },
       orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],
       take: limit + 1,
@@ -52,8 +54,12 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    const [rows, unreadCount] = await Promise.all([
+      rowsPromise,
+      getUnreadCount(user.id),
+    ]);
+
     const slice = rows.slice(0, limit);
-    const unreadCount = await getUnreadCount(user.id);
 
     return Response.json({
       conversations: slice.map((c) => mapConversation(c, user.id)),

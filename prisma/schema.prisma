@@ -507,9 +507,12 @@ model ConversationParticipant {
   lastReadAt     DateTime?
   joinedAt       DateTime     @default(now())
   leftAt         DateTime?
+  /// Per-user inbox hide — does not affect the other participant.
+  hiddenAt       DateTime?
 
   @@unique([conversationId, userId])
   @@index([userId, lastReadAt])
+  @@index([userId, hiddenAt])
 }
 
 model Message {
@@ -830,6 +833,8 @@ model PaymentTicket {
   paymentOption         String    @default("PROTECTED")
   procurementAdvanceAgreed Boolean @default(false)
   procurementAdvanceMinor  Int    @default(0)
+  /// When true, buyer total excludes add-on platform fee; sourcer absorbs SB fee from entitlement.
+  platformFeeIncludedInPrice Boolean @default(false)
   notes                 String    @default("")
   buyerApprovedRevision Int?
   sellerApprovedRevision Int?

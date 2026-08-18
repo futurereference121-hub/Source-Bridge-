@@ -156,6 +156,23 @@ assert.match(
   "conversation GET must skip unfunded expiry on poll ticks",
 );
 assert.match(
+  convGet,
+  /Promise\.all\(\[\s*conversationPromise,\s*ticketsPromise/,
+  "full conversation GET must parallelize conversation + tickets",
+);
+assert.match(
+  convGet,
+  /export async function PATCH/,
+  "conversation PATCH hides a thread for the caller only",
+);
+assert.match(convGet, /hiddenAt: parsed\.data\.hidden \? new Date\(\) : null/);
+assert.match(inbox, /JSON\.stringify\(\{ hidden: true \}\)/);
+assert.match(card, /capture="environment"/);
+assert.match(card, /data-testid="ticket-dispute-receipt"/);
+assert.match(card, /createPortal\(/);
+assert.match(propose, /platformFeeIncludedInPrice/);
+assert.match(propose, /includePlatformFee/);
+assert.match(
   messagesGet,
   /listConversationPaymentTickets\(id, user\.id\)/,
   "messages pagination still expires stale unfunded tickets on full load",

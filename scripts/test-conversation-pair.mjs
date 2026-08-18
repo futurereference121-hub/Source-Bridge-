@@ -26,6 +26,10 @@ function adminDisputeThreadPairKey(disputeCaseId, role) {
   return `admin-dispute:${disputeCaseId}:${role}`;
 }
 
+function adminSupportThreadPairKey(adminUserId, partyUserId) {
+  return `admin-support:${[adminUserId, partyUserId].sort().join(":")}`;
+}
+
 const disputeId = "disp_aaa";
 assert.notEqual(
   adminDisputeThreadPairKey(disputeId, "BUYER"),
@@ -34,6 +38,14 @@ assert.notEqual(
 assert.notEqual(
   adminDisputeThreadPairKey(disputeId, "BUYER"),
   adminDisputeThreadPairKey(disputeId, "SELLER"),
+);
+assert.equal(
+  adminSupportThreadPairKey(a, b),
+  adminSupportThreadPairKey(b, a),
+);
+assert.notEqual(
+  adminSupportThreadPairKey(a, b),
+  adminDisputeThreadPairKey(disputeId, "BUYER"),
 );
 
 // Inbox routing contracts

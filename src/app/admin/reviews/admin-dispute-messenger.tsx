@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImagePlus } from "lucide-react";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
@@ -47,9 +47,12 @@ export default function AdminDisputeMessenger({
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activityAtRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!initialThread) return;
+    const latest = initialThread.messages.at(-1)?.createdAt ?? null;
+    if (latest) activityAtRef.current = latest;
     setThread((prev) => {
       if (!prev) return initialThread;
       const known = new Set(prev.messages.map((m) => m.id));
@@ -67,13 +70,26 @@ export default function AdminDisputeMessenger({
   useEffect(() => {
     let cancelled = false;
     async function refresh() {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
       try {
-        const res = await fetch(
-          `/api/admin/payments/issues/threads?disputeId=${encodeURIComponent(disputeId)}`,
-          { cache: "no-store" },
-        );
+        const url = new URL("/api/admin/payments/issues/threads", window.location.origin);
+        url.searchParams.set("disputeId", disputeId);
+        if (activityAtRef.current) {
+          url.searchParams.set("since", activityAtRef.current);
+        }
+        const res = await fetch(url.pathname + url.search, { cache: "no-store" });
         if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { threads?: Thread[] };
+        const data = (await res.json()) as {
+          unchanged?: boolean;
+          activityAt?: string;
+          threads?: Thread[];
+        };
+        if (data.activityAt) {
+          activityAtRef.current = data.activityAt;
+        }
+        if (data.unchanged) return;
         const next = (data.threads || []).find(
           (t) => t.adminPartyRole === role,
         );
@@ -82,10 +98,19 @@ export default function AdminDisputeMessenger({
         /* keep local history */
       }
     }
-    const id = window.setInterval(() => void refresh(), 45_000);
+    const id = window.setInterval(() => void refresh(), 5_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    window.addEventListener("online", onVis);
     return () => {
       cancelled = true;
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+      window.removeEventListener("online", onVis);
     };
   }, [disputeId, role]);
 
@@ -130,6 +155,7 @@ export default function AdminDisputeMessenger({
             messages: [...base.messages, data.message!],
           };
         });
+        activityAtRef.current = data.message.createdAt;
       }
       setDraft("");
       setPendingUrls([]);

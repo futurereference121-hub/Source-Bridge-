@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { adminDisputeThreadPairKey } from "@/lib/conversation-pair";
+import { adminDisputeThreadPairKey, adminSupportThreadPairKey } from "@/lib/conversation-pair";
 import { isAllowedAttachmentUrl, participantUserSelect } from "@/lib/messaging";
 import { createNotification } from "@/lib/notifications";
 
@@ -11,9 +11,36 @@ function throwHttp(message: string, status: number, code?: string): never {
   throw Object.assign(new Error(message), { status, code });
 }
 
+async function insertDisputeContextMarker(opts: {
+  conversationId: string;
+  disputeCaseId: string;
+  protectedTxnId: string;
+  paymentTicketId: string | null;
+  title: string;
+}) {
+  const body = [
+    "Dispute context",
+    `dispute ${opts.disputeCaseId}`,
+    `txn ${opts.protectedTxnId}`,
+    opts.paymentTicketId ? `ticket ${opts.paymentTicketId}` : null,
+    opts.title ? `"${opts.title}"` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  await prisma.message.create({
+    data: {
+      conversationId: opts.conversationId,
+      senderId: null,
+      body,
+      messageType: "SYSTEM",
+      systemEventType: "DISPUTE_CONTEXT",
+    },
+  });
+}
+
 /**
  * Get or create a private Admin↔party thread for a dispute.
- * Never reuses the Buyer↔Sourcer conversation.
+ * Reuses the same support thread across disputes for that party.
  */
 export async function getOrCreateAdminDisputeThread(opts: {
   adminUserId: string;
@@ -45,14 +72,47 @@ export async function getOrCreateAdminDisputeThread(opts: {
     throwHttp("Admin cannot message themselves as a dispute party", 400);
   }
 
-  const pairKey = adminDisputeThreadPairKey(dispute.id, opts.role);
-  const existing = await prisma.conversation.findUnique({
-    where: { pairKey },
-    include: {
-      participants: { include: { user: { select: participantUserSelect } } },
-    },
-  });
+  const pairKey = adminSupportThreadPairKey(opts.adminUserId, partyId);
+  const legacyPairKey = adminDisputeThreadPairKey(dispute.id, opts.role);
+
+  const existing =
+    (await prisma.conversation.findUnique({
+      where: { pairKey },
+      include: {
+        participants: { include: { user: { select: participantUserSelect } } },
+      },
+    })) ||
+    (await prisma.conversation.findUnique({
+      where: { pairKey: legacyPairKey },
+      include: {
+        participants: { include: { user: { select: participantUserSelect } } },
+      },
+    }));
+
   if (existing) {
+    if (existing.pairKey !== pairKey) {
+      await prisma.conversation.update({
+        where: { id: existing.id },
+        data: { pairKey },
+      });
+    }
+    const markerExists = await prisma.message.findFirst({
+      where: {
+        conversationId: existing.id,
+        systemEventType: "DISPUTE_CONTEXT",
+        body: { contains: opts.disputeCaseId },
+      },
+      select: { id: true },
+    });
+    if (!markerExists) {
+      await insertDisputeContextMarker({
+        conversationId: existing.id,
+        disputeCaseId: dispute.id,
+        protectedTxnId: dispute.protectedTxn.id,
+        paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+        title: dispute.protectedTxn.title,
+      });
+    }
     return {
       conversation: existing,
       created: false,
@@ -61,41 +121,53 @@ export async function getOrCreateAdminDisputeThread(opts: {
     };
   }
 
-  const byCase = await prisma.conversation.findFirst({
-    where: { disputeCaseId: dispute.id, adminPartyRole: opts.role },
-    include: {
-      participants: { include: { user: { select: participantUserSelect } } },
-    },
-  });
-  if (byCase) {
-    return { conversation: byCase, created: false, partyId, dispute };
-  }
-
   const subject =
     opts.role === "BUYER"
       ? "Source Bridge — private message with buyer"
       : "Source Bridge — private message with sourcer";
   const now = new Date();
   try {
-    const conversation = await prisma.conversation.create({
-      data: {
-        pairKey,
-        subject,
-        contextType: ADMIN_DISPUTE_CONTEXT,
-        disputeCaseId: dispute.id,
-        paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
-        adminPartyRole: opts.role,
-        lastMessageAt: now,
-        participants: {
-          create: [
-            { userId: opts.adminUserId, lastReadAt: now },
-            { userId: partyId },
-          ],
+    const conversation = await prisma.$transaction(async (tx) => {
+      const conv = await tx.conversation.create({
+        data: {
+          pairKey,
+          subject,
+          contextType: ADMIN_DISPUTE_CONTEXT,
+          disputeCaseId: dispute.id,
+          paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+          adminPartyRole: opts.role,
+          lastMessageAt: now,
+          participants: {
+            create: [
+              { userId: opts.adminUserId, lastReadAt: now },
+              { userId: partyId },
+            ],
+          },
         },
-      },
-      include: {
-        participants: { include: { user: { select: participantUserSelect } } },
-      },
+        include: {
+          participants: { include: { user: { select: participantUserSelect } } },
+        },
+      });
+      await tx.message.create({
+        data: {
+          conversationId: conv.id,
+          senderId: null,
+          body: [
+            "Dispute context",
+            `dispute ${dispute.id}`,
+            `txn ${dispute.protectedTxn.id}`,
+            dispute.protectedTxn.paymentTicket?.id
+              ? `ticket ${dispute.protectedTxn.paymentTicket.id}`
+              : null,
+            dispute.protectedTxn.title ? `"${dispute.protectedTxn.title}"` : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          messageType: "SYSTEM",
+          systemEventType: "DISPUTE_CONTEXT",
+        },
+      });
+      return conv;
     });
     return { conversation, created: true, partyId, dispute };
   } catch (err) {
@@ -113,8 +185,32 @@ export async function getOrCreateAdminDisputeThread(opts: {
 }
 
 export async function listAdminDisputeThreads(disputeCaseId: string) {
-  return prisma.conversation.findMany({
-    where: { disputeCaseId, contextType: ADMIN_DISPUTE_CONTEXT },
+  const dispute = await prisma.disputeCase.findUnique({
+    where: { id: disputeCaseId },
+    select: {
+      id: true,
+      protectedTxn: {
+        select: { buyerId: true, sellerId: true },
+      },
+    },
+  });
+  if (!dispute) return [];
+
+  const threads = await prisma.conversation.findMany({
+    where: {
+      contextType: ADMIN_DISPUTE_CONTEXT,
+      OR: [
+        { disputeCaseId },
+        {
+          adminPartyRole: "BUYER",
+          participants: { some: { userId: dispute.protectedTxn.buyerId } },
+        },
+        {
+          adminPartyRole: "SELLER",
+          participants: { some: { userId: dispute.protectedTxn.sellerId } },
+        },
+      ],
+    },
     include: {
       participants: { include: { user: { select: participantUserSelect } } },
       messages: {
@@ -127,6 +223,12 @@ export async function listAdminDisputeThreads(disputeCaseId: string) {
       },
     },
   });
+
+  const byRole = new Map<string, (typeof threads)[number]>();
+  for (const t of threads) {
+    if (t.adminPartyRole) byRole.set(t.adminPartyRole, t);
+  }
+  return [...byRole.values()];
 }
 
 export async function sendAdminDisputeMessage(opts: {

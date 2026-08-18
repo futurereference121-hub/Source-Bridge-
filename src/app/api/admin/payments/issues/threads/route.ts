@@ -58,15 +58,39 @@ function mapThread(
   };
 }
 
+function latestThreadActivity(
+  threads: Awaited<ReturnType<typeof listAdminDisputeThreads>>,
+): string {
+  const latest = threads.reduce((max, thread) => {
+    const threadTime = Math.max(
+      thread.updatedAt.getTime(),
+      thread.lastMessageAt?.getTime() ?? 0,
+      ...thread.messages.map((m) => m.createdAt.getTime()),
+    );
+    return Math.max(max, threadTime);
+  }, 0);
+  return new Date(latest || Date.now()).toISOString();
+}
+
 /** List private Admin↔Buyer and Admin↔Sourcer threads for a dispute. */
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
     const disputeId = req.nextUrl.searchParams.get("disputeId") || "";
+    const since = req.nextUrl.searchParams.get("since") || "";
     if (!disputeId) return jsonError("disputeId required", 400);
     const threads = await listAdminDisputeThreads(disputeId);
+    const activityAt = latestThreadActivity(threads);
+    if (since) {
+      const sinceMs = Date.parse(since);
+      const activityMs = Date.parse(activityAt);
+      if (Number.isFinite(sinceMs) && Number.isFinite(activityMs) && activityMs <= sinceMs) {
+        return Response.json({ ok: true, unchanged: true, activityAt });
+      }
+    }
     return Response.json({
       ok: true,
+      activityAt,
       threads: threads.map(mapThread),
     });
   } catch (err) {

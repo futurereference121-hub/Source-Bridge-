@@ -1158,6 +1158,27 @@ export function MessagesInbox({
                       View profile
                     </Link>
                   ) : null}
+                  {activeConversation?.contextType !== "system" ? (
+                    <button
+                      type="button"
+                      className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-white/40 hover:text-white"
+                      onClick={() => {
+                        if (!activeId) return;
+                        void fetch(`/api/conversations/${activeId}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ hidden: true }),
+                        }).then(() => {
+                          setConversations((prev) =>
+                            prev.filter((c) => c.id !== activeId),
+                          );
+                          selectConversation(null);
+                        });
+                      }}
+                    >
+                      Hide
+                    </button>
+                  ) : null}
                   {activeConversation?.contextType !== "system" &&
                   activeConversation?.contextType !== "admin_dispute" ? (
                     <ProposePaymentTicketButton

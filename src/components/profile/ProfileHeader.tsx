@@ -38,6 +38,11 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
   const stories = useStoriesOptional();
   const following = follows.includes(member.id);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [displayMessageDraft, setDisplayMessageDraft] = useState(
+    (member.publicDisplayMessage || member.howICanHelp || "").trim(),
+  );
+  const [displayMessageBusy, setDisplayMessageBusy] = useState(false);
+  const [displayMessageSaved, setDisplayMessageSaved] = useState(false);
   const messagingOk = canReceiveMessages(member);
 
   useEffect(() => {
@@ -74,6 +79,31 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
       return;
     }
     setComposerOpen(true);
+  }
+
+  async function saveDisplayMessage() {
+    if (!isOwner || displayMessageBusy) return;
+    setDisplayMessageBusy(true);
+    setDisplayMessageSaved(false);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          publicDisplayMessage: displayMessageDraft.trim().slice(0, 160),
+        }),
+      });
+      if (!res.ok) {
+        showToast("Could not save display message");
+        return;
+      }
+      setDisplayMessageSaved(true);
+      router.refresh();
+    } catch {
+      showToast("Could not save display message");
+    } finally {
+      setDisplayMessageBusy(false);
+    }
   }
 
   return (
@@ -199,20 +229,43 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
           )}
         </div>
       </div>
-      {(member.publicDisplayMessage || member.howICanHelp)?.trim() ? (
+      {isOwner ? (
+        <div className="mt-7 rounded-xl border border-electric/30 bg-electric/10 px-5 py-4">
+          <label className="block text-xs font-medium uppercase tracking-[0.12em] text-white/50">
+            Public display message
+            <textarea
+              value={displayMessageDraft}
+              onChange={(e) => {
+                setDisplayMessageDraft(e.target.value);
+                setDisplayMessageSaved(false);
+              }}
+              maxLength={160}
+              rows={2}
+              placeholder="How you help buyers and sourcers (visible on your profile)"
+              className="mt-2 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+              disabled={displayMessageBusy}
+            />
+          </label>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void saveDisplayMessage()}
+              disabled={displayMessageBusy}
+              className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+            >
+              {displayMessageBusy ? "Saving…" : "Save message"}
+            </button>
+            {displayMessageSaved ? (
+              <span className="text-xs text-electric">Saved</span>
+            ) : null}
+            <span className="text-[11px] text-white/35">
+              {displayMessageDraft.length}/160 · also editable in Edit Profile
+            </span>
+          </div>
+        </div>
+      ) : (member.publicDisplayMessage || member.howICanHelp)?.trim() ? (
         <div className="mt-7 rounded-xl border border-electric/30 bg-electric/10 px-5 py-4 text-sm leading-relaxed text-white/85">
           {(member.publicDisplayMessage || member.howICanHelp).trim()}
-        </div>
-      ) : isOwner ? (
-        <div className="mt-7 rounded-xl border border-dashed border-white/10 px-5 py-4 text-sm text-white/35">
-          Add a public display message via{" "}
-          <Link
-            href={editHref(member.slug, "profile")}
-            className="text-electric hover:text-electric-hover"
-          >
-            Edit Profile
-          </Link>
-          .
         </div>
       ) : null}
 

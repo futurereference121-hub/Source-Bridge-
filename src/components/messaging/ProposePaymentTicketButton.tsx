@@ -153,6 +153,7 @@ export function ProposePaymentTicketButton({
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(isEdit);
   const [procurementFlag, setProcurementFlag] = useState(false);
+  const [includePlatformFee, setIncludePlatformFee] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -319,6 +320,7 @@ export function ProposePaymentTicketButton({
           currency: currency || "GBP",
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
+          platformFeeIncludedInPrice: includePlatformFee,
           proposalTraceId,
           buyerId: selectedBuyerId,
           sellerId: selectedSellerId,
@@ -628,6 +630,35 @@ export function ProposePaymentTicketButton({
               : ""}
           </span>
         </label>
+      ) : null}
+      <label className="mt-3 flex min-w-0 items-start gap-2 text-[11px] text-white/60">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={includePlatformFee}
+          onChange={(e) => setIncludePlatformFee(e.target.checked)}
+          disabled={busy}
+        />
+        <span>
+          Item/shipping price already includes the Source Bridge fee (2%).
+          Buyer total will not add fee on top; sourcer entitlement is reduced
+          by the platform fee.
+        </span>
+      </label>
+      {itemMajor || shippingMajor ? (
+        <p className="mt-2 text-[11px] text-white/45">
+          Estimated buyer total:{" "}
+          {(() => {
+            const item = Math.round(parseFloat(itemMajor || "0") * 100) || 0;
+            const ship = Math.round(parseFloat(shippingMajor || "0") * 100) || 0;
+            const svc = Math.round(parseFloat(serviceMajor || "0") * 100) || 0;
+            const base = item + ship;
+            const fee = base > 0 ? Math.max(Math.ceil(base * 0.02), 1) : 0;
+            const total = includePlatformFee ? base + svc : base + svc + fee;
+            return `£${(total / 100).toFixed(2)}`;
+          })()}
+          {includePlatformFee ? " (fee included in price)" : " (includes SB fee)"}
+        </p>
       ) : null}
       {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}
     </>

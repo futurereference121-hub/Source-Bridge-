@@ -12,7 +12,19 @@ export function conversationPairKey(userAId: string, userBId: string): string {
   return [userAId, userBId].sort().join(":");
 }
 
-/** Admin↔party dispute threads — never the Buyer↔Sourcer marketplace pair. */
+/** Admin↔party support threads — reused across disputes for the same party. */
+export function adminSupportThreadPairKey(
+  adminUserId: string,
+  partyUserId: string,
+): string {
+  const admin = String(adminUserId || "").trim();
+  const party = String(partyUserId || "").trim();
+  if (!admin || !party) throw new Error("admin and party user IDs are required");
+  if (admin === party) throw new Error("admin and party must differ");
+  return `admin-support:${[admin, party].sort().join(":")}`;
+}
+
+/** @deprecated Legacy per-dispute key — kept for migration lookups only. */
 export function adminDisputeThreadPairKey(
   disputeCaseId: string,
   role: "BUYER" | "SELLER",
