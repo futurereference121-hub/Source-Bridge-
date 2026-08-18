@@ -35,6 +35,9 @@ const resolveSchema = z.object({
   resolutionNote: z.string().trim().max(2000).optional(),
   refundMinor: z.number().int().nonnegative().optional(),
   refundMajor: z.string().trim().max(32).optional(),
+  releaseMinor: z.number().int().nonnegative().optional(),
+  releaseMajor: z.string().trim().max(32).optional(),
+  /** @deprecated Prefer releaseMinor. True = remaining residual only when no typed amount. */
   releaseRemaining: z.boolean().optional().default(false),
   confirmed: z.literal(true),
 });
@@ -144,9 +147,10 @@ export async function GET() {
 
 /**
  * Admin resolve OPEN payment issue.
- * - RESOLVED_SELLER: residual via releaseFinal only
- * - RESOLVED_BUYER: refund remaining platform-held (server-capped)
- * - RESOLVED_SPLIT: controlled refund (+ optional residual release), both bounded
+ * - RESOLVED_SELLER: sourcer release (typed amount or remaining residual)
+ * - RESOLVED_BUYER: buyer refund via original PI/Charge (typed amount or remaining)
+ * - RESOLVED_SPLIT: controlled refund + optional sourcer release, both bounded
+ * Buyer never needs Connect. Sourcer destination is that sourcer's Connect account.
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -186,6 +190,7 @@ export async function PATCH(req: NextRequest) {
 
     const booksAtStart = booksForTxn(txn);
     let refundAppliedMinor = 0;
+    let releaseAppliedMinor = 0;
     let released = false;
     let transferId: string | null = null;
     let working = txn;
@@ -204,16 +209,16 @@ export async function PATCH(req: NextRequest) {
       });
     }
 
-    // Buyer refund (full remaining or controlled partial) — server clamps.
+    // Buyer refund via original PaymentIntent/Charge — buyer does not need Connect.
     if (
       parsed.data.resolution === "RESOLVED_BUYER" ||
       parsed.data.resolution === "RESOLVED_SPLIT"
     ) {
       const books = booksForTxn(working);
+      const typedRefund =
+        Boolean(parsed.data.refundMajor) || parsed.data.refundMinor != null;
       let requested = 0;
-      if (parsed.data.resolution === "RESOLVED_BUYER") {
-        requested = books.refundableMinor;
-      } else if (parsed.data.refundMajor) {
+      if (parsed.data.refundMajor) {
         const parsedMajor = parseHumanAmountToMinor(
           parsed.data.refundMajor,
           working.currency,
@@ -226,8 +231,24 @@ export async function PATCH(req: NextRequest) {
           );
         }
         requested = parsedMajor;
-      } else {
-        requested = Math.max(0, Math.floor(parsed.data.refundMinor ?? 0));
+      } else if (parsed.data.refundMinor != null) {
+        requested = Math.max(0, Math.floor(parsed.data.refundMinor));
+      } else if (parsed.data.resolution === "RESOLVED_BUYER") {
+        requested = books.refundableMinor;
+      }
+
+      if (
+        typedRefund &&
+        requested > books.refundableMinor
+      ) {
+        return jsonError(
+          `Refund capped at platform remainder (${books.refundableMinor} minor units)`,
+          409,
+          {
+            code: "REFUND_EXCEEDS_PLATFORM",
+            refundableMinor: books.refundableMinor,
+          },
+        );
       }
 
       if (requested > 0) {
@@ -303,18 +324,56 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
-    // Seller residual releaseFinal (full or post-partial remainder).
-    if (
+    // Sourcer release to that sourcer's Connect account (typed amount or residual).
+    const typedRelease =
+      Boolean(parsed.data.releaseMajor) || parsed.data.releaseMinor != null;
+    let requestedReleaseMinor = 0;
+    if (parsed.data.releaseMajor) {
+      const parsedMajor = parseHumanAmountToMinor(
+        parsed.data.releaseMajor,
+        working.currency,
+      );
+      if (parsedMajor == null) {
+        return jsonError(
+          "Enter a valid sourcer release amount (e.g. 50.00), not minor units",
+          400,
+          { code: "INVALID_AMOUNT" },
+        );
+      }
+      requestedReleaseMinor = parsedMajor;
+    } else if (parsed.data.releaseMinor != null) {
+      requestedReleaseMinor = Math.max(0, Math.floor(parsed.data.releaseMinor));
+    }
+
+    const wantsRelease =
       parsed.data.resolution === "RESOLVED_SELLER" ||
       (parsed.data.resolution === "RESOLVED_SPLIT" &&
-        parsed.data.releaseRemaining)
-    ) {
+        (typedRelease ? requestedReleaseMinor > 0 : parsed.data.releaseRemaining));
+
+    if (wantsRelease) {
       if (["REFUNDED", "CANCELLED", "FAILED", "RELEASED"].includes(working.status)) {
         return jsonError(
           `Cannot release residual from status ${working.status}`,
           409,
           { code: "INVALID_STATUS" },
         );
+      }
+
+      const booksBeforeRelease = booksForTxn(working);
+      if (typedRelease && requestedReleaseMinor > booksBeforeRelease.finalResidualMinor) {
+        return jsonError(
+          `Sourcer release cannot exceed remaining entitlement (${booksBeforeRelease.finalResidualMinor} minor units)`,
+          409,
+          {
+            code: "RELEASE_EXCEEDS_RESIDUAL",
+            finalResidualMinor: booksBeforeRelease.finalResidualMinor,
+          },
+        );
+      }
+      if (typedRelease && requestedReleaseMinor <= 0 && parsed.data.resolution === "RESOLVED_SELLER") {
+        return jsonError("Enter a sourcer release amount greater than zero", 400, {
+          code: "INVALID_AMOUNT",
+        });
       }
 
       const st = working.status as ProtectedStatus;
@@ -347,9 +406,11 @@ export async function PATCH(req: NextRequest) {
       const result = await releaseFinal({
         protectedTxnId: working.id,
         actorUserId: admin.id,
+        ...(typedRelease ? { amountMinor: requestedReleaseMinor } : {}),
       });
       released = !result.alreadyReleased;
       transferId = result.transferId ?? null;
+      releaseAppliedMinor = result.amountMinor ?? 0;
     }
 
     const updated = await prisma.disputeCase.update({
@@ -371,6 +432,7 @@ export async function PATCH(req: NextRequest) {
         disputeId: dispute.id,
         resolution: parsed.data.resolution,
         refundAppliedMinor,
+        releaseAppliedMinor,
         released,
         transferId,
         booksAtResolve: {
@@ -398,6 +460,7 @@ export async function PATCH(req: NextRequest) {
       ok: true,
       dispute: updated,
       refundAppliedMinor,
+      releaseAppliedMinor,
       released,
       transferId,
     });

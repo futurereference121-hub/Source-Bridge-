@@ -15,6 +15,7 @@ const createSchema = z.object({
   disputeId: z.string().trim().min(1),
   role: z.enum(["BUYER", "SELLER"]),
   body: z.string().trim().max(4000).optional(),
+  attachmentUrls: z.array(z.string().trim().url().max(2048)).max(3).optional(),
 });
 
 function mapThread(
@@ -49,6 +50,10 @@ function mapThread(
             username: m.sender.username,
           }
         : null,
+      attachments: (m.attachments || []).map((a) => ({
+        id: a.id,
+        url: a.url,
+      })),
     })),
   };
 }
@@ -91,16 +96,29 @@ export async function POST(req: NextRequest) {
       });
 
     let message = null;
-    if (parsed.data.body?.trim()) {
+    if (parsed.data.body?.trim() || (parsed.data.attachmentUrls || []).length) {
       const sent = await sendAdminDisputeMessage({
         adminUserId: admin.id,
         conversationId: conversation.id,
-        body: parsed.data.body,
+        body: parsed.data.body || "",
+        attachmentUrls: parsed.data.attachmentUrls,
       });
       message = {
         id: sent.message.id,
+        senderId: sent.message.senderId,
         body: sent.message.body,
         createdAt: sent.message.createdAt.toISOString(),
+        sender: sent.message.sender
+          ? {
+              id: sent.message.sender.id,
+              name: sent.message.sender.name,
+              username: sent.message.sender.username,
+            }
+          : null,
+        attachments: (sent.message.attachments || []).map((a) => ({
+          id: a.id,
+          url: a.url,
+        })),
       };
     }
 

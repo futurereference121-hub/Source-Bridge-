@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { adminDisputeThreadPairKey } from "@/lib/conversation-pair";
-import { participantUserSelect } from "@/lib/messaging";
+import { isAllowedAttachmentUrl, participantUserSelect } from "@/lib/messaging";
 import { createNotification } from "@/lib/notifications";
 
 export const ADMIN_DISPUTE_CONTEXT = "admin_dispute";
@@ -119,9 +119,10 @@ export async function listAdminDisputeThreads(disputeCaseId: string) {
       participants: { include: { user: { select: participantUserSelect } } },
       messages: {
         orderBy: { createdAt: "asc" },
-        take: 50,
+        take: 80,
         include: {
           sender: { select: participantUserSelect },
+          attachments: true,
         },
       },
     },
@@ -132,10 +133,17 @@ export async function sendAdminDisputeMessage(opts: {
   adminUserId: string;
   conversationId: string;
   body: string;
+  attachmentUrls?: string[];
 }) {
   const body = opts.body.trim();
-  if (!body) throwHttp("Message is required", 400);
+  const urls = (opts.attachmentUrls || []).map((u) => u.trim()).filter(Boolean);
+  if (!body && urls.length === 0) throwHttp("Message is required", 400);
   if (body.length > 4000) throwHttp("Message is too long", 400);
+  for (const url of urls) {
+    if (!isAllowedAttachmentUrl(url, opts.adminUserId)) {
+      throwHttp("Invalid attachment URL for this account", 400);
+    }
+  }
 
   const conversation = await prisma.conversation.findUnique({
     where: { id: opts.conversationId },
@@ -162,10 +170,23 @@ export async function sendAdminDisputeMessage(opts: {
       data: {
         conversationId: conversation.id,
         senderId: opts.adminUserId,
-        body,
+        body: body || (urls.length ? "Sent a photo" : ""),
         messageType: "USER",
+        attachments: urls.length
+          ? {
+              create: urls.slice(0, 3).map((url) => ({
+                url,
+                pathname: "",
+                mimeType: "image/*",
+                sizeBytes: 0,
+              })),
+            }
+          : undefined,
       },
-      include: { sender: { select: participantUserSelect } },
+      include: {
+        sender: { select: participantUserSelect },
+        attachments: true,
+      },
     });
     await tx.conversation.update({
       where: { id: conversation.id },

@@ -24,6 +24,7 @@ import {
   ticketAppearsInChatTimeline,
   ticketMayShowPayUi,
   waitingCopyAddressesViewer,
+  isProductPurchaseOrigin,
 } from "@/lib/payments/ticket-lifecycle";
 
 const DEFAULT_BREAKDOWN_LABELS = {
@@ -203,6 +204,8 @@ type Props = {
   onExpandedChange?: (expanded: boolean) => void;
   /** Role-neutral conversation payload — Accept derives from this + myId. */
   ticketSnapshot?: PaymentTicketView | null;
+  /** Merge this ticket only — do not remount the thread. */
+  onTicketUpdated?: (ticket: PaymentTicketView) => void;
   /** Other chat participant — fallback when party snapshots are missing. */
   conversationPeer?: {
     id: string;
@@ -221,11 +224,23 @@ export function PaymentTicketCard({
   expanded: expandedControlled,
   onExpandedChange,
   ticketSnapshot = null,
+  onTicketUpdated,
   conversationPeer = null,
 }: Props) {
-  const [ticket, setTicket] = useState<PaymentTicketView | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [ticket, setTicket] = useState<PaymentTicketView | null>(() => {
+    if (ticketSnapshot && ticketSnapshot.id === ticketId) {
+      const snap = normalizeTicketView({ ...ticketSnapshot });
+      delete (snap as { viewer?: unknown }).viewer;
+      return snap;
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState(
+    !(ticketSnapshot && ticketSnapshot.id === ticketId),
+  );
   const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const actionLockRef = useRef(false);
   const [error, setError] = useState("");
   const [payNotice, setPayNotice] = useState("");
   const [confirmRelease, setConfirmRelease] = useState(false);
@@ -270,6 +285,7 @@ export function PaymentTicketCard({
   );
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
+  const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -496,7 +512,10 @@ export function PaymentTicketCard({
   }, [ticket]);
 
   async function respond(action: "accept" | "decline") {
+    if (actionLockRef.current || busy) return;
+    actionLockRef.current = true;
     setBusy(true);
+    setPendingAction(action);
     setError("");
     try {
       const res = await fetch(`/api/payments/tickets/${ticketId}`, {
@@ -517,13 +536,17 @@ export function PaymentTicketCard({
       if (!res.ok || !json.ticket) {
         setError(json.error || "Action failed");
       } else {
-        setTicket(json.ticket);
-        onChanged?.();
+        const next = normalizeTicketView(json.ticket);
+        delete (next as { viewer?: unknown }).viewer;
+        setTicket(next);
+        onTicketUpdated?.(next);
       }
     } catch {
       setError("Action failed");
     } finally {
+      actionLockRef.current = false;
       setBusy(false);
+      setPendingAction(null);
     }
   }
 
@@ -767,6 +790,7 @@ export function PaymentTicketCard({
     decision: "ACKNOWLEDGE" | "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE",
   ) {
     if (!ticket?.protectedTransactionId) return;
+    if (actionLockRef.current || busy) return;
     const issueSummary =
       issueCategory === "Other"
         ? issueReason.trim()
@@ -784,9 +808,17 @@ export function PaymentTicketCard({
       );
       return;
     }
+    actionLockRef.current = true;
     setBusy(true);
+    setPendingAction(decision);
     setError("");
     try {
+      const evidenceNote = issueEvidenceUrls.length
+        ? `Evidence: ${issueEvidenceUrls.join(" ")}`
+        : "";
+      const detailsJoined = [issueDetails.trim(), evidenceNote]
+        .filter(Boolean)
+        .join("\n\n");
       const res = await fetch("/api/payments/confirm-receipt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -798,9 +830,7 @@ export function PaymentTicketCard({
           reason:
             decision === "REPORT_ISSUE" ? issueSummary : undefined,
           details:
-            decision === "REPORT_ISSUE"
-              ? issueDetails.trim() || undefined
-              : undefined,
+            decision === "REPORT_ISSUE" ? detailsJoined || undefined : undefined,
         }),
       });
       const json = (await res.json()) as {
@@ -809,6 +839,11 @@ export function PaymentTicketCard({
         alreadyConfirmed?: boolean;
         transferTriggered?: boolean;
         decision?: string;
+        transaction?: {
+          status?: string;
+          inspectionEndsAt?: string | null;
+          deliveredAt?: string | null;
+        };
       };
       if (!res.ok) {
         setError(json.error || "Could not complete decision");
@@ -842,13 +877,34 @@ export function PaymentTicketCard({
         setIssueCategory(PAYMENT_ISSUE_CATEGORIES[0]);
         setIssueReason("");
         setIssueDetails("");
-        await load();
-        onChanged?.();
+        setIssueEvidenceUrls([]);
+        if (json.transaction?.status) {
+          setTicket((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  protectedTxnStatus: json.transaction?.status || prev.protectedTxnStatus,
+                  inspectionEndsAt:
+                    json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
+                  deliveredAt:
+                    json.transaction?.deliveredAt ?? prev.deliveredAt,
+                  openDisputeStatus:
+                    decision === "REPORT_ISSUE"
+                      ? prev.openDisputeStatus || "OPEN"
+                      : prev.openDisputeStatus,
+                }
+              : prev,
+          );
+        }
+        onTicketUpdated?.(ticket);
+        void load({ silent: true });
       }
     } catch {
       setError("Could not complete decision");
     } finally {
+      actionLockRef.current = false;
       setBusy(false);
+      setPendingAction(null);
     }
   }
 
@@ -988,7 +1044,10 @@ export function PaymentTicketCard({
   const historical = isTerminal;
   const open = !historical && (ticket.status === "PROPOSED" || ticket.status === "ACCEPTED");
   const viewerMayAccept = Boolean(sessionViewerId) && acceptance.viewerMayAccept;
-  const canRespond = Boolean(open && viewerMayAccept && acceptance.isParty);
+  const isProductPurchase = isProductPurchaseOrigin(ticket.origin);
+  const canRespond = Boolean(
+    open && viewerMayAccept && acceptance.isParty && !isProductPurchase,
+  );
   const sellerConnectReady = Boolean(ticket.sellerConnect?.ready);
   const sellerHandle =
     safeUsernameHandle(ticket.sellerParty?.username) || "the Sourcer";
@@ -1189,7 +1248,7 @@ export function PaymentTicketCard({
         className="min-h-11 rounded-lg bg-electric px-4 py-2 text-sm font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
         data-testid="ticket-accept-agreement"
       >
-        Accept Agreement
+        {pendingAction === "accept" ? "Accepting…" : "Accept Agreement"}
       </button>
       <button
         type="button"
@@ -1308,7 +1367,7 @@ export function PaymentTicketCard({
                   </span>
                 ) : null}
                 <span className="rounded border border-amber-400/25 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-200/70">
-                  TEST
+                  {isProductPurchase ? "Product Purchase Ticket" : "TEST"}
                 </span>
               </div>
               <p className="mt-1 truncate text-sm font-medium text-white/85">
@@ -1913,7 +1972,7 @@ export function PaymentTicketCard({
                 onClick={() => void markShipped()}
                 className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
               >
-                {busy ? "Saving…" : "Mark as Shipped"}
+                {busy ? "Saving…" : isProductPurchaseOrigin(ticket.origin) ? "Submit Shipping Proof" : "Mark as Shipped"}
               </button>
             </div>
           ) : null}
@@ -1965,7 +2024,9 @@ export function PaymentTicketCard({
                   onClick={() => void submitReceiptDecision("START_INSPECTION")}
                   className="rounded-lg border border-white/25 bg-white/5 px-3 py-1.5 text-xs text-white disabled:opacity-50"
                 >
-                  Start 12-Hour Inspection
+                  {pendingAction === "START_INSPECTION"
+                    ? "Starting inspection…"
+                    : "Start 12-Hour Inspection"}
                 </button>
               </div>
               <p className="text-[11px] text-white/40">
@@ -2053,6 +2114,47 @@ export function PaymentTicketCard({
                       maxLength={4000}
                     />
                   </label>
+                  <label className="block text-xs text-white/60">
+                    Photo evidence (same image upload as chat)
+                    <input
+                      type="file"
+                      accept={IMAGE_ACCEPT_ATTR}
+                      disabled={busy || photoBusy || issueEvidenceUrls.length >= 3}
+                      className="mt-1 block w-full text-xs text-white/70"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file || !sessionViewerId) return;
+                        setPhotoBusy(true);
+                        try {
+                          const result = await uploadProfileImageFile({
+                            file,
+                            folder: "misc",
+                            kind: "stock",
+                            userId: sessionViewerId,
+                          });
+                          setIssueEvidenceUrls((prev) =>
+                            [...prev, result.url].slice(0, 3),
+                          );
+                          URL.revokeObjectURL(result.previewUrl);
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : "Could not upload evidence photo",
+                          );
+                        } finally {
+                          setPhotoBusy(false);
+                        }
+                      }}
+                    />
+                  </label>
+                  {issueEvidenceUrls.length ? (
+                    <p className="text-[11px] text-white/45">
+                      {issueEvidenceUrls.length} photo
+                      {issueEvidenceUrls.length === 1 ? "" : "s"} attached
+                    </p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"

@@ -3,7 +3,8 @@ import { Suspense } from "react";
 import { ExploreClient } from "./ExploreClient";
 import {
   buildMergedLiveFeed,
-  getAllMembers,
+  listDirectoryMembersPage,
+  DIRECTORY_PAGE_SIZE_MOBILE,
 } from "@/lib/members-service";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +17,10 @@ export const metadata: Metadata = {
 };
 
 export default async function ExplorePage() {
-  const members = await getAllMembers();
-  const feed = await buildMergedLiveFeed(8, members);
+  const [page, feed] = await Promise.all([
+    listDirectoryMembersPage({ page: 1, limit: DIRECTORY_PAGE_SIZE_MOBILE }),
+    buildMergedLiveFeed(8),
+  ]);
 
   return (
     <Suspense
@@ -27,7 +30,13 @@ export default async function ExplorePage() {
         </div>
       }
     >
-      <ExploreClient initialMembers={members} initialFeed={feed} />
+      <ExploreClient
+        initialMembers={page.members}
+        initialFeed={feed}
+        initialTotal={page.total}
+        initialHasMore={page.hasMore}
+        initialLimit={page.limit}
+      />
     </Suspense>
   );
 }

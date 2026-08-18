@@ -190,6 +190,7 @@ type TimelineTicketLite = {
   buyerApprovedRevision?: number | null;
   sellerApprovedRevision?: number | null;
   protectedTransactionId?: string | null;
+  origin?: string | null;
 };
 
 /** Merge ticket snapshots by id — keep the richest payload (breakdown + parties). */
@@ -248,11 +249,17 @@ function countActiveTicketsClient(
   let n = 0;
   for (const t of tickets) {
     if (
+      t.origin === "PRODUCT_CHECKOUT"
+    ) {
+      continue;
+    }
+    if (
       isActiveLifecycleTicket({
         ticketStatus: t.status || "PROPOSED",
         protectedStatus: t.protectedTxnStatus ?? null,
         lifecycleStage: t.lifecycleStage ?? null,
         hiddenFromChatAt: t.hiddenFromChatAt ?? null,
+        origin: t.origin ?? null,
       })
     ) {
       n += 1;
@@ -363,6 +370,22 @@ export function MessagesInbox({
   const shouldScrollRef = useRef(true);
   const nearBottomRef = useRef(true);
   const softPollInFlightRef = useRef(false);
+  const threadCacheRef = useRef(
+    new Map<
+      string,
+      {
+        messages: Message[];
+        paymentTickets: TimelineTicketLite[];
+        conversation: Conversation;
+        proposalAccess: PaymentsProposalAccess | null;
+        activeTicketCount: number;
+        viewerUserId: string | null;
+        viewerUsername: string | null;
+        activityAt: string | null;
+      }
+    >(),
+  );
+  const activityAtRef = useRef<string | null>(null);
   const [newMessageHint, setNewMessageHint] = useState(false);
 
   const myId = account?.id ?? "";
@@ -457,11 +480,24 @@ export function MessagesInbox({
     shouldScrollRef.current = true;
 
     async function openThread() {
-      setThreadLoading(true);
-      setMessages([]);
-      setProposalAccess(null);
-      setActiveTicketCount(0);
-      setPaymentTickets([]);
+      const cached = threadCacheRef.current.get(activeId!);
+      if (cached) {
+        setThreadLoading(false);
+        setMessages(cached.messages);
+        setPaymentTickets(cached.paymentTickets);
+        setActiveConversation(cached.conversation);
+        setProposalAccess(cached.proposalAccess);
+        setActiveTicketCount(cached.activeTicketCount);
+        setThreadViewerUserId(cached.viewerUserId);
+        setThreadViewerUsername(cached.viewerUsername);
+        activityAtRef.current = cached.activityAt;
+      } else {
+        setThreadLoading(true);
+        setMessages([]);
+        setProposalAccess(null);
+        setActiveTicketCount(0);
+        setPaymentTickets([]);
+      }
       try {
         // Single request — conversation GET already returns recent messages.
         const res = await fetch(`/api/conversations/${activeId}`, {
@@ -506,6 +542,21 @@ export function MessagesInbox({
             ? data.activePaymentTicketCount
             : countActiveTicketsClient(tickets);
         setActiveTicketCount(serverCount);
+        const activityAt =
+          typeof data.activityAt === "string" ? data.activityAt : new Date().toISOString();
+        activityAtRef.current = activityAt;
+        threadCacheRef.current.set(activeId!, {
+          messages: msgs,
+          paymentTickets: visibleChatTickets(mergeTicketSnapshots([], tickets)),
+          conversation: data.conversation as Conversation,
+          proposalAccess:
+            (data.paymentsProposalAccess as PaymentsProposalAccess | undefined) ??
+            null,
+          activeTicketCount: serverCount,
+          viewerUserId: data.viewerUserId || myId,
+          viewerUsername: data.viewerUsername || account?.username || null,
+          activityAt,
+        });
       } catch (err) {
         if (!cancelled) {
           showToast(
@@ -551,12 +602,22 @@ export function MessagesInbox({
       }
       softPollInFlightRef.current = true;
       try {
-        const res = await fetch(`/api/conversations/${activeId}?poll=1`, {
+        const since = activityAtRef.current
+          ? `&since=${encodeURIComponent(activityAtRef.current)}`
+          : "";
+        const res = await fetch(`/api/conversations/${activeId}?poll=1${since}`, {
           cache: "no-store",
         });
         if (!res.ok) return;
         const data = await res.json().catch(() => ({}));
-        if (cancelled || !data?.conversation) return;
+        if (cancelled) return;
+        if (data?.unchanged) {
+          if (typeof data.activityAt === "string") {
+            activityAtRef.current = data.activityAt;
+          }
+          return;
+        }
+        if (!data?.conversation) return;
 
         setThreadViewerUserId(data.viewerUserId || myId);
         setThreadViewerUsername(
@@ -632,6 +693,9 @@ export function MessagesInbox({
           );
           return updated;
         });
+        if (typeof data.activityAt === "string") {
+          activityAtRef.current = data.activityAt;
+        }
       } catch {
         /* silent — avoid toast spam */
       } finally {
@@ -1324,6 +1388,15 @@ export function MessagesInbox({
                                     [m.paymentTicketId!]: next,
                                   }))
                                 }
+                                onTicketUpdated={(updated) => {
+                                  setPaymentTickets((prev) =>
+                                    visibleChatTickets(
+                                      mergeTicketSnapshots(prev, [
+                                        updated as TimelineTicketLite,
+                                      ]),
+                                    ),
+                                  );
+                                }}
                                 onChanged={() => {
                                   void refreshConversationPreservingViewport();
                                 }}

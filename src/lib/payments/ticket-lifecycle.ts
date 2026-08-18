@@ -200,13 +200,21 @@ export function isTerminalLifecycleStage(stage: string): boolean {
  * Single shared helper for: chat badges, active counts, create block,
  * historical styling, and action gates.
  */
+/** Listing checkout fulfilment ticket — not a sourcing negotiation ticket. */
+export function isProductPurchaseOrigin(origin?: string | null): boolean {
+  return origin === "PRODUCT_CHECKOUT";
+}
+
 export function isActiveLifecycleTicket(opts: {
   ticketStatus: string;
   protectedStatus?: string | null;
   procReleased?: boolean;
   lifecycleStage?: string | null;
   hiddenFromChatAt?: Date | string | null;
+  /** Product Purchase Tickets do not consume the sourcing 3-active cap. */
+  origin?: string | null;
 }): boolean {
+  if (isProductPurchaseOrigin(opts.origin)) return false;
   if (opts.hiddenFromChatAt) return false;
   if (isInactiveTicketStatus(opts.ticketStatus)) return false;
   const stage =

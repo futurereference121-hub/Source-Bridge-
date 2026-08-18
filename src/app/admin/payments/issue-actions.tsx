@@ -13,6 +13,9 @@ type Props = {
   currency: string;
   finalResidualMinor: number;
   refundableMinor: number;
+  sellerEntitledMinor?: number;
+  alreadyReleasedMinor?: number;
+  protectedRemainingMinor?: number;
 };
 
 export default function PaymentIssueActions({
@@ -20,41 +23,86 @@ export default function PaymentIssueActions({
   currency,
   finalResidualMinor,
   refundableMinor,
+  sellerEntitledMinor = 0,
+  alreadyReleasedMinor = 0,
+  protectedRemainingMinor = refundableMinor,
 }: Props) {
   const router = useRouter();
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refundMajor, setRefundMajor] = useState(
     refundableMinor > 0
-      ? minorToMajor(
-          Math.min(refundableMinor, finalResidualMinor) || refundableMinor,
-          currency,
-        ).toFixed(2)
+      ? minorToMajor(refundableMinor, currency).toFixed(2)
+      : "0.00",
+  );
+  const [releaseMajor, setReleaseMajor] = useState(
+    finalResidualMinor > 0
+      ? minorToMajor(finalResidualMinor, currency).toFixed(2)
       : "0.00",
   );
   const [note, setNote] = useState("");
   const [confirmText, setConfirmText] = useState<string | null>(null);
-  const [pending, setPending] = useState<{
-    resolution: "RESOLVED_SELLER" | "RESOLVED_BUYER" | "RESOLVED_SPLIT" | "CLOSED";
-    extra?: { refundMinor?: number; releaseRemaining?: boolean };
-  } | null>(null);
 
-  const parsedRefundMinor = useMemo(
-    () => parseHumanAmountToMinor(refundMajor, currency),
+  const refundMinor = useMemo(
+    () => parseHumanAmountToMinor(refundMajor, currency) ?? 0,
     [refundMajor, currency],
   );
+  const releaseMinor = useMemo(
+    () => parseHumanAmountToMinor(releaseMajor, currency) ?? 0,
+    [releaseMajor, currency],
+  );
+  const allocatedMinor = refundMinor + releaseMinor;
+  const remainingAfterAlloc = Math.max(0, protectedRemainingMinor - allocatedMinor);
 
-  async function execute(
-    resolution:
-      | "RESOLVED_SELLER"
-      | "RESOLVED_BUYER"
-      | "RESOLVED_SPLIT"
-      | "CLOSED",
-    extra?: { refundMinor?: number; releaseRemaining?: boolean },
-  ) {
-    setBusy(resolution);
+  function askConfirm() {
+    setError(null);
+    if (refundMinor <= 0 && releaseMinor <= 0) {
+      setError("Enter a refund and/or a sourcer release amount.");
+      return;
+    }
+    if (refundMinor > refundableMinor) {
+      setError(
+        `Refund cannot exceed ${formatMinor(refundableMinor, currency)} (max refundable).`,
+      );
+      return;
+    }
+    if (releaseMinor > 0 && releaseMinor > finalResidualMinor) {
+      setError(
+        `Sourcer release cannot exceed remaining entitlement ${formatMinor(finalResidualMinor, currency)}.`,
+      );
+      return;
+    }
+    if (allocatedMinor > protectedRemainingMinor) {
+      setError(
+        `Allocated total cannot exceed available controlled ${formatMinor(protectedRemainingMinor, currency)}.`,
+      );
+      return;
+    }
+    const parts: string[] = [];
+    if (refundMinor > 0) {
+      parts.push(`refund the buyer ${formatMinor(refundMinor, currency)} via the original payment`);
+    }
+    if (releaseMinor > 0) {
+      parts.push(
+        `release ${formatMinor(releaseMinor, currency)} to the sourcer Connect account`,
+      );
+    }
+    setConfirmText(`Confirm: ${parts.join(" and ")}? Server recalculates books before money moves.`);
+  }
+
+  async function execute() {
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
+      const willRefund = refundMinor > 0;
+      const willRelease = releaseMinor > 0;
+      const resolution =
+        willRefund && willRelease
+          ? "RESOLVED_SPLIT"
+          : willRefund
+            ? "RESOLVED_BUYER"
+            : "RESOLVED_SELLER";
       const res = await fetch("/api/admin/payments/issues", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -62,67 +110,65 @@ export default function PaymentIssueActions({
           disputeId,
           resolution,
           resolutionNote: note.trim() || undefined,
-          refundMinor: extra?.refundMinor,
-          releaseRemaining: extra?.releaseRemaining ?? false,
+          refundMinor: willRefund ? refundMinor : undefined,
+          releaseMinor: willRelease ? releaseMinor : undefined,
           confirmed: true,
         }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        refundableMinor?: number;
-      };
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
         setError(data.error || `Failed (${res.status})`);
         return;
       }
       setConfirmText(null);
-      setPending(null);
       router.refresh();
     } catch {
       setError("Network error");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
-  }
-
-  function askConfirm(
-    resolution:
-      | "RESOLVED_SELLER"
-      | "RESOLVED_BUYER"
-      | "RESOLVED_SPLIT"
-      | "CLOSED",
-    extra?: { refundMinor?: number; releaseRemaining?: boolean },
-    text?: string,
-  ) {
-    setError(null);
-    setPending({ resolution, extra });
-    setConfirmText(text || "Confirm this resolution?");
-  }
-
-  function startSplit(releaseRemaining: boolean) {
-    if (parsedRefundMinor == null) {
-      setError("Enter a valid amount in pounds (e.g. 50.00), not minor units.");
-      return;
-    }
-    if (parsedRefundMinor > refundableMinor) {
-      setError(
-        `Refund cannot exceed ${formatMinor(refundableMinor, currency)} (platform remainder).`,
-      );
-      return;
-    }
-    const rest = Math.max(0, finalResidualMinor - parsedRefundMinor);
-    const text = releaseRemaining
-      ? `Refund ${formatMinor(parsedRefundMinor, currency)} to the buyer and release remaining ${formatMinor(rest, currency)} to the sourcer?`
-      : `Refund ${formatMinor(parsedRefundMinor, currency)} to the buyer and leave remaining seller funds protected?`;
-    askConfirm(
-      "RESOLVED_SPLIT",
-      { refundMinor: parsedRefundMinor, releaseRemaining },
-      text,
-    );
   }
 
   return (
-    <div className="mt-3 space-y-2 border-t border-white/10 pt-3 text-xs">
+    <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-xs">
+      <dl className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <dt className="text-white/40">Available controlled (platform held)</dt>
+          <dd>{formatMinor(protectedRemainingMinor, currency)}</dd>
+        </div>
+        <div>
+          <dt className="text-white/40">Already released to sourcer</dt>
+          <dd>{formatMinor(alreadyReleasedMinor, currency)}</dd>
+        </div>
+        <div>
+          <dt className="text-white/40">Max refundable to buyer</dt>
+          <dd>{formatMinor(refundableMinor, currency)}</dd>
+        </div>
+        <div>
+          <dt className="text-white/40">Remaining sourcer entitlement</dt>
+          <dd>{formatMinor(finalResidualMinor, currency)}</dd>
+        </div>
+        {sellerEntitledMinor > 0 ? (
+          <div>
+            <dt className="text-white/40">Sourcer entitled (gross)</dt>
+            <dd>{formatMinor(sellerEntitledMinor, currency)}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt className="text-white/40">Allocated now / remaining after</dt>
+          <dd>
+            {formatMinor(allocatedMinor, currency)} /{" "}
+            {formatMinor(remainingAfterAlloc, currency)}
+          </dd>
+        </div>
+      </dl>
+      <p className="text-white/35">
+        Amounts are sent to the server as typed minor units; the server
+        recalculates books and refuses anything above remaining entitlement.
+        Buyer refunds use the original PaymentIntent — the buyer does not need
+        Stripe Connect. Sourcer releases go to that sourcer&apos;s Connect
+        account.
+      </p>
       <label className="block text-white/50">
         Admin note (optional)
         <input
@@ -130,104 +176,65 @@ export default function PaymentIssueActions({
           onChange={(e) => setNote(e.target.value)}
           className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
           maxLength={2000}
-          disabled={Boolean(busy)}
+          disabled={busy}
         />
       </label>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={Boolean(busy) || finalResidualMinor <= 0}
-          onClick={() =>
-            askConfirm(
-              "RESOLVED_SELLER",
-              undefined,
-              `Release ${formatMinor(finalResidualMinor, currency)} residual to the sourcer?`,
-            )
-          }
-          className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-        >
-          {busy === "RESOLVED_SELLER"
-            ? "Releasing…"
-            : `Release residual to seller (${formatMinor(finalResidualMinor, currency)})`}
-        </button>
-        <button
-          type="button"
-          disabled={Boolean(busy) || refundableMinor <= 0}
-          onClick={() =>
-            askConfirm(
-              "RESOLVED_BUYER",
-              undefined,
-              `Refund ${formatMinor(refundableMinor, currency)} remaining to the buyer?`,
-            )
-          }
-          className="rounded-lg border border-white/25 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-        >
-          {busy === "RESOLVED_BUYER"
-            ? "Refunding…"
-            : `Refund buyer remaining (${formatMinor(refundableMinor, currency)})`}
-        </button>
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="block text-white/50">
-          Partial refund ({currency.toUpperCase()}, e.g. 50.00 — max{" "}
-          {formatMinor(refundableMinor, currency)})
+          REFUND BUYER {formatMinor(refundableMinor, currency)}
           <input
             value={refundMajor}
             onChange={(e) => setRefundMajor(e.target.value)}
             inputMode="decimal"
-            className="mt-1 w-40 rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-            disabled={Boolean(busy) || refundableMinor <= 0}
+            className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+            disabled={busy || refundableMinor <= 0}
             placeholder="0.00"
           />
         </label>
-        <button
-          type="button"
-          disabled={Boolean(busy) || refundableMinor <= 0}
-          onClick={() => startSplit(false)}
-          className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
-        >
-          {busy === "RESOLVED_SPLIT" ? "Applying…" : "Partial refund only"}
-        </button>
-        <button
-          type="button"
-          disabled={Boolean(busy) || refundableMinor <= 0}
-          onClick={() => startSplit(true)}
-          className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
-        >
-          Partial refund + release rest
-        </button>
+        <label className="block text-white/50">
+          RELEASE TO SOURCER {formatMinor(finalResidualMinor, currency)}
+          <input
+            value={releaseMajor}
+            onChange={(e) => setReleaseMajor(e.target.value)}
+            inputMode="decimal"
+            className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+            disabled={busy || finalResidualMinor <= 0}
+            placeholder="0.00"
+          />
+        </label>
       </div>
-      <p className="text-white/35">
-        Amounts are in {currency.toUpperCase()} (not Stripe minor units). Server
-        clamps refunds to platform-held remainder. Already-released item funds
-        are never reversed automatically.
-      </p>
-      {confirmText && pending ? (
+      {!confirmText ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={askConfirm}
+          className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+        >
+          Review confirmation
+        </button>
+      ) : (
         <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-amber-50">
           <p>{confirmText}</p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={Boolean(busy)}
-              onClick={() => void execute(pending.resolution, pending.extra)}
+              disabled={busy}
+              onClick={() => void execute()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
             >
               {busy ? "Working…" : "Confirm resolution"}
             </button>
             <button
               type="button"
-              disabled={Boolean(busy)}
-              onClick={() => {
-                setConfirmText(null);
-                setPending(null);
-              }}
+              disabled={busy}
+              onClick={() => setConfirmText(null)}
               className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
             >
               Cancel
             </button>
           </div>
         </div>
-      ) : null}
+      )}
       {error ? <p className="text-amber-200/90">{error}</p> : null}
     </div>
   );

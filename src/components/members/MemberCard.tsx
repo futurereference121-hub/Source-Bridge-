@@ -177,6 +177,43 @@ export function MemberCard({ member }: MemberCardProps) {
   );
 }
 
+/** Compact scannable Explore directory card — tap opens profile. */
+export function MemberDirectoryCard({ member }: MemberCardProps) {
+  const verified = isIdentityVerified(member);
+  const photo = memberPhoto(member.photo);
+
+  return (
+    <Link
+      href={`/members/${member.slug}`}
+      className="card-navy flex flex-col rounded-xl p-3 transition-colors hover:border-electric/30 sm:p-3.5"
+    >
+      <div className="flex items-start gap-2.5">
+        <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-navy-mid ring-1 ring-white/10 sm:h-12 sm:w-12">
+          <SafeMemberImage
+            src={photo}
+            alt={member.fullName}
+            fill
+            sizes="48px"
+            className="object-cover"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1">
+            <p className="min-w-0 truncate text-sm font-medium text-white">
+              {member.fullName}
+            </p>
+            {verified ? <VerificationBadge verified size="sm" variant="tick" /> : null}
+          </div>
+          <p className="truncate text-[12px] text-white/55">@{member.username}</p>
+          <p className="mt-0.5 truncate text-[11px] text-white/40">
+            {member.location.label}
+          </p>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 /** Compact row used in lists */
 export function MemberCardCompact({ member }: MemberCardProps) {
   const photo = memberPhoto(member.photo);

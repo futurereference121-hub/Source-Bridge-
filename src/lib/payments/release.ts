@@ -232,6 +232,13 @@ export async function releaseFinal(opts: {
   protectedTxnId: string;
   actorUserId?: string | null;
   action?: Extract<DomainAction, "RELEASE_FINAL">;
+  /**
+   * Optional presentment-currency cap. Omitted = remaining residual (cron / buyer
+   * release-now). Typed admin allocations pass the UI amount; server still
+   * refuses anything above finalResidualMinor. Partial amounts do not mark
+   * RELEASED so inspection cron cannot dump the withheld remainder.
+   */
+  amountMinor?: number;
 }) {
   if (!isPaymentsEnabled() || !isStripeConfigured()) {
     throw Object.assign(new Error("Payments not configured"), {
@@ -294,7 +301,29 @@ export async function releaseFinal(opts: {
   }
 
   const books = computeProtectedFinancials(txn);
-  const amount = books.finalResidualMinor;
+  const residual = books.finalResidualMinor;
+  let amount = residual;
+  let isFullResidual = true;
+  if (opts.amountMinor != null) {
+    const requested = Math.max(0, Math.floor(opts.amountMinor));
+    if (requested <= 0) {
+      return { alreadyReleased: true, txn, amountMinor: 0 };
+    }
+    if (requested > residual) {
+      throw Object.assign(
+        new Error(
+          `Sourcer release cannot exceed remaining entitlement (${residual} minor units)`,
+        ),
+        {
+          status: 409,
+          code: "RELEASE_EXCEEDS_RESIDUAL",
+          finalResidualMinor: residual,
+        },
+      );
+    }
+    amount = requested;
+    isFullResidual = requested >= residual;
+  }
   if (amount <= 0) {
     const next = nextStatus(status, action);
     const updated = await prisma.protectedTransaction.update({
@@ -302,7 +331,7 @@ export async function releaseFinal(opts: {
       data: { status: next, releasedAt: new Date() },
     });
     await markListingSoldIfLinked(txn.listingId);
-    return { alreadyReleased: true, txn: updated };
+    return { alreadyReleased: true, txn: updated, amountMinor: 0 };
   }
 
   assertFinalReleaseInvariants({
@@ -312,12 +341,34 @@ export async function releaseFinal(opts: {
     nextFinalDelta: amount,
   });
 
-  const idempotencyKey = `final_xfer_${txn.id}_${txn.termsHash}`;
+  const idempotencyKey = isFullResidual
+    ? `final_xfer_${txn.id}_${txn.termsHash}`
+    : `final_xfer_${txn.id}_${txn.termsHash}_admin_${amount}`;
   const existingAttempt = await prisma.transferAttempt.findUnique({
     where: { idempotencyKey },
   });
-  // Stripe already paid â€” reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
+  // Stripe already paid — reconcile domain status if prior attempt left READY_TO_RELEASE stuck.
   if (existingAttempt?.status === "SUCCEEDED") {
+    if (!isFullResidual) {
+      if (status === "READY_TO_RELEASE") {
+        const updated = await prisma.protectedTransaction.update({
+          where: { id: txn.id },
+          data: { status: "PARTIALLY_REFUNDED" },
+        });
+        return {
+          alreadyReleased: true,
+          txn: updated,
+          transferId: existingAttempt.stripeTransferId,
+          amountMinor: existingAttempt.amountMinor,
+        };
+      }
+      return {
+        alreadyReleased: true,
+        txn,
+        transferId: existingAttempt.stripeTransferId,
+        amountMinor: existingAttempt.amountMinor,
+      };
+    }
     const next = nextStatus(status, action);
     const updated = await prisma.protectedTransaction.update({
       where: { id: txn.id },
@@ -333,7 +384,12 @@ export async function releaseFinal(opts: {
       },
     });
     await markListingSoldIfLinked(txn.listingId);
-    return { alreadyReleased: true, txn: updated, transferId: existingAttempt.stripeTransferId };
+    return {
+      alreadyReleased: true,
+      txn: updated,
+      transferId: existingAttempt.stripeTransferId,
+      amountMinor: existingAttempt.amountMinor,
+    };
   }
 
   const attempt =
@@ -416,12 +472,13 @@ export async function releaseFinal(opts: {
       transfer_group: txn.id,
       metadata: {
         protectedTxnId: txn.id,
-        kind: "FINAL",
+        kind: isFullResidual ? "FINAL" : "FINAL_PARTIAL",
         chargeModel: CHARGE_MODEL,
         presentmentCurrency,
         presentmentAmountMinor: String(amount),
         settleCurrency: transferCurrency,
         settleAmountMinor: String(transferAmountMinor),
+        fullResidual: isFullResidual ? "1" : "0",
       },
     };
     if (sourceTransaction) {
@@ -443,7 +500,11 @@ export async function releaseFinal(opts: {
       idempotencyKey: stripeIdempotencyKey,
     });
 
-    const next = nextStatus(status, action);
+    const next = isFullResidual
+      ? nextStatus(status, action)
+      : status === "READY_TO_RELEASE"
+        ? "PARTIALLY_REFUNDED"
+        : status;
     const updated = await prisma.$transaction(async (tx) => {
       await tx.transferAttempt.update({
         where: { id: attempt.id },
@@ -462,7 +523,7 @@ export async function releaseFinal(opts: {
           status: next,
           // Domain books stay in presentment currency (item share).
           finalTransferredMinor: txn.finalTransferredMinor + amount,
-          releasedAt: new Date(),
+          releasedAt: isFullResidual ? new Date() : txn.releasedAt,
           sellerConnectAccountId: connect.stripeAccountId,
         },
       });
@@ -494,12 +555,20 @@ export async function releaseFinal(opts: {
         settleCurrency: transferCurrency,
         settleAmountMinor: transferAmountMinor,
         sourceTransaction: sourceTransaction || null,
+        fullResidual: isFullResidual,
       },
     });
 
-    await markListingSoldIfLinked(txn.listingId);
+    if (isFullResidual) {
+      await markListingSoldIfLinked(txn.listingId);
+    }
 
-    return { alreadyReleased: false, txn: updated, transferId: transfer.id };
+    return {
+      alreadyReleased: false,
+      txn: updated,
+      transferId: transfer.id,
+      amountMinor: amount,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Transfer failed";
     await prisma.transferAttempt.update({

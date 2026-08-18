@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 type Props = {
   disputeId: string;
@@ -48,20 +47,6 @@ export default function DisputeReviewActions({
 
   return (
     <div className="mt-3 space-y-2 border-t border-white/10 pt-3 text-xs">
-      <div className="flex flex-wrap gap-2">
-        <Link
-          href={`/admin/reviews/${disputeId}`}
-          className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
-        >
-          Message buyer (private)
-        </Link>
-        <Link
-          href={`/admin/reviews/${disputeId}`}
-          className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
-        >
-          Message sourcer (private)
-        </Link>
-      </div>
       {status === "OPEN" ? (
         <>
           <label className="block text-white/50">

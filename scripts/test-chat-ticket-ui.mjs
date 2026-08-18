@@ -25,6 +25,8 @@ const fulfilmentRules = read("src/lib/payments/fulfilment-rules.ts");
 const cronRelease = read("src/app/api/cron/payments-release/route.ts");
 const reviewActions = read("src/app/admin/reviews/dispute-review-actions.tsx");
 const issueActions = read("src/app/admin/payments/issue-actions.tsx");
+const issuesApi = read("src/app/api/admin/payments/issues/route.ts");
+const releaseEngine = read("src/lib/payments/release.ts");
 const threadsApi = read("src/app/api/admin/payments/issues/threads/route.ts");
 
 // --- RESPONSIVE PAYMENT TICKET FORM ---
@@ -148,8 +150,16 @@ assert.match(authMe, /Vary: "Cookie"/);
 assert.match(appProviders, /fetch\("\/api\/auth\/me", \{ cache: "no-store" \}/);
 assert.match(convGet, /viewerUserId: user\.id/);
 assert.match(convGet, /viewerUsername: user\.username/);
-assert.match(convGet, /listConversationPaymentTickets\(id, user\.id\)/);
-assert.match(messagesGet, /listConversationPaymentTickets\(id, user\.id\)/);
+assert.match(
+  convGet,
+  /listConversationPaymentTickets\(id, user\.id, \{ skipExpire: isPoll \}\)/,
+  "conversation GET must skip unfunded expiry on poll ticks",
+);
+assert.match(
+  messagesGet,
+  /listConversationPaymentTickets\(id, user\.id\)/,
+  "messages pagination still expires stale unfunded tickets on full load",
+);
 assert.match(inbox, /threadViewerUserId/);
 assert.match(inbox, /ticketViewerId/);
 assert.match(inbox, /setThreadViewerUserId\(data\.viewerUserId \|\| myId\)/);
@@ -236,6 +246,47 @@ assert.match(
   "under-review badge must not render on COMPLETED tickets",
 );
 assert.match(
+  card,
+  /Starting inspection…/,
+  "first inspection click must show Starting inspection…",
+);
+assert.match(
+  card,
+  /Accepting…/,
+  "accept must show immediate processing copy",
+);
+assert.match(
+  card,
+  /actionLockRef/,
+  "accept/inspection must be single-flight",
+);
+assert.match(
+  inbox,
+  /onTicketUpdated/,
+  "ticket accept must update that ticket snapshot without thread remount",
+);
+assert.match(
+  inbox,
+  /threadCacheRef/,
+  "already-known conversations must retain a client cache",
+);
+assert.match(
+  convGet,
+  /skipExpire: isPoll/,
+  "poll must not run unfunded expiry / Stripe retrieve on every tick",
+);
+assert.match(
+  convGet,
+  /unchanged: true/,
+  "poll must short-circuit when conversation activity is unchanged",
+);
+assert.match(
+  convGet,
+  /Promise\.all/,
+  "conversation open must parallelize conversation + ticket reads",
+);
+
+assert.match(
   fulfilmentRules,
   /export const BUYER_INACTIVITY_ADMIN_RELEASE_MS = 72 \* 60 \* 60 \* 1000/,
   "inactivity release must use one documented TEST constant (72h)",
@@ -245,15 +296,15 @@ assert.doesNotMatch(
   /BUYER_INACTIVITY_ADMIN_RELEASE_MS|inactivity-release/,
   "cron must not auto-release on the admin inactivity path",
 );
-assert.match(
+assert.doesNotMatch(
   reviewActions,
-  /\/admin\/reviews\/\$\{disputeId\}/,
-  "Message Buyer/Sourcer must open the dispute case page, not the party chat",
+  /Message buyer \(private\)/,
+  "redundant top Message Buyer control must be removed",
 );
 assert.doesNotMatch(
   reviewActions,
-  /inboxBase/,
-  "admin messaging must not reuse the Buyer↔Sourcer inbox URL",
+  /Message sourcer \(private\)/,
+  "redundant top Message Sourcer control must be removed",
 );
 assert.match(
   threadsApi,
@@ -269,6 +320,61 @@ assert.match(
   issueActions,
   /Confirm resolution/,
   "admin resolution must require confirmation",
+);
+assert.match(
+  issueActions,
+  /REFUND BUYER/,
+  "admin money UI must expose refund-buyer destination",
+);
+assert.match(
+  issueActions,
+  /RELEASE TO SOURCER/,
+  "admin money UI must expose sourcer-release destination",
+);
+assert.match(
+  issueActions,
+  /releaseMinor: willRelease \? releaseMinor/,
+  "typed sourcer amount must be sent as releaseMinor, not a boolean dump",
+);
+assert.doesNotMatch(
+  issueActions,
+  /releaseRemaining:\s*willRelease/,
+  "UI must not map typed release amount to boolean releaseRemaining",
+);
+assert.match(
+  issuesApi,
+  /releaseMinor: z\.number\(\)\.int\(\)\.nonnegative\(\)\.optional\(\)/,
+  "admin resolve API must accept typed releaseMinor",
+);
+assert.match(
+  issuesApi,
+  /amountMinor: requestedReleaseMinor/,
+  "typed releaseMinor must be passed through to releaseFinal",
+);
+assert.match(
+  issuesApi,
+  /payment_intent: working\.stripePaymentIntentId/,
+  "buyer refunds must use the original PaymentIntent (no buyer Connect)",
+);
+assert.match(
+  releaseEngine,
+  /amountMinor\?: number/,
+  "releaseFinal must accept a typed presentment-currency cap",
+);
+assert.match(
+  releaseEngine,
+  /RELEASE_EXCEEDS_RESIDUAL/,
+  "typed sourcer release must refuse amounts above remaining entitlement",
+);
+assert.match(
+  releaseEngine,
+  /final_xfer_\$\{txn\.id\}_\$\{txn\.termsHash\}_admin_\$\{amount\}/,
+  "partial admin release must use a distinct idempotency key",
+);
+assert.match(
+  releaseEngine,
+  /where: \{ userId: txn\.sellerId \}/,
+  "sourcer release destination is that sourcer's Connect account",
 );
 
 console.log("[test-chat-ticket-ui] passed");

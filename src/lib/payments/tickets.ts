@@ -61,6 +61,7 @@ export {
   deriveTicketAcceptanceState,
   getPaymentTicketActions,
   isActiveLifecycleTicket,
+  isProductPurchaseOrigin,
   isActiveTicketStatus,
   isInactiveTicketStatus,
   isTerminalLifecycleStage,
@@ -916,11 +917,14 @@ export async function expireStaleUnfundedTickets(opts?: {
 export async function listConversationPaymentTickets(
   conversationId: string,
   viewerId?: string | null,
+  opts?: { skipExpire?: boolean },
 ) {
-  try {
-    await expireStaleUnfundedTickets({ conversationId, limit: 20 });
-  } catch (err) {
-    console.error("[tickets:expire-lazy]", err);
+  if (!opts?.skipExpire) {
+    try {
+      await expireStaleUnfundedTickets({ conversationId, limit: 20 });
+    } catch (err) {
+      console.error("[tickets:expire-lazy]", err);
+    }
   }
   const rows = await prisma.paymentTicket.findMany({
     where: { conversationId },
@@ -1042,6 +1046,7 @@ export async function countActiveConversationTickets(
       protectedTransaction: {
         select: {
           status: true,
+          origin: true,
           procurementTransferredMinor: true,
         },
       },
@@ -1058,6 +1063,7 @@ export async function countActiveConversationTickets(
         protectedStatus: r.protectedTransaction?.status ?? null,
         procReleased,
         hiddenFromChatAt: r.hiddenFromChatAt,
+        origin: r.protectedTransaction?.origin ?? null,
       })
     ) {
       n += 1;

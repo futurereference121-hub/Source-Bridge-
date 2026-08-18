@@ -258,6 +258,11 @@ export default async function AdminPaymentsPage() {
                   currency={t.currency}
                   finalResidualMinor={books.finalResidualMinor}
                   refundableMinor={books.refundableMinor}
+                  sellerEntitledMinor={books.sellerEntitledMinor}
+                  alreadyReleasedMinor={
+                    books.procurementTransferredMinor + books.finalTransferredMinor
+                  }
+                  protectedRemainingMinor={books.protectedRemainingMinor}
                 />
               </div>
             );

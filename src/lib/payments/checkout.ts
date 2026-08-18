@@ -395,7 +395,7 @@ export async function markTxnFundedFromWebhook(opts: {
   }
 
   const status = txn.status as ProtectedStatus;
-  const updated = await prisma.protectedTransaction.update({
+  let updated = await prisma.protectedTransaction.update({
     where: { id: txn.id },
     data: {
       status: nextStatus(status, "MARK_FUNDED"),
@@ -435,6 +435,20 @@ export async function markTxnFundedFromWebhook(opts: {
     where: { protectedTransactionId: txn.id },
     data: { status: "FUNDED" },
   });
+
+  if (!directPath && updated.origin === "PRODUCT_CHECKOUT") {
+    try {
+      const { ensureProductPurchaseTicket } = await import(
+        "@/lib/payments/product-purchase-ticket"
+      );
+      const ensured = await ensureProductPurchaseTicket(updated.id);
+      if (ensured.conversationId) {
+        updated = { ...updated, conversationId: ensured.conversationId };
+      }
+    } catch (err) {
+      console.error("[checkout:product-purchase-ticket]", err);
+    }
+  }
 
   if (!directPath && updated.conversationId) {
     void import("@/lib/payment-notifications").then(({ notifyPaymentFunded }) =>

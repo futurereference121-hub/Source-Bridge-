@@ -14,6 +14,7 @@ import {
   MAX_ACTIVE_PAYMENT_TICKETS,
   isActiveLifecycleTicket,
 } from "@/lib/payments/tickets";
+import { backfillProductPurchaseTicketsForConversation } from "@/lib/payments/product-purchase-ticket";
 import {
   isPaymentsTestRampOpen,
   userMatchesPaymentsAllowlist,
@@ -31,46 +32,97 @@ const RECENT_MESSAGES = 30;
 
 type Params = { params: Promise<{ id: string }> };
 
+async function conversationActivityAt(conversationId: string): Promise<string> {
+  const [conv, ticketMax] = await Promise.all([
+    prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { lastMessageAt: true, updatedAt: true },
+    }),
+    prisma.paymentTicket.aggregate({
+      where: { conversationId },
+      _max: { updatedAt: true },
+    }),
+  ]);
+  const latest = Math.max(
+    conv?.lastMessageAt?.getTime() ?? 0,
+    conv?.updatedAt?.getTime() ?? 0,
+    ticketMax._max.updatedAt?.getTime() ?? 0,
+  );
+  return new Date(latest || Date.now()).toISOString();
+}
+
 export async function GET(_req: Request, { params }: Params) {
   try {
     const user = await requireSessionUser();
     const { id } = await params;
-    const isPoll = new URL(_req.url).searchParams.get("poll") === "1";
+    const url = new URL(_req.url);
+    const isPoll = url.searchParams.get("poll") === "1";
+    const since = url.searchParams.get("since") || "";
 
     await requireParticipant(id, user.id);
 
-    // Repair orphan tickets on initial open only — polling must not delay chat.
     if (!isPoll) {
-      await ensureConversationPaymentTicketMessages(id);
+      await Promise.all([
+        ensureConversationPaymentTicketMessages(id),
+        backfillProductPurchaseTicketsForConversation(id).catch((err) => {
+          console.error("[conversations:product-ticket-backfill]", err);
+          return 0;
+        }),
+      ]);
     }
 
-    const conversation = await prisma.conversation.findUnique({
-      where: { id },
-      include: {
-        participants: {
-          include: { user: { select: participantUserSelect } },
-        },
-        messages: {
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: RECENT_MESSAGES,
-          include: {
-            attachments: true,
-            sender: { select: participantUserSelect },
+    const activityAt = await conversationActivityAt(id);
+    if (isPoll && since) {
+      const sinceMs = Date.parse(since);
+      const activityMs = Date.parse(activityAt);
+      if (Number.isFinite(sinceMs) && Number.isFinite(activityMs) && activityMs <= sinceMs) {
+        return Response.json(
+          {
+            unchanged: true,
+            viewerUserId: user.id,
+            viewerUsername: user.username ?? null,
+            activityAt,
+          },
+          {
+            headers: {
+              "Cache-Control": "private, no-store, no-cache, must-revalidate",
+              Vary: "Cookie",
+            },
+          },
+        );
+      }
+    }
+
+    const [conversation, paymentTickets] = await Promise.all([
+      prisma.conversation.findUnique({
+        where: { id },
+        include: {
+          participants: {
+            include: { user: { select: participantUserSelect } },
+          },
+          messages: {
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: RECENT_MESSAGES,
+            include: {
+              attachments: true,
+              sender: { select: participantUserSelect },
+            },
+          },
+          sourcingRequest: true,
+          listing: {
+            select: {
+              id: true,
+              name: true,
+              images: true,
+              price: true,
+              currency: true,
+              slug: true,
+            },
           },
         },
-        sourcingRequest: true,
-        listing: {
-          select: {
-            id: true,
-            name: true,
-            images: true,
-            price: true,
-            currency: true,
-            slug: true,
-          },
-        },
-      },
-    });
+      }),
+      listConversationPaymentTickets(id, user.id, { skipExpire: isPoll }),
+    ]);
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
@@ -78,47 +130,31 @@ export async function GET(_req: Request, { params }: Params) {
       await markRead(id, user.id);
     }
 
-    // Authoritative tickets for this conversation (all, not just recent page).
-    const paymentTickets = await listConversationPaymentTickets(id, user.id);
     const activePaymentTicketCount = paymentTickets.filter((t) =>
       isActiveLifecycleTicket({
         ticketStatus: t.status,
         protectedStatus: t.protectedTxnStatus ?? null,
         lifecycleStage: t.lifecycleStage ?? null,
         hiddenFromChatAt: t.hiddenFromChatAt ?? null,
+        origin: t.origin ?? null,
       }),
     ).length;
     const messagesAsc = [...conversation.messages].reverse().map(mapMessage);
-    // Merge ALL tickets even when only recent N messages are loaded so older
-    // ticket cards never vanish due to pagination. Dedupes by paymentTicketId.
     const messages = mergePaymentTicketsIntoTimeline(
       id,
       messagesAsc,
       paymentTickets,
     );
 
-    // TEST ramp: when Live is off, eligible authenticated parties can propose.
-    // Peer presence still required; demo/admin eligibility is enforced on create.
     const activeParts = conversation.participants.filter((p) => !p.leftAt);
     const peerPart = activeParts.find((p) => p.userId !== user.id);
-    const identityRows = await prisma.user.findMany({
-      where: {
-        id: {
-          in: [user.id, ...(peerPart ? [peerPart.userId] : [])],
-        },
-      },
-      select: { id: true, email: true },
-    });
-    const byId = new Map(identityRows.map((r) => [r.id, r]));
-    const selfIdentity = byId.get(user.id) || {
+    const rampOpen = isPaymentsTestRampOpen();
+    const selfAllowed = rampOpen || userMatchesPaymentsAllowlist({
       id: user.id,
       email: user.email,
-    };
-    const peerIdentity = peerPart ? byId.get(peerPart.userId) : null;
-    const rampOpen = isPaymentsTestRampOpen();
-    const selfAllowed = rampOpen || userMatchesPaymentsAllowlist(selfIdentity);
-    const peerAllowed = peerIdentity
-      ? rampOpen || userMatchesPaymentsAllowlist(peerIdentity)
+    });
+    const peerAllowed = peerPart
+      ? rampOpen || userMatchesPaymentsAllowlist({ id: peerPart.userId })
       : false;
     const paymentsProposalAccess = {
       allowlistConfigured: rampOpen ? false : true,
@@ -128,7 +164,6 @@ export async function GET(_req: Request, { params }: Params) {
       ),
       selfAllowed,
       peerAllowed,
-      /** True when POST create can pass TEST access for both parties. */
       bothAllowed: selfAllowed && peerAllowed,
       peerPresent: Boolean(peerPart),
     };
@@ -142,7 +177,6 @@ export async function GET(_req: Request, { params }: Params) {
           },
           user.id,
         ),
-        /** Canonical User.id for this cookie session — not /api/auth/me. */
         viewerUserId: user.id,
         viewerUsername: user.username ?? null,
         messages,
@@ -152,6 +186,7 @@ export async function GET(_req: Request, { params }: Params) {
         canCreatePaymentTicket:
           activePaymentTicketCount < MAX_ACTIVE_PAYMENT_TICKETS,
         paymentsProposalAccess,
+        activityAt,
       },
       {
         headers: {

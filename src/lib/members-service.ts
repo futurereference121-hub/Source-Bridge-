@@ -399,6 +399,82 @@ export async function buildMergedLiveFeed(
   return feedFromDbQueries(limit);
 }
 
+const DIRECTORY_INCLUDE = {
+  networkLocations: { orderBy: { sortOrder: "asc" as const }, take: 1 },
+} as const;
+
+export const DIRECTORY_PAGE_SIZE_MOBILE = 24;
+export const DIRECTORY_PAGE_SIZE_DESKTOP = 36;
+
+/**
+ * Server-side Explore directory page. Compact payload — no listings/reviews.
+ * Search is DB-side (username, name, location, display message) so we never
+ * hide-all on the client or reset the full Explore document.
+ */
+export async function listDirectoryMembersPage(opts: {
+  q?: string;
+  page?: number;
+  limit?: number;
+}): Promise<{
+  members: Member[];
+  page: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+}> {
+  const page = Math.max(1, Math.floor(opts.page || 1));
+  const limit = Math.min(
+    Math.max(Math.floor(opts.limit || DIRECTORY_PAGE_SIZE_MOBILE), 6),
+    48,
+  );
+  const q = (opts.q || "").trim();
+  const skip = (page - 1) * limit;
+
+  const searchWhere = q
+    ? {
+        OR: [
+          { username: { contains: q, mode: "insensitive" as const } },
+          { name: { contains: q, mode: "insensitive" as const } },
+          { city: { contains: q, mode: "insensitive" as const } },
+          { country: { contains: q, mode: "insensitive" as const } },
+          {
+            publicDisplayMessage: {
+              contains: q,
+              mode: "insensitive" as const,
+            },
+          },
+        ],
+      }
+    : {};
+
+  try {
+    const where = { ...publicMemberWhere, ...searchWhere };
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        include: DIRECTORY_INCLUDE,
+        orderBy: [{ username: "asc" }],
+        skip,
+        take: limit,
+      }),
+    ]);
+    const members = users
+      .map((u) => dbUserToMember(u as DbUserBundle))
+      .filter((m): m is Member => Boolean(m));
+    return {
+      members,
+      page,
+      limit,
+      total,
+      hasMore: skip + members.length < total,
+    };
+  } catch (err) {
+    console.error("[members] directory page failed", err);
+    return { members: [], page, limit, total: 0, hasMore: false };
+  }
+}
+
 /** Public-safe user profile payload (no email). */
 export function toPublicMemberJson(member: Member) {
   return {

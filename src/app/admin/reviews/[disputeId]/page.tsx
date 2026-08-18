@@ -95,6 +95,10 @@ export default async function AdminDisputeCasePage({ params }: Props) {
         sender: m.sender
           ? { id: m.sender.id, name: m.sender.name, username: m.sender.username }
           : null,
+        attachments: (m.attachments || []).map((a) => ({
+          id: a.id,
+          url: a.url,
+        })),
       })),
     };
   }
@@ -158,14 +162,19 @@ export default async function AdminDisputeCasePage({ params }: Props) {
             currency={t.currency}
             finalResidualMinor={books.finalResidualMinor}
             refundableMinor={books.refundableMinor}
+            sellerEntitledMinor={books.sellerEntitledMinor}
+            alreadyReleasedMinor={
+              books.procurementTransferredMinor + books.finalTransferredMinor
+            }
+            protectedRemainingMinor={books.protectedRemainingMinor}
           />
         ) : null}
       </div>
 
       <h2 className="mt-10 text-lg font-semibold">Private admin messaging</h2>
       <p className="mt-1 text-sm text-white/50">
-        Message Buyer and Message Sourcer are separate private threads, linked
-        to this dispute. They do not share the Buyer↔Sourcer conversation.
+        Left: Admin ↔ Buyer. Right: Admin ↔ Sourcer. Full chronological
+        history, same messages as Inbox. Parties cannot see the other thread.
       </p>
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <AdminDisputeMessenger
