@@ -26,6 +26,9 @@ import {
   MAX_ACTIVE_PAYMENT_TICKETS,
   ticketAppearsInChatTimeline,
 } from "@/lib/payments/ticket-lifecycle";
+import {
+  mergeTicketStatePreferNewer,
+} from "@/lib/payments/ticket-state-guard";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 import { SourceBridgeLoader } from "@/components/ui/SourceBridgeLoader";
@@ -189,11 +192,14 @@ type TimelineTicketLite = {
   sellerId?: string;
   buyerApprovedRevision?: number | null;
   sellerApprovedRevision?: number | null;
+  updatedAt?: string | null;
+  lastMeaningfulActivityAt?: string | null;
+  paymentIntentStatus?: string | null;
   protectedTransactionId?: string | null;
   origin?: string | null;
 };
 
-/** Merge ticket snapshots by id — keep the richest payload (breakdown + parties). */
+/** Merge ticket snapshots by id — newer authoritative state wins (never regress funded). */
 function mergeTicketSnapshots(
   prev: TimelineTicketLite[],
   incoming: TimelineTicketLite[] | null | undefined,
@@ -216,10 +222,37 @@ function mergeTicketSnapshots(
     const incomingRich =
       Boolean((t as PaymentTicketView).breakdown?.labels) ||
       Boolean((t as PaymentTicketView).buyerParty);
-    byId.set(
-      t.id,
-      incomingRich && !existingRich ? t : { ...t, ...existing },
-    );
+    const merged = mergeTicketStatePreferNewer(
+      existing as TimelineTicketLite & PaymentTicketView,
+      t as TimelineTicketLite & PaymentTicketView,
+    ) as TimelineTicketLite & PaymentTicketView;
+    if (incomingRich && !existingRich) {
+      byId.set(
+        t.id,
+        {
+          ...merged,
+          breakdown: (t as PaymentTicketView).breakdown ?? merged.breakdown,
+          buyerParty: (t as PaymentTicketView).buyerParty ?? merged.buyerParty,
+          sellerParty:
+            (t as PaymentTicketView).sellerParty ?? merged.sellerParty,
+        } as TimelineTicketLite,
+      );
+    } else if (existingRich && !incomingRich) {
+      byId.set(
+        t.id,
+        {
+          ...merged,
+          breakdown:
+            (existing as PaymentTicketView).breakdown ?? merged.breakdown,
+          buyerParty:
+            (existing as PaymentTicketView).buyerParty ?? merged.buyerParty,
+          sellerParty:
+            (existing as PaymentTicketView).sellerParty ?? merged.sellerParty,
+        } as TimelineTicketLite,
+      );
+    } else {
+      byId.set(t.id, merged);
+    }
   }
   return [...byId.values()].sort((a, b) => {
     const at = Date.parse(a.createdAt || "");
@@ -382,10 +415,12 @@ export function MessagesInbox({
         viewerUserId: string | null;
         viewerUsername: string | null;
         activityAt: string | null;
+        activityVersion: number | null;
       }
     >(),
   );
   const activityAtRef = useRef<string | null>(null);
+  const activityVersionRef = useRef<number>(0);
   const [newMessageHint, setNewMessageHint] = useState(false);
 
   const myId = account?.id ?? "";
@@ -491,6 +526,7 @@ export function MessagesInbox({
         setThreadViewerUserId(cached.viewerUserId);
         setThreadViewerUsername(cached.viewerUsername);
         activityAtRef.current = cached.activityAt;
+        activityVersionRef.current = cached.activityVersion ?? 0;
       } else {
         setThreadLoading(true);
         setMessages([]);
@@ -544,7 +580,10 @@ export function MessagesInbox({
         setActiveTicketCount(serverCount);
         const activityAt =
           typeof data.activityAt === "string" ? data.activityAt : new Date().toISOString();
+        const activityVersion =
+          typeof data.activityVersion === "number" ? data.activityVersion : 0;
         activityAtRef.current = activityAt;
+        activityVersionRef.current = activityVersion;
         threadCacheRef.current.set(activeId!, {
           messages: msgs,
           paymentTickets: visibleChatTickets(mergeTicketSnapshots([], tickets)),
@@ -556,6 +595,7 @@ export function MessagesInbox({
           viewerUserId: data.viewerUserId || myId,
           viewerUsername: data.viewerUsername || account?.username || null,
           activityAt,
+          activityVersion,
         });
       } catch (err) {
         if (!cancelled) {
@@ -605,15 +645,23 @@ export function MessagesInbox({
         const since = activityAtRef.current
           ? `&since=${encodeURIComponent(activityAtRef.current)}`
           : "";
-        const res = await fetch(`/api/conversations/${activeId}?poll=1${since}`, {
-          cache: "no-store",
-        });
+        const sinceVersion =
+          activityVersionRef.current > 0
+            ? `&sinceVersion=${activityVersionRef.current}`
+            : "";
+        const res = await fetch(
+          `/api/conversations/${activeId}?poll=1${since}${sinceVersion}`,
+          { cache: "no-store" },
+        );
         if (!res.ok) return;
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (data?.unchanged) {
           if (typeof data.activityAt === "string") {
             activityAtRef.current = data.activityAt;
+          }
+          if (typeof data.activityVersion === "number") {
+            activityVersionRef.current = data.activityVersion;
           }
           return;
         }
@@ -695,6 +743,9 @@ export function MessagesInbox({
         });
         if (typeof data.activityAt === "string") {
           activityAtRef.current = data.activityAt;
+        }
+        if (typeof data.activityVersion === "number") {
+          activityVersionRef.current = data.activityVersion;
         }
       } catch {
         /* silent — avoid toast spam */

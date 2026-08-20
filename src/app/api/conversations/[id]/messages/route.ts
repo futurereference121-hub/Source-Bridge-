@@ -16,6 +16,7 @@ import {
   listConversationPaymentTickets,
   mergePaymentTicketsIntoTimeline,
 } from "@/lib/payments/tickets";
+import { bumpConversationActivity } from "@/lib/conversation-activity";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
@@ -175,10 +176,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           sender: { select: participantUserSelect },
         },
       });
-      await tx.conversation.update({
-        where: { id },
-        data: { lastMessageAt: now, updatedAt: now },
-      });
+      await bumpConversationActivity(id, tx, { touchLastMessage: true });
       await tx.conversationParticipant.updateMany({
         where: { conversationId: id, hiddenAt: { not: null } },
         data: { hiddenAt: null },

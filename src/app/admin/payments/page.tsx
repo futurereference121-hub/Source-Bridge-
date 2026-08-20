@@ -74,6 +74,7 @@ export default async function AdminPaymentsPage() {
             procurementTransferredMinor: true,
             finalTransferredMinor: true,
             refundedMinor: true,
+            platformFeeRefundedMinor: true,
             conversationId: true,
             paymentTicket: { select: { id: true } },
           },
@@ -256,6 +257,9 @@ export default async function AdminPaymentsPage() {
                 <PaymentIssueActions
                   disputeId={issue.id}
                   currency={t.currency}
+                  totalPaidMinor={t.totalChargeMinor}
+                  platformFeeMinor={books.platformFeeMinor}
+                  platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
                   finalResidualMinor={books.finalResidualMinor}
                   refundableMinor={books.refundableMinor}
                   sellerEntitledMinor={books.sellerEntitledMinor}

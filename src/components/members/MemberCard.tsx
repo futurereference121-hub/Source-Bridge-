@@ -207,9 +207,10 @@ export function MemberDirectoryCard({ member }: MemberCardProps) {
             {verified ? <VerificationBadge verified size="sm" variant="tick" /> : null}
           </div>
           <p className="truncate text-[12px] text-white/55">@{member.username}</p>
-          <p className="mt-0.5 truncate text-[11px] text-white/40">
-            {member.location.label}
+          <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-white/35">
+            Current location
           </p>
+          <p className="truncate text-[11px] text-white/45">{member.location.label}</p>
         </div>
       </div>
       {message ? (
@@ -218,9 +219,17 @@ export function MemberDirectoryCard({ member }: MemberCardProps) {
         </p>
       ) : null}
       {networkPreview.length ? (
-        <p className="mt-1.5 truncate text-[10px] text-white/35">
-          {networkPreview.map((n) => n.city).join(" · ")}
-        </p>
+        <div className="mt-1.5">
+          <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-white/35">
+            Network reach
+          </p>
+          <p className="truncate text-[10px] text-white/40">
+            {networkPreview.map((n) => `${n.city}, ${n.country}`).join(" · ")}
+            {member.network.length > 2
+              ? ` · +${member.network.length - 2} more`
+              : ""}
+          </p>
+        </div>
       ) : null}
     </Link>
   );

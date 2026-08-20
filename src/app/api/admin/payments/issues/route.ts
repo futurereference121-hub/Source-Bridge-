@@ -37,6 +37,8 @@ const resolveSchema = z.object({
   refundMajor: z.string().trim().max(32).optional(),
   releaseMinor: z.number().int().nonnegative().optional(),
   releaseMajor: z.string().trim().max(32).optional(),
+  /** When true, buyer refund may include remaining SB platform fee on platform. */
+  includePlatformFeeInRefund: z.boolean().optional().default(false),
   /** @deprecated Prefer releaseMinor. True = remaining residual only when no typed amount. */
   releaseRemaining: z.boolean().optional().default(false),
   confirmed: z.literal(true),
@@ -193,6 +195,7 @@ export async function PATCH(req: NextRequest) {
     let releaseAppliedMinor = 0;
     let released = false;
     let transferId: string | null = null;
+    let refundId: string | null = null;
     let working = txn;
 
     // Lift DISPUTED freeze so refund / residual paths can proceed.
@@ -215,6 +218,17 @@ export async function PATCH(req: NextRequest) {
       parsed.data.resolution === "RESOLVED_SPLIT"
     ) {
       const books = booksForTxn(working);
+      const feeStillOnPlatform = Math.min(
+        books.platformFeeMinor - (working.platformFeeRefundedMinor ?? 0),
+        books.protectedRemainingMinor,
+      );
+      const maxRefundExcludingFee = Math.max(
+        0,
+        books.protectedRemainingMinor - feeStillOnPlatform,
+      );
+      const maxRefundable = parsed.data.includePlatformFeeInRefund
+        ? books.refundableMinor
+        : maxRefundExcludingFee;
       const typedRefund =
         Boolean(parsed.data.refundMajor) || parsed.data.refundMinor != null;
       let requested = 0;
@@ -239,14 +253,14 @@ export async function PATCH(req: NextRequest) {
 
       if (
         typedRefund &&
-        requested > books.refundableMinor
+        requested > maxRefundable
       ) {
         return jsonError(
-          `Refund capped at platform remainder (${books.refundableMinor} minor units)`,
+          `Refund capped at ${maxRefundable} minor units${parsed.data.includePlatformFeeInRefund ? "" : " (SB fee excluded — check include fee)"}`,
           409,
           {
             code: "REFUND_EXCEEDS_PLATFORM",
-            refundableMinor: books.refundableMinor,
+            refundableMinor: maxRefundable,
           },
         );
       }
@@ -298,6 +312,9 @@ export async function PATCH(req: NextRequest) {
             idempotencyKey: `admin_refund_${dispute.id}_${plan.amountMinor}`,
           },
         );
+        const feePortion = parsed.data.includePlatformFeeInRefund
+          ? Math.min(feeStillOnPlatform, plan.amountMinor)
+          : 0;
         await appendLedgerEntry({
           protectedTxnId: working.id,
           entryType: "REFUND",
@@ -312,10 +329,13 @@ export async function PATCH(req: NextRequest) {
           where: { id: working.id },
           data: {
             refundedMinor: working.refundedMinor + plan.amountMinor,
+            platformFeeRefundedMinor:
+              (working.platformFeeRefundedMinor ?? 0) + feePortion,
             status: plan.nextStatus,
           },
         });
         refundAppliedMinor = plan.amountMinor;
+        refundId = refund.id;
       } else if (parsed.data.resolution === "RESOLVED_BUYER") {
         return jsonError("Nothing left on platform to refund to buyer", 409, {
           code: "NOTHING_REFUNDABLE",
@@ -463,6 +483,7 @@ export async function PATCH(req: NextRequest) {
       releaseAppliedMinor,
       released,
       transferId,
+      refundId,
     });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;

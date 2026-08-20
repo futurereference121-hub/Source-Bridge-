@@ -42,6 +42,7 @@ export default async function AdminDisputeCasePage({ params }: Props) {
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
+          platformFeeRefundedMinor: true,
           conversationId: true,
           buyerId: true,
           sellerId: true,
@@ -160,6 +161,9 @@ export default async function AdminDisputeCasePage({ params }: Props) {
           <PaymentIssueActions
             disputeId={issue.id}
             currency={t.currency}
+            totalPaidMinor={t.totalChargeMinor}
+            platformFeeMinor={books.platformFeeMinor}
+            platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
             finalResidualMinor={books.finalResidualMinor}
             refundableMinor={books.refundableMinor}
             sellerEntitledMinor={books.sellerEntitledMinor}

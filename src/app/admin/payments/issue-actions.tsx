@@ -11,28 +11,47 @@ import {
 type Props = {
   disputeId: string;
   currency: string;
+  totalPaidMinor: number;
   finalResidualMinor: number;
   refundableMinor: number;
+  platformFeeMinor: number;
+  platformFeeRefundedMinor?: number;
   sellerEntitledMinor?: number;
   alreadyReleasedMinor?: number;
   protectedRemainingMinor?: number;
+  /** Read-only audit ids after resolution (P20). */
+  lastRefundId?: string | null;
+  lastTransferId?: string | null;
 };
 
 export default function PaymentIssueActions({
   disputeId,
   currency,
+  totalPaidMinor,
   finalResidualMinor,
   refundableMinor,
+  platformFeeMinor,
+  platformFeeRefundedMinor = 0,
   sellerEntitledMinor = 0,
   alreadyReleasedMinor = 0,
   protectedRemainingMinor = refundableMinor,
+  lastRefundId = null,
+  lastTransferId = null,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const feeStillOnPlatform = Math.max(
+    0,
+    Math.min(platformFeeMinor - platformFeeRefundedMinor, protectedRemainingMinor),
+  );
+  const maxRefundExcludingFee = Math.max(0, protectedRemainingMinor - feeStillOnPlatform);
+  const [includePlatformFee, setIncludePlatformFee] = useState(false);
+  const maxRefundable = includePlatformFee ? refundableMinor : maxRefundExcludingFee;
+
   const [refundMajor, setRefundMajor] = useState(
-    refundableMinor > 0
-      ? minorToMajor(refundableMinor, currency).toFixed(2)
+    maxRefundable > 0
+      ? minorToMajor(maxRefundable, currency).toFixed(2)
       : "0.00",
   );
   const [releaseMajor, setReleaseMajor] = useState(
@@ -60,15 +79,15 @@ export default function PaymentIssueActions({
       setError("Enter a refund and/or a sourcer release amount.");
       return;
     }
-    if (refundMinor > refundableMinor) {
+    if (refundMinor > maxRefundable) {
       setError(
-        `Refund cannot exceed ${formatMinor(refundableMinor, currency)} (max refundable).`,
+        `Refund cannot exceed ${formatMinor(maxRefundable, currency)}${includePlatformFee ? " (includes SB fee)" : " (excludes SB fee)"}.`,
       );
       return;
     }
     if (releaseMinor > 0 && releaseMinor > finalResidualMinor) {
       setError(
-        `Sourcer release cannot exceed remaining entitlement ${formatMinor(finalResidualMinor, currency)}.`,
+        `Sourcer release cannot exceed remaining seller funds ${formatMinor(finalResidualMinor, currency)}.`,
       );
       return;
     }
@@ -80,14 +99,16 @@ export default function PaymentIssueActions({
     }
     const parts: string[] = [];
     if (refundMinor > 0) {
-      parts.push(`refund the buyer ${formatMinor(refundMinor, currency)} via the original payment`);
+      parts.push(
+        `refund the buyer ${formatMinor(refundMinor, currency)} via the original payment${includePlatformFee ? " (may include Source Bridge fee)" : ""}`,
+      );
     }
     if (releaseMinor > 0) {
       parts.push(
         `release ${formatMinor(releaseMinor, currency)} to the sourcer Connect account`,
       );
     }
-    setConfirmText(`Confirm: ${parts.join(" and ")}? Server recalculates books before money moves.`);
+    setConfirmText(`Confirm decision: ${parts.join(" and ")}? Server recalculates books before money moves.`);
   }
 
   async function execute() {
@@ -112,10 +133,15 @@ export default function PaymentIssueActions({
           resolutionNote: note.trim() || undefined,
           refundMinor: willRefund ? refundMinor : undefined,
           releaseMinor: willRelease ? releaseMinor : undefined,
+          includePlatformFeeInRefund: includePlatformFee,
           confirmed: true,
         }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        refundId?: string;
+        transferId?: string;
+      };
       if (!res.ok) {
         setError(data.error || `Failed (${res.status})`);
         return;
@@ -131,44 +157,83 @@ export default function PaymentIssueActions({
 
   return (
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-xs">
-      <dl className="grid gap-2 sm:grid-cols-2">
+      <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         <div>
-          <dt className="text-white/40">Available controlled (platform held)</dt>
-          <dd>{formatMinor(protectedRemainingMinor, currency)}</dd>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+            Total paid
+          </dt>
+          <dd className="text-sm text-white">{formatMinor(totalPaidMinor, currency)}</dd>
         </div>
         <div>
-          <dt className="text-white/40">Already released to sourcer</dt>
-          <dd>{formatMinor(alreadyReleasedMinor, currency)}</dd>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+            Already released
+          </dt>
+          <dd className="text-sm text-white">
+            {formatMinor(alreadyReleasedMinor, currency)}
+          </dd>
         </div>
         <div>
-          <dt className="text-white/40">Max refundable to buyer</dt>
-          <dd>{formatMinor(refundableMinor, currency)}</dd>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+            Remaining seller funds
+          </dt>
+          <dd className="text-sm text-white">
+            {formatMinor(finalResidualMinor, currency)}
+          </dd>
         </div>
         <div>
-          <dt className="text-white/40">Remaining sourcer entitlement</dt>
-          <dd>{formatMinor(finalResidualMinor, currency)}</dd>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-electric/80">
+            SB fee (held)
+          </dt>
+          <dd className="text-sm text-white">
+            {formatMinor(feeStillOnPlatform, currency)}
+            {platformFeeRefundedMinor > 0 ? (
+              <span className="ml-1 text-white/45">
+                · refunded {formatMinor(platformFeeRefundedMinor, currency)}
+              </span>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+            Platform controlled
+          </dt>
+          <dd className="text-sm text-white">
+            {formatMinor(protectedRemainingMinor, currency)}
+          </dd>
         </div>
         {sellerEntitledMinor > 0 ? (
           <div>
-            <dt className="text-white/40">Sourcer entitled (gross)</dt>
-            <dd>{formatMinor(sellerEntitledMinor, currency)}</dd>
+            <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+              Sourcer entitled (gross)
+            </dt>
+            <dd className="text-sm text-white">
+              {formatMinor(sellerEntitledMinor, currency)}
+            </dd>
           </div>
         ) : null}
-        <div>
-          <dt className="text-white/40">Allocated now / remaining after</dt>
-          <dd>
-            {formatMinor(allocatedMinor, currency)} /{" "}
-            {formatMinor(remainingAfterAlloc, currency)}
-          </dd>
-        </div>
       </dl>
-      <p className="text-white/35">
-        Amounts are sent to the server as typed minor units; the server
-        recalculates books and refuses anything above remaining entitlement.
-        Buyer refunds use the original PaymentIntent — the buyer does not need
-        Stripe Connect. Sourcer releases go to that sourcer&apos;s Connect
-        account.
-      </p>
+
+      <label className="flex items-center gap-2 text-white/60">
+        <input
+          type="checkbox"
+          checked={includePlatformFee}
+          onChange={(e) => {
+            setIncludePlatformFee(e.target.checked);
+            if (!e.target.checked && refundMinor > maxRefundExcludingFee) {
+              setRefundMajor(
+                maxRefundExcludingFee > 0
+                  ? minorToMajor(maxRefundExcludingFee, currency).toFixed(2)
+                  : "0.00",
+              );
+            }
+          }}
+          disabled={busy || feeStillOnPlatform <= 0}
+          className="rounded border-white/30"
+        />
+        Include Source Bridge fee in buyer refund (up to{" "}
+        {formatMinor(feeStillOnPlatform, currency)})
+      </label>
+
       <label className="block text-white/50">
         Admin note (optional)
         <input
@@ -181,18 +246,18 @@ export default function PaymentIssueActions({
       </label>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block text-white/50">
-          REFUND BUYER {formatMinor(refundableMinor, currency)}
+          REFUND BUYER £ (max {formatMinor(maxRefundable, currency)})
           <input
             value={refundMajor}
             onChange={(e) => setRefundMajor(e.target.value)}
             inputMode="decimal"
             className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-            disabled={busy || refundableMinor <= 0}
+            disabled={busy || maxRefundable <= 0}
             placeholder="0.00"
           />
         </label>
         <label className="block text-white/50">
-          RELEASE TO SOURCER {formatMinor(finalResidualMinor, currency)}
+          RELEASE TO SOURCER £ (max {formatMinor(finalResidualMinor, currency)})
           <input
             value={releaseMajor}
             onChange={(e) => setReleaseMajor(e.target.value)}
@@ -205,17 +270,17 @@ export default function PaymentIssueActions({
       </div>
       {!confirmText ? (
         <div className="flex flex-wrap gap-2">
-          {refundableMinor > 0 ? (
+          {maxRefundable > 0 ? (
             <button
               type="button"
               disabled={busy}
               onClick={() => {
-                setRefundMajor(minorToMajor(refundableMinor, currency).toFixed(2));
+                setRefundMajor(minorToMajor(maxRefundable, currency).toFixed(2));
                 setReleaseMajor("0.00");
               }}
               className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
             >
-              Refund buyer (max {formatMinor(refundableMinor, currency)})
+              Refund buyer (max {formatMinor(maxRefundable, currency)})
             </button>
           ) : null}
           {finalResidualMinor > 0 ? (
@@ -235,9 +300,9 @@ export default function PaymentIssueActions({
             type="button"
             disabled={busy}
             onClick={askConfirm}
-            className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+            className="rounded-lg bg-electric px-4 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-app-navy disabled:opacity-50"
           >
-            Review confirmation
+            Confirm decision
           </button>
         </div>
       ) : (
@@ -264,6 +329,45 @@ export default function PaymentIssueActions({
         </div>
       )}
       {error ? <p className="text-amber-200/90">{error}</p> : null}
+      {(lastRefundId || lastTransferId) ? (
+        <details className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-white/55">
+          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
+            Advanced / audit
+          </summary>
+          <dl className="mt-2 space-y-1 font-mono text-[11px]">
+            {lastRefundId ? (
+              <div>
+                <dt className="text-white/35">Refund ID</dt>
+                <dd>{lastRefundId}</dd>
+              </div>
+            ) : null}
+            {lastTransferId ? (
+              <div>
+                <dt className="text-white/35">Transfer ID</dt>
+                <dd>{lastTransferId}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt className="text-white/35">Allocated / remaining</dt>
+              <dd>
+                {formatMinor(allocatedMinor, currency)} /{" "}
+                {formatMinor(remainingAfterAlloc, currency)}
+              </dd>
+            </div>
+          </dl>
+        </details>
+      ) : (
+        <details className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-white/45">
+          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-[0.14em] text-white/35">
+            Advanced / audit
+          </summary>
+          <p className="mt-2 text-[11px] leading-relaxed">
+            Buyer refunds use the original PaymentIntent. Sourcer releases go to
+            that sourcer&apos;s Connect account. Refund and Transfer IDs appear
+            here after confirmation.
+          </p>
+        </details>
+      )}
     </div>
   );
 }

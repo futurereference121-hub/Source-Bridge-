@@ -37,6 +37,7 @@ import {
   mapMessage,
   participantUserSelect,
 } from "@/lib/messaging";
+import { bumpConversationActivity } from "@/lib/conversation-activity";
 import {
   ACTIVE_TICKET_STATUSES,
   deriveTicketAcceptanceState,
@@ -1631,9 +1632,8 @@ export async function createOrRevisePaymentTicket(opts: {
         replyAllowed: true,
       },
     });
-    await tx.conversation.update({
-      where: { id: opts.conversationId },
-      data: { lastMessageAt: new Date(), updatedAt: new Date() },
+    await bumpConversationActivity(opts.conversationId, tx, {
+      touchLastMessage: true,
     });
     return { ticket, messageId: message.id };
   });
@@ -1767,9 +1767,8 @@ export async function cancelPaymentTicket(opts: {
         paymentTicketId: ticket.id,
       },
     });
-    await tx.conversation.update({
-      where: { id: ticket.conversationId },
-      data: { lastMessageAt: new Date(), updatedAt: new Date() },
+    await bumpConversationActivity(ticket.conversationId, tx, {
+      touchLastMessage: true,
     });
     return row;
   });
@@ -2015,9 +2014,8 @@ export async function respondToPaymentTicket(opts: {
           paymentTicketId: ticket.id,
         },
       });
-      await tx.conversation.update({
-        where: { id: ticket.conversationId },
-        data: { lastMessageAt: new Date(), updatedAt: new Date() },
+      await bumpConversationActivity(ticket.conversationId, tx, {
+        touchLastMessage: true,
       });
       return row;
     });
@@ -2116,9 +2114,8 @@ export async function respondToPaymentTicket(opts: {
       });
     }
 
-    await tx.conversation.update({
-      where: { id: ticket.conversationId },
-      data: { lastMessageAt: new Date(), updatedAt: new Date() },
+    await bumpConversationActivity(ticket.conversationId, tx, {
+      touchLastMessage: true,
     });
     return row;
   });

@@ -47,6 +47,7 @@ export default async function AdminReviewsPage() {
           procurementTransferredMinor: true,
           finalTransferredMinor: true,
           refundedMinor: true,
+          platformFeeRefundedMinor: true,
           conversationId: true,
           buyerId: true,
           sellerId: true,
@@ -126,102 +127,106 @@ export default async function AdminReviewsPage() {
               ? `@${t.seller.username}`
               : t.seller.name || t.seller.email;
             return (
-              <div
+              <details
                 key={issue.id}
-                className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-5"
+                className="rounded-xl border border-amber-400/20 bg-amber-400/5"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium text-white">{t.title}</p>
-                      <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-white/60">
-                        {issue.status.replace(/_/g, " ")}
-                      </span>
-                    </div>
-                    <p className="mt-1 font-mono text-xs text-white/45">
-                      txn {t.id} · dispute {issue.id}
-                    </p>
-                    {issue.category ? (
-                      <p className="mt-2 text-sm font-medium text-amber-100/90">
-                        {issue.category}
+                <summary className="cursor-pointer list-none px-5 py-4 [&::-webkit-details-marker]:hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-white">{t.title}</p>
+                        <span className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-white/60">
+                          {issue.status.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-white/45">
+                        {new Date(issue.createdAt).toLocaleString()} · Buyer{" "}
+                        {buyerLabel} · Sourcer {sellerLabel}
                       </p>
-                    ) : null}
-                    <p className="mt-1 text-sm text-white/70">
-                      {issue.reason}
-                      {issue.details ? ` — ${issue.details.slice(0, 240)}` : ""}
-                    </p>
-                    {issue.adminNotes ? (
-                      <p className="mt-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/55">
-                        Admin notes: {issue.adminNotes}
-                      </p>
-                    ) : null}
-                    <p className="mt-2 text-xs text-white/40">
-                      Opened by{" "}
-                      {issue.openedBy.username
-                        ? `@${issue.openedBy.username}`
-                        : issue.openedBy.name || issue.openedBy.email}
-                      {" · "}
-                      {new Date(issue.createdAt).toLocaleString()}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                      <Link
-                        href={`/admin/reviews/${issue.id}`}
-                        className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
-                      >
-                        Open case
-                      </Link>
-                      <AdminDisputeMessageLink
-                        disputeId={issue.id}
-                        role="BUYER"
-                        label={`Message buyer (${buyerLabel})`}
-                      />
-                      <AdminDisputeMessageLink
-                        disputeId={issue.id}
-                        role="SELLER"
-                        label={`Message sourcer (${sellerLabel})`}
-                      />
                     </div>
-                  </div>
-                  <div className="text-right text-xs text-white/55">
-                    <p>
-                      Residual protected:{" "}
-                      {formatMinor(books.finalResidualMinor, t.currency)}
-                    </p>
-                    <p>
-                      Refundable: {formatMinor(books.refundableMinor, t.currency)}
-                    </p>
-                    <p>
-                      Item funds released early:{" "}
-                      {formatMinor(books.itemFundsReleasedEarlyMinor, t.currency)}
+                    <p className="text-xs text-white/50">
+                      {formatMinor(books.finalResidualMinor, t.currency)} seller
+                      remaining · {formatMinor(books.refundableMinor, t.currency)}{" "}
+                      refundable
                     </p>
                   </div>
-                </div>
-                <DisputeReviewActions
-                  disputeId={issue.id}
-                  status={issue.status}
-                  adminNotes={issue.adminNotes}
-                />
-                {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
-                  <PaymentIssueActions
+                </summary>
+                <div className="border-t border-amber-400/15 px-5 pb-5 pt-4">
+                  <p className="font-mono text-xs text-white/45">
+                    txn {t.id} · dispute {issue.id}
+                  </p>
+                  {issue.category ? (
+                    <p className="mt-2 text-sm font-medium text-amber-100/90">
+                      {issue.category}
+                    </p>
+                  ) : null}
+                  <p className="mt-1 text-sm text-white/70">
+                    {issue.reason}
+                    {issue.details ? ` — ${issue.details.slice(0, 240)}` : ""}
+                  </p>
+                  {issue.adminNotes ? (
+                    <p className="mt-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/55">
+                      Admin notes: {issue.adminNotes}
+                    </p>
+                  ) : null}
+                  <p className="mt-2 text-xs text-white/40">
+                    Opened by{" "}
+                    {issue.openedBy.username
+                      ? `@${issue.openedBy.username}`
+                      : issue.openedBy.name || issue.openedBy.email}
+                    {" · "}
+                    {new Date(issue.createdAt).toLocaleString()}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <Link
+                      href={`/admin/reviews/${issue.id}`}
+                      className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
+                    >
+                      Open case
+                    </Link>
+                    <AdminDisputeMessageLink
+                      disputeId={issue.id}
+                      role="BUYER"
+                      label={`Message buyer (${buyerLabel})`}
+                    />
+                    <AdminDisputeMessageLink
+                      disputeId={issue.id}
+                      role="SELLER"
+                      label={`Message sourcer (${sellerLabel})`}
+                    />
+                  </div>
+                  <DisputeReviewActions
                     disputeId={issue.id}
-                    currency={t.currency}
-                    finalResidualMinor={books.finalResidualMinor}
-                    refundableMinor={books.refundableMinor}
-                    sellerEntitledMinor={books.sellerEntitledMinor}
-                    alreadyReleasedMinor={
-                      books.procurementTransferredMinor + books.finalTransferredMinor
-                    }
-                    protectedRemainingMinor={books.protectedRemainingMinor}
+                    status={issue.status}
+                    adminNotes={issue.adminNotes}
                   />
-                ) : null}
-              </div>
+                  {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
+                    <PaymentIssueActions
+                      disputeId={issue.id}
+                      currency={t.currency}
+                      totalPaidMinor={t.totalChargeMinor}
+                      platformFeeMinor={books.platformFeeMinor}
+                      platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
+                      finalResidualMinor={books.finalResidualMinor}
+                      refundableMinor={books.refundableMinor}
+                      sellerEntitledMinor={books.sellerEntitledMinor}
+                      alreadyReleasedMinor={
+                        books.procurementTransferredMinor +
+                        books.finalTransferredMinor
+                      }
+                      protectedRemainingMinor={books.protectedRemainingMinor}
+                    />
+                  ) : null}
+                </div>
+              </details>
             );
           })
         )}
       </div>
 
       {resolvedDisputes.length > 0 ? (
-        <details className="mt-10 rounded-xl border border-white/10 bg-white/[0.03]">
+        <details className="mt-10 rounded-xl border border-white/10 bg-white/[0.03]" open={false}>
           <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-white/70">
             Resolved disputes ({resolvedDisputes.length})
           </summary>

@@ -480,6 +480,8 @@ model Conversation {
   /// BUYER | SELLER — which party this admin_dispute thread is with.
   adminPartyRole    String?
   closedAt          DateTime?
+  /// Monotonic sequence bumped on messages, tickets, protected txns, disputes.
+  activityVersion   Int                       @default(0)
   createdAt         DateTime                  @default(now())
   updatedAt         DateTime                  @updatedAt
   lastMessageAt     DateTime?
@@ -908,6 +910,8 @@ model ProtectedTransaction {
   procurementTransferredMinor Int    @default(0)
   finalTransferredMinor    Int       @default(0)
   refundedMinor            Int       @default(0)
+  /// SB platform fee portion included in buyer refunds (distinct from item refund).
+  platformFeeRefundedMinor Int       @default(0)
   stripePaymentIntentId    String    @default("")
   stripeCheckoutSessionId  String    @default("")
   stripeChargeId           String    @default("")

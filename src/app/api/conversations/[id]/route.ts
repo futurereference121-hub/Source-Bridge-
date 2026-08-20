@@ -23,6 +23,10 @@ import {
   isInstantPaymentsEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
+import {
+  conversationActivityAt,
+  getConversationActivityVersion,
+} from "@/lib/conversation-activity";
 import { jsonError } from "@/lib/validation";
 import { z } from "zod";
 
@@ -33,39 +37,6 @@ const RECENT_MESSAGES = 30;
 
 type Params = { params: Promise<{ id: string }> };
 
-async function conversationActivityAt(conversationId: string): Promise<string> {
-  const [conv, ticketMax, protectedTxnMax, disputeMax] = await Promise.all([
-    prisma.conversation.findUnique({
-      where: { id: conversationId },
-      select: { lastMessageAt: true, updatedAt: true },
-    }),
-    prisma.paymentTicket.aggregate({
-      where: { conversationId },
-      _max: { updatedAt: true },
-    }),
-    prisma.protectedTransaction.aggregate({
-      where: { conversationId },
-      _max: { updatedAt: true },
-    }),
-    prisma.disputeCase.aggregate({
-      where: {
-        protectedTxn: {
-          conversationId,
-        },
-      },
-      _max: { updatedAt: true },
-    }),
-  ]);
-  const latest = Math.max(
-    conv?.lastMessageAt?.getTime() ?? 0,
-    conv?.updatedAt?.getTime() ?? 0,
-    ticketMax._max.updatedAt?.getTime() ?? 0,
-    protectedTxnMax._max.updatedAt?.getTime() ?? 0,
-    disputeMax._max.updatedAt?.getTime() ?? 0,
-  );
-  return new Date(latest || Date.now()).toISOString();
-}
-
 export async function GET(_req: Request, { params }: Params) {
   try {
     const user = await requireSessionUser();
@@ -73,6 +44,8 @@ export async function GET(_req: Request, { params }: Params) {
     const url = new URL(_req.url);
     const isPoll = url.searchParams.get("poll") === "1";
     const since = url.searchParams.get("since") || "";
+    const sinceVersionRaw = url.searchParams.get("sinceVersion") || "";
+    const sinceVersion = sinceVersionRaw ? Number(sinceVersionRaw) : null;
 
     await requireParticipant(id, user.id);
 
@@ -87,17 +60,34 @@ export async function GET(_req: Request, { params }: Params) {
     }
 
     let activityAt: string | null = null;
-    if (isPoll && since) {
-      activityAt = await conversationActivityAt(id);
+    let activityVersion: number | null = null;
+    if (isPoll && (since || sinceVersion != null)) {
+      [activityAt, activityVersion] = await Promise.all([
+        conversationActivityAt(id),
+        getConversationActivityVersion(id),
+      ]);
+      const versionUnchanged =
+        sinceVersion != null &&
+        Number.isFinite(sinceVersion) &&
+        activityVersion <= sinceVersion;
       const sinceMs = Date.parse(since);
       const activityMs = Date.parse(activityAt);
-      if (Number.isFinite(sinceMs) && Number.isFinite(activityMs) && activityMs <= sinceMs) {
+      const timeUnchanged =
+        since &&
+        Number.isFinite(sinceMs) &&
+        Number.isFinite(activityMs) &&
+        activityMs <= sinceMs;
+      if (
+        (sinceVersion != null && versionUnchanged) ||
+        (sinceVersion == null && timeUnchanged)
+      ) {
         return Response.json(
           {
             unchanged: true,
             viewerUserId: user.id,
             viewerUsername: user.username ?? null,
             activityAt,
+            activityVersion,
           },
           {
             headers: {
@@ -138,16 +128,19 @@ export async function GET(_req: Request, { params }: Params) {
     });
     const ticketsPromise = listConversationPaymentTickets(id, user.id, { skipExpire: isPoll });
 
-    const [conversation, paymentTickets, activityResolved] = activityAt
-      ? [
-          ...(await Promise.all([conversationPromise, ticketsPromise])),
-          activityAt,
-        ]
-      : await Promise.all([
-          conversationPromise,
-          ticketsPromise,
-          conversationActivityAt(id),
-        ]);
+    const [conversation, paymentTickets, activityResolved, activityVersionResolved] =
+      activityAt != null && activityVersion != null
+        ? [
+            ...(await Promise.all([conversationPromise, ticketsPromise])),
+            activityAt,
+            activityVersion,
+          ]
+        : await Promise.all([
+            conversationPromise,
+            ticketsPromise,
+            conversationActivityAt(id),
+            getConversationActivityVersion(id),
+          ]);
 
     if (!conversation) return jsonError("Conversation not found", 404);
 
@@ -212,6 +205,7 @@ export async function GET(_req: Request, { params }: Params) {
           activePaymentTicketCount < MAX_ACTIVE_PAYMENT_TICKETS,
         paymentsProposalAccess,
         activityAt: activityResolved,
+        activityVersion: activityVersionResolved,
       },
       {
         headers: {

@@ -15,6 +15,10 @@ Conversation is primarily messaging. Payment Tickets must not overwhelm chat. Al
 
 Polling / revalidation must not: clear drafts, reset collapse keyed by ticket id, jump scroll, duplicate messages/tickets, or repeat financial actions.
 
+## Performance (permanent principle)
+
+User-perceived speed is part of definition of done. Prefer monotonic `activityVersion` + stale-response guards over extra polling, spinners, or refresh-after-click. One lightweight active-conversation poll; mutation responses return canonical ticket state immediately for the acting user. Never apply older poll/mutation payloads over newer funded or accepted state.
+
 ## Viewer
 
 Actions derive from the **current authenticated session** + authoritative ticket fields. Conversation GET `viewerUserId` (cookie session `User.id`) drives Payment Ticket Accept — never a cached `/api/auth/me` identity from another party. Never reuse another user’s `ticket.viewer` / actions / conversation payload. Authenticated ticket/conversation/`/api/auth/me` responses: `private, no-store`.

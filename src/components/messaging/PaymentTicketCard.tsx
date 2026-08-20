@@ -26,6 +26,7 @@ import {
   waitingCopyAddressesViewer,
   isProductPurchaseOrigin,
 } from "@/lib/payments/ticket-lifecycle";
+import { shouldApplyTicketUpdate } from "@/lib/payments/ticket-state-guard";
 
 const DEFAULT_BREAKDOWN_LABELS = {
   itemCost: "Item / procurement budget",
@@ -331,7 +332,10 @@ export function PaymentTicketCard({
         const next = normalizeTicketView(json.ticket as PaymentTicketView);
         // Role-neutral: never persist a previous viewer's identity on the ticket.
         delete (next as { viewer?: unknown }).viewer;
-        setTicket(next);
+        setTicket((prev) => {
+          if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
+          return next;
+        });
       }
     } catch {
       if (!silent) setError("Could not load Payment Ticket");
@@ -385,6 +389,7 @@ export function PaymentTicketCard({
       ) {
         return prev;
       }
+      if (!shouldApplyTicketUpdate(snap, prev)) return prev;
       return { ...prev, ...snap, viewer: undefined };
     });
   }, [ticketSnapshot, ticketId]);
