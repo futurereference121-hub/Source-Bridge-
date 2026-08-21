@@ -17,6 +17,7 @@ import {
   mergePaymentTicketsIntoTimeline,
 } from "@/lib/payments/tickets";
 import { bumpConversationActivity } from "@/lib/conversation-activity";
+import { messageVisibleToUserWhere } from "@/lib/conversation-hide";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
@@ -45,7 +46,10 @@ export async function GET(req: NextRequest, { params }: Params) {
     );
 
     const rows = await prisma.message.findMany({
-      where: { conversationId: id },
+      where: {
+        conversationId: id,
+        ...messageVisibleToUserWhere(user.id),
+      },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -177,10 +181,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         },
       });
       await bumpConversationActivity(id, tx, { touchLastMessage: true });
-      await tx.conversationParticipant.updateMany({
-        where: { conversationId: id, hiddenAt: { not: null } },
-        data: { hiddenAt: null },
-      });
+      // Resurface is handled inside bumpConversationActivity (clears hiddenAt).
       await markRead(id, user.id, tx);
       return msg;
     });

@@ -164,6 +164,7 @@ export type PaymentTicketView = {
   };
   trackingNumber?: string;
   trackingCarrier?: string;
+  shipmentPhotoUrl?: string;
   shippedAt?: string | null;
   deliveredAt?: string | null;
   inspectionEndsAt?: string | null;
@@ -284,6 +285,7 @@ export function PaymentTicketCard({
   const [trackingInput, setTrackingInput] = useState("");
   const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
   const [shipmentPhotoPreview, setShipmentPhotoPreview] = useState("");
+  const [shippingPhotoRevealed, setShippingPhotoRevealed] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
   const [issueOpen, setIssueOpen] = useState(false);
@@ -1970,10 +1972,49 @@ export function PaymentTicketCard({
                   })}
                 </p>
               ) : null}
-              {residualProtected > 0 ? (
+              {ticket.shipmentPhotoUrl ? (
+                <div className="space-y-2 pt-1">
+                  <p className="text-white/55">Shipping proof submitted</p>
+                  <button
+                    type="button"
+                    onClick={() => setShippingPhotoRevealed((v) => !v)}
+                    className="rounded-lg border border-white/20 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-white/80 hover:border-electric/40 hover:text-white"
+                    data-testid="ticket-shipping-photo-toggle"
+                  >
+                    {shippingPhotoRevealed
+                      ? "Hide shipping photo"
+                      : "Reveal shipping photo"}
+                  </button>
+                  {shippingPhotoRevealed ? (
+                    <div
+                      className="fixed inset-0 z-[90] flex items-center justify-center overflow-hidden bg-black/80 p-4"
+                      role="dialog"
+                      aria-modal
+                      data-testid="ticket-shipping-photo-lightbox"
+                      onClick={() => setShippingPhotoRevealed(false)}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={ticket.shipmentPhotoUrl}
+                        alt="Shipping proof"
+                        className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {residualProtected > 0 && !isProductPurchase ? (
                 <p className="text-white/45">
                   Remaining {formatMinor(residualProtected, cur)} stays protected
                   until inspection completes.
+                </p>
+              ) : null}
+              {isProductPurchase && residualProtected > 0 ? (
+                <p className="text-white/45">
+                  Remaining {formatMinor(residualProtected, cur)} stays protected.
+                  Admin controls release or refund — buyers can view and report
+                  an issue.
                 </p>
               ) : null}
             </div>
@@ -2144,45 +2185,75 @@ export function PaymentTicketCard({
             </div>
           ) : null}
 
-          {inInspection &&
+          {isProductPurchase &&
+          !inInspection &&
           !disputeResolved &&
-          (canReleaseNow || canReportIssue) ? (
+          canReportIssue &&
+          !issueOpen ? (
             <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
-              {ticket.inspectionEndsAt ? (
-                <p className="text-white/50">
-                  Inspection ends{" "}
-                  {new Date(ticket.inspectionEndsAt).toLocaleString()}
-                  {" — "}remaining residual auto-releases after this deadline
-                  unless you release early or report a problem.
-                </p>
+              <p className="text-white/50">
+                View shipping details above. Report an issue if something is
+                wrong — Source Bridge admin controls release or refund.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setIssueOpen(true)}
+                className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
+                data-testid="ticket-product-report-issue"
+              >
+                Report a Problem
+              </button>
+            </div>
+          ) : null}
+
+          {!disputeResolved &&
+          ((inInspection && (canReleaseNow || canReportIssue)) ||
+            (isProductPurchase && canReportIssue && issueOpen)) ? (
+            <div className="space-y-2 border-t border-white/10 pt-2 text-xs text-white/75">
+              {inInspection ? (
+                ticket.inspectionEndsAt ? (
+                  <p className="text-white/50">
+                    Inspection ends{" "}
+                    {new Date(ticket.inspectionEndsAt).toLocaleString()}
+                    {" — "}remaining residual auto-releases after this deadline
+                    unless you release early or report a problem.
+                  </p>
+                ) : (
+                  <p className="text-white/50">
+                    Inspection in progress — remaining funds stay protected until
+                    release or a reported issue.
+                  </p>
+                )
               ) : (
                 <p className="text-white/50">
-                  Inspection in progress — remaining funds stay protected until
-                  release or a reported issue.
+                  Describe the issue. Admin will decide refund or seller release.
                 </p>
               )}
-              <div className="flex flex-wrap gap-2">
-                {canReleaseNow ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void submitReceiptDecision("RELEASE_NOW")}
-                    className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-                  >
-                    {busy ? "Releasing…" : "Release Funds Now"}
-                  </button>
-                ) : null}
-                {canReportIssue && !issueOpen ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setIssueOpen(true)}
-                    className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
-                  >
-                    Report a Problem
-                  </button>
-                ) : null}
-              </div>
+              {inInspection ? (
+                <div className="flex flex-wrap gap-2">
+                  {canReleaseNow ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void submitReceiptDecision("RELEASE_NOW")}
+                      className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                    >
+                      {busy ? "Releasing…" : "Release Funds Now"}
+                    </button>
+                  ) : null}
+                  {canReportIssue && !issueOpen ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setIssueOpen(true)}
+                      className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs text-amber-100 disabled:opacity-50"
+                    >
+                      Report a Problem
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               {issueOpen ? (
                 <div className="space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-2">
                   <label className="block text-xs text-white/60">

@@ -30,9 +30,29 @@ assert.match(lifecycle, /isProductPurchaseOrigin/);
 assert.match(lifecycle, /if \(isProductPurchaseOrigin\(opts\.origin\)\) return false/);
 assert.match(card, /Submit Shipping Proof/);
 assert.match(card, /Product Purchase Ticket/);
+assert.match(card, /Reveal shipping photo/);
+assert.match(card, /Hide shipping photo/);
+assert.match(card, /ticket-product-report-issue/);
 assert.match(purchases, /Protected Purchases/);
+assert.match(purchases, /protectedTxnId=\{t\.id\}/);
+assert.match(purchases, /Safely refundable/);
 assert.match(layout, /\/admin\/purchases/);
 assert.match(productCheckout, /origin: "PRODUCT_CHECKOUT"/);
+const fulfilment = read("src/lib/payments/fulfilment.ts");
+assert.match(
+  fulfilment,
+  /if \(opts\.origin === "PRODUCT_CHECKOUT"\) return false/,
+  "product purchase buyers cannot confirm receipt / release funds",
+);
+assert.match(
+  fulfilment,
+  /PRODUCT_ADMIN_ONLY/,
+  "product purchase receipt decisions stay admin-controlled",
+);
+const tracking = read("src/app/api/payments/tracking/route.ts");
+assert.match(tracking, /shipmentPhotoUrl: parsed\.data\.shipmentPhotoUrl/);
+const tickets = read("src/lib/payments/tickets.ts");
+assert.match(tickets, /shipmentPhotoUrl/);
 assert.doesNotMatch(
   helper,
   /futureman|theowlsaid|bellahap/,

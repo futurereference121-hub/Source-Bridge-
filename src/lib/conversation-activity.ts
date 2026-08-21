@@ -7,6 +7,7 @@ type DbClient = Prisma.TransactionClient | typeof prisma;
  * Monotonic conversation activity sequence — bumps on every meaningful mutation
  * (messages, tickets, protected txns, disputes). Poll clients pass `sinceVersion`
  * to avoid false "unchanged" when timestamps collide or aggregate lag.
+ * Also clears per-user inbox hides so Hide/Delete chats resurface on new activity.
  */
 export async function bumpConversationActivity(
   conversationId: string,
@@ -21,6 +22,10 @@ export async function bumpConversationActivity(
       ...(opts?.touchLastMessage ? { lastMessageAt: new Date() } : {}),
     },
     select: { activityVersion: true },
+  });
+  await client.conversationParticipant.updateMany({
+    where: { conversationId, hiddenAt: { not: null } },
+    data: { hiddenAt: null },
   });
   return row.activityVersion;
 }

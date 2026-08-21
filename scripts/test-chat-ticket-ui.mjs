@@ -26,8 +26,16 @@ const cronRelease = read("src/app/api/cron/payments-release/route.ts");
 const reviewActions = read("src/app/admin/reviews/dispute-review-actions.tsx");
 const issueActions = read("src/app/admin/payments/issue-actions.tsx");
 const issuesApi = read("src/app/api/admin/payments/issues/route.ts");
+const protectedTxnApi = read("src/app/api/admin/payments/protected-txns/route.ts");
+const adminMoney = read("src/lib/payments/admin-protected-decision.ts");
 const releaseEngine = read("src/lib/payments/release.ts");
 const threadsApi = read("src/app/api/admin/payments/issues/threads/route.ts");
+const purchasesPage = read("src/app/admin/purchases/page.tsx");
+const convHide = read("src/lib/conversation-hide.ts");
+const msgHideRoute = read(
+  "src/app/api/conversations/[id]/messages/[messageId]/hide/route.ts",
+);
+const activityBump = read("src/lib/conversation-activity.ts");
 
 // --- RESPONSIVE PAYMENT TICKET FORM ---
 assert.match(propose, /pt-propose-v9-no-fee-checkbox/);
@@ -165,8 +173,17 @@ assert.match(
   /export async function PATCH/,
   "conversation PATCH hides a thread for the caller only",
 );
-assert.match(convGet, /hiddenAt: parsed\.data\.hidden \? new Date\(\) : null/);
-assert.match(inbox, /JSON\.stringify\(\{ hidden: true \}\)/);
+assert.match(convGet, /hiddenAt: hide \? new Date\(\) : unhide \? null/);
+assert.match(inbox, /action: "hide" \| "delete"/);
+assert.match(inbox, /Hide chat/);
+assert.match(inbox, /Delete chat/);
+assert.match(inbox, /Delete for me/);
+assert.match(inbox, /ChatOptionsMenu/);
+assert.match(
+  inbox,
+  /messages\/\$\{messageId\}\/hide/,
+  "Delete for me must call per-message hide API",
+);
 assert.match(card, /capture="environment"/);
 assert.match(card, /data-testid="ticket-dispute-receipt"/);
 assert.match(card, /createPortal\(/);
@@ -383,8 +400,8 @@ assert.match(
 );
 assert.match(
   issueActions,
-  /RELEASE TO SOURCER/,
-  "admin money UI must expose sourcer-release destination",
+  /RELEASE TO SELLER/,
+  "admin money UI must expose seller-release destination",
 );
 assert.match(
   issueActions,
@@ -402,14 +419,53 @@ assert.match(
   "admin resolve API must accept typed releaseMinor",
 );
 assert.match(
-  issuesApi,
+  adminMoney,
   /amountMinor: requestedReleaseMinor/,
   "typed releaseMinor must be passed through to releaseFinal",
 );
 assert.match(
-  issuesApi,
+  adminMoney,
   /payment_intent: working\.stripePaymentIntentId/,
   "buyer refunds must use the original PaymentIntent (no buyer Connect)",
+);
+assert.match(
+  issuesApi,
+  /executeAdminProtectedMoneyDecision/,
+  "dispute resolve must reuse shared admin money decision",
+);
+assert.match(
+  protectedTxnApi,
+  /executeAdminProtectedMoneyDecision/,
+  "no-dispute protected purchase decide must reuse shared money decision",
+);
+assert.match(
+  protectedTxnApi,
+  /OPEN_DISPUTE_EXISTS/,
+  "no-dispute path must refuse when an open dispute exists",
+);
+assert.match(
+  purchasesPage,
+  /protectedTxnId=\{t\.id\}/,
+  "Protected Purchases accordion must mount money controls without open dispute",
+);
+assert.match(purchasesPage, /Safely refundable/);
+assert.match(issueActions, /Safely refundable/);
+assert.match(issueActions, /\/api\/admin\/payments\/protected-txns/);
+assert.match(
+  activityBump,
+  /hiddenAt: \{ not: null \}/,
+  "meaningful activity must resurface per-user inbox hides",
+);
+assert.match(convHide, /FINANCIAL_RECEIPT_PROTECTED/);
+assert.match(msgHideRoute, /hideMessageForUser/);
+assert.match(card, /Reveal shipping photo/);
+assert.match(card, /Hide shipping photo/);
+assert.match(card, /ticket-shipping-photo-lightbox/);
+assert.match(card, /Shipping proof submitted/);
+assert.match(card, /ticket-product-report-issue/);
+assert.match(
+  card,
+  /Admin controls release or refund/,
 );
 assert.match(
   releaseEngine,

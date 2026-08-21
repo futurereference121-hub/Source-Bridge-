@@ -135,15 +135,21 @@ export default async function AdminProtectedPurchasesPage() {
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-white/40">Remaining seller</dt>
+                    <dt className="text-white/40">Remaining seller funds</dt>
                     <dd>
                       {formatMinor(books.finalResidualMinor, t.currency)}
                     </dd>
                   </div>
                   <div>
-                    <dt className="text-white/40">Source Bridge fee</dt>
+                    <dt className="text-white/40">SB fee</dt>
                     <dd>
                       {formatMinor(books.platformFeeMinor, t.currency)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-white/40">Safely refundable</dt>
+                    <dd>
+                      {formatMinor(books.refundableMinor, t.currency)}
                     </dd>
                   </div>
                 </dl>
@@ -177,23 +183,24 @@ export default async function AdminProtectedPurchasesPage() {
                     protectedRemainingMinor={books.protectedRemainingMinor}
                   />
                 ) : !isDirectPaymentOption(t.paymentOption) &&
-                  ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "DISPUTED", "READY_TO_RELEASE"].includes(
+                  ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "DISPUTED", "READY_TO_RELEASE", "PARTIALLY_REFUNDED"].includes(
                     t.status,
                   ) ? (
-                  <p className="mt-3 text-xs text-white/50">
-                    Admin refund / release controls appear when a buyer reports
-                    an item issue (same money service as Reviews). TOTAL PAID{" "}
-                    {formatMinor(t.totalChargeMinor, t.currency)} · ALREADY
-                    RELEASED{" "}
-                    {formatMinor(
+                  <PaymentIssueActions
+                    protectedTxnId={t.id}
+                    currency={t.currency}
+                    totalPaidMinor={t.totalChargeMinor}
+                    platformFeeMinor={books.platformFeeMinor}
+                    platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
+                    finalResidualMinor={books.finalResidualMinor}
+                    refundableMinor={books.refundableMinor}
+                    sellerEntitledMinor={books.sellerEntitledMinor}
+                    alreadyReleasedMinor={
                       books.procurementTransferredMinor +
-                        books.finalTransferredMinor,
-                      t.currency,
-                    )}{" "}
-                    · REMAINING SELLER{" "}
-                    {formatMinor(books.finalResidualMinor, t.currency)} · SB FEE{" "}
-                    {formatMinor(books.platformFeeMinor, t.currency)}.
-                  </p>
+                      books.finalTransferredMinor
+                    }
+                    protectedRemainingMinor={books.protectedRemainingMinor}
+                  />
                 ) : null}
                 <details className="mt-4 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/45">
                   <summary className="cursor-pointer text-white/55">

@@ -85,6 +85,7 @@ model User {
   verificationAudits   VerificationAuditEvent[]
   conversationParts    ConversationParticipant[]
   messagesSent         Message[]                     @relation("MessageSender")
+  messageHides         MessageHide[]
   sourcingSent         SourcingRequest[]             @relation("SourcingFrom")
   sourcingReceived     SourcingRequest[]             @relation("SourcingTo")
   transactionsAsBuyer  Transaction[]                 @relation("TxnBuyer")
@@ -535,11 +536,26 @@ model Message {
   paymentTicketId String?
   paymentTicket   PaymentTicket?      @relation(fields: [paymentTicketId], references: [id], onDelete: SetNull)
   attachments     MessageAttachment[]
+  /// Per-user "Delete for me" — does not remove the shared row for others.
+  hides           MessageHide[]
 
   @@index([conversationId, createdAt])
   @@index([senderId])
   @@index([conversationId, clientMessageId])
   @@index([paymentTicketId])
+}
+
+/// Per-user soft-hide of a message ("Delete for me"). Shared Message row remains.
+model MessageHide {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hiddenAt  DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId, messageId])
 }
 
 model MessageAttachment {
@@ -927,6 +943,8 @@ model ProtectedTransaction {
   trackingProvider         String    @default("")
   trackingNumber           String    @default("")
   trackingCarrier          String    @default("")
+  /// Seller shipping-proof image URL (listing Protected Product Purchase).
+  shipmentPhotoUrl         String    @default("")
   /// Normalized tracking status (see TrackingProvider).
   trackingStatus           String    @default("")
   /// Seller cannot self-declare tracked DELIVERED — only provider/admin.

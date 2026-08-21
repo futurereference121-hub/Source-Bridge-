@@ -9,7 +9,10 @@ import {
 } from "@/lib/payments/money";
 
 type Props = {
-  disputeId: string;
+  /** When set, resolve via dispute issues API (closes dispute). */
+  disputeId?: string;
+  /** When set (no open dispute), resolve via protected-txns API. */
+  protectedTxnId?: string;
   currency: string;
   totalPaidMinor: number;
   finalResidualMinor: number;
@@ -26,6 +29,7 @@ type Props = {
 
 export default function PaymentIssueActions({
   disputeId,
+  protectedTxnId,
   currency,
   totalPaidMinor,
   finalResidualMinor,
@@ -105,7 +109,7 @@ export default function PaymentIssueActions({
     }
     if (releaseMinor > 0) {
       parts.push(
-        `release ${formatMinor(releaseMinor, currency)} to the sourcer Connect account`,
+        `release ${formatMinor(releaseMinor, currency)} to the seller Connect account`,
       );
     }
     setConfirmText(`Confirm decision: ${parts.join(" and ")}? Server recalculates books before money moves.`);
@@ -113,6 +117,10 @@ export default function PaymentIssueActions({
 
   async function execute() {
     if (busy) return;
+    if (!disputeId && !protectedTxnId) {
+      setError("Missing dispute or protected transaction id.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -124,11 +132,14 @@ export default function PaymentIssueActions({
           : willRefund
             ? "RESOLVED_BUYER"
             : "RESOLVED_SELLER";
-      const res = await fetch("/api/admin/payments/issues", {
+      const endpoint = disputeId
+        ? "/api/admin/payments/issues"
+        : "/api/admin/payments/protected-txns";
+      const res = await fetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          disputeId,
+          ...(disputeId ? { disputeId } : { protectedTxnId }),
           resolution,
           resolutionNote: note.trim() || undefined,
           refundMinor: willRefund ? refundMinor : undefined,
@@ -195,6 +206,14 @@ export default function PaymentIssueActions({
         </div>
         <div>
           <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
+            Safely refundable
+          </dt>
+          <dd className="text-sm text-white">
+            {formatMinor(refundableMinor, currency)}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-semibold uppercase tracking-[0.12em] text-white/45">
             Platform controlled
           </dt>
           <dd className="text-sm text-white">
@@ -257,7 +276,7 @@ export default function PaymentIssueActions({
           />
         </label>
         <label className="block text-white/50">
-          RELEASE TO SOURCER £ (max {formatMinor(finalResidualMinor, currency)})
+          RELEASE TO SELLER £ (max {formatMinor(finalResidualMinor, currency)})
           <input
             value={releaseMajor}
             onChange={(e) => setReleaseMajor(e.target.value)}
@@ -293,7 +312,7 @@ export default function PaymentIssueActions({
               }}
               className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
             >
-              Release to sourcer (max {formatMinor(finalResidualMinor, currency)})
+              Release to seller (max {formatMinor(finalResidualMinor, currency)})
             </button>
           ) : null}
           <button

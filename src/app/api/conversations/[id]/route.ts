@@ -27,6 +27,7 @@ import {
   conversationActivityAt,
   getConversationActivityVersion,
 } from "@/lib/conversation-activity";
+import { messageVisibleToUserWhere } from "@/lib/conversation-hide";
 import { jsonError } from "@/lib/validation";
 import { z } from "zod";
 
@@ -106,6 +107,7 @@ export async function GET(_req: Request, { params }: Params) {
           include: { user: { select: participantUserSelect } },
         },
         messages: {
+          where: messageVisibleToUserWhere(user.id),
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: RECENT_MESSAGES,
           include: {
@@ -226,10 +228,16 @@ export async function GET(_req: Request, { params }: Params) {
 }
 
 const patchSchema = z.object({
-  hidden: z.boolean(),
-});
+  /** Legacy: hide/unhide */
+  hidden: z.boolean().optional(),
+  /** hide | delete | unhide — Delete is soft per-user (same as hide; does not destroy shared data). */
+  action: z.enum(["hide", "delete", "unhide"]).optional(),
+}).refine(
+  (v) => v.hidden != null || v.action != null,
+  { message: "Provide hidden or action" },
+);
 
-/** Per-user hide/unhide conversation from inbox (P7). */
+/** Per-user hide/delete conversation from inbox. Shared messages & tickets retained. */
 export async function PATCH(req: Request, { params }: Params) {
   try {
     const user = await requireSessionUser();
@@ -242,16 +250,27 @@ export async function PATCH(req: Request, { params }: Params) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
+    const hide =
+      parsed.data.action === "hide" ||
+      parsed.data.action === "delete" ||
+      parsed.data.hidden === true;
+    const unhide =
+      parsed.data.action === "unhide" || parsed.data.hidden === false;
+
     await prisma.conversationParticipant.update({
       where: {
         conversationId_userId: { conversationId: id, userId: user.id },
       },
       data: {
-        hiddenAt: parsed.data.hidden ? new Date() : null,
+        hiddenAt: hide ? new Date() : unhide ? null : new Date(),
       },
     });
 
-    return Response.json({ ok: true, hidden: parsed.data.hidden });
+    return Response.json({
+      ok: true,
+      hidden: hide,
+      action: parsed.data.action || (hide ? "hide" : "unhide"),
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     if (status === 401) return jsonError("Sign in required", 401);

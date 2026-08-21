@@ -289,6 +289,7 @@ function mapTicket(
     trackingNumber?: string | null;
     trackingCarrier?: string | null;
     shippedAt?: Date | string | null;
+    shipmentPhotoUrl?: string | null;
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
     fundedAt?: Date | string | null;
@@ -379,6 +380,7 @@ function mapTicket(
 
   const trackingNumber = extras?.trackingNumber || "";
   const trackingCarrier = extras?.trackingCarrier || "";
+  const shipmentPhotoUrl = (extras?.shipmentPhotoUrl || "").trim();
   const shippedAtIso =
     extras?.shippedAt instanceof Date
       ? extras.shippedAt.toISOString()
@@ -519,6 +521,7 @@ function mapTicket(
     lifecycleLabel: lifecycleLabel(lifecycleStage),
     trackingNumber,
     trackingCarrier,
+    shipmentPhotoUrl: shipmentPhotoUrl || undefined,
     shippedAt: shippedAtIso,
     deliveredAt: deliveredAtIso,
     inspectionEndsAt: inspectionEndsAtIso,
@@ -953,6 +956,7 @@ export async function listConversationPaymentTickets(
           refundedMinor: true,
           trackingNumber: true,
           trackingCarrier: true,
+          shipmentPhotoUrl: true,
           shippedAt: true,
           deliveredAt: true,
           inspectionEndsAt: true,
@@ -1038,6 +1042,7 @@ export async function listConversationPaymentTickets(
       procurementAdvancesFlag: isProcurementAdvancesEnabled(),
       trackingNumber: t.protectedTransaction?.trackingNumber ?? "",
       trackingCarrier: t.protectedTransaction?.trackingCarrier ?? "",
+      shipmentPhotoUrl: t.protectedTransaction?.shipmentPhotoUrl ?? "",
       shippedAt: t.protectedTransaction?.shippedAt ?? null,
       deliveredAt: t.protectedTransaction?.deliveredAt ?? null,
       inspectionEndsAt: t.protectedTransaction?.inspectionEndsAt ?? null,
@@ -2226,6 +2231,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           refundedMinor: true,
           trackingNumber: true,
           trackingCarrier: true,
+          shipmentPhotoUrl: true,
           shippedAt: true,
           deliveredAt: true,
           inspectionEndsAt: true,
@@ -2272,6 +2278,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     procurementAdvancesFlag: isProcurementAdvancesEnabled(),
     trackingNumber: pt?.trackingNumber ?? "",
     trackingCarrier: pt?.trackingCarrier ?? "",
+    shipmentPhotoUrl: pt?.shipmentPhotoUrl ?? "",
     shippedAt: pt?.shippedAt ?? null,
     deliveredAt: pt?.deliveredAt ?? null,
     inspectionEndsAt: pt?.inspectionEndsAt ?? null,

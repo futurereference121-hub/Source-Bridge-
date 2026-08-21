@@ -28,6 +28,7 @@ runNodeTestScripts(
     "scripts/test-protected-fund-zero-transfer.mjs",
     "scripts/test-conversation-pair.mjs",
     "scripts/test-refund-route-readonly.mjs",
+    "scripts/test-qa-gaps-15step.mjs",
   ],
   { label: "payments:fast" },
 );

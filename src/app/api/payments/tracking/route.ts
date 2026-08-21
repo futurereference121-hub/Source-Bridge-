@@ -188,6 +188,9 @@ export async function POST(req: NextRequest) {
           trackingProvider: provider.name,
           trackingStatus: normalized,
           shippedAt: new Date(),
+          ...(parsed.data.shipmentPhotoUrl
+            ? { shipmentPhotoUrl: parsed.data.shipmentPhotoUrl }
+            : {}),
         },
       });
     });

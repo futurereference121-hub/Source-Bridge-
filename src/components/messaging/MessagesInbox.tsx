@@ -301,6 +301,50 @@ function countActiveTicketsClient(
   return n;
 }
 
+/** Viewport-aware chat options menu (Hide / Delete). */
+function ChatOptionsMenu({
+  onHide,
+  onDelete,
+  align = "right",
+}: {
+  onHide: () => void;
+  onDelete: () => void;
+  align?: "left" | "right";
+}) {
+  return (
+    <details className="relative shrink-0">
+      <summary
+        className="cursor-pointer list-none px-1 py-0.5 text-[14px] leading-none text-white/50 hover:text-white [&::-webkit-details-marker]:hidden"
+        aria-label="Chat options"
+        onClick={(e) => e.stopPropagation()}
+      >
+        •••
+      </summary>
+      <div
+        className={`absolute z-40 mt-1 min-w-[9.5rem] overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg ${
+          align === "right" ? "right-0" : "left-0"
+        }`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="block w-full px-3 py-2.5 text-left text-xs text-white/80 hover:bg-white/10 sm:py-2"
+          onClick={onHide}
+        >
+          Hide chat
+        </button>
+        <button
+          type="button"
+          className="block w-full px-3 py-2.5 text-left text-xs text-amber-100/90 hover:bg-white/10 sm:py-2"
+          onClick={onDelete}
+        >
+          Delete chat
+        </button>
+      </div>
+    </details>
+  );
+}
+
 function mergePaymentTicketsClient(
   conversationId: string,
   messages: Message[],
@@ -441,6 +485,46 @@ export function MessagesInbox({
       else router.replace("/inbox", { scroll: false });
     },
     [router],
+  );
+
+  const removeConversationFromInbox = useCallback(
+    async (conversationId: string, action: "hide" | "delete") => {
+      const res = await fetch(`/api/conversations/${conversationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        showToast("Could not update chat");
+        return;
+      }
+      setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+      if (activeId === conversationId) {
+        selectConversation(null);
+      }
+    },
+    [activeId, selectConversation, showToast],
+  );
+
+  const deleteMessageForMe = useCallback(
+    async (messageId: string) => {
+      if (!activeId) return;
+      const res = await fetch(
+        `/api/conversations/${activeId}/messages/${messageId}/hide`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden: true }),
+        },
+      );
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        showToast(data.error || "Could not delete message");
+        return;
+      }
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    },
+    [activeId, showToast],
   );
 
   const loadConversations = useCallback(
@@ -1076,33 +1160,68 @@ export function MessagesInbox({
                           onClick={() => selectConversation(c.id)}
                           className="min-w-0 flex-1 text-left"
                         >
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={`truncate text-sm ${
-                                c.unread
-                                  ? "font-semibold text-white"
-                                  : "text-white/85"
-                              }`}
-                            >
-                              {conversationTitle(c, myId)}
-                            </span>
-                            {c.unread ? (
-                              <span
-                                className="h-2 w-2 shrink-0 rounded-full bg-electric"
-                                aria-label="Unread"
-                              />
-                            ) : null}
-                            <span className="ml-auto shrink-0 text-[11px] text-white/35">
-                              {formatTime(c.lastMessageAt)}
-                            </span>
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`truncate text-sm ${
+                                    c.unread
+                                      ? "font-semibold text-white"
+                                      : "text-white/85"
+                                  }`}
+                                >
+                                  {conversationTitle(c, myId)}
+                                </span>
+                                {c.unread ? (
+                                  <span
+                                    className="h-2 w-2 shrink-0 rounded-full bg-electric"
+                                    aria-label="Unread"
+                                  />
+                                ) : null}
+                              </div>
+                              <p
+                                className={`mt-0.5 truncate text-xs ${
+                                  c.unread ? "text-white/70" : "text-white/40"
+                                }`}
+                              >
+                                {previewText(c.lastMessage)}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 flex-col items-end gap-0.5">
+                              <span className="text-[11px] text-white/35">
+                                {formatTime(c.lastMessageAt)}
+                              </span>
+                              {c.contextType !== "system" ? (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                >
+                                  <ChatOptionsMenu
+                                    onHide={() => {
+                                      void removeConversationFromInbox(
+                                        c.id,
+                                        "hide",
+                                      );
+                                    }}
+                                    onDelete={() => {
+                                      if (
+                                        typeof window !== "undefined" &&
+                                        !window.confirm(
+                                          "Delete this chat from your inbox? The other person keeps their copy. Completed tickets stay in history.",
+                                        )
+                                      ) {
+                                        return;
+                                      }
+                                      void removeConversationFromInbox(
+                                        c.id,
+                                        "delete",
+                                      );
+                                    }}
+                                  />
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
-                          <p
-                            className={`mt-0.5 truncate text-xs ${
-                              c.unread ? "text-white/70" : "text-white/40"
-                            }`}
-                          >
-                            {previewText(c.lastMessage)}
-                          </p>
                         </button>
                       </div>
                     </li>
@@ -1210,35 +1329,24 @@ export function MessagesInbox({
                     </Link>
                   ) : null}
                   {activeConversation?.contextType !== "system" ? (
-                    <details className="relative shrink-0">
-                      <summary
-                        className="cursor-pointer list-none px-1 text-[14px] leading-none text-white/50 hover:text-white [&::-webkit-details-marker]:hidden"
-                        aria-label="Chat options"
-                      >
-                        •••
-                      </summary>
-                      <div className="absolute right-0 z-40 mt-1 min-w-[9rem] overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg">
-                        <button
-                          type="button"
-                          className="block w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/10"
-                          onClick={() => {
-                            if (!activeId) return;
-                            void fetch(`/api/conversations/${activeId}`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ hidden: true }),
-                            }).then(() => {
-                              setConversations((prev) =>
-                                prev.filter((c) => c.id !== activeId),
-                              );
-                              selectConversation(null);
-                            });
-                          }}
-                        >
-                          Hide chat
-                        </button>
-                      </div>
-                    </details>
+                    <ChatOptionsMenu
+                      onHide={() => {
+                        if (!activeId) return;
+                        void removeConversationFromInbox(activeId, "hide");
+                      }}
+                      onDelete={() => {
+                        if (!activeId) return;
+                        if (
+                          typeof window !== "undefined" &&
+                          !window.confirm(
+                            "Delete this chat from your inbox? The other person keeps their copy. Completed tickets stay in history.",
+                          )
+                        ) {
+                          return;
+                        }
+                        void removeConversationFromInbox(activeId, "delete");
+                      }}
+                    />
                   ) : null}
                   {activeConversation?.contextType !== "system" &&
                   activeConversation?.contextType !== "admin_dispute" ? (
@@ -1554,10 +1662,10 @@ export function MessagesInbox({
                       return (
                         <li
                           key={m.id}
-                          className={`flex ${mine ? "justify-end" : "justify-start"}`}
+                          className={`group relative flex ${mine ? "justify-end" : "justify-start"}`}
                         >
                           <div
-                            className={`max-w-[85%] rounded-xl px-3.5 py-2.5 sm:max-w-[70%] ${
+                            className={`relative max-w-[85%] rounded-xl px-3.5 py-2.5 sm:max-w-[70%] ${
                               isSystem
                                 ? "w-full border border-electric/25 bg-electric/10 text-white/90"
                                 : mine
@@ -1565,6 +1673,27 @@ export function MessagesInbox({
                                   : "bg-white/[0.06] text-white/90"
                             }`}
                           >
+                            {!isSystem && !m.paymentTicketId ? (
+                              <details className="absolute right-1 top-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                                <summary
+                                  className="cursor-pointer list-none rounded px-1 text-[12px] leading-none text-white/45 hover:text-white [&::-webkit-details-marker]:hidden"
+                                  aria-label="Message options"
+                                >
+                                  •••
+                                </summary>
+                                <div className="absolute right-0 z-30 mt-1 min-w-[8.5rem] overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg">
+                                  <button
+                                    type="button"
+                                    className="block w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/10"
+                                    onClick={() => {
+                                      void deleteMessageForMe(m.id);
+                                    }}
+                                  >
+                                    Delete for me
+                                  </button>
+                                </div>
+                              </details>
+                            ) : null}
                             {isSystem ? (
                               <p className="mb-1 text-[11px] uppercase tracking-[0.12em] text-electric">
                                 Source Bridge official
