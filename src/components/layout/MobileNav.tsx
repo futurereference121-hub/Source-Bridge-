@@ -7,6 +7,7 @@ import {
   Home,
   Inbox,
   MessageSquare,
+  Search,
   UserRound,
 } from "lucide-react";
 import { mobileNavItems } from "@/lib/site";
@@ -17,6 +18,7 @@ import { useNotifications } from "@/hooks/useNotifications";
 
 const ICONS = {
   "/": Home,
+  "/search": Search,
   "/explore": Compass,
   "/requests": Inbox,
   "/inbox": MessageSquare,

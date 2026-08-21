@@ -16,9 +16,15 @@ import {
 type StatusEditorProps = {
   onClose: () => void;
   initialText?: string;
+  /** When set, PATCH edits the current active status instead of publishing new. */
+  mode?: "create" | "edit";
 };
 
-export function StatusEditor({ onClose, initialText = "" }: StatusEditorProps) {
+export function StatusEditor({
+  onClose,
+  initialText = "",
+  mode = "create",
+}: StatusEditorProps) {
   const router = useRouter();
   const { showToast } = useAppUi();
   const [text, setText] = useState(initialText);
@@ -26,10 +32,22 @@ export function StatusEditor({ onClose, initialText = "" }: StatusEditorProps) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     try {
-      await apiJson("/api/status", jsonBody("POST", { text: text.trim() }));
-      showToast("Status published successfully.");
+      if (mode === "edit") {
+        await apiJson("/api/status", jsonBody("PATCH", { text: text.trim() }));
+        showToast("Status updated.");
+      } else {
+        await apiJson(
+          "/api/status",
+          jsonBody("POST", {
+            text: text.trim(),
+            idempotencyKey: `status_${Date.now()}`,
+          }),
+        );
+        showToast("Status published successfully.");
+      }
       onClose();
       router.refresh();
     } catch (err) {
@@ -39,10 +57,29 @@ export function StatusEditor({ onClose, initialText = "" }: StatusEditorProps) {
     }
   }
 
+  async function onDelete() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiJson("/api/status", { method: "DELETE" });
+      showToast("Status removed.");
+      onClose();
+      router.refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not delete status");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <EditorShell title="Update Status" onClose={onClose}>
+    <EditorShell
+      title={mode === "edit" ? "Edit Status" : "Update Status"}
+      onClose={onClose}
+    >
       <p className="mb-4 text-sm text-white/45">
-        Status expires after 24 hours. Maximum 3 posts per day.
+        Status expires after 24 hours. One active status at a time — a new post
+        supersedes the previous. Maximum 3 posts per day.
       </p>
       <form onSubmit={onSubmit} className="space-y-4">
         <EditorField label="Status">
@@ -54,12 +91,31 @@ export function StatusEditor({ onClose, initialText = "" }: StatusEditorProps) {
             placeholder="Share a short update"
             required
             autoFocus
+            disabled={busy}
           />
           <span className="mt-1 block text-right text-xs text-white/35">
             {text.length}/{STATUS_TEXT_MAX}
           </span>
         </EditorField>
-        <EditorSubmit busy={busy}>Publish status</EditorSubmit>
+        <EditorSubmit busy={busy}>
+          {busy
+            ? mode === "edit"
+              ? "Saving…"
+              : "Publishing…"
+            : mode === "edit"
+              ? "Save status"
+              : "Publish status"}
+        </EditorSubmit>
+        {mode === "edit" ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onDelete()}
+            className="w-full rounded-lg border border-amber-400/30 px-3 py-2 text-xs text-amber-100 disabled:opacity-50"
+          >
+            Delete status
+          </button>
+        ) : null}
       </form>
     </EditorShell>
   );

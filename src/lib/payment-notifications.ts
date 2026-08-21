@@ -71,16 +71,32 @@ export async function notifyPaymentFunded(opts: {
   sellerId: string;
   buyerId: string;
   title: string;
+  ticketId?: string | null;
+  buyerUsername?: string | null;
+  origin?: string | null;
 }): Promise<void> {
+  const ticketHref = opts.ticketId
+    ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+    : inboxHref(opts.conversationId);
+  const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const buyerHandle = opts.buyerUsername
+    ? `@${opts.buyerUsername.replace(/^@/, "")}`
+    : "@buyer";
   await createNotification({
     userId: opts.sellerId,
     type: "PAYMENT_STATUS",
-    title: "Payment received",
-    body: opts.title.slice(0, 140),
-    href: inboxHref(opts.conversationId),
+    title: isProduct
+      ? `${buyerHandle} purchased your ${opts.title.slice(0, 80)}.`
+      : "Payment received",
+    body: isProduct
+      ? "Open the Product Purchase Ticket to fulfil the order."
+      : opts.title.slice(0, 140),
+    href: ticketHref,
     actorId: opts.buyerId,
     actorName: "Buyer",
-    dedupeKey: `pt-funded:${opts.protectedTxnId}`,
+    dedupeKey: isProduct
+      ? `product-purchased:${opts.protectedTxnId}`
+      : `pt-funded:${opts.protectedTxnId}`,
   });
 }
 
@@ -114,17 +130,28 @@ export async function notifyDisputeOpened(opts: {
   category: string;
   openedById: string;
 }): Promise<void> {
-  const summary = opts.category || "Payment issue reported";
+  const summary =
+    opts.category?.trim() || "The Buyer reported an issue with the item.";
   await createNotifications([
     {
       userId: opts.sellerId,
       type: "PAYMENT_DISPUTE",
-      title: "Buyer reported a payment issue",
-      body: summary.slice(0, 140),
+      title: "The Buyer reported an issue with the item.",
+      body: `${summary.slice(0, 100)} · Source Bridge is reviewing the issue.`,
       href: inboxHref(opts.conversationId),
       actorId: opts.openedById,
       actorName: "Buyer",
       dedupeKey: `dispute-open:${opts.disputeId}:seller`,
+    },
+    {
+      userId: opts.buyerId,
+      type: "PAYMENT_DISPUTE",
+      title: "UNDER REVIEW BY SOURCE BRIDGE",
+      body: "Source Bridge is reviewing the issue.",
+      href: inboxHref(opts.conversationId),
+      actorId: opts.openedById,
+      actorName: "Buyer",
+      dedupeKey: `dispute-open:${opts.disputeId}:buyer`,
     },
   ]);
 }
@@ -135,7 +162,7 @@ export async function notifyDisputeUnderReview(opts: {
   buyerId: string;
   sellerId: string;
 }): Promise<void> {
-  const body = "UNDER REVIEW BY SOURCE BRIDGE";
+  const body = "Source Bridge is reviewing the issue.";
   await createNotifications([
     {
       userId: opts.buyerId,
@@ -163,12 +190,12 @@ export async function notifyDisputeResolved(opts: {
   sellerId: string;
   resolution: string;
 }): Promise<void> {
-  const body = "Admin reviewed your payment issue.";
+  const body = "Source Bridge reviewed the item issue.";
   await createNotifications([
     {
       userId: opts.buyerId,
       type: "PAYMENT_DISPUTE",
-      title: "Payment issue resolved",
+      title: "Item issue resolved",
       body,
       href: inboxHref(opts.conversationId),
       dedupeKey: `dispute-resolved:${opts.disputeId}:buyer`,
@@ -176,7 +203,7 @@ export async function notifyDisputeResolved(opts: {
     {
       userId: opts.sellerId,
       type: "PAYMENT_DISPUTE",
-      title: "Payment issue resolved",
+      title: "Item issue resolved",
       body,
       href: inboxHref(opts.conversationId),
       dedupeKey: `dispute-resolved:${opts.disputeId}:seller`,

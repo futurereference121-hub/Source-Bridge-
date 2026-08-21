@@ -163,6 +163,10 @@ export function lifecycleLabel(stage: string): string {
     case "COMPLETED":
     case "RELEASED":
       return "COMPLETED";
+    case "REFUNDED":
+      return "COMPLETED · FULLY REFUNDED";
+    case "PARTIALLY_REFUNDED":
+      return "COMPLETED · PARTIALLY REFUNDED";
     case "DISPUTED":
       return "ISSUE REPORTED";
     case "SUPERSEDED":
@@ -312,7 +316,40 @@ export function isCompletedLifecycleTicket(opts: {
       opts.protectedStatus ?? null,
       false,
     );
-  return stage === "COMPLETED" || stage === "RELEASED";
+  return (
+    stage === "COMPLETED" ||
+    stage === "RELEASED" ||
+    stage === "REFUNDED" ||
+    stage === "PARTIALLY_REFUNDED"
+  );
+}
+
+/** Top-level COMPLETED financial substatus for receipts. */
+export function deriveCompletedFinancialSubstatus(opts: {
+  protectedStatus?: string | null;
+  openDisputeStatus?: string | null;
+  refundedMinor?: number;
+  releasedToSellerMinor?: number;
+  platformFeeRefundedMinor?: number;
+  platformFeeMinor?: number;
+}): string {
+  const st = (opts.protectedStatus || "").trim();
+  const dispute = (opts.openDisputeStatus || "").trim();
+  const refunded = opts.refundedMinor ?? 0;
+  const released = opts.releasedToSellerMinor ?? 0;
+  if (dispute === "RESOLVED_SPLIT" || (refunded > 0 && released > 0)) {
+    return "Split";
+  }
+  if (st === "REFUNDED" || (refunded > 0 && released <= 0)) {
+    return "Fully Refunded";
+  }
+  if (st === "PARTIALLY_REFUNDED" || refunded > 0) {
+    return "Partially Refunded";
+  }
+  if ((opts.platformFeeRefundedMinor ?? 0) > 0) {
+    return "Fee Adjusted";
+  }
+  return "Funds Settled";
 }
 
 const OPEN_DISPUTE_STATUSES = new Set(["OPEN", "UNDER_REVIEW"]);

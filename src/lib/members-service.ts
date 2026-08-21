@@ -6,6 +6,7 @@ import type { FeedItem } from "@/lib/types";
 import { isStatusActive } from "@/lib/member-status";
 import { memberPhoto } from "@/lib/placeholders";
 import { publicMemberWhere } from "@/lib/discoverability";
+import { normalizeSearchHandle } from "@/lib/validation";
 
 /**
  * Self-service lookup only (e.g. /api/profile fetching the signed-in user's
@@ -429,11 +430,13 @@ export async function listDirectoryMembersPage(opts: {
   );
   const q = (opts.q || "").trim();
   const skip = (page - 1) * limit;
+  const handleNorm = normalizeSearchHandle(q);
+  const qNoAt = q.replace(/^@+/, "").trim();
 
   const searchWhere = q
     ? {
         OR: [
-          { username: { contains: q, mode: "insensitive" as const } },
+          { username: { contains: qNoAt, mode: "insensitive" as const } },
           { name: { contains: q, mode: "insensitive" as const } },
           { city: { contains: q, mode: "insensitive" as const } },
           { country: { contains: q, mode: "insensitive" as const } },
@@ -443,6 +446,26 @@ export async function listDirectoryMembersPage(opts: {
               mode: "insensitive" as const,
             },
           },
+          {
+            networkLocations: {
+              some: {
+                OR: [
+                  { city: { contains: q, mode: "insensitive" as const } },
+                  { country: { contains: q, mode: "insensitive" as const } },
+                ],
+              },
+            },
+          },
+          ...(handleNorm.length >= 2
+            ? [
+                {
+                  username: {
+                    contains: handleNorm,
+                    mode: "insensitive" as const,
+                  },
+                },
+              ]
+            : []),
         ],
       }
     : {};

@@ -38,8 +38,8 @@ export const footerNavItems: NavItem[] = [
 
 export const mobileNavItems: NavItem[] = [
   { label: "Home", href: "/" },
+  { label: "Search", href: "/search" },
   { label: "Explore", href: "/explore" },
-  { label: "Requests", href: "/requests" },
   { label: "Inbox", href: "/inbox" },
   { label: "Profile", href: "/profile" },
 ];

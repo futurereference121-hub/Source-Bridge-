@@ -65,7 +65,7 @@ export async function GET() {
     await requireAdmin();
 
     const open = await prisma.disputeCase.findMany({
-      where: { status: "OPEN" },
+      where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
       orderBy: { createdAt: "asc" },
       take: 100,
       include: {

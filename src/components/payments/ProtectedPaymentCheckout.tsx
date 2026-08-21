@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Browser success alone never marks FUNDED - funding is webhook-only.
- * After confirmPayment succeeds we poll SB txn status and never infinite-spin.
+ * After confirmPayment succeeds, reconcile PI→PT server-side (same idempotent
+ * path as the webhook). Polling remains a fallback; never infinite-spin.
  */
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -36,8 +36,41 @@ type CheckoutInnerProps = {
   ordersHref?: string;
 };
 
-const POLL_MS = 2000;
-const POLL_MAX = 12;
+const POLL_MS = 1500;
+const POLL_MAX = 8;
+
+async function reconcileAndFetchTxnStatus(protectedTxnId: string): Promise<{
+  paymentReceived: boolean;
+  payoutSettled: boolean;
+  status: string;
+  paymentProcessing: boolean;
+} | null> {
+  try {
+    const res = await fetch(`/api/payments/checkout`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ protectedTxnId, reconcile: true }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      transaction?: {
+        paymentReceived?: boolean;
+        payoutSettled?: boolean;
+        status?: string;
+      };
+      paymentProcessing?: boolean;
+    };
+    if (!res.ok || !json.transaction) return null;
+    return {
+      paymentReceived: Boolean(json.transaction.paymentReceived),
+      payoutSettled: Boolean(json.transaction.payoutSettled),
+      status: String(json.transaction.status || ""),
+      paymentProcessing: Boolean(json.paymentProcessing),
+    };
+  } catch {
+    return null;
+  }
+}
 
 async function fetchTxnStatus(protectedTxnId: string): Promise<{
   paymentReceived: boolean;
@@ -92,19 +125,20 @@ function CheckoutForm({
     async function tick() {
       if (cancelled) return;
       n += 1;
-      const st = await fetchTxnStatus(protectedTxnId!);
+      const st =
+        n === 1
+          ? await reconcileAndFetchTxnStatus(protectedTxnId!)
+          : await fetchTxnStatus(protectedTxnId!);
       if (cancelled) return;
       if (st?.payoutSettled || (st?.paymentReceived && paymentMode === "protected")) {
         setPhase("complete");
         return;
       }
       if (st?.paymentReceived && paymentMode === "direct") {
-        // Funded / routed — treat as success even if booking still catching RELEASED.
         setPhase("complete");
         return;
       }
       if (n >= POLL_MAX) {
-        // Never infinite spinner; never tell buyer to pay again.
         setPhase("received_pending");
         return;
       }
@@ -140,7 +174,6 @@ function CheckoutForm({
         onFailed?.();
         return;
       }
-      // Card path may succeed without redirect. Do NOT claim FUNDED; poll SB.
       onSubmitted();
       if (protectedTxnId) {
         setPhase("polling");
@@ -172,8 +205,8 @@ function CheckoutForm({
           </p>
         )}
         <p className="text-[11px] text-white/40">
-          Status updates when Stripe webhooks confirm. You will not be charged
-          twice for this order.
+          Status updates when Source Bridge confirms your payment. You will not
+          be charged twice for this order.
         </p>
         <div className="flex flex-wrap gap-2">
           <a
@@ -227,9 +260,11 @@ function CheckoutForm({
       </div>
       {error ? <p className="text-xs text-amber-300">{error}</p> : null}
       {phase === "polling" ? (
-        <p className="flex items-center gap-1.5 text-xs text-white/55">
-          <Loader2 size={14} className="animate-spin" /> Confirming with Source
-          Bridge…
+        <p
+          data-testid="payment-processing-status"
+          className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-electric"
+        >
+          <Loader2 size={14} className="animate-spin" /> Payment processing
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
@@ -242,7 +277,7 @@ function CheckoutForm({
           {phase === "confirming"
             ? "Processing…"
             : phase === "polling"
-              ? "Confirming…"
+              ? "PAYMENT PROCESSING"
               : phase === "error"
                 ? "Try Payment Again"
                 : "Pay securely (TEST)"}

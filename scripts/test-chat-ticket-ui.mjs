@@ -30,7 +30,7 @@ const releaseEngine = read("src/lib/payments/release.ts");
 const threadsApi = read("src/app/api/admin/payments/issues/threads/route.ts");
 
 // --- RESPONSIVE PAYMENT TICKET FORM ---
-assert.match(propose, /pt-propose-v8-viewport-dialog/);
+assert.match(propose, /pt-propose-v9-no-fee-checkbox/);
 assert.match(propose, /createPortal/);
 assert.match(propose, /data-sb-ticket-form="viewport-dialog"/);
 assert.match(propose, /fixed inset-0/);
@@ -170,8 +170,26 @@ assert.match(inbox, /JSON\.stringify\(\{ hidden: true \}\)/);
 assert.match(card, /capture="environment"/);
 assert.match(card, /data-testid="ticket-dispute-receipt"/);
 assert.match(card, /createPortal\(/);
-assert.match(propose, /platformFeeIncludedInPrice/);
-assert.match(propose, /includePlatformFee/);
+assert.match(
+  propose,
+  /platformFeeIncludedInPrice:\s*false/,
+  "ticket create always sends fee-on-top; no client fee-included toggle",
+);
+assert.doesNotMatch(
+  propose,
+  /includePlatformFee/,
+  "Source Bridge fee confirmation / included-in-price checkbox must be removed",
+);
+assert.doesNotMatch(
+  propose,
+  /already includes the Source Bridge fee/,
+  "fee acknowledgment checkbox copy must not appear on create form",
+);
+assert.match(
+  propose,
+  /includes Source Bridge fee/,
+  "estimate still discloses SB fee in breakdown copy",
+);
 assert.match(
   messagesGet,
   /listConversationPaymentTickets\(id, user\.id\)/,
@@ -197,8 +215,28 @@ assert.match(card, /ACKNOWLEDGE/);
 assert.match(card, /Confirm Item Received/);
 assert.match(card, /Start 12-Hour Inspection/);
 assert.match(card, /Release Funds Now/);
+assert.match(card, /Starting inspection/);
+assert.match(card, /data-testid="ticket-start-inspection"/);
+assert.match(card, /data-testid="ticket-add-photo-evidence"/);
+assert.match(card, /ADD PHOTO EVIDENCE/);
+assert.match(card, /TAKE A PHOTO/);
+assert.match(card, /UPLOAD A PHOTO/);
+assert.match(card, /Replace photo/);
+assert.match(card, /Remove photo/);
+assert.match(
+  card,
+  /canReleaseNow:\s*true,\s*canReportIssue:\s*true/,
+  "first-click START_INSPECTION must optimistically unlock Release/Report",
+);
+assert.doesNotMatch(
+  card,
+  /Photo evidence \(same image upload as chat\)/,
+  "native Choose File must not be the primary evidence UX",
+);
 assert.match(card, /ALREADY_FUNDED/);
 assert.match(card, /paymentIntentStatus/);
+assert.match(card, /showPaymentProcessing/);
+assert.match(card, /data-testid="ticket-payment-processing"/);
 assert.doesNotMatch(card, /trustLevel/);
 assert.doesNotMatch(card, /matchMedia|pointer:\s*coarse|ontouchstart/);
 

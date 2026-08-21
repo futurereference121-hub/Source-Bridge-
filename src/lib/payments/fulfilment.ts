@@ -82,7 +82,9 @@ export function buyerCanConfirmReceipt(opts: {
   status: string;
   shipped: boolean;
   deliveredAt?: Date | string | null;
+  origin?: string | null;
 }): boolean {
+  if (opts.origin === "PRODUCT_CHECKOUT") return false;
   if (isDirectPaymentOption(opts.paymentOption)) return false;
   if (!opts.shipped) return false;
   if (opts.deliveredAt) return false;
@@ -95,7 +97,9 @@ export function buyerCanReleaseNow(opts: {
   status: string;
   shipped: boolean;
   deliveredAt?: Date | string | null;
+  origin?: string | null;
 }): boolean {
+  if (opts.origin === "PRODUCT_CHECKOUT") return false;
   if (isDirectPaymentOption(opts.paymentOption)) return false;
   if (opts.status === "IN_INSPECTION" || opts.status === "READY_TO_RELEASE") {
     return true;
@@ -108,21 +112,34 @@ export function buyerCanReleaseNow(opts: {
 /**
  * Buyer may report a problem only during active inspection while residual
  * remains protected. Not offered on the initial receipt modal.
+ * Product Purchase: buyer may report while funded/shipped without inspection authority.
  */
 export function buyerCanReportIssue(opts: {
   paymentOption: string;
   status: string;
   /** When known, require remaining seller residual (or protected remainder). */
   residualMinor?: number;
+  origin?: string | null;
 }): boolean {
   if (isDirectPaymentOption(opts.paymentOption)) return false;
-  if (opts.status !== "IN_INSPECTION") return false;
+  if (opts.origin === "PRODUCT_CHECKOUT") {
+    if (
+      !["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "DISPUTED"].includes(
+        opts.status,
+      )
+    ) {
+      return false;
+    }
+  } else if (opts.status !== "IN_INSPECTION") {
+    return false;
+  }
   if (
     typeof opts.residualMinor === "number" &&
     opts.residualMinor <= 0
   ) {
     return false;
   }
+  if (opts.origin === "PRODUCT_CHECKOUT") return true;
   return canTransition(opts.status as ProtectedStatus, "OPEN_DISPUTE");
 }
 
@@ -299,6 +316,7 @@ export function mapProtectedTxnSummary(
           status: t.status,
           shipped,
           deliveredAt: t.deliveredAt,
+          origin: t.origin,
         }),
       canReleaseNow:
         viewerRole === "buyer" &&
@@ -307,6 +325,7 @@ export function mapProtectedTxnSummary(
           status: t.status,
           shipped,
           deliveredAt: t.deliveredAt,
+          origin: t.origin,
         }),
       canReportIssue:
         viewerRole === "buyer" &&
@@ -314,6 +333,7 @@ export function mapProtectedTxnSummary(
           paymentOption: t.paymentOption,
           status: t.status,
           residualMinor: books.finalResidualMinor,
+          origin: t.origin,
         }),
       canReleaseProcurement,
       /** Sourcer/seller never releases item funds. */
@@ -502,6 +522,20 @@ export async function confirmReceipt(opts: {
     );
   }
 
+  if (
+    txn.origin === "PRODUCT_CHECKOUT" &&
+    (decision === "RELEASE_NOW" ||
+      decision === "START_INSPECTION" ||
+      decision === "ACKNOWLEDGE")
+  ) {
+    throw Object.assign(
+      new Error(
+        "Product Purchase funds are released by Source Bridge admin only. You can report an item issue for review.",
+      ),
+      { status: 409, code: "PRODUCT_ADMIN_ONLY" },
+    );
+  }
+
   const buyer = await prisma.user.findUnique({
     where: { id: opts.buyerId },
     select: { id: true, email: true },
@@ -552,6 +586,7 @@ type TxnRow = {
   sellerId: string;
   conversationId?: string | null;
   paymentOption: string;
+  origin?: string | null;
   shippedAt: Date | null;
   trackingNumber: string;
   deliveredAt: Date | null;
@@ -866,14 +901,33 @@ async function reportIssueAfterReceipt(opts: {
     );
   }
 
-  // Report a Problem is only available during the inspection window — not on
-  // the initial receipt decision modal (RELEASE_NOW / START_INSPECTION only).
-  if (status !== "IN_INSPECTION") {
+  // Sourcing: Report a Problem only during inspection.
+  // Product Purchase: buyer may report without inspection authority.
+  if (
+    status !== "IN_INSPECTION" &&
+    txn.origin !== "PRODUCT_CHECKOUT"
+  ) {
     throw Object.assign(
       new Error(
         "Report a Problem is only available during the 12-hour inspection period",
       ),
       { status: 409, code: "ISSUE_INSPECTION_ONLY" },
+    );
+  }
+  if (
+    txn.origin === "PRODUCT_CHECKOUT" &&
+    ![
+      "FUNDED",
+      "PROCUREMENT_RELEASED",
+      "AWAITING_SHIPMENT",
+      "IN_TRANSIT",
+      "DELIVERED",
+      "IN_INSPECTION",
+    ].includes(status)
+  ) {
+    throw Object.assign(
+      new Error(`Cannot report an issue from status ${status}`),
+      { status: 409, code: "INVALID_TRANSITION" },
     );
   }
 
@@ -884,7 +938,10 @@ async function reportIssueAfterReceipt(opts: {
     });
   }
 
-  if (!canTransition(status, "OPEN_DISPUTE")) {
+  if (
+    status === "IN_INSPECTION" &&
+    !canTransition(status, "OPEN_DISPUTE")
+  ) {
     throw Object.assign(
       new Error(`Cannot report an issue from status ${status}`),
       { status: 409, code: "INVALID_TRANSITION" },
@@ -931,7 +988,7 @@ async function reportIssueAfterReceipt(opts: {
         category: category.slice(0, 120),
         reason: reason.slice(0, 200),
         details: (opts.details || "").slice(0, 4000),
-        status: "OPEN",
+        status: "UNDER_REVIEW",
       },
     });
     const u = await tx.protectedTransaction.update({
@@ -968,12 +1025,27 @@ async function reportIssueAfterReceipt(opts: {
       category,
       transferTriggered: false,
       autoReleaseFrozen: true,
+      underReviewImmediately: true,
       financialSnapshot,
     },
   });
 
-  void import("@/lib/payment-notifications").then(({ notifyDisputeOpened }) =>
-    notifyDisputeOpened({
+  if (txn.conversationId) {
+    try {
+      const { bumpConversationActivity } = await import(
+        "@/lib/conversation-activity"
+      );
+      await bumpConversationActivity(txn.conversationId, prisma, {
+        touchLastMessage: true,
+      });
+    } catch (err) {
+      console.error("[fulfilment:bump-activity-on-dispute]", err);
+    }
+  }
+
+  try {
+    const { notifyDisputeOpened } = await import("@/lib/payment-notifications");
+    await notifyDisputeOpened({
       disputeId: dispute.id,
       protectedTxnId: txn.id,
       conversationId: txn.conversationId || "",
@@ -981,8 +1053,10 @@ async function reportIssueAfterReceipt(opts: {
       sellerId: txn.sellerId,
       category,
       openedById: opts.buyerId,
-    }),
-  );
+    });
+  } catch (err) {
+    console.error("[fulfilment:notify-dispute]", err);
+  }
 
   return {
     alreadyConfirmed: false,

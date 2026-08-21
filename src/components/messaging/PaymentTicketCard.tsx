@@ -12,6 +12,7 @@ import {
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 import {
+  deriveCompletedFinancialSubstatus,
   getPaymentTicketActions,
   isCompletedLifecycleTicket,
   isSubtleHistoricalTicket,
@@ -293,6 +294,9 @@ export function PaymentTicketCard({
   const [issueDetails, setIssueDetails] = useState("");
   const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
   const [issueEvidencePreviews, setIssueEvidencePreviews] = useState<string[]>([]);
+  const [issuePhotoMenuOpen, setIssuePhotoMenuOpen] = useState(false);
+  const issueCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const issueGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -493,7 +497,7 @@ export function PaymentTicketCard({
     };
   }, [ticketId, load, ticketSnapshot?.id, checkout, paymentSubmitted]);
 
-  // After return from 3DS: poll — funding only when webhook sets FUNDED.
+  // After return from 3DS: poll — client reconcile + webhook both mark FUNDED.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -895,20 +899,36 @@ export function PaymentTicketCard({
           if (!prev) return prev;
           nextLocal = {
             ...prev,
-            protectedTxnStatus: json.transaction?.status || prev.protectedTxnStatus,
             inspectionEndsAt:
               json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
             deliveredAt:
               json.transaction?.deliveredAt ?? prev.deliveredAt,
+            protectedTxnStatus:
+              decision === "START_INSPECTION"
+                ? "IN_INSPECTION"
+                : decision === "REPORT_ISSUE"
+                  ? "DISPUTED"
+                  : json.transaction?.status || prev.protectedTxnStatus,
             lifecycleStage:
               decision === "START_INSPECTION"
                 ? "IN_INSPECTION"
                 : decision === "RELEASE_NOW"
                   ? "READY_TO_RELEASE"
-                  : prev.lifecycleStage,
+                  : decision === "REPORT_ISSUE"
+                    ? "DISPUTED"
+                    : prev.lifecycleStage,
+            actions: {
+              ...prev.actions,
+              ...(decision === "START_INSPECTION"
+                ? { canReleaseNow: true, canReportIssue: true }
+                : {}),
+              ...(decision === "REPORT_ISSUE"
+                ? { canReleaseNow: false, canReportIssue: false }
+                : {}),
+            },
             openDisputeStatus:
               decision === "REPORT_ISSUE"
-                ? "OPEN"
+                ? "UNDER_REVIEW"
                 : prev.openDisputeStatus,
           };
           return nextLocal;
@@ -1058,6 +1078,19 @@ export function PaymentTicketCard({
     protectedStatus: ticket.protectedTxnStatus ?? null,
     lifecycleStage: lifecycleStageResolved,
   });
+  const completedSubstatus = isCompleted
+    ? deriveCompletedFinancialSubstatus({
+        protectedStatus: ticket.protectedTxnStatus ?? null,
+        openDisputeStatus: ticket.openDisputeStatus ?? null,
+        refundedMinor: ticket.books?.refundedMinor ?? 0,
+        releasedToSellerMinor:
+          (ticket.books?.procurementTransferredMinor ?? 0) +
+          (ticket.books?.finalTransferredMinor ?? 0),
+        platformFeeRefundedMinor: 0,
+        platformFeeMinor:
+          ticket.books?.platformFeeMinor ?? ticket.protectionFeeMinor ?? 0,
+      })
+    : null;
   const isTerminal =
     isTerminalLifecycleStage(lifecycleStageResolved) || subtleHistorical;
   // Actions / CTAs blocked for all terminal lifecycle stages.
@@ -1086,6 +1119,15 @@ export function PaymentTicketCard({
     }) &&
     ticket.actions?.canPay !== false &&
     !paymentSubmitted;
+  const showPaymentProcessing =
+    !historical &&
+    iAmBuyer &&
+    Boolean(ticket.protectedTransactionId) &&
+    !ticket.fundedAt &&
+    ticket.status !== "FUNDED" &&
+    (paymentSubmitted ||
+      ticket.paymentIntentStatus === "processing" ||
+      ticket.paymentIntentStatus === "succeeded");
   const needsSellerConnectSetup =
     !historical &&
     Boolean(ticket.protectedTransactionId) &&
@@ -1381,9 +1423,13 @@ export function PaymentTicketCard({
                       : "rounded border border-electric/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-electric"
                   }
                 >
-                  {isCompleted ? "COMPLETED" : stageLabel}
+                  {isCompleted
+                    ? `COMPLETED · ${completedSubstatus || "Funds Settled"}`
+                    : stageLabel}
                 </span>
-                {ticket.openDisputeStatus === "UNDER_REVIEW" && !isCompleted ? (
+                {(ticket.openDisputeStatus === "UNDER_REVIEW" ||
+                  ticket.openDisputeStatus === "OPEN") &&
+                !isCompleted ? (
                   <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-200/90">
                     UNDER REVIEW BY SOURCE BRIDGE
                   </span>
@@ -1442,6 +1488,14 @@ export function PaymentTicketCard({
           >
             {payFailed ? "Try Payment Again" : "Make Payment"}
           </button>
+        ) : null}
+        {showPaymentProcessing && !checkout ? (
+          <div
+            data-testid="ticket-payment-processing"
+            className="relative z-20 mt-2 flex min-h-11 w-full items-center justify-center rounded-lg border border-electric/40 bg-electric/10 px-4 py-2 text-sm font-semibold uppercase tracking-wide text-electric"
+          >
+            Payment processing
+          </div>
         ) : null}
       </div>
     );
@@ -1629,6 +1683,14 @@ export function PaymentTicketCard({
           </button>
         </div>
       ) : null}
+      {showPaymentProcessing && !checkout ? (
+        <div
+          data-testid="ticket-payment-processing"
+          className="mt-3 flex min-h-11 items-center justify-center rounded-lg border border-electric/40 bg-electric/10 px-3 py-3 text-sm font-semibold uppercase tracking-wide text-electric"
+        >
+          Payment processing
+        </div>
+      ) : null}
 
       {proposerLabel || proposedWhen ? (
         <p className="mt-2 text-xs text-white/45">
@@ -1800,42 +1862,39 @@ export function PaymentTicketCard({
       ) : null}
 
       {isCompleted ? (
-        <div className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white/70">
+        <div
+          className="mt-3 space-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white/70"
+          data-testid="ticket-completed-receipt"
+        >
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300/90">
-            Payment completed
+            COMPLETED · {completedSubstatus || "Funds Settled"}
           </p>
           <p className="flex justify-between gap-3">
-            <span>Seller payment fully released</span>
+            <span>Buyer refund</span>
             <span className="tabular-nums text-white">
-              {formatMinor(sellerEntitledMinor, cur)}
+              {formatMinor(ticket.books?.refundedMinor ?? 0, cur)}
             </span>
           </p>
-          {itemFundsReceived > 0 ? (
-            <>
-              <p className="flex justify-between gap-3 text-white/55">
-                <span>Item / procurement released</span>
-                <span className="tabular-nums">
-                  {formatMinor(itemFundsReceived, cur)}
-                </span>
-              </p>
-              <p className="flex justify-between gap-3 text-white/55">
-                <span>Final seller funds released</span>
-                <span className="tabular-nums">
-                  {formatMinor(finalTransferredMinor, cur)}
-                </span>
-              </p>
-            </>
-          ) : null}
+          <p className="flex justify-between gap-3">
+            <span>Sourcer release</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(
+                (ticket.books?.procurementTransferredMinor ?? 0) +
+                  (ticket.books?.finalTransferredMinor ?? 0),
+                cur,
+              )}
+            </span>
+          </p>
+          <p className="flex justify-between gap-3">
+            <span>Source Bridge fee retained</span>
+            <span className="tabular-nums text-white">
+              {formatMinor(platformFeeHeld, cur)}
+            </span>
+          </p>
           <p className="flex justify-between gap-3">
             <span>Remaining protected</span>
             <span className="tabular-nums text-white">
               {formatMinor(0, cur)}
-            </span>
-          </p>
-          <p className="flex justify-between gap-3">
-            <span>Source Bridge fee</span>
-            <span className="tabular-nums text-white">
-              {formatMinor(platformFeeHeld, cur)}
             </span>
           </p>
         </div>
@@ -2068,9 +2127,10 @@ export function PaymentTicketCard({
                 </button>
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || pendingAction === "START_INSPECTION"}
                   onClick={() => void submitReceiptDecision("START_INSPECTION")}
                   className="rounded-lg border border-white/25 bg-white/5 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                  data-testid="ticket-start-inspection"
                 >
                   {pendingAction === "START_INSPECTION"
                     ? "Starting inspection…"
@@ -2164,17 +2224,20 @@ export function PaymentTicketCard({
                       maxLength={4000}
                     />
                   </label>
-                  <label className="block text-xs text-white/60">
-                    Photo evidence (same image upload as chat)
+                  <div className="relative space-y-2">
                     <input
+                      ref={issueCameraInputRef}
                       type="file"
                       accept={IMAGE_ACCEPT_ATTR}
                       capture="environment"
-                      disabled={busy || photoBusy || issueEvidenceUrls.length >= 3}
-                      className="mt-1 block w-full text-xs text-white/70"
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden
+                      disabled={busy || photoBusy}
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         e.target.value = "";
+                        setIssuePhotoMenuOpen(false);
                         if (!file || !sessionViewerId) return;
                         setPhotoBusy(true);
                         try {
@@ -2184,12 +2247,8 @@ export function PaymentTicketCard({
                             kind: "stock",
                             userId: sessionViewerId,
                           });
-                          setIssueEvidenceUrls((prev) =>
-                            [...prev, result.url].slice(0, 3),
-                          );
-                          setIssueEvidencePreviews((prev) =>
-                            [...prev, result.previewUrl].slice(0, 3),
-                          );
+                          setIssueEvidenceUrls([result.url]);
+                          setIssueEvidencePreviews([result.previewUrl]);
                         } catch (err) {
                           setError(
                             err instanceof Error
@@ -2201,24 +2260,101 @@ export function PaymentTicketCard({
                         }
                       }}
                     />
-                  </label>
-                  {issueEvidencePreviews.length ? (
-                    <div className="flex flex-wrap gap-2">
-                      {issueEvidencePreviews.map((url, i) => (
-                        <span
-                          key={`${url}-${i}`}
-                          className="block h-16 w-16 overflow-hidden rounded-md border border-white/15"
+                    <input
+                      ref={issueGalleryInputRef}
+                      type="file"
+                      accept={IMAGE_ACCEPT_ATTR}
+                      className="sr-only"
+                      tabIndex={-1}
+                      aria-hidden
+                      disabled={busy || photoBusy}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        setIssuePhotoMenuOpen(false);
+                        if (!file || !sessionViewerId) return;
+                        setPhotoBusy(true);
+                        try {
+                          const result = await uploadProfileImageFile({
+                            file,
+                            folder: "misc",
+                            kind: "stock",
+                            userId: sessionViewerId,
+                          });
+                          setIssueEvidenceUrls([result.url]);
+                          setIssueEvidencePreviews([result.previewUrl]);
+                        } catch (err) {
+                          setError(
+                            err instanceof Error
+                              ? err.message
+                              : "Could not upload evidence photo",
+                          );
+                        } finally {
+                          setPhotoBusy(false);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      data-testid="ticket-add-photo-evidence"
+                      disabled={busy || photoBusy}
+                      onClick={() => setIssuePhotoMenuOpen((v) => !v)}
+                      className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-electric/40 bg-electric/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-electric disabled:opacity-50"
+                    >
+                      {photoBusy ? "Uploading…" : "📎 ADD PHOTO EVIDENCE"}
+                    </button>
+                    {issuePhotoMenuOpen ? (
+                      <div className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg">
+                        <button
+                          type="button"
+                          className="block w-full px-3 py-2.5 text-left text-xs text-white hover:bg-white/10"
+                          onClick={() => issueCameraInputRef.current?.click()}
                         >
+                          TAKE A PHOTO
+                        </button>
+                        <button
+                          type="button"
+                          className="block w-full border-t border-white/10 px-3 py-2.5 text-left text-xs text-white hover:bg-white/10"
+                          onClick={() => issueGalleryInputRef.current?.click()}
+                        >
+                          UPLOAD A PHOTO
+                        </button>
+                      </div>
+                    ) : null}
+                    {issueEvidencePreviews[0] ? (
+                      <div className="flex items-start gap-3">
+                        <span className="block h-20 w-20 overflow-hidden rounded-md border border-white/15">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
-                            src={url}
-                            alt={`Evidence ${i + 1}`}
+                            src={issueEvidencePreviews[0]}
+                            alt="Evidence preview"
                             className="h-full w-full object-cover"
                           />
                         </span>
-                      ))}
-                    </div>
-                  ) : null}
+                        <div className="flex flex-col gap-1">
+                          <button
+                            type="button"
+                            className="text-left text-[11px] text-electric"
+                            onClick={() => setIssuePhotoMenuOpen(true)}
+                            disabled={busy || photoBusy}
+                          >
+                            Replace photo
+                          </button>
+                          <button
+                            type="button"
+                            className="text-left text-[11px] text-amber-200/80"
+                            onClick={() => {
+                              setIssueEvidenceUrls([]);
+                              setIssueEvidencePreviews([]);
+                            }}
+                            disabled={busy || photoBusy}
+                          >
+                            Remove photo
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -2257,7 +2393,9 @@ export function PaymentTicketCard({
               }
             >
               {ticket.openDisputeStatus === "UNDER_REVIEW"
-                ? "UNDER REVIEW BY SOURCE BRIDGE"
+                ? "UNDER REVIEW BY SOURCE BRIDGE — The Buyer reported an issue with the item. Source Bridge is reviewing the issue."
+                : ticket.openDisputeStatus === "OPEN"
+                  ? "The Buyer reported an issue with the item. Source Bridge is reviewing the issue."
                 : `Issue reported — remaining seller funds stay protected; auto-release is frozen${
                     itemFundsReceived > 0
                       ? ` (earlier item funds ${formatMinor(itemFundsReceived, cur)} already released stay with the sourcer)`
@@ -2335,6 +2473,14 @@ export function PaymentTicketCard({
             >
               {payFailed ? "Try Payment Again" : "Make Payment"}
             </button>
+          ) : null}
+          {showPaymentProcessing && !checkout ? (
+            <span
+              data-testid="ticket-payment-processing"
+              className="inline-flex items-center rounded-lg border border-electric/40 bg-electric/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-electric"
+            >
+              Payment processing
+            </span>
           ) : null}
           {canRelease && !confirmRelease ? (
             <button

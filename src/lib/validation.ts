@@ -12,6 +12,14 @@ const MESSAGE_IMAGES_MAX = 3;
 export const USERNAME_REGEX =
   /^[a-z0-9](?:[a-z0-9._]{1,28}[a-z0-9])?$/i;
 
+export function normalizeSearchHandle(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase()
+    .replace(/[\s._\-]+/g, "");
+}
+
 export function normalizeUsername(raw: string): string {
   return raw.trim().replace(/^@/, "").toLowerCase();
 }

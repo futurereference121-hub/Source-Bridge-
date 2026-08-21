@@ -1210,25 +1210,35 @@ export function MessagesInbox({
                     </Link>
                   ) : null}
                   {activeConversation?.contextType !== "system" ? (
-                    <button
-                      type="button"
-                      className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-white/40 hover:text-white"
-                      onClick={() => {
-                        if (!activeId) return;
-                        void fetch(`/api/conversations/${activeId}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ hidden: true }),
-                        }).then(() => {
-                          setConversations((prev) =>
-                            prev.filter((c) => c.id !== activeId),
-                          );
-                          selectConversation(null);
-                        });
-                      }}
-                    >
-                      Hide
-                    </button>
+                    <details className="relative shrink-0">
+                      <summary
+                        className="cursor-pointer list-none px-1 text-[14px] leading-none text-white/50 hover:text-white [&::-webkit-details-marker]:hidden"
+                        aria-label="Chat options"
+                      >
+                        •••
+                      </summary>
+                      <div className="absolute right-0 z-40 mt-1 min-w-[9rem] overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg">
+                        <button
+                          type="button"
+                          className="block w-full px-3 py-2 text-left text-xs text-white/80 hover:bg-white/10"
+                          onClick={() => {
+                            if (!activeId) return;
+                            void fetch(`/api/conversations/${activeId}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ hidden: true }),
+                            }).then(() => {
+                              setConversations((prev) =>
+                                prev.filter((c) => c.id !== activeId),
+                              );
+                              selectConversation(null);
+                            });
+                          }}
+                        >
+                          Hide chat
+                        </button>
+                      </div>
+                    </details>
                   ) : null}
                   {activeConversation?.contextType !== "system" &&
                   activeConversation?.contextType !== "admin_dispute" ? (

@@ -187,7 +187,7 @@ export function computeTicketLifecycleActions(opts: {
     return { canEdit: true, canCancel: false, canDelete: true };
   }
   if (opts.status === "ACCEPTED") {
-    return { canEdit: true, canCancel: true, canDelete: false };
+    return { canEdit: true, canCancel: true, canDelete: true };
   }
   if (opts.status === "DRAFT") {
     return { canEdit: true, canCancel: false, canDelete: true };
@@ -281,6 +281,7 @@ function mapTicket(
   },
   extras?: {
     protectedTxnStatus?: string | null;
+    origin?: string | null;
     procurementTransferredMinor?: number;
     finalTransferredMinor?: number;
     refundedMinor?: number;
@@ -316,7 +317,6 @@ function mapTicket(
     openDisputeStatus?: string | null;
     openDisputeResolutionNote?: string | null;
     openDisputeResolvedAt?: string | null;
-    origin?: string | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -417,6 +417,7 @@ function mapTicket(
       status: ptStatus,
       shipped,
       deliveredAt: deliveredAtIso,
+      origin: extras?.origin ?? null,
     });
   const canReleaseNow =
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
@@ -425,6 +426,7 @@ function mapTicket(
       status: ptStatus,
       shipped,
       deliveredAt: deliveredAtIso,
+      origin: extras?.origin ?? null,
     });
   const canReportIssue =
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
@@ -432,6 +434,7 @@ function mapTicket(
       paymentOption: t.paymentOption,
       status: ptStatus,
       residualMinor: books.finalResidualMinor,
+      origin: extras?.origin ?? null,
     });
 
   const acceptance = extras?.viewerId
@@ -1449,8 +1452,8 @@ export async function createOrRevisePaymentTicket(opts: {
     open = target;
   }
 
-  // Max 3 ACTIVE tickets (derived lifecycle). Revising supersedes the old one,
-  // so exclude it from the count. Completed (RELEASED) does not count.
+  // Max 3 ACTIVE tickets (derived lifecycle). In-place revise keeps the same
+  // ticket id, so exclude it from the count. Completed (RELEASED) does not count.
   const activeCount = await countActiveConversationTickets(
     opts.conversationId,
     open?.id ?? null,
@@ -1556,12 +1559,9 @@ export async function createOrRevisePaymentTicket(opts: {
   }> = [];
 
   const { ticket, messageId } = await prisma.$transaction(async (tx) => {
+    // In-place revise: same ticket id, bump revision, reset acceptance.
+    // Cancel any prior unfunded protected txn so outdated terms cannot fund.
     if (open && open.status !== "FUNDED") {
-      await tx.paymentTicket.update({
-        where: { id: open.id },
-        data: { status: "SUPERSEDED" },
-      });
-      // Outdated revisions cannot fund — cancel any unfunded protected txn.
       if (open.protectedTransactionId) {
         const prior = await tx.protectedTransaction.findUnique({
           where: { id: open.protectedTransactionId },
@@ -1569,7 +1569,9 @@ export async function createOrRevisePaymentTicket(opts: {
         if (
           prior &&
           !prior.fundedAt &&
-          ["ACCEPTED", "AWAITING_PAYMENT"].includes(prior.status)
+          ["ACCEPTED", "AWAITING_PAYMENT", "AWAITING_ACCEPTANCE"].includes(
+            prior.status,
+          )
         ) {
           await tx.protectedTransaction.update({
             where: { id: prior.id },
@@ -1583,7 +1585,65 @@ export async function createOrRevisePaymentTicket(opts: {
           }
         }
       }
+
+      const updated = await tx.paymentTicket.update({
+        where: { id: open.id },
+        data: {
+          createdById: opts.actorId,
+          buyerId: opts.buyerId,
+          sellerId: opts.sellerId,
+          listingId: terms.listingId,
+          sourcingRequestId,
+          status: "PROPOSED",
+          revision,
+          termsHash,
+          title,
+          currency,
+          itemCostMinor: fees.itemCostMinor,
+          shippingMinor: fees.shippingMinor,
+          sellerServiceFeeMinor: fees.sellerServiceFeeMinor,
+          protectionFeeMinor: fees.protectionFeeMinor,
+          totalChargeMinor: total,
+          paymentOption,
+          procurementAdvanceAgreed: terms.procurementAdvanceAgreed,
+          procurementAdvanceMinor: procurementMinor,
+          platformFeeIncludedInPrice,
+          notes: opts.amounts.notes || "",
+          stripeMode: getStripeMode(),
+          protectedTransactionId: { set: null },
+          declinedById: { set: null },
+          declinedAt: { set: null },
+          declineReason: "",
+          lastMeaningfulActivityAt: new Date(),
+          buyerApprovedRevision:
+            opts.actorId === opts.buyerId ? revision : { set: null },
+          buyerApprovedAt:
+            opts.actorId === opts.buyerId ? new Date() : { set: null },
+          sellerApprovedRevision:
+            opts.actorId === opts.sellerId ? revision : { set: null },
+          sellerApprovedAt:
+            opts.actorId === opts.sellerId ? new Date() : { set: null },
+          ...(traceId ? { proposalTraceId: traceId } : {}),
+        },
+      });
+
+      const message = await tx.message.create({
+        data: {
+          conversationId: opts.conversationId,
+          senderId: opts.actorId,
+          body: `Payment Ticket v${revision} revised — Protected by Source Bridge.`,
+          messageType: "PAYMENT_TICKET",
+          systemEventType: "PAYMENT_TICKET_PROPOSED",
+          paymentTicketId: updated.id,
+          replyAllowed: true,
+        },
+      });
+      await bumpConversationActivity(opts.conversationId, tx, {
+        touchLastMessage: true,
+      });
+      return { ticket: updated, messageId: message.id };
     }
+
     const ticket = await tx.paymentTicket.create({
       data: {
         conversationId: opts.conversationId,
@@ -1796,8 +1856,9 @@ export async function cancelPaymentTicket(opts: {
 }
 
 /**
- * Safe hard-delete for PROPOSED / never dual-accepted tickets (no money).
- * Removes timeline markers so the ticket disappears from the active timeline.
+ * Safe hard-delete for unfunded tickets (PROPOSED / DRAFT / ACCEPTED).
+ * Removes timeline markers so the ticket disappears for both parties.
+ * Funded / money tickets must use cancel/admin paths — never hard-delete.
  */
 export async function deletePaymentTicket(opts: {
   ticketId: string;
@@ -1811,29 +1872,19 @@ export async function deletePaymentTicket(opts: {
   }
   await assertPartyToTicket(ticket, opts.actorId);
 
-  if (ticket.status !== "PROPOSED" && ticket.status !== "DRAFT") {
+  if (
+    ticket.status !== "PROPOSED" &&
+    ticket.status !== "DRAFT" &&
+    ticket.status !== "ACCEPTED"
+  ) {
     throw Object.assign(
-      new Error(
-        "Only proposed (never fully accepted) unfunded tickets can be deleted",
-      ),
+      new Error("Only unfunded Payment Tickets can be deleted"),
       { status: 409, code: "TICKET_NOT_DELETABLE" },
     );
   }
 
   const pt = await loadProtectedTxnForGuard(ticket.protectedTransactionId);
   assertNotFundedForMutation(ticket.status, pt, "delete");
-
-  // Extra guard: dual-accepted would be ACCEPTED status; refuse if both
-  // already approved same revision (race / spoof).
-  if (
-    ticket.buyerApprovedRevision === ticket.revision &&
-    ticket.sellerApprovedRevision === ticket.revision
-  ) {
-    throw Object.assign(
-      new Error("Accepted agreements cannot be hard-deleted — cancel instead"),
-      { status: 409, code: "TICKET_NOT_DELETABLE" },
-    );
-  }
 
   const deferredListingReleases: Array<{ listingId: string; buyerId: string }> =
     [];
@@ -1870,6 +1921,10 @@ export async function deletePaymentTicket(opts: {
 
     await tx.paymentTicket.delete({
       where: { id: ticket.id },
+    });
+
+    await bumpConversationActivity(ticket.conversationId, tx, {
+      touchLastMessage: true,
     });
   });
 

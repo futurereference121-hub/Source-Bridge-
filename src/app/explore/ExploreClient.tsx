@@ -21,6 +21,8 @@ type ExploreClientProps = {
   initialTotal: number;
   initialHasMore: boolean;
   initialLimit: number;
+  /** Dedicated Search tab — focus search UX first. */
+  searchFirst?: boolean;
 };
 
 function mapApiMember(raw: Record<string, unknown>): Member | null {
@@ -43,6 +45,7 @@ export function ExploreClient({
   initialTotal,
   initialHasMore,
   initialLimit: _initialLimit,
+  searchFirst = false,
 }: ExploreClientProps) {
   const searchParams = useSearchParams();
   const stories = useStoriesOptional();

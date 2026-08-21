@@ -195,9 +195,27 @@ export async function createPaymentIntentForTxn(opts: {
         };
       }
       if (existing.status === "succeeded") {
+        // Client confirmed Stripe success before webhook — reconcile immediately.
+        const reconciled = await markTxnFundedFromWebhook({
+          paymentIntentId: existing.id,
+          chargeId:
+            typeof existing.latest_charge === "string"
+              ? existing.latest_charge
+              : undefined,
+          amountMinor: existing.amount,
+          currency: existing.currency,
+          eventId: `client_reconcile_${existing.id}`,
+        });
         throw Object.assign(
-          new Error("Payment already succeeded — wait for funding confirmation"),
-          { status: 409, code: "PI_ALREADY_SUCCEEDED" },
+          new Error(
+            reconciled.handled
+              ? "Payment already funded"
+              : "Payment already succeeded — wait for funding confirmation",
+          ),
+          {
+            status: 409,
+            code: reconciled.handled ? "ALREADY_FUNDED" : "PI_ALREADY_SUCCEEDED",
+          },
         );
       }
       if (existing.status === "processing") {
@@ -433,8 +451,21 @@ export async function markTxnFundedFromWebhook(opts: {
 
   await prisma.paymentTicket.updateMany({
     where: { protectedTransactionId: txn.id },
-    data: { status: "FUNDED" },
+    data: { status: "FUNDED", lastMeaningfulActivityAt: new Date() },
   });
+
+  if (updated.conversationId) {
+    try {
+      const { bumpConversationActivity } = await import(
+        "@/lib/conversation-activity"
+      );
+      await bumpConversationActivity(updated.conversationId, prisma, {
+        touchLastMessage: true,
+      });
+    } catch (err) {
+      console.error("[checkout:bump-activity-on-fund]", err);
+    }
+  }
 
   if (!directPath && updated.origin === "PRODUCT_CHECKOUT") {
     try {
@@ -451,15 +482,32 @@ export async function markTxnFundedFromWebhook(opts: {
   }
 
   if (!directPath && updated.conversationId) {
-    void import("@/lib/payment-notifications").then(({ notifyPaymentFunded }) =>
-      notifyPaymentFunded({
+    try {
+      const { notifyPaymentFunded } = await import("@/lib/payment-notifications");
+      const [buyer, ticket] = await Promise.all([
+        prisma.user.findUnique({
+          where: { id: updated.buyerId },
+          select: { username: true },
+        }),
+        prisma.paymentTicket.findFirst({
+          where: { protectedTransactionId: updated.id },
+          select: { id: true },
+          orderBy: { updatedAt: "desc" },
+        }),
+      ]);
+      await notifyPaymentFunded({
         protectedTxnId: updated.id,
         conversationId: updated.conversationId || "",
         sellerId: updated.sellerId,
         buyerId: updated.buyerId,
         title: updated.title || "Protected Payment",
-      }),
-    );
+        ticketId: ticket?.id,
+        buyerUsername: buyer?.username,
+        origin: updated.origin,
+      });
+    } catch (err) {
+      console.error("[checkout:notify-funded]", err);
+    }
   }
 
   // Direct: Destination Charges only — verify routing, mark RELEASED, NO transfers.create.
@@ -700,6 +748,127 @@ export async function getProtectedTxnPaymentStatus(opts: {
           saleStatus: txn.listing.saleStatus,
         }
       : null,
+  };
+}
+
+/**
+ * After Stripe.js confirmPayment reports success (or PI is succeeded/processing),
+ * retrieve the PI server-side and apply the same idempotent FUNDED transition the
+ * webhook uses. Webhook redelivery later is a no-op via charge_${piId} ledger key.
+ */
+export async function reconcileTxnFundingFromStripe(opts: {
+  protectedTxnId: string;
+  viewerUserId: string;
+}): Promise<{
+  status: Awaited<ReturnType<typeof getProtectedTxnPaymentStatus>>;
+  reconciled: boolean;
+  paymentProcessing: boolean;
+  reason: string;
+}> {
+  const txn = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.protectedTxnId },
+    select: {
+      id: true,
+      buyerId: true,
+      sellerId: true,
+      status: true,
+      fundedAt: true,
+      stripePaymentIntentId: true,
+      totalChargeMinor: true,
+      currency: true,
+      stripeMode: true,
+    },
+  });
+  if (!txn) {
+    throw Object.assign(new Error("Transaction not found"), { status: 404 });
+  }
+  if (txn.buyerId !== opts.viewerUserId && txn.sellerId !== opts.viewerUserId) {
+    throw Object.assign(new Error("Not a party to this transaction"), {
+      status: 403,
+    });
+  }
+  assertStripeModeCompatible(txn.stripeMode);
+
+  if (txn.status === "FUNDED" || txn.fundedAt) {
+    const status = await getProtectedTxnPaymentStatus(opts);
+    return {
+      status,
+      reconciled: false,
+      paymentProcessing: false,
+      reason: "already_funded",
+    };
+  }
+
+  if (!txn.stripePaymentIntentId) {
+    const status = await getProtectedTxnPaymentStatus(opts);
+    return {
+      status,
+      reconciled: false,
+      paymentProcessing: false,
+      reason: "no_payment_intent",
+    };
+  }
+
+  if (!isStripeConfigured()) {
+    throw Object.assign(new Error("Payments not configured"), {
+      status: 503,
+      code: "STRIPE_NOT_CONFIGURED",
+    });
+  }
+
+  const stripe = getStripe();
+  const pi = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
+  if (pi.livemode) {
+    throw Object.assign(new Error("Live PaymentIntents are not accepted"), {
+      status: 403,
+      code: "LIVE_PI_REFUSED",
+    });
+  }
+
+  if (pi.status === "processing") {
+    const status = await getProtectedTxnPaymentStatus(opts);
+    return {
+      status,
+      reconciled: false,
+      paymentProcessing: true,
+      reason: "pi_processing",
+    };
+  }
+
+  if (pi.status !== "succeeded") {
+    const status = await getProtectedTxnPaymentStatus(opts);
+    return {
+      status,
+      reconciled: false,
+      paymentProcessing: false,
+      reason: `pi_${pi.status}`,
+    };
+  }
+
+  if (pi.amount !== txn.totalChargeMinor) {
+    const status = await getProtectedTxnPaymentStatus(opts);
+    return {
+      status,
+      reconciled: false,
+      paymentProcessing: false,
+      reason: "amount_mismatch",
+    };
+  }
+
+  const funded = await markTxnFundedFromWebhook({
+    paymentIntentId: pi.id,
+    chargeId: typeof pi.latest_charge === "string" ? pi.latest_charge : undefined,
+    amountMinor: pi.amount,
+    currency: pi.currency,
+    eventId: `client_reconcile_${pi.id}`,
+  });
+
+  const status = await getProtectedTxnPaymentStatus(opts);
+  return {
+    status,
+    reconciled: Boolean(funded.handled),
+    paymentProcessing: !status.paymentReceived,
+    reason: String(funded.reason || "reconciled"),
   };
 }
 

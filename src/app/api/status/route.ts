@@ -6,6 +6,7 @@ import { STATUS_TTL_MS } from "@/lib/limits";
 import { jsonError, statusSchema } from "@/lib/validation";
 import { isStatusActive } from "@/lib/member-status";
 import { notifyFollowersOfPost } from "@/lib/notifications";
+import { z } from "zod";
 
 export async function GET() {
   try {
@@ -16,6 +17,7 @@ export async function GET() {
     });
     const status = latest
       ? {
+          id: latest.id,
           text: latest.text,
           postedAt: latest.postedAt.toISOString(),
           expiresAt: latest.expiresAt.toISOString(),
@@ -47,16 +49,47 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid status", 400);
     }
 
+    const idempotencyKey =
+      typeof body?.idempotencyKey === "string"
+        ? body.idempotencyKey.trim().slice(0, 120)
+        : "";
+
     await assertDailyLimit(user.id, "status");
     const now = new Date();
-    const row = await prisma.statusUpdate.create({
-      data: {
-        userId: user.id,
-        text: parsed.data.text,
-        postedAt: now,
-        expiresAt: new Date(now.getTime() + STATUS_TTL_MS),
-      },
+    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
+
+    const row = await prisma.$transaction(async (tx) => {
+      // One active status per user — supersede any still-active rows.
+      await tx.statusUpdate.updateMany({
+        where: {
+          userId: user.id,
+          expiresAt: { gt: now },
+        },
+        data: { expiresAt: now },
+      });
+
+      if (idempotencyKey) {
+        const recent = await tx.statusUpdate.findFirst({
+          where: {
+            userId: user.id,
+            text: parsed.data.text,
+            postedAt: { gte: new Date(now.getTime() - 15_000) },
+          },
+          orderBy: { postedAt: "desc" },
+        });
+        if (recent) return recent;
+      }
+
+      return tx.statusUpdate.create({
+        data: {
+          userId: user.id,
+          text: parsed.data.text,
+          postedAt: now,
+          expiresAt,
+        },
+      });
     });
+
     const limit = await recordDailyAction(user.id, "status", now);
 
     if (user.slug) {
@@ -72,6 +105,7 @@ export async function POST(req: NextRequest) {
     return Response.json({
       ok: true,
       status: {
+        id: row.id,
         text: row.text,
         postedAt: row.postedAt.toISOString(),
         expiresAt: row.expiresAt.toISOString(),
@@ -79,11 +113,68 @@ export async function POST(req: NextRequest) {
       limit,
     });
   } catch (err) {
-    const status = (err as { status?: number }).status || 500;
-    const message = err instanceof Error ? err.message : "Failed to publish status";
+    const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
-    if (status === 429) return jsonError(message, 429);
-    console.error("[status]", err);
-    return jsonError(message, status);
+    if (status === 429) {
+      return jsonError(err instanceof Error ? err.message : "Daily limit", 429);
+    }
+    console.error("[status:post]", err);
+    return jsonError("Failed to publish status", 500);
+  }
+}
+
+const patchSchema = z.object({
+  text: z.string().trim().min(1).max(500),
+});
+
+/** Edit the current active status in place. */
+export async function PATCH(req: NextRequest) {
+  try {
+    const user = await requireSessionUser();
+    const body = await req.json();
+    const parsed = patchSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(parsed.error.issues[0]?.message || "Invalid status", 400);
+    }
+    const now = new Date();
+    const current = await prisma.statusUpdate.findFirst({
+      where: { userId: user.id, expiresAt: { gt: now } },
+      orderBy: { postedAt: "desc" },
+    });
+    if (!current) return jsonError("No active status to edit", 404);
+    const updated = await prisma.statusUpdate.update({
+      where: { id: current.id },
+      data: { text: parsed.data.text },
+    });
+    return Response.json({
+      ok: true,
+      status: {
+        id: updated.id,
+        text: updated.text,
+        postedAt: updated.postedAt.toISOString(),
+        expiresAt: updated.expiresAt.toISOString(),
+      },
+    });
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 401) return jsonError("Sign in required", 401);
+    return jsonError("Failed to edit status", 500);
+  }
+}
+
+/** Delete/expire the current active status. */
+export async function DELETE() {
+  try {
+    const user = await requireSessionUser();
+    const now = new Date();
+    const result = await prisma.statusUpdate.updateMany({
+      where: { userId: user.id, expiresAt: { gt: now } },
+      data: { expiresAt: now },
+    });
+    return Response.json({ ok: true, expired: result.count });
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 401) return jsonError("Sign in required", 401);
+    return jsonError("Failed to delete status", 500);
   }
 }

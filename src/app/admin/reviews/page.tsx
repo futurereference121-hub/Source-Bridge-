@@ -7,6 +7,8 @@ import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import PaymentIssueActions from "../payments/issue-actions";
 import DisputeReviewActions from "./dispute-review-actions";
 import AdminDisputeMessageLink from "./admin-dispute-message-link";
+import AdminCaseAccordion from "./admin-case-accordion";
+import AdminEvidenceGallery from "./admin-evidence-gallery";
 
 const resolvedStatuses = [
   "RESOLVED_BUYER",
@@ -75,6 +77,8 @@ export default async function AdminReviewsPage() {
           refundedMinor: true,
           finalTransferredMinor: true,
           procurementTransferredMinor: true,
+          buyer: { select: { username: true, name: true } },
+          seller: { select: { username: true, name: true } },
         },
       },
     },
@@ -87,23 +91,14 @@ export default async function AdminReviewsPage() {
       </p>
       <h1 className="mt-2 font-display text-4xl">Payment disputes</h1>
       <p className="mt-2 max-w-2xl text-sm text-white/55">
-        Buyer-reported issues during the 12-hour inspection window. Financial
-        operations and release controls live on{" "}
-        <Link href="/admin/payments" className="text-electric hover:text-electric-hover">
-          Protected Payments
-        </Link>
-        .
-      </p>
-      <p className="mt-2 text-xs text-white/40">
-        Terms &amp; Conditions acceptance for disputes is a future legal
-        requirement — not enforced in TEST yet. See{" "}
-        <code className="text-white/55">docs/PAYMENT_DISPUTES_AND_TERMS.md</code>.
+        Expand a case in place for evidence, messaging, and financial controls.
+        Cases open collapsed by default.
       </p>
 
       <div className="mt-8 space-y-4">
         {disputes.length === 0 ? (
           <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/40">
-            No open payment disputes.
+            No open item issues.
           </p>
         ) : (
           disputes.map((issue) => {
@@ -127,12 +122,11 @@ export default async function AdminReviewsPage() {
               ? `@${t.seller.username}`
               : t.seller.name || t.seller.email;
             return (
-              <details
+              <AdminCaseAccordion
                 key={issue.id}
-                className="rounded-xl border border-amber-400/20 bg-amber-400/5"
-              >
-                <summary className="cursor-pointer list-none px-5 py-4 [&::-webkit-details-marker]:hidden">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                id={issue.id}
+                summary={
+                  <div className="flex w-full flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-white">{t.title}</p>
@@ -144,6 +138,11 @@ export default async function AdminReviewsPage() {
                         {new Date(issue.createdAt).toLocaleString()} · Buyer{" "}
                         {buyerLabel} · Sourcer {sellerLabel}
                       </p>
+                      {issue.category || issue.reason ? (
+                        <p className="mt-1 truncate text-xs text-white/55">
+                          {issue.category || issue.reason}
+                        </p>
+                      ) : null}
                     </div>
                     <p className="text-xs text-white/50">
                       {formatMinor(books.finalResidualMinor, t.currency)} seller
@@ -151,113 +150,149 @@ export default async function AdminReviewsPage() {
                       refundable
                     </p>
                   </div>
-                </summary>
-                <div className="border-t border-amber-400/15 px-5 pb-5 pt-4">
-                  <p className="font-mono text-xs text-white/45">
-                    txn {t.id} · dispute {issue.id}
+                }
+              >
+                {issue.category ? (
+                  <p className="text-sm font-medium text-amber-100/90">
+                    {issue.category}
                   </p>
-                  {issue.category ? (
-                    <p className="mt-2 text-sm font-medium text-amber-100/90">
-                      {issue.category}
-                    </p>
-                  ) : null}
-                  <p className="mt-1 text-sm text-white/70">
-                    {issue.reason}
-                    {issue.details ? ` — ${issue.details.slice(0, 240)}` : ""}
+                ) : null}
+                <p className="mt-1 text-sm text-white/70">
+                  {issue.reason}
+                  {issue.details
+                    ? ` — ${issue.details
+                        .replace(/https?:\/\/\S+/gi, "")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                        .slice(0, 240)}`
+                    : ""}
+                </p>
+                <AdminEvidenceGallery details={issue.details} />
+                {issue.adminNotes ? (
+                  <p className="mt-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/55">
+                    Admin notes: {issue.adminNotes}
                   </p>
-                  {issue.adminNotes ? (
-                    <p className="mt-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/55">
-                      Admin notes: {issue.adminNotes}
-                    </p>
-                  ) : null}
-                  <p className="mt-2 text-xs text-white/40">
-                    Opened by{" "}
-                    {issue.openedBy.username
-                      ? `@${issue.openedBy.username}`
-                      : issue.openedBy.name || issue.openedBy.email}
-                    {" · "}
-                    {new Date(issue.createdAt).toLocaleString()}
-                  </p>
+                ) : null}
+                <p className="mt-2 text-xs text-white/40">
+                  Opened by{" "}
+                  {issue.openedBy.username
+                    ? `@${issue.openedBy.username}`
+                    : issue.openedBy.name || issue.openedBy.email}
+                  {" · "}
+                  {new Date(issue.createdAt).toLocaleString()}
+                </p>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <Link
-                      href={`/admin/reviews/${issue.id}`}
-                      className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
-                    >
-                      Open case
-                    </Link>
-                    <AdminDisputeMessageLink
+                  <AdminDisputeMessageLink
                       disputeId={issue.id}
                       role="BUYER"
                       label={`Message buyer (${buyerLabel})`}
+                      adminUserId={user.id}
                     />
                     <AdminDisputeMessageLink
                       disputeId={issue.id}
                       role="SELLER"
                       label={`Message sourcer (${sellerLabel})`}
+                      adminUserId={user.id}
                     />
-                  </div>
-                  <DisputeReviewActions
-                    disputeId={issue.id}
-                    status={issue.status}
-                    adminNotes={issue.adminNotes}
-                  />
-                  {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
-                    <PaymentIssueActions
-                      disputeId={issue.id}
-                      currency={t.currency}
-                      totalPaidMinor={t.totalChargeMinor}
-                      platformFeeMinor={books.platformFeeMinor}
-                      platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
-                      finalResidualMinor={books.finalResidualMinor}
-                      refundableMinor={books.refundableMinor}
-                      sellerEntitledMinor={books.sellerEntitledMinor}
-                      alreadyReleasedMinor={
-                        books.procurementTransferredMinor +
-                        books.finalTransferredMinor
-                      }
-                      protectedRemainingMinor={books.protectedRemainingMinor}
-                    />
+                  {t.conversationId ? (
+                    <Link
+                      href={`/inbox/${t.conversationId}`}
+                      className="rounded-lg border border-white/20 px-3 py-1.5 text-electric hover:text-electric-hover"
+                    >
+                      View chat
+                    </Link>
                   ) : null}
                 </div>
-              </details>
+                <DisputeReviewActions
+                  disputeId={issue.id}
+                  status={issue.status}
+                  adminNotes={issue.adminNotes}
+                />
+                {issue.status === "OPEN" || issue.status === "UNDER_REVIEW" ? (
+                  <PaymentIssueActions
+                    disputeId={issue.id}
+                    currency={t.currency}
+                    totalPaidMinor={t.totalChargeMinor}
+                    platformFeeMinor={books.platformFeeMinor}
+                    platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
+                    finalResidualMinor={books.finalResidualMinor}
+                    refundableMinor={books.refundableMinor}
+                    sellerEntitledMinor={books.sellerEntitledMinor}
+                    alreadyReleasedMinor={
+                      books.procurementTransferredMinor +
+                      books.finalTransferredMinor
+                    }
+                    protectedRemainingMinor={books.protectedRemainingMinor}
+                  />
+                ) : null}
+                <details className="mt-4 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/45">
+                  <summary className="cursor-pointer text-white/55">
+                    Advanced / Audit
+                  </summary>
+                  <p className="mt-2 font-mono break-all">
+                    dispute {issue.id}
+                    <br />
+                    txn {t.id}
+                    {t.paymentTicket?.id ? (
+                      <>
+                        <br />
+                        ticket {t.paymentTicket.id}
+                      </>
+                    ) : null}
+                  </p>
+                </details>
+              </AdminCaseAccordion>
             );
           })
         )}
       </div>
 
       {resolvedDisputes.length > 0 ? (
-        <details className="mt-10 rounded-xl border border-white/10 bg-white/[0.03]" open={false}>
-          <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-white/70">
+        <div className="mt-10 space-y-3">
+          <p className="text-sm font-medium text-white/70">
             Resolved disputes ({resolvedDisputes.length})
-          </summary>
-          <ul className="divide-y divide-white/10 border-t border-white/10">
-            {resolvedDisputes.map((issue) => {
-              const t = issue.protectedTxn;
-              const released =
-                t.procurementTransferredMinor + t.finalTransferredMinor;
-              return (
-                <li key={issue.id} className="px-5 py-3 text-sm">
-                  <Link
-                    href={`/admin/reviews/${issue.id}`}
-                    className="font-medium text-white hover:text-electric"
-                  >
-                    {t.title}
-                  </Link>
-                  <p className="mt-1 text-xs text-white/45">
-                    {issue.status.replace(/_/g, " ")}
-                    {issue.resolutionNote
-                      ? ` — ${issue.resolutionNote.slice(0, 120)}`
-                      : ""}
-                  </p>
-                  <p className="mt-1 text-xs text-white/35">
-                    Refunded {formatMinor(t.refundedMinor, t.currency)} ·
-                    Released {formatMinor(released, t.currency)}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        </details>
+          </p>
+          {resolvedDisputes.map((issue) => {
+            const t = issue.protectedTxn;
+            const released =
+              t.procurementTransferredMinor + t.finalTransferredMinor;
+            const buyer = t.buyer.username
+              ? `@${t.buyer.username}`
+              : t.buyer.name;
+            const seller = t.seller.username
+              ? `@${t.seller.username}`
+              : t.seller.name;
+            return (
+              <AdminCaseAccordion
+                key={issue.id}
+                id={issue.id}
+                summary={
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="font-medium text-white">{t.title}</p>
+                    <p className="mt-1 text-xs text-white/45">
+                      {issue.status.replace(/_/g, " ")} · Buyer {buyer} ·
+                      Sourcer {seller}
+                    </p>
+                  </div>
+                }
+              >
+                <p className="text-xs text-white/55">
+                  {issue.resolutionNote
+                    ? issue.resolutionNote.slice(0, 240)
+                    : "Resolved"}
+                </p>
+                <p className="mt-2 text-xs text-white/40">
+                  Refunded {formatMinor(t.refundedMinor, t.currency)} · Released{" "}
+                  {formatMinor(released, t.currency)}
+                </p>
+                <details className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/45">
+                  <summary className="cursor-pointer">Advanced / Audit</summary>
+                  <p className="mt-2 font-mono break-all">dispute {issue.id}</p>
+                </details>
+              </AdminCaseAccordion>
+            );
+          })}
+        </div>
       ) : null}
     </>
   );

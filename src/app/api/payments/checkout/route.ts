@@ -6,6 +6,7 @@ import {
   checkoutPublicConfig,
   createPaymentIntentForTxn,
   getProtectedTxnPaymentStatus,
+  reconcileTxnFundingFromStripe,
 } from "@/lib/payments/checkout";
 import { isPaymentsEnabled } from "@/lib/payments/flags";
 
@@ -14,6 +15,11 @@ export const runtime = "nodejs";
 const schema = z.object({
   protectedTxnId: z.string().trim().min(1),
   idempotencyKey: z.string().trim().min(8).max(200),
+});
+
+const reconcileSchema = z.object({
+  protectedTxnId: z.string().trim().min(1),
+  reconcile: z.literal(true),
 });
 
 export async function GET(req: NextRequest) {
@@ -60,6 +66,21 @@ export async function POST(req: NextRequest) {
       return jsonError("Payments are not enabled", 503);
     }
     const body = await req.json();
+    const reconcileParsed = reconcileSchema.safeParse(body);
+    if (reconcileParsed.success) {
+      const result = await reconcileTxnFundingFromStripe({
+        protectedTxnId: reconcileParsed.data.protectedTxnId,
+        viewerUserId: user.id,
+      });
+      return Response.json({
+        ok: true,
+        reconciled: result.reconciled,
+        paymentProcessing: result.paymentProcessing,
+        reason: result.reason,
+        transaction: result.status,
+        ...checkoutPublicConfig(),
+      });
+    }
     const parsed = schema.safeParse(body);
     if (!parsed.success) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
