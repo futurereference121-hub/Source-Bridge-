@@ -1,7 +1,6 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
-import AdminSignOutButton from "./_components/AdminSignOutButton";
+import AdminNav from "./_components/AdminNav";
 
 export default async function AdminLayout({
   children,
@@ -12,41 +11,15 @@ export default async function AdminLayout({
   const isAdmin = Boolean(user && isAdminUser(user));
 
   // Authenticated ordinary users must never render admin chrome or forms.
-  if (!isAdmin && user) {
+  // Keep this redirect out of soft-nav failure paths for true admins — only
+  // bounce when we positively know the signed-in user is not an admin.
+  if (user && !isAdmin) {
     redirect("/explore");
   }
 
   return (
     <div className="min-h-screen bg-app-navy px-6 py-10 text-white">
-      {isAdmin ? (
-        <nav className="mx-auto mb-10 flex max-w-6xl flex-wrap items-center gap-6 text-sm text-white/70">
-          <Link
-            href="/admin/verifications"
-            className="font-medium text-electric hover:text-electric-hover"
-          >
-            Verification Applicants
-          </Link>
-          <Link
-            href="/admin/payments"
-            className="font-medium text-electric hover:text-electric-hover"
-          >
-            Protected Payments
-          </Link>
-          <Link
-            href="/admin/purchases"
-            className="font-medium text-electric hover:text-electric-hover"
-          >
-            Protected Purchases
-          </Link>
-          <Link
-            href="/admin/reviews"
-            className="font-medium text-electric hover:text-electric-hover"
-          >
-            Reviews & Disputes
-          </Link>
-          <AdminSignOutButton />
-        </nav>
-      ) : null}
+      {isAdmin ? <AdminNav /> : null}
       <main className="mx-auto max-w-6xl">{children}</main>
     </div>
   );

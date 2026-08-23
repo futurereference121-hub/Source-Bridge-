@@ -2,6 +2,10 @@ import { prisma } from "@/lib/db";
 import { adminDisputeThreadPairKey, adminSupportThreadPairKey } from "@/lib/conversation-pair";
 import { isAllowedAttachmentUrl, participantUserSelect } from "@/lib/messaging";
 import { createNotification } from "@/lib/notifications";
+import {
+  buildDisputeContextStructured,
+  formatHumanDisputeContextBody,
+} from "@/lib/payments/dispute-context-copy";
 
 export const ADMIN_DISPUTE_CONTEXT = "admin_dispute";
 
@@ -17,16 +21,28 @@ async function insertDisputeContextMarker(opts: {
   protectedTxnId: string;
   paymentTicketId: string | null;
   title: string;
+  category?: string | null;
+  reason?: string | null;
+  status?: string | null;
+  buyerUsername?: string | null;
+  sellerUsername?: string | null;
+  createdAt: Date;
 }) {
-  const body = [
-    "Dispute context",
-    `dispute ${opts.disputeCaseId}`,
-    `txn ${opts.protectedTxnId}`,
-    opts.paymentTicketId ? `ticket ${opts.paymentTicketId}` : null,
-    opts.title ? `"${opts.title}"` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const structured = buildDisputeContextStructured({
+    title: opts.title,
+    category: opts.category,
+    reason: opts.reason,
+    status: opts.status,
+    buyerUsername: opts.buyerUsername,
+    sellerUsername: opts.sellerUsername,
+    createdAt: opts.createdAt,
+    reviewHref: `/admin/reviews/${opts.disputeCaseId}`,
+    disputeCaseId: opts.disputeCaseId,
+    protectedTxnId: opts.protectedTxnId,
+    paymentTicketId: opts.paymentTicketId,
+  });
+  // Human body only — IDs live on Conversation + Advanced/Audit UI.
+  const body = formatHumanDisputeContextBody(structured);
   await prisma.message.create({
     data: {
       conversationId: opts.conversationId,
@@ -34,6 +50,7 @@ async function insertDisputeContextMarker(opts: {
       body,
       messageType: "SYSTEM",
       systemEventType: "DISPUTE_CONTEXT",
+      paymentTicketId: opts.paymentTicketId,
     },
   });
 }
@@ -58,6 +75,8 @@ export async function getOrCreateAdminDisputeThread(opts: {
           conversationId: true,
           paymentTicket: { select: { id: true } },
           title: true,
+          buyer: { select: { username: true } },
+          seller: { select: { username: true } },
         },
       },
     },
@@ -89,28 +108,47 @@ export async function getOrCreateAdminDisputeThread(opts: {
       },
     }));
 
+  const markerPayload = {
+    disputeCaseId: dispute.id,
+    protectedTxnId: dispute.protectedTxn.id,
+    paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+    title: dispute.protectedTxn.title,
+    category: dispute.category,
+    reason: dispute.reason,
+    status: dispute.status,
+    buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
+    sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+    createdAt: dispute.createdAt,
+  };
+
   if (existing) {
-    if (existing.pairKey !== pairKey) {
+    if (
+      existing.pairKey !== pairKey ||
+      existing.disputeCaseId !== dispute.id
+    ) {
       await prisma.conversation.update({
         where: { id: existing.id },
-        data: { pairKey },
+        data: {
+          pairKey,
+          disputeCaseId: dispute.id,
+          paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+          adminPartyRole: opts.role,
+        },
       });
     }
+    // Dedupe by dispute age — do not require raw IDs in the message body.
     const markerExists = await prisma.message.findFirst({
       where: {
         conversationId: existing.id,
         systemEventType: "DISPUTE_CONTEXT",
-        body: { contains: opts.disputeCaseId },
+        createdAt: { gte: dispute.createdAt },
       },
       select: { id: true },
     });
     if (!markerExists) {
       await insertDisputeContextMarker({
         conversationId: existing.id,
-        disputeCaseId: dispute.id,
-        protectedTxnId: dispute.protectedTxn.id,
-        paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
-        title: dispute.protectedTxn.title,
+        ...markerPayload,
       });
     }
     return {
@@ -148,23 +186,27 @@ export async function getOrCreateAdminDisputeThread(opts: {
           participants: { include: { user: { select: participantUserSelect } } },
         },
       });
+      const structured = buildDisputeContextStructured({
+        title: dispute.protectedTxn.title,
+        category: dispute.category,
+        reason: dispute.reason,
+        status: dispute.status,
+        buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
+        sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+        createdAt: dispute.createdAt,
+        reviewHref: `/admin/reviews/${dispute.id}`,
+        disputeCaseId: dispute.id,
+        protectedTxnId: dispute.protectedTxn.id,
+        paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+      });
       await tx.message.create({
         data: {
           conversationId: conv.id,
           senderId: null,
-          body: [
-            "Dispute context",
-            `dispute ${dispute.id}`,
-            `txn ${dispute.protectedTxn.id}`,
-            dispute.protectedTxn.paymentTicket?.id
-              ? `ticket ${dispute.protectedTxn.paymentTicket.id}`
-              : null,
-            dispute.protectedTxn.title ? `"${dispute.protectedTxn.title}"` : null,
-          ]
-            .filter(Boolean)
-            .join(" · "),
+          body: formatHumanDisputeContextBody(structured),
           messageType: "SYSTEM",
           systemEventType: "DISPUTE_CONTEXT",
+          paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
         },
       });
       return conv;
@@ -301,7 +343,7 @@ export async function sendAdminDisputeMessage(opts: {
     userId: partyId,
     type: "PAYMENT_DISPUTE",
     title: "Message from Source Bridge",
-    body: "You have a private message about a payment issue.",
+    body: "You have a private message about an item review.",
     href: `/inbox/${conversation.id}`,
     actorId: opts.adminUserId,
     actorName: "Source Bridge",

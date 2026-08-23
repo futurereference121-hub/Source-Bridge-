@@ -108,13 +108,15 @@ export function EditorField({
 export function EditorSubmit({
   children,
   busy,
+  disabled,
 }: {
   children: ReactNode;
   busy?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
-      disabled={busy}
+      disabled={busy || disabled}
       type="submit"
       className="inline-flex h-11 items-center justify-center rounded-lg bg-electric px-5 text-xs font-medium uppercase tracking-[0.12em] text-white transition-colors hover:bg-electric-hover disabled:opacity-50"
     >

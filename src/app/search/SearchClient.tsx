@@ -1,28 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import type { FeedItem, Member } from "@/lib/types";
+import type { Member } from "@/lib/types";
 import { SearchBar } from "@/components/search/SearchBar";
-import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
 import { MemberDirectoryCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 
-const SEARCH_EXAMPLES =
-  "Japan · Coffee from Colombia · Someone travelling to Bangkok · Watches in Switzerland";
-
-const FEED_PREVIEW_LIMIT = 8;
-
-type ExploreClientProps = {
+type SearchClientProps = {
   initialMembers: Member[];
-  initialFeed: FeedItem[];
   initialTotal: number;
   initialHasMore: boolean;
-  initialLimit: number;
-  /** Dedicated Search tab — focus search UX first. */
-  searchFirst?: boolean;
+  initialQuery?: string;
 };
 
 function mapApiMember(raw: Record<string, unknown>): Member | null {
@@ -36,23 +26,23 @@ function mapApiMember(raw: Record<string, unknown>): Member | null {
 
 function directoryLimit(): number {
   if (typeof window === "undefined") return 24;
-  return window.matchMedia("((min-width: 768px))").matches ? 36 : 24;
+  return window.matchMedia("(min-width: 768px)").matches ? 36 : 24;
 }
 
-export function ExploreClient({
+/**
+ * Dedicated Search view — live results under the field (not Explore mid-page).
+ */
+export function SearchClient({
   initialMembers,
-  initialFeed,
   initialTotal,
   initialHasMore,
-  initialLimit: _initialLimit,
-  searchFirst = false,
-}: ExploreClientProps) {
+  initialQuery = "",
+}: SearchClientProps) {
   const searchParams = useSearchParams();
   const stories = useStoriesOptional();
-  const initialQ = searchParams.get("q") ?? "";
-  const [query, setQuery] = useState(initialQ);
+  const urlQ = searchParams.get("q") ?? initialQuery;
+  const [query, setQuery] = useState(urlQ);
   const [members, setMembers] = useState<Member[]>(initialMembers);
-  const [feed, setFeed] = useState<FeedItem[]>(initialFeed);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [total, setTotal] = useState(initialTotal);
@@ -62,27 +52,19 @@ export function ExploreClient({
   const queryRef = useRef(query);
   queryRef.current = query;
   const requestSeq = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const inputWrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const ids = members.map((m) => m.id);
     if (ids.length) void stories?.refreshRings(ids);
   }, [members, stories?.refreshRings]);
 
-  useEffect(() => {
-    const ids = members.map((m) => m.id);
-    if (!ids.length || !stories?.refreshRings) return;
-    const refresh = stories.refreshRings;
-    function onVisible() {
-      if (document.visibilityState === "visible") {
-        void refresh(ids, { force: true });
-      }
-    }
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [members, stories?.refreshRings]);
-
   const fetchMembersPage = useCallback(
     async (opts: { q: string; page: number; append: boolean }) => {
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
       const seq = ++requestSeq.current;
       if (opts.append) setLoadingMore(true);
       else setSearching(true);
@@ -91,16 +73,16 @@ export function ExploreClient({
         const pageLimit = directoryLimit();
         const res = await fetch(
           `/api/members?q=${encodeURIComponent(opts.q)}&page=${opts.page}&limit=${pageLimit}`,
-          { cache: "no-store" },
+          { cache: "no-store", signal: ac.signal },
         );
-        if (!res.ok) throw new Error("Could not refresh member directory");
+        if (!res.ok) throw new Error("Could not refresh search results");
         const data = (await res.json()) as {
           members?: Record<string, unknown>[];
           total?: number;
           hasMore?: boolean;
           page?: number;
-          limit?: number;
         };
+        // Stale-query protection: ignore older responses.
         if (seq !== requestSeq.current) return;
         if (opts.q !== queryRef.current) return;
         const nextMembers = (data.members || [])
@@ -116,8 +98,11 @@ export function ExploreClient({
         );
         setPage(data.page || opts.page);
         setHasMore(Boolean(data.hasMore));
-        setTotal(typeof data.total === "number" ? data.total : nextMembers.length);
+        setTotal(
+          typeof data.total === "number" ? data.total : nextMembers.length,
+        );
       } catch (err) {
+        if ((err as { name?: string })?.name === "AbortError") return;
         if (seq !== requestSeq.current) return;
         setError(
           err instanceof Error ? err.message : "Connection lost. Please retry.",
@@ -133,104 +118,104 @@ export function ExploreClient({
   );
 
   useEffect(() => {
-    if (query === initialQ && !query && initialMembers.length > 0) {
-      return;
-    }
     const handle = window.setTimeout(
       () => {
         void fetchMembersPage({ q: query, page: 1, append: false });
       },
-      query === initialQ ? 0 : 280,
+      query === urlQ && !query ? 0 : 280,
     );
     return () => window.clearTimeout(handle);
-  }, [query, initialQ, initialMembers.length, fetchMembersPage]);
+  }, [query, urlQ, fetchMembersPage]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function refreshFeed() {
-      try {
-        const feedRes = await fetch("/api/feed?limit=8", { cache: "no-store" });
-        if (!feedRes.ok || cancelled) return;
-        const feedData = (await feedRes.json()) as { items?: FeedItem[] };
-        if (Array.isArray(feedData.items)) setFeed(feedData.items);
-      } catch {
-        /* keep SSR feed */
-      }
-    }
-    const soft = window.setTimeout(() => void refreshFeed(), 4000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(soft);
-    };
+    inputWrapRef.current?.querySelector("input")?.focus();
   }, []);
 
   return (
-    <div className="bg-app-navy min-h-[100svh] pt-24 pb-24 text-white sm:pt-28 sm:pb-28">
+    <div
+      className="bg-app-navy min-h-[100svh] pt-24 pb-24 text-white sm:pt-28 sm:pb-28"
+      data-testid="dedicated-search"
+    >
       <Container>
-        <header className="mx-auto max-w-3xl text-center">
-          <h1 className="font-display text-[1.65rem] leading-snug tracking-tight text-white sm:text-4xl sm:leading-tight md:text-[2.5rem]">
-            What do you need—and where in the world can it be found?
+        <header className="mx-auto max-w-3xl">
+          <h1 className="font-display text-2xl tracking-tight text-white sm:text-3xl">
+            Search
           </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-white/60 sm:mt-5 sm:text-base">
-            Discover trusted people already connected to the places, products
-            and opportunities you are looking for.
+          <p className="mt-2 text-sm text-white/55">
+            Find people by handle, name, place, or public message.
           </p>
         </header>
 
-        <div className="mx-auto mt-8 max-w-3xl sm:mt-10">
+        <div className="mx-auto mt-6 max-w-3xl" ref={inputWrapRef}>
           <SearchBar
             value={query}
             onChange={setQuery}
             variant="dark"
-            placeholder="Search by place, product, journey or opportunity..."
+            enableAutocomplete={false}
+            placeholder="Search @handle, name, city, or message…"
           />
-          <p className="mt-3 text-center text-xs leading-relaxed text-white/35 sm:text-[13px]">
-            {SEARCH_EXAMPLES}
-          </p>
           {error ? (
             <p className="mt-2 text-center text-xs text-red-300">{error}</p>
           ) : null}
         </div>
 
-        <section className="mx-auto mt-8 max-w-5xl sm:mt-10">
+        <section
+          className="mx-auto mt-4 max-w-3xl"
+          aria-live="polite"
+          data-testid="search-live-results"
+        >
           <div className="mb-3 flex items-baseline justify-between gap-3">
-            <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">
-              Live
-            </h2>
-            <Link
-              href="/activity"
-              className="text-[11px] font-medium uppercase tracking-[0.14em] text-electric/80 transition-colors hover:text-electric"
-            >
-              View All Activity
-            </Link>
-          </div>
-          <LiveFeedSplit
-            items={feed.slice(0, FEED_PREVIEW_LIMIT * 2)}
-            perColumnLimit={FEED_PREVIEW_LIMIT}
-          />
-        </section>
-
-        <section className="mt-10 sm:mt-12">
-          <div className="mb-4 flex items-baseline justify-between gap-3">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/45">
-              People
+              Results
             </h2>
             <p className="text-sm text-white/40">
               {searching
-                ? "Updating…"
-                : `${total} member${total === 1 ? "" : "s"}`}
+                ? "Searching…"
+                : query.trim()
+                  ? `${total} result${total === 1 ? "" : "s"}`
+                  : `${total} member${total === 1 ? "" : "s"}`}
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4 xl:grid-cols-5">
+          {query.trim().length > 0 && members.length > 0 ? (
+            <ul className="mb-4 divide-y divide-white/10 rounded-xl border border-white/10 bg-white/[0.03]">
+              {members.slice(0, 8).map((member) => (
+                <li key={`live-${member.id}`}>
+                  <a
+                    href={`/u/${member.slug}`}
+                    className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.04]"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={member.photo || "/placeholders/avatar.svg"}
+                      alt=""
+                      className="h-9 w-9 rounded-full object-cover"
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-white">
+                        @{member.username}
+                      </p>
+                      <p className="truncate text-xs text-white/45">
+                        {member.fullName || "Member"}
+                      </p>
+                    </div>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
             {members.map((member) => (
               <MemberDirectoryCard key={member.id} member={member} />
             ))}
           </div>
 
           {!members.length && !searching ? (
-            <p className="mt-16 text-center text-white/50">
-              No members match this search. Try a place, product, or username.
+            <p className="mt-12 text-center text-white/50">
+              {query.trim()
+                ? "No members match this search."
+                : "Start typing to search members."}
             </p>
           ) : null}
 
@@ -246,9 +231,9 @@ export function ExploreClient({
                     append: true,
                   })
                 }
-                className="rounded-lg border border-white/20 px-5 py-2.5 text-xs font-medium uppercase tracking-[0.14em] text-white/80 hover:border-electric/40 hover:text-white disabled:opacity-50"
+                className="rounded-lg border border-white/20 px-4 py-2 text-xs uppercase tracking-[0.12em] text-white/70 hover:border-white/40 disabled:opacity-50"
               >
-                {loadingMore ? "Loading…" : "Load more people"}
+                {loadingMore ? "Loading…" : "Load more"}
               </button>
             </div>
           ) : null}

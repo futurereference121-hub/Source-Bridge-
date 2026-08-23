@@ -1,4 +1,4 @@
-import Link from "next/link";
+﻿import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -9,6 +9,7 @@ import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import PaymentIssueActions from "./issue-actions";
 import InactivityReleasePanel from "./inactivity-release-panel";
+import AdminListedPurchasesSection from "./listed-purchases-section";
 
 export default async function AdminPaymentsPage() {
   const user = await getSessionUser();
@@ -111,6 +112,7 @@ export default async function AdminPaymentsPage() {
         Financial operations
       </p>
       <h1 className="mt-2 font-display text-4xl">Protected Payments</h1>
+      <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45" id="sourcing-payments">SOURCING PAYMENT · LISTED PRODUCT PURCHASE</p>
       <p className="mt-2 max-w-2xl text-sm text-white/55">
         Stripe is the processor ({CHARGE_MODEL}). Source Bridge owns transaction
         state and transfer timing. Live mode is forced off.
@@ -118,11 +120,11 @@ export default async function AdminPaymentsPage() {
 
       <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
         <p>
-          Stripe configured: {isStripeConfigured() ? "yes" : "no"} · Mode:{" "}
-          {flags.stripeMode} · LIVE_PAYMENTS_ENABLED: false
+          Stripe configured: {isStripeConfigured() ? "yes" : "no"} Â· Mode:{" "}
+          {flags.stripeMode} Â· LIVE_PAYMENTS_ENABLED: false
         </p>
         <p className="mt-1">
-          Flags — payments: {String(flags.PAYMENTS_ENABLED)}, connect
+          Flags â€” payments: {String(flags.PAYMENTS_ENABLED)}, connect
           onboarding: {String(flags.CONNECT_ONBOARDING_ENABLED)}, protected:{" "}
           {String(flags.PROTECTED_PAYMENTS_ENABLED)}, instant:{" "}
           {String(flags.INSTANT_PAYMENTS_ENABLED)}, procurement:{" "}
@@ -132,8 +134,8 @@ export default async function AdminPaymentsPage() {
         </p>
         <p className="mt-1">
           Protection fee: {config.protectionFeeBps} bps (floor{" "}
-          {config.protectionFeeFloorMinor} minor) · Inspection:{" "}
-          {config.inspectionHours}h · Procurement min trust:{" "}
+          {config.protectionFeeFloorMinor} minor) Â· Inspection:{" "}
+          {config.inspectionHours}h Â· Procurement min trust:{" "}
           {config.procurementMinTrustLevel}
         </p>
       </div>
@@ -184,23 +186,23 @@ export default async function AdminPaymentsPage() {
                   <div>
                     <p className="font-medium text-white">{t.title}</p>
                     <p className="mt-1 font-mono text-xs text-white/45">
-                      txn {t.id} · dispute {issue.id}
+                      txn {t.id} Â· dispute {issue.id}
                     </p>
                     <p className="mt-1 text-sm text-white/70">
                       {issue.reason}
-                      {issue.details ? ` — ${issue.details.slice(0, 180)}` : ""}
+                      {issue.details ? ` â€” ${issue.details.slice(0, 180)}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-white/40">
                       Opened by{" "}
                       {issue.openedBy.username
                         ? `@${issue.openedBy.username}`
                         : issue.openedBy.name || issue.openedBy.email}
-                      {" · "}
+                      {" Â· "}
                       {t.origin}
-                      {t.paymentTicket?.id ? " · sourcing ticket" : ""}
+                      {t.paymentTicket?.id ? " Â· sourcing ticket" : ""}
                       {t.conversationId ? (
                         <>
-                          {" · "}
+                          {" Â· "}
                           <Link
                             href={`/inbox/${t.conversationId}`}
                             className="text-electric hover:underline"
@@ -277,6 +279,11 @@ export default async function AdminPaymentsPage() {
       <InactivityReleasePanel />
 
       <h2 className="mt-10 text-lg font-semibold">Recent protected transactions</h2>
+      <section className="mt-10">
+        <AdminListedPurchasesSection />
+      </section>
+
+      <h2 className="mt-10 text-lg font-semibold text-white">SOURCING PAYMENT · recent</h2>
       <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-white/5 text-white/50">
@@ -299,7 +306,7 @@ export default async function AdminPaymentsPage() {
               recent.map((row) => (
                 <tr key={row.id} className="border-t border-white/10">
                   <td className="px-3 py-2 font-mono text-xs text-white/70">
-                    {row.id.slice(0, 12)}…
+                    {row.id.slice(0, 12)}â€¦
                   </td>
                   <td className="px-3 py-2">{row.status}</td>
                   <td className="px-3 py-2">{row.paymentOption}</td>
@@ -316,15 +323,16 @@ export default async function AdminPaymentsPage() {
 
       <p className="mt-6 text-xs text-white/40">
         Sensitive actions require re-auth + reason via audited APIs. There is no
-        universal “mark completed” bypass. Never release on fully completed
+        universal â€œmark completedâ€ bypass. Never release on fully completed
         historical TXNs.
       </p>
       <Link
         href="/admin"
         className="mt-4 inline-block text-sm text-electric hover:text-electric-hover"
       >
-        ← Admin home
+        â† Admin home
       </Link>
     </>
   );
 }
+

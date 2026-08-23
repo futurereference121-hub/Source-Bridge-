@@ -433,6 +433,32 @@ export async function listDirectoryMembersPage(opts: {
   const handleNorm = normalizeSearchHandle(q);
   const qNoAt = q.replace(/^@+/, "").trim();
 
+  // Normalized-handle ID prefilter so "the owl" / "the.owl" / "the_owl" match.
+  let normalizedHandleIds: string[] = [];
+  if (handleNorm.length >= 2) {
+    try {
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "User"
+        WHERE "deletedAt" IS NULL
+          AND "emailVerified" = true
+          AND "onboardingComplete" = true
+          AND "isDiscoverable" = true
+          AND "isTestAccount" = false
+          AND "isAdmin" = false
+          AND role <> 'ADMIN'
+          AND username IS NOT NULL
+          AND slug IS NOT NULL
+          AND regexp_replace(lower(username), '[\\s._\\-]+', '', 'g')
+            LIKE ${"%" + handleNorm + "%"}
+        ORDER BY username ASC
+        LIMIT 500
+      `;
+      normalizedHandleIds = rows.map((r) => r.id);
+    } catch (err) {
+      console.error("[members] normalized handle search failed", err);
+    }
+  }
+
   const searchWhere = q
     ? {
         OR: [
@@ -465,6 +491,9 @@ export async function listDirectoryMembersPage(opts: {
                   },
                 },
               ]
+            : []),
+          ...(normalizedHandleIds.length
+            ? [{ id: { in: normalizedHandleIds } }]
             : []),
         ],
       }

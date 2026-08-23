@@ -43,6 +43,9 @@ function mapThread(
       senderId: m.senderId,
       body: m.body,
       createdAt: m.createdAt.toISOString(),
+      messageType: m.messageType,
+      systemEventType: m.systemEventType,
+      paymentTicketId: m.paymentTicketId,
       sender: m.sender
         ? {
             id: m.sender.id,

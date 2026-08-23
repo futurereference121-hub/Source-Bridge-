@@ -36,8 +36,11 @@ export async function GET(req: NextRequest) {
           include: { user: { select: participantUserSelect } },
         },
         messages: {
+          where: {
+            hides: { none: { userId: user.id } },
+          },
           orderBy: { createdAt: "desc" },
-          take: 1,
+          take: 8,
           include: { attachments: true },
         },
         sourcingRequest: true,
@@ -59,11 +62,25 @@ export async function GET(req: NextRequest) {
       getUnreadCount(user.id),
     ]);
 
-    const slice = rows.slice(0, limit);
+    const slice = rows.slice(0, limit).map((c) => {
+      const mine = c.participants.find((p) => p.userId === user.id);
+      const cutoff = mine?.deletedBeforeAt?.getTime() ?? 0;
+      const visibleMessages =
+        cutoff > 0
+          ? c.messages.filter((m) => m.createdAt.getTime() > cutoff)
+          : c.messages;
+      return mapConversation(
+        {
+          ...c,
+          messages: visibleMessages.slice(0, 1),
+        },
+        user.id,
+      );
+    });
 
     return Response.json({
-      conversations: slice.map((c) => mapConversation(c, user.id)),
-      nextCursor: rows.length > limit ? slice[slice.length - 1]?.id ?? null : null,
+      conversations: slice,
+      nextCursor: rows.length > limit ? rows[limit - 1]?.id ?? null : null,
       unreadCount,
     }, {
       headers: {

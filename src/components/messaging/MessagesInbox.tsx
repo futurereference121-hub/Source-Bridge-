@@ -17,10 +17,12 @@ import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { memberPhoto } from "@/lib/placeholders";
 import { ReviewPrompt } from "@/components/messaging/ReviewPrompt";
 import { PaymentTicketCard, type PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
+import DisputeContextMessage from "@/components/messaging/DisputeContextMessage";
 import {
   ProposePaymentTicketButton,
   type PaymentsProposalAccess,
 } from "@/components/messaging/ProposePaymentTicketButton";
+import { disputeContextInboxPreview } from "@/lib/payments/dispute-context-copy";
 import {
   isActiveLifecycleTicket,
   MAX_ACTIVE_PAYMENT_TICKETS,
@@ -75,6 +77,8 @@ type Conversation = {
   subject: string;
   contextType: string;
   typeLabel?: string;
+  disputeCaseId?: string | null;
+  paymentTicketId?: string | null;
   lastMessageAt: string | null;
   lastMessage: Message | null;
   unread: boolean;
@@ -167,7 +171,13 @@ function previewText(message: Message | null) {
     return "Payment Ticket";
   }
   if (message.messageType === "SYSTEM") {
+    if (message.systemEventType === "DISPUTE_CONTEXT") {
+      return disputeContextInboxPreview(message.body || "");
+    }
     const body = message.body?.trim();
+    if (body && /\b(?:dispute|txn|ticket)\s+[a-z0-9_-]{8,}/i.test(body)) {
+      return disputeContextInboxPreview(body);
+    }
     return body ? body.slice(0, 90) : "Official notification";
   }
   const body = message.body?.trim();
@@ -271,6 +281,7 @@ function visibleChatTickets(
       protectedStatus: t.protectedTxnStatus ?? null,
       fundedAt: t.fundedAt ?? null,
       hiddenFromChatAt: t.hiddenFromChatAt ?? null,
+      origin: t.origin ?? null,
     }),
   );
 }
@@ -570,6 +581,57 @@ export function MessagesInbox({
   useEffect(() => {
     void loadConversations();
   }, [loadConversations]);
+
+  // Soft-reconcile inbox list so resurfaced chats appear with notifications
+  // (not only after full remount). Keep interval modest vs thread soft-poll.
+  useEffect(() => {
+    let cancelled = false;
+    async function softList() {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      try {
+        const url = new URL("/api/conversations", window.location.origin);
+        url.searchParams.set("limit", "30");
+        const res = await fetch(url.pathname + url.search, {
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          conversations: Conversation[];
+          nextCursor: string | null;
+        };
+        setConversations((prev) => {
+          const byId = new Map(prev.map((c) => [c.id, c]));
+          for (const c of data.conversations) {
+            byId.set(c.id, c);
+          }
+          // Preserve relative order from server for first page; keep extras.
+          const ordered = data.conversations.map((c) => byId.get(c.id)!);
+          for (const c of prev) {
+            if (!data.conversations.some((x) => x.id === c.id)) {
+              ordered.push(c);
+            }
+          }
+          return ordered;
+        });
+        if (!listCursor) setListCursor(data.nextCursor);
+      } catch {
+        /* soft */
+      }
+    }
+    const id = window.setInterval(() => void softList(), 8000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void softList();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [listCursor]);
 
   useEffect(() => {
     const ids = conversations
@@ -1703,7 +1765,28 @@ export function MessagesInbox({
                                 {displayName(m.sender ?? null)}
                               </p>
                             ) : null}
-                            {m.body?.trim() ? (
+                            {isSystem &&
+                            (m.systemEventType === "DISPUTE_CONTEXT" ||
+                              /\b(?:dispute|txn|ticket)\s+[a-z0-9_-]{8,}/i.test(
+                                m.body || "",
+                              )) ? (
+                              <DisputeContextMessage
+                                body={m.body || ""}
+                                createdAt={m.createdAt}
+                                structured={{
+                                  disputeCaseId:
+                                    activeConversation?.disputeCaseId ?? null,
+                                  paymentTicketId:
+                                    m.paymentTicketId ||
+                                    activeConversation?.paymentTicketId ||
+                                    null,
+                                  // Party inbox: stay in support thread (not admin UI).
+                                  reviewHref: activeConversation?.id
+                                    ? `/inbox/${activeConversation.id}`
+                                    : "#",
+                                }}
+                              />
+                            ) : m.body?.trim() ? (
                               <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                                 {m.body}
                               </p>

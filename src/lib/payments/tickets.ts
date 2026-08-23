@@ -736,6 +736,7 @@ export async function ensureConversationPaymentTicketMessages(
         select: {
           status: true,
           fundedAt: true,
+          origin: true,
         },
       },
     },
@@ -748,6 +749,7 @@ export async function ensureConversationPaymentTicketMessages(
       protectedStatus: t.protectedTransaction?.status ?? null,
       fundedAt: t.protectedTransaction?.fundedAt ?? null,
       hiddenFromChatAt: t.hiddenFromChatAt ?? null,
+      origin: t.protectedTransaction?.origin ?? null,
     }),
   );
   if (visible.length === 0) return 0;
@@ -1029,6 +1031,7 @@ export async function listConversationPaymentTickets(
           (t.protectedTransaction?.finalTransferredMinor ?? 0) > 0 ||
           (t.protectedTransaction?.refundedMinor ?? 0) > 0,
         hiddenFromChatAt: t.hiddenFromChatAt ?? null,
+        origin: t.protectedTransaction?.origin ?? null,
       }),
     )
     .map((t) =>

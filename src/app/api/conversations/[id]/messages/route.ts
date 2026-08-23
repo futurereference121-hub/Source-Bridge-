@@ -17,7 +17,10 @@ import {
   mergePaymentTicketsIntoTimeline,
 } from "@/lib/payments/tickets";
 import { bumpConversationActivity } from "@/lib/conversation-activity";
-import { messageVisibleToUserWhere } from "@/lib/conversation-hide";
+import {
+  getParticipantDeleteCutoff,
+  messageVisibleToUserWhere,
+} from "@/lib/conversation-hide";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
 
@@ -45,10 +48,12 @@ export async function GET(req: NextRequest, { params }: Params) {
       MAX_LIMIT,
     );
 
+    const deletedBeforeAt = await getParticipantDeleteCutoff(id, user.id);
+
     const rows = await prisma.message.findMany({
       where: {
         conversationId: id,
-        ...messageVisibleToUserWhere(user.id),
+        ...messageVisibleToUserWhere(user.id, deletedBeforeAt),
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,

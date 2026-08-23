@@ -512,6 +512,8 @@ model ConversationParticipant {
   leftAt         DateTime?
   /// Per-user inbox hide — does not affect the other participant.
   hiddenAt       DateTime?
+  /// Per-user Delete cutoff — on resurface, only messages after this are visible.
+  deletedBeforeAt DateTime?
 
   @@unique([conversationId, userId])
   @@index([userId, lastReadAt])

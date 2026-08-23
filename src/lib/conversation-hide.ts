@@ -5,9 +5,8 @@ import { bumpConversationActivity } from "@/lib/conversation-activity";
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
 /**
- * Clear per-user inbox hide so the conversation resurfaces for all
- * participants who had hidden/deleted it from their inbox.
- * Does not touch leftAt, Message rows, or Payment Tickets.
+ * Clear per-user inbox hide so the conversation resurfaces.
+ * Never clears deletedBeforeAt — Delete keeps a history cutoff.
  */
 export async function clearConversationHidden(
   conversationId: string,
@@ -29,7 +28,7 @@ export async function bumpAndResurfaceConversation(
   opts?: { touchLastMessage?: boolean },
 ): Promise<number> {
   const version = await bumpConversationActivity(conversationId, client, opts);
-  await clearConversationHidden(conversationId, client);
+  // bumpConversationActivity already clears hiddenAt; keep helper for callers.
   return version;
 }
 
@@ -40,10 +39,7 @@ function throwHttp(message: string, status: number, code?: string): never {
   throw err;
 }
 
-/**
- * Soft-hide a conversation for the caller only (Hide chat / Delete chat).
- * Shared messages and financial tickets are never destroyed.
- */
+/** Soft-hide from inbox only — full history remains on resurface. */
 export async function hideConversationForUser(
   conversationId: string,
   userId: string,
@@ -57,12 +53,52 @@ export async function hideConversationForUser(
 }
 
 /**
- * Prisma filter: exclude messages this user has Delete-for-me'd.
+ * Delete from inbox for this user only. Sets a cutoff so resurfaced chats
+ * show only messages after this moment. Does not destroy shared Message rows.
  */
-export function messageVisibleToUserWhere(userId: string): Prisma.MessageWhereInput {
+export async function deleteConversationForUser(
+  conversationId: string,
+  userId: string,
+): Promise<void> {
+  const now = new Date();
+  await prisma.conversationParticipant.update({
+    where: {
+      conversationId_userId: { conversationId, userId },
+    },
+    data: {
+      hiddenAt: now,
+      deletedBeforeAt: now,
+    },
+  });
+}
+
+/**
+ * Prisma filter: exclude Delete-for-me hides and pre-delete-cutoff messages.
+ */
+export function messageVisibleToUserWhere(
+  userId: string,
+  deletedBeforeAt?: Date | null,
+): Prisma.MessageWhereInput {
   return {
     hides: { none: { userId } },
+    ...(deletedBeforeAt
+      ? { createdAt: { gt: deletedBeforeAt } }
+      : {}),
   };
+}
+
+export async function getParticipantDeleteCutoff(
+  conversationId: string,
+  userId: string,
+  client: DbClient = prisma,
+): Promise<Date | null> {
+  const row = await client.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: { conversationId, userId },
+    },
+    select: { deletedBeforeAt: true },
+  });
+  return row?.deletedBeforeAt ?? null;
 }
 
 /**

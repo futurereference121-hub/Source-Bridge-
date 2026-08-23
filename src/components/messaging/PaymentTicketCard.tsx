@@ -11,6 +11,7 @@ import {
 } from "@/components/messaging/ProposePaymentTicketButton";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
+import { AddPhotoControl } from "@/components/media/AddPhotoControl";
 import {
   deriveCompletedFinancialSubstatus,
   getPaymentTicketActions,
@@ -272,6 +273,7 @@ export function PaymentTicketCard({
   const [gone, setGone] = useState(false);
   const autoExpandDone = useRef(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuPanelRef = useRef<HTMLDivElement | null>(null);
   const [checkout, setCheckout] = useState<{
     clientSecret: string;
     publishableKey: string;
@@ -449,12 +451,15 @@ export function PaymentTicketCard({
   useEffect(() => {
     if (!menuOpen) return;
     function onDoc(e: MouseEvent) {
-      if (!menuRef.current?.contains(e.target as Node)) {
-        setMenuOpen(false);
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || menuPanelRef.current?.contains(t)) {
+        return;
       }
+      setMenuOpen(false);
     }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    // Use click (not mousedown) so menu item onClick always fires first.
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
   }, [menuOpen]);
 
   // Soft revalidate ticket state while conversation is open (visibility-aware).
@@ -786,7 +791,19 @@ export function PaymentTicketCard({
           shipmentPhotoUrl: shipmentPhotoUrl || undefined,
         }),
       });
-      const json = (await res.json()) as { ok?: boolean; error?: string };
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        activityVersion?: number;
+        ticket?: PaymentTicketView;
+        transaction?: {
+          status?: string;
+          trackingNumber?: string | null;
+          trackingCarrier?: string | null;
+          shipmentPhotoUrl?: string | null;
+          shippedAt?: string | null;
+        };
+      };
       if (!res.ok) {
         setError(json.error || "Could not mark as shipped");
       } else {
@@ -794,8 +811,46 @@ export function PaymentTicketCard({
         setCarrier("");
         setTrackingInput("");
         setShipmentPhotoUrl("");
-        await load();
+        setShipmentPhotoPreview("");
+        // Apply canonical mutation response immediately (before remote poll).
+        let nextLocal: PaymentTicketView | null = null;
+        if (json.ticket) {
+          const next = normalizeTicketView(json.ticket);
+          delete (next as { viewer?: unknown }).viewer;
+          setTicket((prev) => {
+            if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
+            nextLocal = next;
+            return next;
+          });
+        } else if (json.transaction) {
+          setTicket((prev) => {
+            if (!prev) return prev;
+            nextLocal = {
+              ...prev,
+              trackingNumber:
+                json.transaction?.trackingNumber || prev.trackingNumber,
+              trackingCarrier:
+                json.transaction?.trackingCarrier || prev.trackingCarrier,
+              shipmentPhotoUrl:
+                json.transaction?.shipmentPhotoUrl || prev.shipmentPhotoUrl,
+              shippedAt: json.transaction?.shippedAt ?? prev.shippedAt,
+              protectedTxnStatus:
+                json.transaction?.status || prev.protectedTxnStatus,
+              lifecycleStage: "AWAITING_SHIPMENT",
+              actions: {
+                ...prev.actions,
+                canMarkShipped: false,
+                canAddTracking: false,
+              },
+            };
+            return nextLocal;
+          });
+        }
+        if (nextLocal) {
+          onTicketUpdated?.(nextLocal);
+        }
         onChanged?.();
+        void load({ silent: true });
       }
     } catch {
       setError("Could not mark as shipped");
@@ -974,6 +1029,7 @@ export function PaymentTicketCard({
     !ticketAppearsInChatTimeline({
       ticketStatus: ticket.status,
       protectedStatus: ticket.protectedTxnStatus ?? null,
+      origin: ticket.origin ?? null,
     })
   ) {
     return null;
@@ -1401,10 +1457,11 @@ export function PaymentTicketCard({
             : "w-full min-w-0 max-w-full overflow-visible rounded-xl border border-electric/30 bg-[#07152c] px-3 py-2.5 sm:px-4"
         }
       >
+        <div className="flex w-full min-w-0 items-start gap-1">
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="flex w-full min-w-0 items-start justify-between gap-2 text-left sm:gap-3"
+          className="flex min-w-0 flex-1 items-start justify-between gap-2 text-left sm:gap-3"
           data-sb-ticket-header="collapsed"
         >
           <div className="flex min-w-0 items-start gap-2">
@@ -1467,6 +1524,24 @@ export function PaymentTicketCard({
             aria-hidden
           />
         </button>
+        {showMenu ? (
+          <div className="relative shrink-0" ref={menuRef}>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen((v) => !v);
+              }}
+              className="mt-0.5 rounded-md border border-white/15 p-1 text-white/60 hover:border-white/30 hover:text-white"
+              aria-label="Ticket actions"
+              data-testid="ticket-actions-menu-collapsed"
+            >
+              <MoreHorizontal size={16} />
+            </button>
+          </div>
+        ) : null}
+        </div>
         {canRespond ? (
           <div
             data-testid="ticket-action-required-collapsed"
@@ -1499,6 +1574,68 @@ export function PaymentTicketCard({
             Payment processing
           </div>
         ) : null}
+        {menuOpen && mounted && showMenu
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:items-start md:justify-end md:bg-transparent md:p-0"
+                onClick={() => setMenuOpen(false)}
+              >
+                <div
+                  ref={menuPanelRef}
+                  role="menu"
+                  className="w-full max-w-xs overflow-hidden rounded-xl border border-white/15 bg-[#061228] py-1 shadow-xl md:absolute md:right-4 md:top-24 md:w-44"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {canEdit ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2.5 text-left text-xs text-white/80 hover:bg-white/5"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpen(false);
+                        setExpanded(true);
+                        setEditOpen(true);
+                      }}
+                    >
+                      Edit Terms
+                    </button>
+                  ) : null}
+                  {canCancel ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2.5 text-left text-xs text-amber-200/90 hover:bg-white/5"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpen(false);
+                        setExpanded(true);
+                        setConfirmCancel(true);
+                      }}
+                    >
+                      Cancel Agreement
+                    </button>
+                  ) : null}
+                  {canDelete ? (
+                    <button
+                      type="button"
+                      className="block w-full px-3 py-2.5 text-left text-xs text-red-300/90 hover:bg-white/5"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuOpen(false);
+                        setExpanded(true);
+                        setConfirmDelete(true);
+                      }}
+                    >
+                      Delete Ticket
+                    </button>
+                  ) : null}
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
       </div>
     );
   }
@@ -1572,6 +1709,7 @@ export function PaymentTicketCard({
                       onClick={() => setMenuOpen(false)}
                     >
                       <div
+                        ref={menuPanelRef}
                         role="menu"
                         className="w-full max-w-xs overflow-hidden rounded-xl border border-white/15 bg-[#061228] py-1 shadow-xl md:absolute md:right-4 md:top-24 md:w-44"
                         onClick={(e) => e.stopPropagation()}
@@ -1580,7 +1718,9 @@ export function PaymentTicketCard({
                           <button
                             type="button"
                             className="block w-full px-3 py-2.5 text-left text-xs text-white/80 hover:bg-white/5"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               setMenuOpen(false);
                               setEditOpen(true);
                             }}
@@ -1592,7 +1732,9 @@ export function PaymentTicketCard({
                           <button
                             type="button"
                             className="block w-full px-3 py-2.5 text-left text-xs text-amber-200/90 hover:bg-white/5"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               setMenuOpen(false);
                               setConfirmCancel(true);
                             }}
@@ -1604,7 +1746,9 @@ export function PaymentTicketCard({
                           <button
                             type="button"
                             className="block w-full px-3 py-2.5 text-left text-xs text-red-300/90 hover:bg-white/5"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               setMenuOpen(false);
                               setConfirmDelete(true);
                             }}
@@ -2047,58 +2191,29 @@ export function PaymentTicketCard({
                 origin: ticket.origin,
                 paymentOption: ticket.paymentOption,
               }) ? (
-                <label className="block text-xs text-white/55">
-                  Shipment photo (required)
-                  <input
-                    type="file"
-                    accept={IMAGE_ACCEPT_ATTR}
-                    capture="environment"
-                    className="mt-1 block w-full text-xs text-white/70"
-                    disabled={busy || photoBusy}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (!file) return;
-                      void (async () => {
-                        setPhotoBusy(true);
-                        setError("");
-                        try {
-                          const result = await uploadProfileImageFile({
-                            file,
-                            folder: "misc",
-                            kind: "stock",
-                            userId: sessionViewerId || "seller",
-                          });
-                          setShipmentPhotoUrl(result.url);
-                          setShipmentPhotoPreview(result.previewUrl);
-                        } catch (err) {
-                          setError(
-                            err instanceof Error
-                              ? err.message
-                              : "Could not upload shipment photo",
-                          );
-                        } finally {
-                          setPhotoBusy(false);
-                        }
-                      })();
+                <div className="space-y-2">
+                  <p className="text-xs text-white/55">Shipment photo (required)</p>
+                  <AddPhotoControl
+                    userId={sessionViewerId || "seller"}
+                    folder="misc"
+                    maxCount={1}
+                    urls={shipmentPhotoUrl ? [shipmentPhotoUrl] : []}
+                    onChange={(next) => {
+                      const url = next[0] || "";
+                      setShipmentPhotoUrl(url);
+                      setShipmentPhotoPreview(url);
                     }}
+                    disabled={busy || photoBusy}
+                    label="ADD PHOTO"
+                    testId="ticket-shipment-add-photo"
                   />
-                  {shipmentPhotoPreview || shipmentPhotoUrl ? (
-                    <span className="mt-2 block overflow-hidden rounded-md border border-white/15">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={shipmentPhotoPreview || shipmentPhotoUrl}
-                        alt="Shipment preview"
-                        className="max-h-24 w-full object-cover"
-                      />
-                    </span>
-                  ) : (
-                    <span className="mt-1 block text-[11px] text-white/40">
+                  {!shipmentPhotoUrl ? (
+                    <p className="text-[11px] text-white/40">
                       Photo of the packed item is required for protected listing
                       sales.
-                    </span>
-                  )}
-                </label>
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
               <p className="text-[11px] text-white/40">
                 You cannot mark delivered. Residual stays protected until buyer

@@ -16,9 +16,11 @@ const helper = read("src/lib/payments/product-purchase-ticket.ts");
 const checkout = read("src/lib/payments/checkout.ts");
 const lifecycle = read("src/lib/payments/ticket-lifecycle.ts");
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
-const purchases = read("src/app/admin/purchases/page.tsx");
+const purchasesRedirect = read("src/app/admin/purchases/page.tsx");
+const listed = read("src/app/admin/payments/listed-purchases-section.tsx");
 const layout = read("src/app/admin/layout.tsx");
 const productCheckout = read("src/app/api/payments/product-checkout/route.ts");
+const notify = read("src/lib/payment-notifications.ts");
 
 assert.match(helper, /ensureProductPurchaseTicket/);
 assert.match(helper, /getOrCreateConversationPair/);
@@ -28,16 +30,26 @@ assert.match(helper, /Product Purchase Ticket/);
 assert.match(checkout, /ensureProductPurchaseTicket/);
 assert.match(lifecycle, /isProductPurchaseOrigin/);
 assert.match(lifecycle, /if \(isProductPurchaseOrigin\(opts\.origin\)\) return false/);
+assert.match(
+  lifecycle,
+  /export function ticketAppearsInChatTimeline[\s\S]*isProductPurchaseOrigin\(opts\.origin\)\) return false/,
+);
 assert.match(card, /Submit Shipping Proof/);
 assert.match(card, /Product Purchase Ticket/);
 assert.match(card, /Reveal shipping photo/);
 assert.match(card, /Hide shipping photo/);
 assert.match(card, /ticket-product-report-issue/);
-assert.match(purchases, /Protected Purchases/);
-assert.match(purchases, /protectedTxnId=\{t\.id\}/);
-assert.match(purchases, /Safely refundable/);
-assert.match(layout, /\/admin\/purchases/);
+assert.match(card, /AddPhotoControl/);
+assert.match(purchasesRedirect, /redirect\("\/admin\/payments#listed-product-purchases"\)/);
+assert.match(listed, /LISTED PRODUCT PURCHASE/);
+assert.match(listed, /protectedTxnId=\{t\.id\}/);
+assert.match(listed, /Safely refundable/);
+assert.match(listed, /shipmentPhotoUrl/);
+assert.match(listed, /VIEW PHOTO/);
+assert.match(layout, /AdminNav/);
 assert.match(productCheckout, /origin: "PRODUCT_CHECKOUT"/);
+assert.match(notify, /\/profile\/sales/);
+assert.match(notify, /\/profile\/purchases/);
 const fulfilment = read("src/lib/payments/fulfilment.ts");
 assert.match(
   fulfilment,

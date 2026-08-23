@@ -30,7 +30,7 @@ const protectedTxnApi = read("src/app/api/admin/payments/protected-txns/route.ts
 const adminMoney = read("src/lib/payments/admin-protected-decision.ts");
 const releaseEngine = read("src/lib/payments/release.ts");
 const threadsApi = read("src/app/api/admin/payments/issues/threads/route.ts");
-const purchasesPage = read("src/app/admin/purchases/page.tsx");
+const purchasesPage = read("src/app/admin/payments/listed-purchases-section.tsx");
 const convHide = read("src/lib/conversation-hide.ts");
 const msgHideRoute = read(
   "src/app/api/conversations/[id]/messages/[messageId]/hide/route.ts",
@@ -173,7 +173,8 @@ assert.match(
   /export async function PATCH/,
   "conversation PATCH hides a thread for the caller only",
 );
-assert.match(convGet, /hiddenAt: hide \? new Date\(\) : unhide \? null/);
+assert.match(convGet, /deleteConversationForUser|hideConversationForUser/);
+assert.match(convGet, /action === "delete"/);
 assert.match(inbox, /action: "hide" \| "delete"/);
 assert.match(inbox, /Hide chat/);
 assert.match(inbox, /Delete chat/);

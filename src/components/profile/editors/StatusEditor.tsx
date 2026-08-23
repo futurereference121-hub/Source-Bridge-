@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { STATUS_TEXT_MAX } from "@/lib/limits";
@@ -20,6 +20,14 @@ type StatusEditorProps = {
   mode?: "create" | "edit";
 };
 
+type LimitState = {
+  remaining: number;
+  allowed: boolean;
+  nextAllowedAt: string | null;
+  cooldownRemainingMs: number;
+  serverNow?: string;
+};
+
 export function StatusEditor({
   onClose,
   initialText = "",
@@ -29,9 +37,40 @@ export function StatusEditor({
   const { showToast } = useAppUi();
   const [text, setText] = useState(initialText);
   const [busy, setBusy] = useState(false);
+  const [limit, setLimit] = useState<LimitState | null>(null);
+  const idempotencyKeyRef = useRef(`status_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+
+  useEffect(() => {
+    if (mode !== "create") return;
+    let cancelled = false;
+    void fetch("/api/status", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: { limit?: LimitState }) => {
+        if (cancelled || !j.limit) return;
+        setLimit({
+          remaining: Number(j.limit.remaining ?? 0),
+          allowed: Boolean(j.limit.allowed),
+          nextAllowedAt: j.limit.nextAllowedAt ?? null,
+          cooldownRemainingMs: Number(j.limit.cooldownRemainingMs ?? 0),
+          serverNow: j.limit.serverNow,
+        });
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  const blockedByDaily = mode === "create" && limit != null && !limit.allowed;
+  const blockedByCooldown =
+    mode === "create" &&
+    limit != null &&
+    (limit.cooldownRemainingMs || 0) > 0;
+  const publishDisabled = busy || blockedByDaily || blockedByCooldown;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (publishDisabled && mode === "create") return;
     if (busy) return;
     setBusy(true);
     try {
@@ -39,13 +78,14 @@ export function StatusEditor({
         await apiJson("/api/status", jsonBody("PATCH", { text: text.trim() }));
         showToast("Status updated.");
       } else {
-        await apiJson(
+        const json = (await apiJson(
           "/api/status",
           jsonBody("POST", {
             text: text.trim(),
-            idempotencyKey: `status_${Date.now()}`,
+            idempotencyKey: idempotencyKeyRef.current,
           }),
-        );
+        )) as { limit?: LimitState };
+        if (json.limit) setLimit(json.limit);
         showToast("Status published successfully.");
       }
       onClose();
@@ -79,8 +119,22 @@ export function StatusEditor({
     >
       <p className="mb-4 text-sm text-white/45">
         Status expires after 24 hours. One active status at a time — a new post
-        supersedes the previous. Maximum 3 posts per day.
+        supersedes the previous. Maximum 3 posts per day, at least 1 hour apart.
       </p>
+      {mode === "create" && blockedByDaily ? (
+        <p className="mb-3 text-xs text-amber-200/90" data-testid="status-daily-limit">
+          Daily Status limit reached (3/day). Try again tomorrow.
+        </p>
+      ) : null}
+      {mode === "create" && blockedByCooldown && !blockedByDaily ? (
+        <p className="mb-3 text-xs text-amber-200/90" data-testid="status-cooldown">
+          Wait at least 1 hour between Status updates
+          {limit?.nextAllowedAt
+            ? ` (available ${new Date(limit.nextAllowedAt).toLocaleString()})`
+            : ""}
+          .
+        </p>
+      ) : null}
       <form onSubmit={onSubmit} className="space-y-4">
         <EditorField label="Status">
           <input
@@ -91,13 +145,13 @@ export function StatusEditor({
             placeholder="Share a short update"
             required
             autoFocus
-            disabled={busy}
+            disabled={busy || publishDisabled}
           />
           <span className="mt-1 block text-right text-xs text-white/35">
             {text.length}/{STATUS_TEXT_MAX}
           </span>
         </EditorField>
-        <EditorSubmit busy={busy}>
+        <EditorSubmit busy={busy} disabled={publishDisabled && mode === "create"}>
           {busy
             ? mode === "edit"
               ? "Saving…"

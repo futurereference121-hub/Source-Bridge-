@@ -27,7 +27,10 @@ import {
   conversationActivityAt,
   getConversationActivityVersion,
 } from "@/lib/conversation-activity";
-import { messageVisibleToUserWhere } from "@/lib/conversation-hide";
+import {
+  getParticipantDeleteCutoff,
+  messageVisibleToUserWhere,
+} from "@/lib/conversation-hide";
 import { jsonError } from "@/lib/validation";
 import { z } from "zod";
 
@@ -59,6 +62,8 @@ export async function GET(_req: Request, { params }: Params) {
         }),
       ]);
     }
+
+    const deletedBeforeAt = await getParticipantDeleteCutoff(id, user.id);
 
     let activityAt: string | null = null;
     let activityVersion: number | null = null;
@@ -107,7 +112,7 @@ export async function GET(_req: Request, { params }: Params) {
           include: { user: { select: participantUserSelect } },
         },
         messages: {
-          where: messageVisibleToUserWhere(user.id),
+          where: messageVisibleToUserWhere(user.id, deletedBeforeAt),
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: RECENT_MESSAGES,
           include: {
@@ -150,7 +155,16 @@ export async function GET(_req: Request, { params }: Params) {
       await markRead(id, user.id);
     }
 
-    const activePaymentTicketCount = paymentTickets.filter((t) =>
+    const ticketsForViewer = deletedBeforeAt
+      ? paymentTickets.filter((t) => {
+          const created = Date.parse(t.createdAt || "");
+          return (
+            Number.isFinite(created) && created > deletedBeforeAt.getTime()
+          );
+        })
+      : paymentTickets;
+
+    const activePaymentTicketCount = ticketsForViewer.filter((t) =>
       isActiveLifecycleTicket({
         ticketStatus: t.status,
         protectedStatus: t.protectedTxnStatus ?? null,
@@ -163,7 +177,7 @@ export async function GET(_req: Request, { params }: Params) {
     const messages = mergePaymentTicketsIntoTimeline(
       id,
       messagesAsc,
-      paymentTickets,
+      ticketsForViewer,
     );
 
     const activeParts = conversation.participants.filter((p) => !p.leftAt);
@@ -200,7 +214,7 @@ export async function GET(_req: Request, { params }: Params) {
         viewerUserId: user.id,
         viewerUsername: user.username ?? null,
         messages,
-        paymentTickets,
+        paymentTickets: ticketsForViewer,
         activePaymentTicketCount,
         maxActivePaymentTickets: MAX_ACTIVE_PAYMENT_TICKETS,
         canCreatePaymentTicket:
@@ -230,7 +244,7 @@ export async function GET(_req: Request, { params }: Params) {
 const patchSchema = z.object({
   /** Legacy: hide/unhide */
   hidden: z.boolean().optional(),
-  /** hide | delete | unhide — Delete is soft per-user (same as hide; does not destroy shared data). */
+  /** hide | delete | unhide — Delete sets per-user history cutoff; Hide does not. */
   action: z.enum(["hide", "delete", "unhide"]).optional(),
 }).refine(
   (v) => v.hidden != null || v.action != null,
@@ -250,27 +264,55 @@ export async function PATCH(req: Request, { params }: Params) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
-    const hide =
-      parsed.data.action === "hide" ||
-      parsed.data.action === "delete" ||
-      parsed.data.hidden === true;
-    const unhide =
-      parsed.data.action === "unhide" || parsed.data.hidden === false;
+    const action = parsed.data.action;
+    const isDelete = action === "delete";
+    const isHide =
+      action === "hide" || parsed.data.hidden === true;
+    const isUnhide =
+      action === "unhide" || parsed.data.hidden === false;
 
-    await prisma.conversationParticipant.update({
-      where: {
-        conversationId_userId: { conversationId: id, userId: user.id },
-      },
-      data: {
-        hiddenAt: hide ? new Date() : unhide ? null : new Date(),
-      },
-    });
+    if (isDelete) {
+      const { deleteConversationForUser } = await import(
+        "@/lib/conversation-hide"
+      );
+      await deleteConversationForUser(id, user.id);
+      return Response.json({
+        ok: true,
+        hidden: true,
+        deleted: true,
+        action: "delete",
+      });
+    }
 
-    return Response.json({
-      ok: true,
-      hidden: hide,
-      action: parsed.data.action || (hide ? "hide" : "unhide"),
-    });
+    if (isHide) {
+      const { hideConversationForUser } = await import(
+        "@/lib/conversation-hide"
+      );
+      await hideConversationForUser(id, user.id);
+      return Response.json({
+        ok: true,
+        hidden: true,
+        deleted: false,
+        action: "hide",
+      });
+    }
+
+    if (isUnhide) {
+      await prisma.conversationParticipant.update({
+        where: {
+          conversationId_userId: { conversationId: id, userId: user.id },
+        },
+        data: { hiddenAt: null },
+      });
+      return Response.json({
+        ok: true,
+        hidden: false,
+        deleted: false,
+        action: "unhide",
+      });
+    }
+
+    return jsonError("Provide hide, delete, or unhide", 400);
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     if (status === 401) return jsonError("Sign in required", 401);

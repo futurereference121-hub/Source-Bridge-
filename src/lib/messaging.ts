@@ -605,6 +605,8 @@ export function mapConversation(
     id: string;
     subject: string;
     contextType: string;
+    disputeCaseId?: string | null;
+    paymentTicketId?: string | null;
     listingId: string | null;
     opportunityId: string | null;
     sourcingRequestId: string | null;
@@ -685,6 +687,8 @@ export function mapConversation(
     subject: c.subject,
     contextType: c.contextType,
     typeLabel: conversationTypeLabel(c.contextType),
+    disputeCaseId: c.disputeCaseId ?? null,
+    paymentTicketId: c.paymentTicketId ?? null,
     listingId: c.listingId,
     opportunityId: c.opportunityId,
     sourcingRequestId: c.sourcingRequestId,

@@ -74,13 +74,21 @@ assert.doesNotMatch(
   "no-dispute API must not require disputeId",
 );
 
-const purchases = read("src/app/admin/purchases/page.tsx");
+const purchases = read("src/app/admin/payments/listed-purchases-section.tsx");
 assert.match(purchases, /protectedTxnId=\{t\.id\}/);
 assert.match(purchases, /Safely refundable/);
 assert.doesNotMatch(
   purchases,
   /Admin refund \/ release controls appear when a buyer reports/,
 );
+
+const purchasesRedirect = read("src/app/admin/purchases/page.tsx");
+assert.match(purchasesRedirect, /\/admin\/payments#listed-product-purchases/);
+
+assert.match(hideLib, /deleteConversationForUser/);
+assert.match(hideLib, /deletedBeforeAt/);
+assert.match(convRoute, /deleteConversationForUser/);
+assert.match(schema, /deletedBeforeAt/);
 
 // Prefer reading breakdown source for fee distinctness
 const breakdown = read("src/lib/payments/breakdown.ts");

@@ -10,7 +10,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8");
 
 const reviews = read("src/app/admin/reviews/page.tsx");
-const purchases = read("src/app/admin/purchases/page.tsx");
+const purchases = read("src/app/admin/payments/listed-purchases-section.tsx");
+const purchasesRedirect = read("src/app/admin/purchases/page.tsx");
 const accordion = read("src/app/admin/reviews/admin-case-accordion.tsx");
 const evidence = read("src/app/admin/reviews/admin-evidence-gallery.tsx");
 const msgLink = read("src/app/admin/reviews/admin-dispute-message-link.tsx");
@@ -26,6 +27,7 @@ assert.doesNotMatch(
   "reviews list must not navigate to slow per-case page as primary",
 );
 assert.match(purchases, /AdminCaseAccordion/);
+assert.match(purchasesRedirect, /\/admin\/payments#listed-product-purchases/);
 assert.doesNotMatch(
   purchases,
   /href=\{`\/admin\/purchases\/\$\{t\.id\}`\}/,

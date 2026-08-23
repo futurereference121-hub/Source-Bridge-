@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { ExploreClient } from "@/app/explore/ExploreClient";
+import { SearchClient } from "@/app/search/SearchClient";
 import {
-  buildMergedLiveFeed,
   listDirectoryMembersPage,
   DIRECTORY_PAGE_SIZE_MOBILE,
 } from "@/lib/members-service";
@@ -17,10 +16,10 @@ export const metadata: Metadata = {
 };
 
 export default async function SearchPage() {
-  const [page, feed] = await Promise.all([
-    listDirectoryMembersPage({ page: 1, limit: DIRECTORY_PAGE_SIZE_MOBILE }),
-    buildMergedLiveFeed(6),
-  ]);
+  const page = await listDirectoryMembersPage({
+    page: 1,
+    limit: DIRECTORY_PAGE_SIZE_MOBILE,
+  });
 
   return (
     <Suspense
@@ -30,13 +29,10 @@ export default async function SearchPage() {
         </div>
       }
     >
-      <ExploreClient
+      <SearchClient
         initialMembers={page.members}
-        initialFeed={feed}
         initialTotal={page.total}
         initialHasMore={page.hasMore}
-        initialLimit={page.limit}
-        searchFirst
       />
     </Suspense>
   );

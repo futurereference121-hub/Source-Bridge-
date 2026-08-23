@@ -29,6 +29,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const role = request.cookies.get("sb_role")?.value ?? "";
   const isAdmin = role === "ADMIN";
+  const hasSession = Boolean(request.cookies.get("sb_session")?.value);
 
   // ── Admin routing ────────────────────────────────────────────────────────
   if (isAdmin) {
@@ -64,8 +65,12 @@ export function middleware(request: NextRequest) {
   }
 
   // Unauthenticated visitors hitting protected admin pages go to admin sign-in.
-  // Authenticated normal users are handled above; admins handled earlier.
+  // If a session cookie exists but sb_role is missing/stale, do NOT bounce —
+  // let server components authorize so valid admin sessions are not flaky.
   if (isAdminPath && !isPublicAdminEntry) {
+    if (hasSession) {
+      return NextResponse.next();
+    }
     return NextResponse.redirect(new URL("/admin/sign-in", request.url));
   }
 

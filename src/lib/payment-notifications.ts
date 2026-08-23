@@ -75,10 +75,12 @@ export async function notifyPaymentFunded(opts: {
   buyerUsername?: string | null;
   origin?: string | null;
 }): Promise<void> {
-  const ticketHref = opts.ticketId
-    ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
-    : inboxHref(opts.conversationId);
   const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const ticketHref = isProduct
+    ? "/profile/sales"
+    : opts.ticketId
+      ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+      : inboxHref(opts.conversationId);
   const buyerHandle = opts.buyerUsername
     ? `@${opts.buyerUsername.replace(/^@/, "")}`
     : "@buyer";
@@ -89,7 +91,7 @@ export async function notifyPaymentFunded(opts: {
       ? `${buyerHandle} purchased your ${opts.title.slice(0, 80)}.`
       : "Payment received",
     body: isProduct
-      ? "Open the Product Purchase Ticket to fulfil the order."
+      ? "Open Sales & Fulfilment to fulfil the order."
       : opts.title.slice(0, 140),
     href: ticketHref,
     actorId: opts.buyerId,
@@ -106,7 +108,15 @@ export async function notifyShipmentUpdate(opts: {
   buyerId: string;
   sellerId: string;
   trackingNumber?: string;
+  ticketId?: string | null;
+  origin?: string | null;
 }): Promise<void> {
+  const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const href = isProduct
+    ? "/profile/purchases"
+    : opts.ticketId
+      ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+      : inboxHref(opts.conversationId);
   await createNotification({
     userId: opts.buyerId,
     type: "PAYMENT_SHIPPING",
@@ -114,7 +124,7 @@ export async function notifyShipmentUpdate(opts: {
     body: opts.trackingNumber
       ? `Tracking: ${opts.trackingNumber.slice(0, 80)}`
       : "The sourcer added shipping details.",
-    href: inboxHref(opts.conversationId),
+    href,
     actorId: opts.sellerId,
     actorName: "Sourcer",
     dedupeKey: `pt-shipped:${opts.protectedTxnId}`,

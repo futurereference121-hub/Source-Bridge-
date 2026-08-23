@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ImagePlus } from "lucide-react";
 import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
+import DisputeContextMessage from "@/components/messaging/DisputeContextMessage";
 
 type Attachment = {
   id?: string;
@@ -15,6 +16,9 @@ type Message = {
   senderId: string | null;
   body: string;
   createdAt: string;
+  messageType?: string;
+  systemEventType?: string;
+  paymentTicketId?: string | null;
   sender: { id: string; name: string; username: string | null } | null;
   attachments?: Attachment[];
 };
@@ -23,6 +27,8 @@ type Thread = {
   id: string;
   adminPartyRole: string | null;
   subject: string;
+  disputeCaseId?: string | null;
+  paymentTicketId?: string | null;
   messages: Message[];
 };
 
@@ -226,25 +232,45 @@ export default function AdminDisputeMessenger({
         ) : (
           thread!.messages.map((m) => {
             const mine = m.senderId === adminUserId;
+            const isDisputeContext =
+              m.systemEventType === "DISPUTE_CONTEXT" ||
+              /\b(?:dispute|txn|ticket)\s+[a-z0-9_-]{8,}/i.test(m.body || "");
             return (
               <div
                 key={m.id}
                 className={`rounded-lg px-3 py-2 text-xs ${
-                  mine
-                    ? "ml-6 bg-electric/15 text-white"
-                    : "mr-6 bg-white/5 text-white/80"
+                  isDisputeContext
+                    ? "border border-electric/20 bg-electric/10 text-white/90"
+                    : mine
+                      ? "ml-6 bg-electric/15 text-white"
+                      : "mr-6 bg-white/5 text-white/80"
                 }`}
               >
-                <p className="text-[10px] uppercase tracking-wide text-white/40">
-                  {mine
-                    ? "Source Bridge"
-                    : m.sender?.username
-                      ? `@${m.sender.username}`
-                      : m.sender?.name || "Party"}
-                </p>
-                {m.body ? (
-                  <p className="mt-1 whitespace-pre-wrap">{m.body}</p>
-                ) : null}
+                {isDisputeContext ? (
+                  <DisputeContextMessage
+                    body={m.body || ""}
+                    createdAt={m.createdAt}
+                    structured={{
+                      disputeCaseId: disputeId,
+                      paymentTicketId:
+                        m.paymentTicketId || thread?.paymentTicketId || null,
+                      reviewHref: `/admin/reviews/${disputeId}`,
+                    }}
+                  />
+                ) : (
+                  <>
+                    <p className="text-[10px] uppercase tracking-wide text-white/40">
+                      {mine
+                        ? "Source Bridge"
+                        : m.sender?.username
+                          ? `@${m.sender.username}`
+                          : m.sender?.name || "Party"}
+                    </p>
+                    {m.body ? (
+                      <p className="mt-1 whitespace-pre-wrap">{m.body}</p>
+                    ) : null}
+                  </>
+                )}
                 {(m.attachments || []).map((a) => (
                   <a
                     key={a.url}

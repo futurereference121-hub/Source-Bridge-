@@ -255,7 +255,10 @@ export function ticketAppearsInChatTimeline(opts: {
   fundedAt?: Date | string | null;
   involvesMoney?: boolean;
   hiddenFromChatAt?: Date | string | null;
+  /** Listed product purchases use Purchases / Sales — not Inbox ticket cards. */
+  origin?: string | null;
 }): boolean {
+  if (isProductPurchaseOrigin(opts.origin)) return false;
   if (opts.hiddenFromChatAt) return false;
   const st = opts.ticketStatus;
   if (

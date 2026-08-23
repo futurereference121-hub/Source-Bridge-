@@ -21,6 +21,9 @@ import {
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import { sellerCanAddTracking } from "@/lib/payments/fulfilment";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
+import { bumpConversationActivity } from "@/lib/conversation-activity";
+import { getPaymentTicket } from "@/lib/payments/tickets";
+import { notifyShipmentUpdate } from "@/lib/payment-notifications";
 
 export const runtime = "nodejs";
 
@@ -69,6 +72,9 @@ async function assertTestPartyGate(
 /**
  * Seller adds tracking for PRODUCT_CHECKOUT or CHAT_TICKET protected txns.
  * Cannot self-declare DELIVERED. No funds movement.
+ *
+ * Ordering (realtime): DB ship state → activityVersion → notification →
+ * canonical mutation response (ticket + activityVersion).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -159,41 +165,67 @@ export async function POST(req: NextRequest) {
         ? "TRACKING_IN_TRANSIT"
         : null;
 
-    const updated = await prisma.$transaction(async (tx) => {
-      let st = next;
-      if (transitAction && canTransition(next, transitAction)) {
-        st = nextStatus(next, transitAction);
-      }
-      await tx.trackingEvent.create({
-        data: {
-          protectedTxnId: txn.id,
-          provider: provider.name,
-          providerStatus,
-          normalizedStatus: normalized,
-          rawPayloadJson: JSON.stringify({
+    const { updated, activityVersion, linkedTicketId } =
+      await prisma.$transaction(async (tx) => {
+        let st = next;
+        if (transitAction && canTransition(next, transitAction)) {
+          st = nextStatus(next, transitAction);
+        }
+        await tx.trackingEvent.create({
+          data: {
+            protectedTxnId: txn.id,
+            provider: provider.name,
+            providerStatus,
+            normalizedStatus: normalized,
+            rawPayloadJson: JSON.stringify({
+              trackingNumber: parsed.data.trackingNumber,
+              carrier: parsed.data.carrier || "",
+              shipmentPhotoUrl: parsed.data.shipmentPhotoUrl || "",
+              note: "seller_added",
+            }),
+            occurredAt: new Date(),
+          },
+        });
+        const row = await tx.protectedTransaction.update({
+          where: { id: txn.id },
+          data: {
+            status: st,
             trackingNumber: parsed.data.trackingNumber,
-            carrier: parsed.data.carrier || "",
-            shipmentPhotoUrl: parsed.data.shipmentPhotoUrl || "",
-            note: "seller_added",
-          }),
-          occurredAt: new Date(),
-        },
+            trackingCarrier: parsed.data.carrier || "",
+            trackingProvider: provider.name,
+            trackingStatus: normalized,
+            shippedAt: new Date(),
+            ...(parsed.data.shipmentPhotoUrl
+              ? { shipmentPhotoUrl: parsed.data.shipmentPhotoUrl }
+              : {}),
+          },
+        });
+
+        // Advance ticket activity clocks so client stale-guards accept shipped state.
+        await tx.paymentTicket.updateMany({
+          where: { protectedTransactionId: txn.id },
+          data: { lastMeaningfulActivityAt: new Date() },
+        });
+
+        let version = 0;
+        if (txn.conversationId) {
+          version = await bumpConversationActivity(txn.conversationId, tx, {
+            touchLastMessage: true,
+          });
+        }
+
+        const linked = await tx.paymentTicket.findFirst({
+          where: { protectedTransactionId: txn.id },
+          select: { id: true },
+          orderBy: { updatedAt: "desc" },
+        });
+
+        return {
+          updated: row,
+          activityVersion: version,
+          linkedTicketId: linked?.id ?? null,
+        };
       });
-      return tx.protectedTransaction.update({
-        where: { id: txn.id },
-        data: {
-          status: st,
-          trackingNumber: parsed.data.trackingNumber,
-          trackingCarrier: parsed.data.carrier || "",
-          trackingProvider: provider.name,
-          trackingStatus: normalized,
-          shippedAt: new Date(),
-          ...(parsed.data.shipmentPhotoUrl
-            ? { shipmentPhotoUrl: parsed.data.shipmentPhotoUrl }
-            : {}),
-        },
-      });
-    });
 
     await recordAuditEvent({
       protectedTxnId: txn.id,
@@ -202,27 +234,43 @@ export async function POST(req: NextRequest) {
       meta: { trackingNumber: parsed.data.trackingNumber },
     });
 
+    // Notify only after authoritative state + activityVersion are committed.
     if (txn.conversationId) {
-      const conversationId = txn.conversationId;
-      void import("@/lib/payment-notifications").then(({ notifyShipmentUpdate }) =>
-        notifyShipmentUpdate({
+      try {
+        await notifyShipmentUpdate({
           protectedTxnId: txn.id,
-          conversationId,
+          conversationId: txn.conversationId,
           buyerId: txn.buyerId,
           sellerId: txn.sellerId,
           trackingNumber: parsed.data.trackingNumber,
-        }),
-      );
+          ticketId: linkedTicketId,
+          origin: txn.origin,
+        });
+      } catch (err) {
+        console.error("[payments:tracking:notify]", err);
+      }
+    }
+
+    let ticket = null;
+    if (linkedTicketId) {
+      try {
+        ticket = await getPaymentTicket(linkedTicketId, user.id);
+      } catch (err) {
+        console.error("[payments:tracking:ticket]", err);
+      }
     }
 
     return Response.json({
       ok: true,
+      activityVersion,
+      ticket,
       transaction: {
         id: updated.id,
         status: updated.status,
         trackingStatus: updated.trackingStatus,
         trackingNumber: updated.trackingNumber,
         trackingCarrier: updated.trackingCarrier,
+        shipmentPhotoUrl: updated.shipmentPhotoUrl || null,
         shippedAt: updated.shippedAt?.toISOString() ?? null,
       },
       notice:
@@ -283,21 +331,34 @@ export async function PATCH(req: NextRequest) {
       // Carrier delivered ≠ buyer receipt. Do not set deliveredAt or start inspection.
     }
 
-    await prisma.trackingEvent.create({
-      data: {
-        protectedTxnId: txn.id,
-        provider: result.provider,
-        providerStatus: result.providerStatus,
-        normalizedStatus: normalized,
-        rawPayloadJson: JSON.stringify(result.raw),
-        occurredAt: result.occurredAt,
-      },
-    });
+    const { updated, activityVersion } = await prisma.$transaction(
+      async (tx) => {
+        await tx.trackingEvent.create({
+          data: {
+            protectedTxnId: txn.id,
+            provider: result.provider,
+            providerStatus: result.providerStatus,
+            normalizedStatus: normalized,
+            rawPayloadJson: JSON.stringify(result.raw),
+            occurredAt: result.occurredAt,
+          },
+        });
 
-    const updated = await prisma.protectedTransaction.update({
-      where: { id: txn.id },
-      data: updates,
-    });
+        const row = await tx.protectedTransaction.update({
+          where: { id: txn.id },
+          data: updates,
+        });
+
+        let version = 0;
+        if (txn.conversationId && updates.status) {
+          version = await bumpConversationActivity(txn.conversationId, tx, {
+            touchLastMessage: true,
+          });
+        }
+
+        return { updated: row, activityVersion: version };
+      },
+    );
 
     await recordAuditEvent({
       protectedTxnId: txn.id,
@@ -308,6 +369,7 @@ export async function PATCH(req: NextRequest) {
 
     return Response.json({
       ok: true,
+      activityVersion,
       normalizedStatus: normalized,
       transaction: {
         id: updated.id,
