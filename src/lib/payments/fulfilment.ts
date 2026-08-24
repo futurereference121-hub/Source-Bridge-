@@ -177,6 +177,7 @@ export function mapProtectedTxnSummary(
     trackingNumber: string;
     trackingCarrier: string;
     trackingStatus: string;
+    shipmentPhotoUrl?: string | null;
     createdAt: Date;
     listingId: string | null;
     conversationId?: string | null;
@@ -261,6 +262,7 @@ export function mapProtectedTxnSummary(
     trackingNumber: t.trackingNumber || "",
     trackingCarrier: t.trackingCarrier || "",
     trackingStatus: t.trackingStatus || "",
+    shipmentPhotoUrl: t.shipmentPhotoUrl || "",
     createdAt: t.createdAt.toISOString(),
     conversationId: t.conversationId ?? null,
     paymentTicketId: t.paymentTicket?.id ?? null,

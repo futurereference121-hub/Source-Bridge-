@@ -73,7 +73,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 }
 
-/** Safe hard-delete for unfunded PROPOSED tickets only. */
+/** Safe hard-delete for unfunded PROPOSED / DRAFT / ACCEPTED tickets only. */
 export async function DELETE(_req: NextRequest, ctx: Ctx) {
   try {
     const user = await requireSessionUser();

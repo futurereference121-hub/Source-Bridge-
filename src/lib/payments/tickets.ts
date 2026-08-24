@@ -168,7 +168,7 @@ export function ticketInvolvesMoney(input: FundingGuardInputs): boolean {
 /**
  * Lifecycle actions for a party viewing a ticket.
  * - PROPOSED (never dual-accepted): edit + safe delete
- * - ACCEPTED unfunded: edit (supersede) + cancel agreement
+ * - ACCEPTED unfunded: edit (renegotiate) + cancel agreement + safe delete
  * - FUNDED / money: none of the above
  */
 export function computeTicketLifecycleActions(opts: {
@@ -1738,6 +1738,8 @@ export async function createOrRevisePaymentTicket(opts: {
       actorName: creator?.name || "",
       actorUsername: creator?.username,
       title: ticket.title,
+      revision: ticket.revision,
+      isRevision: Boolean(open),
     }),
   );
 

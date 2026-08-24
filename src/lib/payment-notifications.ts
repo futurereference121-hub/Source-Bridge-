@@ -13,7 +13,7 @@ function inboxHref(conversationId: string): string {
   return `/inbox/${conversationId}`;
 }
 
-/** Counterparty notification when a Payment Ticket is proposed. */
+/** Counterparty notification when a Payment Ticket is proposed or revised. */
 export async function notifyPaymentTicketProposed(opts: {
   ticketId: string;
   conversationId: string;
@@ -22,17 +22,28 @@ export async function notifyPaymentTicketProposed(opts: {
   actorName: string;
   actorUsername?: string | null;
   title: string;
+  /** Current ticket revision — must be unique per revise so renegotiation notifies. */
+  revision?: number;
+  /** True when in-place revise invalidated prior acceptance. */
+  isRevision?: boolean;
 }): Promise<void> {
   const who = actorLabel(opts.actorName, opts.actorUsername);
+  const revision = Math.max(1, Number(opts.revision) || 1);
+  const isRevision = Boolean(opts.isRevision);
   await createNotification({
     userId: opts.counterpartyId,
     type: "PAYMENT_TICKET",
-    title: `${who} proposed a Payment Ticket`,
-    body: opts.title.slice(0, 140),
-    href: inboxHref(opts.conversationId),
+    title: isRevision
+      ? `${who} revised Payment Ticket terms`
+      : `${who} proposed a Payment Ticket`,
+    body: isRevision
+      ? "Prior acceptance was cleared. Review and accept the new terms."
+      : opts.title.slice(0, 140),
+    href: `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`,
     actorId: opts.actorId,
     actorName: who,
-    dedupeKey: `pt-proposed:${opts.ticketId}`,
+    // Include revision so edit/renegotiation is not silently deduped.
+    dedupeKey: `pt-proposed:${opts.ticketId}:v${revision}`,
   });
 }
 

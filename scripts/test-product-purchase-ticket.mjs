@@ -45,21 +45,64 @@ assert.match(listed, /LISTED PRODUCT PURCHASE/);
 assert.match(listed, /protectedTxnId=\{t\.id\}/);
 assert.match(listed, /Safely refundable/);
 assert.match(listed, /shipmentPhotoUrl/);
-assert.match(listed, /VIEW PHOTO/);
+assert.match(listed, /AdminShipmentPhoto/);
+const adminPhoto = read("src/components/admin/AdminShipmentPhoto.tsx");
+assert.match(adminPhoto, /VIEW PHOTO/);
 assert.match(layout, /AdminNav/);
 assert.match(productCheckout, /origin: "PRODUCT_CHECKOUT"/);
 assert.match(notify, /\/profile\/sales/);
 assert.match(notify, /\/profile\/purchases/);
-const fulfilment = read("src/lib/payments/fulfilment.ts");
 assert.match(
-  fulfilment,
+  notify,
+  /Open Sales & Fulfilment to fulfil the order/,
+  "product purchase notifications deep-link sellers to Sales & Fulfilment",
+);
+const purchasesPage = read("src/app/profile/purchases/page.tsx");
+const salesPage = read("src/app/profile/sales/page.tsx");
+assert.match(purchasesPage, /Listed product purchase/);
+assert.match(salesPage, /Listed product purchase/);
+assert.match(purchasesPage, /not a sourcing Payment Ticket in Inbox/);
+assert.match(salesPage, /not a sourcing Payment Ticket in Inbox/);
+assert.doesNotMatch(
+  purchasesPage,
+  /origin === "CHAT_TICKET" \|\| o\.paymentTicketId/,
+  "product purchase tickets must not be labeled as sourcing via paymentTicketId alone",
+);
+assert.doesNotMatch(
+  salesPage,
+  /origin === "CHAT_TICKET" \|\| o\.paymentTicketId/,
+  "product purchase tickets must not be labeled as sourcing via paymentTicketId alone",
+);
+assert.match(purchasesPage, /o\.origin === "PRODUCT_CHECKOUT"/);
+assert.match(salesPage, /o\.origin === "PRODUCT_CHECKOUT"/);
+assert.match(purchasesPage, /shipmentPhotoUrl/);
+assert.match(salesPage, /shipmentPhotoUrl/);
+const fulfilmentMap = read("src/lib/payments/fulfilment.ts");
+assert.match(
+  fulfilmentMap,
+  /shipmentPhotoUrl: t\.shipmentPhotoUrl/,
+  "orders API must expose shipping proof for Purchases / Sales cards",
+);
+assert.match(
+  fulfilmentMap,
   /if \(opts\.origin === "PRODUCT_CHECKOUT"\) return false/,
   "product purchase buyers cannot confirm receipt / release funds",
 );
 assert.match(
-  fulfilment,
+  fulfilmentMap,
   /PRODUCT_ADMIN_ONLY/,
   "product purchase receipt decisions stay admin-controlled",
+);
+const inbox = read("src/components/messaging/MessagesInbox.tsx");
+assert.match(
+  inbox,
+  /visibleChatTickets/,
+  "Inbox must filter tickets before rendering Payment Ticket cards",
+);
+assert.match(
+  inbox,
+  /origin: t\.origin \?\? null/,
+  "Inbox timeline filter must pass origin so PRODUCT_CHECKOUT is excluded",
 );
 const tracking = read("src/app/api/payments/tracking/route.ts");
 assert.match(tracking, /shipmentPhotoUrl: parsed\.data\.shipmentPhotoUrl/);

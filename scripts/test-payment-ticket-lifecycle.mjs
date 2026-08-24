@@ -134,7 +134,8 @@ function computeTicketLifecycleActions(opts) {
     return { canEdit: true, canCancel: false, canDelete: true };
   }
   if (opts.status === "ACCEPTED") {
-    return { canEdit: true, canCancel: true, canDelete: false };
+    // Unfunded ACCEPTED may delete (hard-remove) or cancel agreement.
+    return { canEdit: true, canCancel: true, canDelete: true };
   }
   if (opts.status === "DRAFT") {
     return { canEdit: true, canCancel: false, canDelete: true };
@@ -303,8 +304,8 @@ const stranger = "stranger";
     involvesMoney: false,
   });
   ok(
-    "ACCEPTED unfunded: canEdit + canCancel, not delete",
-    a.canEdit && a.canCancel && !a.canDelete,
+    "ACCEPTED unfunded: canEdit + canCancel + canDelete",
+    a.canEdit && a.canCancel && a.canDelete,
   );
 }
 {
@@ -501,11 +502,11 @@ ok(
 );
 
 // API route shape contract
-function canHardDelete({ status, involvesMoney, bothApproved }) {
+function canHardDelete({ status, involvesMoney }) {
   if (involvesMoney) return false;
-  if (status !== "PROPOSED" && status !== "DRAFT") return false;
-  if (bothApproved) return false;
-  return true;
+  return (
+    status === "PROPOSED" || status === "DRAFT" || status === "ACCEPTED"
+  );
 }
 function canCancelAgreement({ status, involvesMoney }) {
   if (involvesMoney) return false;
@@ -513,15 +514,15 @@ function canCancelAgreement({ status, involvesMoney }) {
 }
 ok(
   "PROPOSED unfunded deleteable",
-  canHardDelete({ status: "PROPOSED", involvesMoney: false, bothApproved: false }),
+  canHardDelete({ status: "PROPOSED", involvesMoney: false }),
 );
 ok(
-  "ACCEPTED not hard-deletable",
-  !canHardDelete({ status: "ACCEPTED", involvesMoney: false, bothApproved: true }),
+  "ACCEPTED unfunded hard-deletable",
+  canHardDelete({ status: "ACCEPTED", involvesMoney: false }),
 );
 ok(
   "FUNDED spoof not deletable",
-  !canHardDelete({ status: "FUNDED", involvesMoney: true, bothApproved: true }),
+  !canHardDelete({ status: "FUNDED", involvesMoney: true }),
 );
 ok(
   "ACCEPTED unfunded cancellable",

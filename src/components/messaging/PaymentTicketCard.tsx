@@ -2750,9 +2750,16 @@ export function PaymentTicketCard({
               sellerId: ticket.sellerId,
             }}
             onCloseEdit={() => setEditOpen(false)}
-            onCreated={() => {
+            onCreated={({ ticket: next }) => {
               setEditOpen(false);
-              void load();
+              if (next?.id) {
+                const normalized = normalizeTicketView(next);
+                delete (normalized as { viewer?: unknown }).viewer;
+                setTicket(normalized);
+                onTicketUpdated?.(normalized);
+              } else {
+                void load();
+              }
               onChanged?.();
             }}
           />

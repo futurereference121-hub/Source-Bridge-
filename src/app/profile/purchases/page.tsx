@@ -24,6 +24,7 @@ type Order = {
   inspectionEndsAt: string | null;
   conversationId?: string | null;
   paymentTicketId?: string | null;
+  shipmentPhotoUrl?: string;
   labels: { payment: string; shipping: string; delivery: string };
   listing: { id: string; slug: string; name: string; saleStatus: string } | null;
   counterparty: {
@@ -320,7 +321,52 @@ export default function PurchasesPage() {
                       </p>
                     </div>
                   ) : null}
-                  {o.origin === "CHAT_TICKET" || o.paymentTicketId ? (
+                  {o.origin === "PRODUCT_CHECKOUT" ? (
+                    <div className="sm:col-span-2 space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-electric/90">
+                        Listed product purchase
+                      </p>
+                      <p className="text-xs text-white/45">
+                        Managed here under Purchases
+                        {o.conversationId ? (
+                          <>
+                            {" · "}
+                            <Link
+                              href={`/inbox/${o.conversationId}`}
+                              className="text-electric hover:underline"
+                            >
+                              Message seller
+                            </Link>
+                          </>
+                        ) : null}
+                        {" · "}
+                        not a sourcing Payment Ticket in Inbox
+                      </p>
+                      {o.listing?.slug ? (
+                        <p className="text-xs text-white/55">
+                          Listing:{" "}
+                          <Link
+                            href={`/marketplace/${o.listing.slug}`}
+                            className="text-electric hover:underline"
+                          >
+                            {o.listing.name || o.listing.slug}
+                          </Link>
+                        </p>
+                      ) : null}
+                      {o.shipmentPhotoUrl ? (
+                        <div className="space-y-1">
+                          <p className="text-xs text-white/40">Shipping proof</p>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={o.shipmentPhotoUrl}
+                            alt="Shipment proof"
+                            className="max-h-40 rounded-lg border border-white/15 object-contain"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {o.origin === "CHAT_TICKET" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
                         Sourcing payment ticket
