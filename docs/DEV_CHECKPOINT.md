@@ -4,13 +4,13 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Final 12-step QA — Steps 1–4 checkpoint (shipping/activity sync, admin nav, human dispute context, dedicated Search). Steps 5–12 not started in this chunk. Deploy deferred until full pass.
+- **Workstream:** Final 12-step QA — Steps 5–6 checkpoint (message notification + Inbox sync; delete-chat `deletedBeforeAt` fresh resurface). Steps 7–12 not started in this chunk. Deploy deferred.
 - **Last verified commit:** (this checkpoint; see `git log -1`)
-- **Last TEST deployment:** `dpl_E4Aj5vkJpwXZVeXMyztY7fAvFwHW` (`source-bridge-5bowg9g3s-canna-cake.vercel.app`) → www.sourcebridge.app — **not redeployed for Steps 1–4**
-- **Known blocker:** Live browser QA still required for Steps 1–4 (Buyer Confirm after ship, admin tab first-click, dispute support cards, mobile Search). Steps 5–12 pending.
+- **Last TEST deployment:** `dpl_E4Aj5vkJpwXZVeXMyztY7fAvFwHW` (`source-bridge-5bowg9g3s-canna-cake.vercel.app`) → www.sourcebridge.app — **not redeployed for Steps 1–6**
+- **Known blocker:** Live browser QA still required for Steps 1–6 (dual-session message/Inbox, delete then resurface fresh). Steps 7–12 pending.
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST (`getStripeMode()` still hard-refuses Live)
-- **Last critical regression:** Steps 1–4 targeted source tests PASS; typecheck on touched areas; full suite / deploy / live QA not claimed here
-- **Migration status:** `20260821193000_message_hide_shipment_photo` APPLIED on Production TEST Neon (MessageHide + ProtectedTransaction.shipmentPhotoUrl). Prior `20260820140000_activity_version_platform_fee_refund` already APPLIED.
+- **Last critical regression:** Steps 5–6 targeted source tests PASS; typecheck PASS; full suite / deploy / live QA not claimed here
+- **Migration status:** `20260821193000_message_hide_shipment_photo` APPLIED on Production TEST Neon (MessageHide + ProtectedTransaction.shipmentPhotoUrl). Prior `20260820140000_activity_version_platform_fee_refund` already APPLIED. `20260823160000_conversation_delete_cutoff` (`deletedBeforeAt`) required for Step 6.
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 

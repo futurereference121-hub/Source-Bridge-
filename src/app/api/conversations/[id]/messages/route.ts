@@ -16,10 +16,11 @@ import {
   listConversationPaymentTickets,
   mergePaymentTicketsIntoTimeline,
 } from "@/lib/payments/tickets";
-import { bumpConversationActivity } from "@/lib/conversation-activity";
+import { bumpConversationActivity, getConversationActivityVersion } from "@/lib/conversation-activity";
 import {
   getParticipantDeleteCutoff,
   messageVisibleToUserWhere,
+  ticketsVisibleAfterDeleteCutoff,
 } from "@/lib/conversation-hide";
 import { jsonError, sendMessageSchema } from "@/lib/validation";
 import { createNotifications } from "@/lib/notifications";
@@ -69,7 +70,11 @@ export async function GET(req: NextRequest, { params }: Params) {
     const mapped = [...slice].reverse().map(mapMessage);
     // Authoritative tickets for this conversation (all, not just page).
     // Merge so paginated window cannot hide older tickets.
-    const paymentTickets = await listConversationPaymentTickets(id, user.id);
+    // Apply Delete-for-me cutoff so load-older cannot reinject pre-delete cards.
+    const paymentTickets = ticketsVisibleAfterDeleteCutoff(
+      await listConversationPaymentTickets(id, user.id),
+      deletedBeforeAt,
+    );
     const messages = mergePaymentTicketsIntoTimeline(
       id,
       mapped,
@@ -154,42 +159,51 @@ export async function POST(req: NextRequest, { params }: Params) {
         },
       });
       if (existing) {
+        const activityVersion = await getConversationActivityVersion(id);
         return Response.json({
           ok: true,
           existing: true,
           message: mapMessage(existing),
+          activityVersion,
         });
       }
     }
 
-    const message = await prisma.$transaction(async (tx) => {
-      const msg = await tx.message.create({
-        data: {
-          conversationId: id,
-          senderId: user.id,
-          body: parsed.data.text,
-          clientMessageId,
-          createdAt: now,
-          attachments:
-            parsed.data.attachmentUrls.length > 0
-              ? {
-                  create: parsed.data.attachmentUrls.map((url) => ({
-                    url,
-                    pathname: safePathname(url),
-                  })),
-                }
-              : undefined,
-        },
-        include: {
-          attachments: true,
-          sender: { select: participantUserSelect },
-        },
-      });
-      await bumpConversationActivity(id, tx, { touchLastMessage: true });
-      // Resurface is handled inside bumpConversationActivity (clears hiddenAt).
-      await markRead(id, user.id, tx);
-      return msg;
-    });
+    // Persist → activityVersion (resurface) → markRead → then notify.
+    // Clients learn version in the same response so Inbox can catch up
+    // before (or with) the notification poll — notify never leads Inbox.
+    const { message, activityVersion } = await prisma.$transaction(
+      async (tx) => {
+        const msg = await tx.message.create({
+          data: {
+            conversationId: id,
+            senderId: user.id,
+            body: parsed.data.text,
+            clientMessageId,
+            createdAt: now,
+            attachments:
+              parsed.data.attachmentUrls.length > 0
+                ? {
+                    create: parsed.data.attachmentUrls.map((url) => ({
+                      url,
+                      pathname: safePathname(url),
+                    })),
+                  }
+                : undefined,
+          },
+          include: {
+            attachments: true,
+            sender: { select: participantUserSelect },
+          },
+        });
+        const version = await bumpConversationActivity(id, tx, {
+          touchLastMessage: true,
+        });
+        // Resurface is handled inside bumpConversationActivity (clears hiddenAt).
+        await markRead(id, user.id, tx);
+        return { message: msg, activityVersion: version };
+      },
+    );
 
     const limit = await recordDailyAction(user.id, "message", now);
 
@@ -215,6 +229,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       {
         ok: true,
         message: mapMessage(message),
+        activityVersion,
         limit,
       },
       { status: 201 },

@@ -30,6 +30,7 @@ import {
 import {
   getParticipantDeleteCutoff,
   messageVisibleToUserWhere,
+  ticketsVisibleAfterDeleteCutoff,
 } from "@/lib/conversation-hide";
 import { jsonError } from "@/lib/validation";
 import { z } from "zod";
@@ -155,14 +156,10 @@ export async function GET(_req: Request, { params }: Params) {
       await markRead(id, user.id);
     }
 
-    const ticketsForViewer = deletedBeforeAt
-      ? paymentTickets.filter((t) => {
-          const created = Date.parse(t.createdAt || "");
-          return (
-            Number.isFinite(created) && created > deletedBeforeAt.getTime()
-          );
-        })
-      : paymentTickets;
+    const ticketsForViewer = ticketsVisibleAfterDeleteCutoff(
+      paymentTickets,
+      deletedBeforeAt,
+    );
 
     const activePaymentTicketCount = ticketsForViewer.filter((t) =>
       isActiveLifecycleTicket({

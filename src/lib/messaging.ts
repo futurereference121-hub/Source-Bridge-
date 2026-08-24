@@ -110,22 +110,37 @@ export async function markRead(
 export async function getUnreadCount(userId: string): Promise<number> {
   const participations = await prisma.conversationParticipant.findMany({
     where: { userId, leftAt: null, hiddenAt: null },
-    select: { conversationId: true, lastReadAt: true },
+    select: {
+      conversationId: true,
+      lastReadAt: true,
+      deletedBeforeAt: true,
+    },
   });
   if (participations.length === 0) return 0;
 
   // Include SYSTEM messages (senderId is null) — Prisma `not: userId` skips nulls.
+  // Respect Delete-for-me cutoff + per-message hides so badge matches Inbox.
   return prisma.message.count({
     where: {
-      OR: participations.map((p) => ({
-        conversationId: p.conversationId,
-        AND: [
-          {
-            OR: [{ senderId: null }, { senderId: { not: userId } }],
-          },
-          ...(p.lastReadAt ? [{ createdAt: { gt: p.lastReadAt } }] : []),
-        ],
-      })),
+      OR: participations.map((p) => {
+        const afterRead = p.lastReadAt ? p.lastReadAt.getTime() : 0;
+        const afterDelete = p.deletedBeforeAt
+          ? p.deletedBeforeAt.getTime()
+          : 0;
+        const afterMs = Math.max(afterRead, afterDelete);
+        return {
+          conversationId: p.conversationId,
+          AND: [
+            {
+              OR: [{ senderId: null }, { senderId: { not: userId } }],
+            },
+            ...(afterMs > 0
+              ? [{ createdAt: { gt: new Date(afterMs) } }]
+              : []),
+            { hides: { none: { userId } } },
+          ],
+        };
+      }),
     },
   });
 }

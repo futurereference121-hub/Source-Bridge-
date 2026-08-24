@@ -102,6 +102,21 @@ export async function getParticipantDeleteCutoff(
 }
 
 /**
+ * After Delete-for-me, only tickets created after the cutoff resurface.
+ * In-place revises keep original createdAt — pre-delete tickets stay hidden.
+ */
+export function ticketsVisibleAfterDeleteCutoff<
+  T extends { createdAt?: string | null },
+>(tickets: T[], deletedBeforeAt: Date | null | undefined): T[] {
+  if (!deletedBeforeAt) return tickets;
+  const cutoff = deletedBeforeAt.getTime();
+  return tickets.filter((t) => {
+    const created = Date.parse(t.createdAt || "");
+    return Number.isFinite(created) && created > cutoff;
+  });
+}
+
+/**
  * Per-user Delete for me. Refuses payment-ticket / completed financial cards.
  * Does not destroy shared Message rows or attachments for other participants.
  */

@@ -34,6 +34,7 @@ import {
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 import { SourceBridgeLoader } from "@/components/ui/SourceBridgeLoader";
+import { subscribeToNewNotifications } from "@/hooks/useNotifications";
 
 type ParticipantUser = {
   id: string;
@@ -603,14 +604,28 @@ export function MessagesInbox({
           nextCursor: string | null;
         };
         setConversations((prev) => {
+          const serverIds = new Set(data.conversations.map((c) => c.id));
           const byId = new Map(prev.map((c) => [c.id, c]));
           for (const c of data.conversations) {
             byId.set(c.id, c);
           }
-          // Preserve relative order from server for first page; keep extras.
+          // First page from server is authoritative (hide/delete on another
+          // device drops here). Keep only older pagination extras below the
+          // first-page floor so softList does not resurrect hidden rows.
+          const floorMs = (() => {
+            const last = data.conversations[data.conversations.length - 1];
+            if (!last?.lastMessageAt) return null;
+            const t = new Date(last.lastMessageAt).getTime();
+            return Number.isFinite(t) ? t : null;
+          })();
           const ordered = data.conversations.map((c) => byId.get(c.id)!);
           for (const c of prev) {
-            if (!data.conversations.some((x) => x.id === c.id)) {
+            if (serverIds.has(c.id)) continue;
+            if (floorMs == null) continue;
+            const at = c.lastMessageAt
+              ? new Date(c.lastMessageAt).getTime()
+              : 0;
+            if (Number.isFinite(at) && at < floorMs) {
               ordered.push(c);
             }
           }
@@ -626,10 +641,15 @@ export function MessagesInbox({
       if (document.visibilityState === "visible") void softList();
     };
     document.addEventListener("visibilitychange", onVis);
+    // Keep Inbox in lockstep with MESSAGE notifications (never notify-ahead).
+    const unsubNotify = subscribeToNewNotifications((items) => {
+      if (items.some((n) => n.type === "MESSAGE")) void softList();
+    });
     return () => {
       cancelled = true;
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
+      unsubNotify();
     };
   }, [listCursor]);
 
@@ -1086,6 +1106,9 @@ export function MessagesInbox({
       if (!res.ok) throw new Error(data.error || "Failed to send");
 
       const message = data.message as Message;
+      if (typeof data.activityVersion === "number") {
+        activityVersionRef.current = data.activityVersion;
+      }
       setMessages((prev) =>
         prev.some((m) => m.id === message.id) ? prev : [...prev, message],
       );
