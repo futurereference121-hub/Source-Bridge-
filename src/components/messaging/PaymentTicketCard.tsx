@@ -9,8 +9,6 @@ import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPayment
 import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
-import { uploadProfileImageFile } from "@/lib/client-image-upload";
-import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 import { AddPhotoControl } from "@/components/media/AddPhotoControl";
 import {
   deriveCompletedFinancialSubstatus,
@@ -297,10 +295,6 @@ export function PaymentTicketCard({
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
   const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
-  const [issueEvidencePreviews, setIssueEvidencePreviews] = useState<string[]>([]);
-  const [issuePhotoMenuOpen, setIssuePhotoMenuOpen] = useState(false);
-  const issueCameraInputRef = useRef<HTMLInputElement | null>(null);
-  const issueGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -825,6 +819,8 @@ export function PaymentTicketCard({
         } else if (json.transaction) {
           setTicket((prev) => {
             if (!prev) return prev;
+            const nextStatus =
+              json.transaction?.status || prev.protectedTxnStatus;
             nextLocal = {
               ...prev,
               trackingNumber:
@@ -834,9 +830,18 @@ export function PaymentTicketCard({
               shipmentPhotoUrl:
                 json.transaction?.shipmentPhotoUrl || prev.shipmentPhotoUrl,
               shippedAt: json.transaction?.shippedAt ?? prev.shippedAt,
-              protectedTxnStatus:
-                json.transaction?.status || prev.protectedTxnStatus,
-              lifecycleStage: "AWAITING_SHIPMENT",
+              protectedTxnStatus: nextStatus,
+              // Prefer server status for stage; do not force AWAITING_SHIPMENT.
+              lifecycleStage:
+                nextStatus === "IN_TRANSIT" ||
+                nextStatus === "OUT_FOR_DELIVERY"
+                  ? "IN_TRANSIT"
+                  : nextStatus === "DELIVERED"
+                    ? "DELIVERED"
+                    : prev.lifecycleStage === "FUNDED" ||
+                        prev.lifecycleStage === "AWAITING_SHIPMENT"
+                      ? "AWAITING_SHIPMENT"
+                      : prev.lifecycleStage,
               actions: {
                 ...prev.actions,
                 canMarkShipped: false,
@@ -2410,135 +2415,18 @@ export function PaymentTicketCard({
                       maxLength={4000}
                     />
                   </label>
-                  <div className="relative space-y-2">
-                    <input
-                      ref={issueCameraInputRef}
-                      type="file"
-                      accept={IMAGE_ACCEPT_ATTR}
-                      capture="environment"
-                      className="sr-only"
-                      tabIndex={-1}
-                      aria-hidden
-                      disabled={busy || photoBusy}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = "";
-                        setIssuePhotoMenuOpen(false);
-                        if (!file || !sessionViewerId) return;
-                        setPhotoBusy(true);
-                        try {
-                          const result = await uploadProfileImageFile({
-                            file,
-                            folder: "misc",
-                            kind: "stock",
-                            userId: sessionViewerId,
-                          });
-                          setIssueEvidenceUrls([result.url]);
-                          setIssueEvidencePreviews([result.previewUrl]);
-                        } catch (err) {
-                          setError(
-                            err instanceof Error
-                              ? err.message
-                              : "Could not upload evidence photo",
-                          );
-                        } finally {
-                          setPhotoBusy(false);
-                        }
-                      }}
-                    />
-                    <input
-                      ref={issueGalleryInputRef}
-                      type="file"
-                      accept={IMAGE_ACCEPT_ATTR}
-                      className="sr-only"
-                      tabIndex={-1}
-                      aria-hidden
-                      disabled={busy || photoBusy}
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = "";
-                        setIssuePhotoMenuOpen(false);
-                        if (!file || !sessionViewerId) return;
-                        setPhotoBusy(true);
-                        try {
-                          const result = await uploadProfileImageFile({
-                            file,
-                            folder: "misc",
-                            kind: "stock",
-                            userId: sessionViewerId,
-                          });
-                          setIssueEvidenceUrls([result.url]);
-                          setIssueEvidencePreviews([result.previewUrl]);
-                        } catch (err) {
-                          setError(
-                            err instanceof Error
-                              ? err.message
-                              : "Could not upload evidence photo",
-                          );
-                        } finally {
-                          setPhotoBusy(false);
-                        }
-                      }}
-                    />
-                    <button
-                      type="button"
-                      data-testid="ticket-add-photo-evidence"
-                      disabled={busy || photoBusy}
-                      onClick={() => setIssuePhotoMenuOpen((v) => !v)}
-                      className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-electric/40 bg-electric/10 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-electric disabled:opacity-50"
-                    >
-                      {photoBusy ? "Uploading…" : "📎 ADD PHOTO EVIDENCE"}
-                    </button>
-                    {issuePhotoMenuOpen ? (
-                      <div className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-lg border border-white/15 bg-[#07152c] shadow-lg">
-                        <button
-                          type="button"
-                          className="block w-full px-3 py-2.5 text-left text-xs text-white hover:bg-white/10"
-                          onClick={() => issueCameraInputRef.current?.click()}
-                        >
-                          TAKE A PHOTO
-                        </button>
-                        <button
-                          type="button"
-                          className="block w-full border-t border-white/10 px-3 py-2.5 text-left text-xs text-white hover:bg-white/10"
-                          onClick={() => issueGalleryInputRef.current?.click()}
-                        >
-                          UPLOAD A PHOTO
-                        </button>
-                      </div>
-                    ) : null}
-                    {issueEvidencePreviews[0] ? (
-                      <div className="flex items-start gap-3">
-                        <span className="block h-20 w-20 overflow-hidden rounded-md border border-white/15">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={issueEvidencePreviews[0]}
-                            alt="Evidence preview"
-                            className="h-full w-full object-cover"
-                          />
-                        </span>
-                        <div className="flex flex-col gap-1">
-                          <button
-                            type="button"
-                            className="text-left text-[11px] text-electric"
-                            onClick={() => setIssuePhotoMenuOpen(true)}
-                            disabled={busy || photoBusy}
-                          >
-                            Replace photo
-                          </button>
-                          <button
-                            type="button"
-                            className="text-left text-[11px] text-amber-200/80"
-                            onClick={() => {
-                              setIssueEvidenceUrls([]);
-                              setIssueEvidencePreviews([]);
-                            }}
-                            disabled={busy || photoBusy}
-                          >
-                            Remove photo
-                          </button>
-                        </div>
-                      </div>
+                  <div className="space-y-2">
+                    {sessionViewerId ? (
+                      <AddPhotoControl
+                        userId={sessionViewerId}
+                        folder="misc"
+                        maxCount={1}
+                        urls={issueEvidenceUrls}
+                        onChange={setIssueEvidenceUrls}
+                        disabled={busy || photoBusy}
+                        label="ADD PHOTO EVIDENCE"
+                        testId="ticket-add-photo-evidence"
+                      />
                     ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">

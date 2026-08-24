@@ -4,12 +4,12 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Close remaining 15-step QA gaps (chat hide/delete, admin protected refund/release without dispute, shipping photo reveal/hide)
-- **Last verified commit:** `289e66680edc6f0bf184251c8e897afb6c1799ec`
-- **Last TEST deployment:** `dpl_E4Aj5vkJpwXZVeXMyztY7fAvFwHW` (`source-bridge-5bowg9g3s-canna-cake.vercel.app`) → www.sourcebridge.app
-- **Known blocker:** Live browser QA still required for Hide/Delete chat, admin no-dispute money controls, and shipping photo reveal/hide.
+- **Workstream:** Final 12-step QA — Steps 1–4 checkpoint (shipping/activity sync, admin nav, human dispute context, dedicated Search). Steps 5–12 not started in this chunk. Deploy deferred until full pass.
+- **Last verified commit:** (this checkpoint; see `git log -1`)
+- **Last TEST deployment:** `dpl_E4Aj5vkJpwXZVeXMyztY7fAvFwHW` (`source-bridge-5bowg9g3s-canna-cake.vercel.app`) → www.sourcebridge.app — **not redeployed for Steps 1–4**
+- **Known blocker:** Live browser QA still required for Steps 1–4 (Buyer Confirm after ship, admin tab first-click, dispute support cards, mobile Search). Steps 5–12 pending.
 - **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST (`getStripeMode()` still hard-refuses Live)
-- **Last critical regression:** targeted + `test:payments:fast` + `full` PASS; typecheck PASS; build PASS; `test:live-guard` PASS
+- **Last critical regression:** Steps 1–4 targeted source tests PASS; typecheck on touched areas; full suite / deploy / live QA not claimed here
 - **Migration status:** `20260821193000_message_hide_shipment_photo` APPLIED on Production TEST Neon (MessageHide + ProtectedTransaction.shipmentPhotoUrl). Prior `20260820140000_activity_version_platform_fee_refund` already APPLIED.
 
 ## Baseline (approved, do not “fix” in tooling tasks)

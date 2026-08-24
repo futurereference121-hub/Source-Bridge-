@@ -4,6 +4,7 @@ import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import AdminCaseAccordion from "../reviews/admin-case-accordion";
+import { AdminShipmentPhoto } from "@/components/admin/AdminShipmentPhoto";
 import PaymentIssueActions from "./issue-actions";
 
 export default async function AdminListedPurchasesSection() {
@@ -91,15 +92,16 @@ export default async function AdminListedPurchasesSection() {
                         {t.listing?.name || t.title}
                       </p>
                       <p className="mt-1 text-xs text-white/45">
+                        LISTED PRODUCT PURCHASE ·{" "}
                         {isDirectPaymentOption(t.paymentOption)
                           ? "Direct Payment"
                           : "Protected Payment"}{" "}
-                        ┬╖ {t.status.replace(/_/g, " ")} ┬╖ Buyer {buyer} ┬╖ Seller{" "}
+                        · {t.status.replace(/_/g, " ")} · Buyer {buyer} · Seller{" "}
                         {seller}
                       </p>
                       {dispute ? (
                         <p className="mt-1 text-xs text-amber-200/80">
-                          Item issue ΓÇö {dispute.status.replace(/_/g, " ")}
+                          Item issue — {dispute.status.replace(/_/g, " ")}
                         </p>
                       ) : null}
                     </div>
@@ -153,25 +155,7 @@ export default async function AdminListedPurchasesSection() {
                   </p>
                 ) : null}
                 {t.shipmentPhotoUrl ? (
-                  <div
-                    className="mt-3 flex items-center gap-3"
-                    data-testid="admin-shipment-photo"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={t.shipmentPhotoUrl}
-                      alt="Shipping proof"
-                      className="h-14 w-14 rounded-md border border-white/15 object-cover"
-                    />
-                    <a
-                      href={t.shipmentPhotoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[11px] font-semibold uppercase tracking-[0.12em] text-electric hover:underline"
-                    >
-                      VIEW PHOTO
-                    </a>
-                  </div>
+                  <AdminShipmentPhoto url={t.shipmentPhotoUrl} />
                 ) : null}
                 {t.conversationId ? (
                   <Link

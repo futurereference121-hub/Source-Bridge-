@@ -1,4 +1,4 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -7,9 +7,15 @@ import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { AdminShipmentPhoto } from "@/components/admin/AdminShipmentPhoto";
 import PaymentIssueActions from "./issue-actions";
 import InactivityReleasePanel from "./inactivity-release-panel";
 import AdminListedPurchasesSection from "./listed-purchases-section";
+
+function paymentTypeLabel(origin: string | null | undefined): string {
+  if (origin === "PRODUCT_CHECKOUT") return "LISTED PRODUCT PURCHASE";
+  return "SOURCING PAYMENT";
+}
 
 export default async function AdminPaymentsPage() {
   const user = await getSessionUser();
@@ -77,6 +83,9 @@ export default async function AdminPaymentsPage() {
             refundedMinor: true,
             platformFeeRefundedMinor: true,
             conversationId: true,
+            trackingCarrier: true,
+            trackingNumber: true,
+            shipmentPhotoUrl: true,
             paymentTicket: { select: { id: true } },
           },
         },
@@ -89,10 +98,15 @@ export default async function AdminPaymentsPage() {
         id: true,
         status: true,
         paymentOption: true,
+        origin: true,
+        title: true,
         currency: true,
         totalChargeMinor: true,
         stripeMode: true,
         updatedAt: true,
+        trackingCarrier: true,
+        trackingNumber: true,
+        shipmentPhotoUrl: true,
       },
     }),
   ]);
@@ -120,11 +134,11 @@ export default async function AdminPaymentsPage() {
 
       <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
         <p>
-          Stripe configured: {isStripeConfigured() ? "yes" : "no"} Â· Mode:{" "}
-          {flags.stripeMode} Â· LIVE_PAYMENTS_ENABLED: false
+          Stripe configured: {isStripeConfigured() ? "yes" : "no"} · Mode:{" "}
+          {flags.stripeMode} · LIVE_PAYMENTS_ENABLED: false
         </p>
         <p className="mt-1">
-          Flags â€” payments: {String(flags.PAYMENTS_ENABLED)}, connect
+          Flags — payments: {String(flags.PAYMENTS_ENABLED)}, connect
           onboarding: {String(flags.CONNECT_ONBOARDING_ENABLED)}, protected:{" "}
           {String(flags.PROTECTED_PAYMENTS_ENABLED)}, instant:{" "}
           {String(flags.INSTANT_PAYMENTS_ENABLED)}, procurement:{" "}
@@ -134,8 +148,8 @@ export default async function AdminPaymentsPage() {
         </p>
         <p className="mt-1">
           Protection fee: {config.protectionFeeBps} bps (floor{" "}
-          {config.protectionFeeFloorMinor} minor) Â· Inspection:{" "}
-          {config.inspectionHours}h Â· Procurement min trust:{" "}
+          {config.protectionFeeFloorMinor} minor) · Inspection:{" "}
+          {config.inspectionHours}h · Procurement min trust:{" "}
           {config.procurementMinTrustLevel}
         </p>
       </div>
@@ -186,23 +200,23 @@ export default async function AdminPaymentsPage() {
                   <div>
                     <p className="font-medium text-white">{t.title}</p>
                     <p className="mt-1 font-mono text-xs text-white/45">
-                      txn {t.id} Â· dispute {issue.id}
+                      txn {t.id} · dispute {issue.id}
                     </p>
                     <p className="mt-1 text-sm text-white/70">
                       {issue.reason}
-                      {issue.details ? ` â€” ${issue.details.slice(0, 180)}` : ""}
+                      {issue.details ? ` — ${issue.details.slice(0, 180)}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-white/40">
                       Opened by{" "}
                       {issue.openedBy.username
                         ? `@${issue.openedBy.username}`
                         : issue.openedBy.name || issue.openedBy.email}
-                      {" Â· "}
-                      {t.origin}
-                      {t.paymentTicket?.id ? " Â· sourcing ticket" : ""}
+                      {" · "}
+                      {paymentTypeLabel(t.origin)}
+                      {t.paymentTicket?.id ? " · linked ticket" : ""}
                       {t.conversationId ? (
                         <>
-                          {" Â· "}
+                          {" · "}
                           <Link
                             href={`/inbox/${t.conversationId}`}
                             className="text-electric hover:underline"
@@ -256,6 +270,14 @@ export default async function AdminPaymentsPage() {
                     </dd>
                   </div>
                 </dl>
+                {(t.trackingNumber || t.trackingCarrier) ? (
+                  <p className="mt-3 text-xs text-white/50">
+                    {t.trackingCarrier || "Carrier"} {t.trackingNumber || ""}
+                  </p>
+                ) : null}
+                {t.shipmentPhotoUrl ? (
+                  <AdminShipmentPhoto url={t.shipmentPhotoUrl} />
+                ) : null}
                 <PaymentIssueActions
                   disputeId={issue.id}
                   currency={t.currency}
@@ -278,59 +300,65 @@ export default async function AdminPaymentsPage() {
 
       <InactivityReleasePanel />
 
-      <h2 className="mt-10 text-lg font-semibold">Recent protected transactions</h2>
       <section className="mt-10">
         <AdminListedPurchasesSection />
       </section>
 
       <h2 className="mt-10 text-lg font-semibold text-white">SOURCING PAYMENT · recent</h2>
-      <div className="mt-4 overflow-x-auto rounded-xl border border-white/10">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-white/5 text-white/50">
-            <tr>
-              <th className="px-3 py-2 font-medium">ID</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-              <th className="px-3 py-2 font-medium">Option</th>
-              <th className="px-3 py-2 font-medium">Total</th>
-              <th className="px-3 py-2 font-medium">Mode</th>
-            </tr>
-          </thead>
-          <tbody>
-            {recent.length === 0 ? (
-              <tr>
-                <td className="px-3 py-4 text-white/40" colSpan={5}>
-                  No protected transactions yet.
-                </td>
-              </tr>
-            ) : (
-              recent.map((row) => (
-                <tr key={row.id} className="border-t border-white/10">
-                  <td className="px-3 py-2 font-mono text-xs text-white/70">
-                    {row.id.slice(0, 12)}â€¦
-                  </td>
-                  <td className="px-3 py-2">{row.status}</td>
-                  <td className="px-3 py-2">{row.paymentOption}</td>
-                  <td className="px-3 py-2">
-                    {formatMinor(row.totalChargeMinor, row.currency)}
-                  </td>
-                  <td className="px-3 py-2">{row.stripeMode}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="mt-4 space-y-3">
+        {recent.filter((r) => r.origin !== "PRODUCT_CHECKOUT").length === 0 ? (
+          <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/40">
+            No sourcing protected transactions yet.
+          </p>
+        ) : (
+          recent
+            .filter((r) => r.origin !== "PRODUCT_CHECKOUT")
+            .map((row) => (
+              <div
+                key={row.id}
+                className="rounded-xl border border-white/10 bg-white/5 p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-white">
+                      {row.title || "Sourcing payment"}
+                    </p>
+                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-electric/80">
+                      {paymentTypeLabel(row.origin)}
+                    </p>
+                    <p className="mt-1 font-mono text-xs text-white/45">
+                      {row.id.slice(0, 12)}…
+                    </p>
+                    <p className="mt-1 text-xs text-white/50">
+                      {row.status} · {row.paymentOption} ·{" "}
+                      {formatMinor(row.totalChargeMinor, row.currency)} ·{" "}
+                      {row.stripeMode}
+                    </p>
+                    {row.trackingNumber ? (
+                      <p className="mt-1 text-xs text-white/45">
+                        {row.trackingCarrier || "Carrier"} {row.trackingNumber}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                {row.shipmentPhotoUrl ? (
+                  <AdminShipmentPhoto url={row.shipmentPhotoUrl} />
+                ) : null}
+              </div>
+            ))
+        )}
       </div>
 
       <p className="mt-6 text-xs text-white/40">
         Sensitive actions require re-auth + reason via audited APIs. There is no
-        universal â€œmark completedâ€ bypass. Never release on fully completed
+        universal “mark completed” bypass. Never release on fully completed
         historical TXNs.
       </p>
       <Link
         href="/admin"
         className="mt-4 inline-block text-sm text-electric hover:text-electric-hover"
       >
-        â† Admin home
+        ← Admin home
       </Link>
     </>
   );

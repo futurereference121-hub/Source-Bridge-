@@ -17,6 +17,7 @@ function read(rel) {
 const propose = read("src/components/messaging/ProposePaymentTicketButton.tsx");
 const inbox = read("src/components/messaging/MessagesInbox.tsx");
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
+const addPhoto = read("src/components/media/AddPhotoControl.tsx");
 const convGet = read("src/app/api/conversations/[id]/route.ts");
 const authMe = read("src/app/api/auth/me/route.ts");
 const appProviders = read("src/components/providers/AppProviders.tsx");
@@ -185,7 +186,11 @@ assert.match(
   /messages\/\$\{messageId\}\/hide/,
   "Delete for me must call per-message hide API",
 );
-assert.match(card, /capture="environment"/);
+assert.match(
+  card,
+  /AddPhotoControl/,
+  "shipping + dispute evidence must use shared AddPhotoControl",
+);
 assert.match(card, /data-testid="ticket-dispute-receipt"/);
 assert.match(card, /createPortal\(/);
 assert.match(
@@ -235,12 +240,24 @@ assert.match(card, /Start 12-Hour Inspection/);
 assert.match(card, /Release Funds Now/);
 assert.match(card, /Starting inspection/);
 assert.match(card, /data-testid="ticket-start-inspection"/);
-assert.match(card, /data-testid="ticket-add-photo-evidence"/);
+assert.match(card, /testId="ticket-add-photo-evidence"/);
 assert.match(card, /ADD PHOTO EVIDENCE/);
-assert.match(card, /TAKE A PHOTO/);
-assert.match(card, /UPLOAD A PHOTO/);
-assert.match(card, /Replace photo/);
-assert.match(card, /Remove photo/);
+assert.match(
+  addPhoto,
+  /data-testid=\{testId\}/,
+  "AddPhotoControl maps testId prop to data-testid",
+);
+assert.match(
+  addPhoto,
+  /TAKE A PHOTO/,
+  "shared AddPhotoControl exposes TAKE A PHOTO",
+);
+assert.match(
+  addPhoto,
+  /UPLOAD A PHOTO/,
+  "shared AddPhotoControl exposes UPLOAD A PHOTO",
+);
+assert.match(addPhoto, /Remove/);
 assert.match(
   card,
   /canReleaseNow:\s*true,\s*canReportIssue:\s*true/,

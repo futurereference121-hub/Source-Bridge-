@@ -8,8 +8,7 @@ import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
-import { uploadProfileImageFile } from "@/lib/client-image-upload";
-import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
+import { AddPhotoControl } from "@/components/media/AddPhotoControl";
 
 type Order = {
   id: string;
@@ -69,7 +68,6 @@ export default function SalesFulfilmentPage() {
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
-  const [photoBusy, setPhotoBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -392,50 +390,30 @@ export default function SalesFulfilmentPage() {
                           origin: o.origin,
                           paymentOption: o.paymentOption,
                         }) ? (
-                          <label className="block text-sm">
-                            <span className="text-white/55">
+                          <div className="space-y-2">
+                            <p className="text-sm text-white/55">
                               Shipment photo (required)
-                            </span>
-                            <input
-                              type="file"
-                              accept={IMAGE_ACCEPT_ATTR}
-                              required={!shipmentPhotoUrl}
-                              className="mt-1 block w-full text-sm text-white/70"
-                              disabled={busyId === o.id || photoBusy}
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                e.target.value = "";
-                                if (!file || !account) return;
-                                void (async () => {
-                                  setPhotoBusy(true);
-                                  try {
-                                    const result = await uploadProfileImageFile({
-                                      file,
-                                      folder: "misc",
-                                      kind: "stock",
-                                      userId: account.id,
-                                    });
-                                    setShipmentPhotoUrl(result.url);
-                                    URL.revokeObjectURL(result.previewUrl);
-                                    showToast("Shipment photo attached");
-                                  } catch (err) {
-                                    showToast(
-                                      err instanceof Error
-                                        ? err.message
-                                        : "Photo upload failed",
-                                    );
-                                  } finally {
-                                    setPhotoBusy(false);
-                                  }
-                                })();
-                              }}
-                            />
-                            <span className="mt-1 block text-xs text-white/40">
+                            </p>
+                            {account?.id ? (
+                              <AddPhotoControl
+                                userId={account.id}
+                                folder="misc"
+                                maxCount={1}
+                                urls={shipmentPhotoUrl ? [shipmentPhotoUrl] : []}
+                                onChange={(next) =>
+                                  setShipmentPhotoUrl(next[0] || "")
+                                }
+                                disabled={busyId === o.id}
+                                label="ADD PHOTO"
+                                testId="sales-shipment-add-photo"
+                              />
+                            ) : null}
+                            <p className="text-xs text-white/40">
                               {shipmentPhotoUrl
                                 ? "Photo attached"
                                 : "Photo of the packed item is required for protected listing sales."}
-                            </span>
-                          </label>
+                            </p>
+                          </div>
                         ) : null}
                         <p className="text-xs text-white/40">
                           Ship date is recorded automatically. You cannot mark
@@ -447,7 +425,6 @@ export default function SalesFulfilmentPage() {
                             showArrow={false}
                             disabled={
                               busyId === o.id ||
-                              photoBusy ||
                               (listingProtectedShipmentPhotoRequired({
                                 origin: o.origin,
                                 paymentOption: o.paymentOption,
