@@ -9,6 +9,7 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { AddPhotoControl } from "@/components/media/AddPhotoControl";
+import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 
 type Order = {
   id: string;
@@ -69,6 +70,7 @@ export default function SalesFulfilmentPage() {
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -325,15 +327,12 @@ export default function SalesFulfilmentPage() {
                         not a sourcing Payment Ticket in Inbox
                       </p>
                       {o.shipmentPhotoUrl ? (
-                        <div className="space-y-1">
-                          <p className="text-xs text-white/40">Shipping proof on file</p>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={o.shipmentPhotoUrl}
-                            alt="Shipment proof"
-                            className="max-h-40 rounded-lg border border-white/15 object-contain"
-                          />
-                        </div>
+                        <ViewPhotoControl
+                          url={o.shipmentPhotoUrl}
+                          alt="Shipment proof"
+                          caption="Shipping proof on file"
+                          testId={`sales-shipment-photo-${o.id}`}
+                        />
                       ) : null}
                     </div>
                   ) : null}
@@ -438,8 +437,9 @@ export default function SalesFulfilmentPage() {
                                 onChange={(next) =>
                                   setShipmentPhotoUrl(next[0] || "")
                                 }
+                                onBusyChange={setPhotoBusy}
                                 disabled={busyId === o.id}
-                                label="ADD PHOTO"
+                                label="ADD SHIPPING PHOTO"
                                 testId="sales-shipment-add-photo"
                               />
                             ) : null}
@@ -460,6 +460,7 @@ export default function SalesFulfilmentPage() {
                             showArrow={false}
                             disabled={
                               busyId === o.id ||
+                              photoBusy ||
                               (listingProtectedShipmentPhotoRequired({
                                 origin: o.origin,
                                 paymentOption: o.paymentOption,
@@ -468,7 +469,11 @@ export default function SalesFulfilmentPage() {
                             }
                             className="rounded-lg"
                           >
-                            {busyId === o.id ? "Saving…" : "Save tracking"}
+                            {busyId === o.id
+                              ? "Saving…"
+                              : photoBusy
+                                ? "Uploading photo…"
+                                : "Save tracking"}
                           </PrimaryButton>
                           <button
                             type="button"
@@ -486,6 +491,7 @@ export default function SalesFulfilmentPage() {
                         className="rounded-lg"
                         onClick={() => {
                           setOpenId(o.id);
+                          setPhotoBusy(false);
                           setCarrier("");
                           setTrackingNumber("");
                           setShipmentPhotoUrl("");

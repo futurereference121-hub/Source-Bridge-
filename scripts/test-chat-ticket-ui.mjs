@@ -241,7 +241,7 @@ assert.match(card, /Release Funds Now/);
 assert.match(card, /Starting inspection/);
 assert.match(card, /data-testid="ticket-start-inspection"/);
 assert.match(card, /testId="ticket-add-photo-evidence"/);
-assert.match(card, /ADD PHOTO EVIDENCE/);
+assert.match(card, /ADD EVIDENCE PHOTO/);
 assert.match(
   addPhoto,
   /data-testid=\{testId\}/,
@@ -258,6 +258,8 @@ assert.match(
   "shared AddPhotoControl exposes UPLOAD A PHOTO",
 );
 assert.match(addPhoto, /Remove/);
+assert.match(addPhoto, /Replace/);
+assert.match(addPhoto, /onBusyChange/);
 assert.match(
   card,
   /canReleaseNow:\s*true,\s*canReportIssue:\s*true/,

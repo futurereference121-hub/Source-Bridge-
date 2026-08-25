@@ -14,6 +14,7 @@ runNodeTestScripts(
     "scripts/test-explore-directory.mjs",
     "scripts/test-product-purchase-ticket.mjs",
     "scripts/test-shipping-activity-sync.mjs",
+    "scripts/test-photo-upload-control.mjs",
     "scripts/test-payment-journey-regression.mjs",
     "scripts/test-payment-ticket-lifecycle.mjs",
     "scripts/test-payments-domain.mjs",

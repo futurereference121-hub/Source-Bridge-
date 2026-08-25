@@ -7,6 +7,7 @@ import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
+import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 
 type Order = {
   id: string;
@@ -354,15 +355,12 @@ export default function PurchasesPage() {
                         </p>
                       ) : null}
                       {o.shipmentPhotoUrl ? (
-                        <div className="space-y-1">
-                          <p className="text-xs text-white/40">Shipping proof</p>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={o.shipmentPhotoUrl}
-                            alt="Shipment proof"
-                            className="max-h-40 rounded-lg border border-white/15 object-contain"
-                          />
-                        </div>
+                        <ViewPhotoControl
+                          url={o.shipmentPhotoUrl}
+                          alt="Shipment proof"
+                          caption="Shipping proof"
+                          testId={`purchase-shipment-photo-${o.id}`}
+                        />
                       ) : null}
                     </div>
                   ) : null}

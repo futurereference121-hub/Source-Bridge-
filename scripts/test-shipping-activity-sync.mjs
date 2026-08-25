@@ -22,6 +22,8 @@ assert.match(tracking, /notifyShipmentUpdate/);
 assert.match(tracking, /activityVersion/);
 assert.match(tracking, /getPaymentTicket/);
 assert.match(tracking, /lastMeaningfulActivityAt/);
+assert.match(tracking, /SHIPMENT_PHOTO_REQUIRED/);
+assert.match(tracking, /shipmentPhotoUrl: parsed\.data\.shipmentPhotoUrl/);
 assert.match(
   tracking,
   /await notifyShipmentUpdate/,

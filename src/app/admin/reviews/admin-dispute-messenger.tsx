@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus } from "lucide-react";
-import { uploadProfileImageFile } from "@/lib/client-image-upload";
-import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
+import { AddPhotoControl } from "@/components/media/AddPhotoControl";
 import DisputeContextMessage from "@/components/messaging/DisputeContextMessage";
 
 type Attachment = {
@@ -308,52 +306,28 @@ export default function AdminDisputeMessenger({
             className="w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
             placeholder={`Message ${role === "BUYER" ? "buyer" : "sourcer"}…`}
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-white/15 px-2 py-1.5 text-[11px] text-white/70">
-              <ImagePlus size={14} />
-              {uploading ? "Uploading…" : "Attach photo"}
-              <input
-                type="file"
-                accept={IMAGE_ACCEPT_ATTR}
-                className="sr-only"
-                disabled={busy || uploading || pendingUrls.length >= 3}
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (!file) return;
-                  setUploading(true);
-                  try {
-                    const result = await uploadProfileImageFile({
-                      file,
-                      folder: "misc",
-                      kind: "stock",
-                      userId: adminUserId,
-                    });
-                    setPendingUrls((prev) => [...prev, result.url].slice(0, 3));
-                    URL.revokeObjectURL(result.previewUrl);
-                  } catch (err) {
-                    setError(
-                      err instanceof Error ? err.message : "Upload failed",
-                    );
-                  } finally {
-                    setUploading(false);
-                  }
-                }}
-              />
-            </label>
-            {pendingUrls.length ? (
-              <span className="text-[11px] text-white/45">
-                {pendingUrls.length} photo{pendingUrls.length === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              disabled={busy || uploading || (!draft.trim() && !pendingUrls.length)}
-              onClick={() => void send()}
-              className="ml-auto rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-            >
-              {busy ? "Sending…" : "Send"}
-            </button>
+          <div className="space-y-2">
+            <AddPhotoControl
+              userId={adminUserId}
+              folder="misc"
+              maxCount={3}
+              urls={pendingUrls}
+              onChange={setPendingUrls}
+              onBusyChange={setUploading}
+              disabled={busy}
+              label="ADD EVIDENCE PHOTO"
+              testId="admin-dispute-add-photo"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={busy || uploading || (!draft.trim() && !pendingUrls.length)}
+                onClick={() => void send()}
+                className="ml-auto rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+              >
+                {busy ? "Sending…" : uploading ? "Uploading…" : "Send"}
+              </button>
+            </div>
           </div>
         </div>
       )}

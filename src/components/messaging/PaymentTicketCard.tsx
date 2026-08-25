@@ -284,7 +284,6 @@ export function PaymentTicketCard({
   const [carrier, setCarrier] = useState("");
   const [trackingInput, setTrackingInput] = useState("");
   const [shipmentPhotoUrl, setShipmentPhotoUrl] = useState("");
-  const [shipmentPhotoPreview, setShipmentPhotoPreview] = useState("");
   const [shippingPhotoRevealed, setShippingPhotoRevealed] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
@@ -805,7 +804,7 @@ export function PaymentTicketCard({
         setCarrier("");
         setTrackingInput("");
         setShipmentPhotoUrl("");
-        setShipmentPhotoPreview("");
+        setPhotoBusy(false);
         // Apply canonical mutation response immediately (before remote poll).
         let nextLocal: PaymentTicketView | null = null;
         if (json.ticket) {
@@ -2204,12 +2203,11 @@ export function PaymentTicketCard({
                     maxCount={1}
                     urls={shipmentPhotoUrl ? [shipmentPhotoUrl] : []}
                     onChange={(next) => {
-                      const url = next[0] || "";
-                      setShipmentPhotoUrl(url);
-                      setShipmentPhotoPreview(url);
+                      setShipmentPhotoUrl(next[0] || "");
                     }}
-                    disabled={busy || photoBusy}
-                    label="ADD PHOTO"
+                    onBusyChange={setPhotoBusy}
+                    disabled={busy}
+                    label="ADD SHIPPING PHOTO"
                     testId="ticket-shipment-add-photo"
                   />
                   {!shipmentPhotoUrl ? (
@@ -2239,7 +2237,13 @@ export function PaymentTicketCard({
                 onClick={() => void markShipped()}
                 className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
               >
-                {busy ? "Saving…" : isProductPurchaseOrigin(ticket.origin) ? "Submit Shipping Proof" : "Mark as Shipped"}
+                {busy
+                  ? "Saving…"
+                  : photoBusy
+                    ? "Uploading photo…"
+                    : isProductPurchaseOrigin(ticket.origin)
+                      ? "Submit Shipping Proof"
+                      : "Mark as Shipped"}
               </button>
             </div>
           ) : null}
@@ -2423,8 +2427,9 @@ export function PaymentTicketCard({
                         maxCount={1}
                         urls={issueEvidenceUrls}
                         onChange={setIssueEvidenceUrls}
-                        disabled={busy || photoBusy}
-                        label="ADD PHOTO EVIDENCE"
+                        onBusyChange={setPhotoBusy}
+                        disabled={busy}
+                        label="ADD EVIDENCE PHOTO"
                         testId="ticket-add-photo-evidence"
                       />
                     ) : null}
@@ -2434,6 +2439,7 @@ export function PaymentTicketCard({
                       type="button"
                       disabled={
                         busy ||
+                        photoBusy ||
                         (issueCategory === "Other"
                           ? issueReason.trim().length < 3
                           : !issueCategory.trim())
