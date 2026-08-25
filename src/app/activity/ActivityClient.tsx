@@ -26,8 +26,15 @@ export function ActivityClient() {
       }
     }
     void load();
+    let unsub: () => void = () => {};
+    void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
+      unsub = subscribeStatusChanged(() => {
+        void load();
+      });
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, []);
 

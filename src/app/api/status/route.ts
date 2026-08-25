@@ -1,86 +1,35 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
-import {
-  assertDailyLimit,
-  checkDailyLimit,
-  recordDailyAction,
-} from "@/lib/rate-limit";
-import { STATUS_MIN_INTERVAL_MS, STATUS_TTL_MS } from "@/lib/limits";
+import { STATUS_TEXT_MAX } from "@/lib/limits";
 import { jsonError, statusSchema } from "@/lib/validation";
 import { isStatusActive } from "@/lib/member-status";
 import { notifyFollowersOfPost } from "@/lib/notifications";
+import { revalidatePublicMemberSurfaces } from "@/lib/revalidate-public";
+import {
+  deleteActiveStatus,
+  publishStatusAtomic,
+  readStatusPublishState,
+} from "@/lib/status-publish";
 import { z } from "zod";
-
-function statusLimitPayload(
-  limit: Awaited<ReturnType<typeof checkDailyLimit>>,
-  opts: {
-    serverNow: Date;
-    nextAllowedAt: string | null;
-    cooldownRemainingMs: number;
-  },
-) {
-  return {
-    ...limit,
-    serverNow: opts.serverNow.toISOString(),
-    nextAllowedAt: opts.nextAllowedAt,
-    cooldownRemainingMs: opts.cooldownRemainingMs,
-    minIntervalMs: STATUS_MIN_INTERVAL_MS,
-  };
-}
-
-async function cooldownState(userId: string, now: Date) {
-  const lastSuccess = await prisma.statusUpdate.findFirst({
-    where: { userId },
-    orderBy: { postedAt: "desc" },
-    select: { postedAt: true, id: true, text: true, expiresAt: true },
-  });
-  if (!lastSuccess) {
-    return {
-      lastSuccess: null as null | typeof lastSuccess,
-      nextAllowedAt: null as string | null,
-      cooldownRemainingMs: 0,
-      allowed: true,
-    };
-  }
-  const elapsed = now.getTime() - lastSuccess.postedAt.getTime();
-  const remaining = Math.max(0, STATUS_MIN_INTERVAL_MS - elapsed);
-  return {
-    lastSuccess,
-    nextAllowedAt:
-      remaining > 0
-        ? new Date(lastSuccess.postedAt.getTime() + STATUS_MIN_INTERVAL_MS).toISOString()
-        : null,
-    cooldownRemainingMs: remaining,
-    allowed: remaining <= 0,
-  };
-}
 
 export async function GET() {
   try {
     const user = await requireSessionUser();
     const now = new Date();
-    const latest = await prisma.statusUpdate.findFirst({
-      where: { userId: user.id },
-      orderBy: { postedAt: "desc" },
-    });
-    const status = latest
+    const state = await readStatusPublishState(prisma, user.id, now);
+    const status = state.active
       ? {
-          id: latest.id,
-          text: latest.text,
-          postedAt: latest.postedAt.toISOString(),
-          expiresAt: latest.expiresAt.toISOString(),
+          id: state.active.id,
+          text: state.active.text,
+          postedAt: state.active.postedAt.toISOString(),
+          expiresAt: state.active.expiresAt.toISOString(),
+          version: state.active.postedAt.getTime(),
         }
       : null;
-    const limit = await checkDailyLimit(user.id, "status");
-    const cool = await cooldownState(user.id, now);
     return Response.json({
       status: isStatusActive(status) ? status : null,
-      limit: statusLimitPayload(limit, {
-        serverNow: now,
-        nextAllowedAt: cool.nextAllowedAt,
-        cooldownRemainingMs: cool.cooldownRemainingMs,
-      }),
+      limit: state.limit,
     });
   } catch (err) {
     const status = (err as { status?: number }).status;
@@ -107,124 +56,40 @@ export async function POST(req: NextRequest) {
       typeof body?.idempotencyKey === "string"
         ? body.idempotencyKey.trim().slice(0, 120)
         : "";
-    void idempotencyKey; // accepted for client double-click; server uses same-text window
 
-    const now = new Date();
-    const cool = await cooldownState(user.id, now);
-    if (!cool.allowed) {
-      const limit = await checkDailyLimit(user.id, "status");
-      const mins = Math.max(1, Math.ceil(cool.cooldownRemainingMs / 60_000));
-      return jsonError(
-        `You can update your Status again in ${mins} minute${mins === 1 ? "" : "s"}.`,
-        429,
-        {
-          code: "STATUS_COOLDOWN",
-          limit: statusLimitPayload(limit, {
-            serverNow: now,
-            nextAllowedAt: cool.nextAllowedAt,
-            cooldownRemainingMs: cool.cooldownRemainingMs,
-          }),
-        },
-      );
-    }
-
-    // Idempotency BEFORE expire / daily burn — never burn a slot on retry.
-    const recentSame = await prisma.statusUpdate.findFirst({
-      where: {
-        userId: user.id,
-        text: parsed.data.text,
-        postedAt: { gte: new Date(now.getTime() - 60_000) },
-      },
-      orderBy: { postedAt: "desc" },
-    });
-    if (recentSame) {
-      const limit = await checkDailyLimit(user.id, "status");
-      const coolAfter = await cooldownState(user.id, now);
-      return Response.json({
-        ok: true,
-        existing: true,
-        status: {
-          id: recentSame.id,
-          text: recentSame.text,
-          postedAt: recentSame.postedAt.toISOString(),
-          expiresAt: recentSame.expiresAt.toISOString(),
-        },
-        limit: statusLimitPayload(limit, {
-          serverNow: now,
-          nextAllowedAt: coolAfter.nextAllowedAt,
-          cooldownRemainingMs: coolAfter.cooldownRemainingMs,
-        }),
-      });
-    }
-
-    try {
-      await assertDailyLimit(user.id, "status");
-    } catch (err) {
-      if ((err as { status?: number }).status === 429) {
-        const limit = await checkDailyLimit(user.id, "status");
-        const coolAfter = await cooldownState(user.id, now);
-        return jsonError(
-          "You've used your 3 Status updates for today.",
-          429,
-          {
-            code: "STATUS_DAILY_LIMIT",
-            limit: statusLimitPayload(limit, {
-              serverNow: now,
-              nextAllowedAt: coolAfter.nextAllowedAt,
-              cooldownRemainingMs: coolAfter.cooldownRemainingMs,
-            }),
-          },
-        );
-      }
-      throw err;
-    }
-    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
-
-    const row = await prisma.$transaction(async (tx) => {
-      await tx.statusUpdate.updateMany({
-        where: {
-          userId: user.id,
-          expiresAt: { gt: now },
-        },
-        data: { expiresAt: now },
-      });
-
-      return tx.statusUpdate.create({
-        data: {
-          userId: user.id,
-          text: parsed.data.text,
-          postedAt: now,
-          expiresAt,
-        },
-      });
+    const result = await publishStatusAtomic(prisma, {
+      userId: user.id,
+      text: parsed.data.text,
+      idempotencyKey,
     });
 
-    const limit = await recordDailyAction(user.id, "status", now);
-    const coolAfter = await cooldownState(user.id, now);
+    if (!result.ok) {
+      return jsonError(result.message, 429, {
+        code: result.code,
+        limit: result.limit,
+      });
+    }
 
-    if (user.slug) {
+    if (!result.existing && user.slug) {
       await notifyFollowersOfPost({
         authorId: user.id,
         authorName: user.username ? `@${user.username}` : user.name,
         kind: "STATUS",
-        text: row.text,
+        text: result.status.text,
         href: `/members/${user.slug}`,
       });
     }
 
+    revalidatePublicMemberSurfaces({
+      slug: user.slug,
+      username: user.username,
+    });
+
     return Response.json({
       ok: true,
-      status: {
-        id: row.id,
-        text: row.text,
-        postedAt: row.postedAt.toISOString(),
-        expiresAt: row.expiresAt.toISOString(),
-      },
-      limit: statusLimitPayload(limit, {
-        serverNow: now,
-        nextAllowedAt: coolAfter.nextAllowedAt,
-        cooldownRemainingMs: coolAfter.cooldownRemainingMs,
-      }),
+      existing: Boolean(result.existing),
+      status: result.status,
+      limit: result.limit,
     });
   } catch (err) {
     const status = (err as { status?: number }).status;
@@ -238,10 +103,13 @@ export async function POST(req: NextRequest) {
 }
 
 const patchSchema = z.object({
-  text: z.string().trim().min(1).max(500),
+  text: z.string().trim().min(1).max(STATUS_TEXT_MAX),
 });
 
-/** Edit the current active status in place. */
+/**
+ * In-place text edit of the current active status.
+ * Does NOT burn daily quota or advance the 1h publication cooldown.
+ */
 export async function PATCH(req: NextRequest) {
   try {
     const user = await requireSessionUser();
@@ -260,6 +128,10 @@ export async function PATCH(req: NextRequest) {
       where: { id: current.id },
       data: { text: parsed.data.text },
     });
+    revalidatePublicMemberSurfaces({
+      slug: user.slug,
+      username: user.username,
+    });
     return Response.json({
       ok: true,
       status: {
@@ -267,6 +139,7 @@ export async function PATCH(req: NextRequest) {
         text: updated.text,
         postedAt: updated.postedAt.toISOString(),
         expiresAt: updated.expiresAt.toISOString(),
+        version: updated.postedAt.getTime(),
       },
     });
   } catch (err) {
@@ -280,21 +153,12 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE() {
   try {
     const user = await requireSessionUser();
-    const now = new Date();
-    await prisma.statusUpdate.updateMany({
-      where: { userId: user.id, expiresAt: { gt: now } },
-      data: { expiresAt: now },
+    const { limit } = await deleteActiveStatus(prisma, user.id);
+    revalidatePublicMemberSurfaces({
+      slug: user.slug,
+      username: user.username,
     });
-    const limit = await checkDailyLimit(user.id, "status");
-    const cool = await cooldownState(user.id, now);
-    return Response.json({
-      ok: true,
-      limit: statusLimitPayload(limit, {
-        serverNow: now,
-        nextAllowedAt: cool.nextAllowedAt,
-        cooldownRemainingMs: cool.cooldownRemainingMs,
-      }),
-    });
+    return Response.json({ ok: true, limit });
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);

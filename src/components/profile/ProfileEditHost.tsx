@@ -58,6 +58,8 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
     return (
       <StatusEditor
         onClose={close}
+        memberId={member.id}
+        memberSlug={member.slug}
         initialText={
           isStatusActive(member.status) ? member.status?.text || "" : ""
         }

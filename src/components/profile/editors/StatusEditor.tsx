@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { STATUS_TEXT_MAX } from "@/lib/limits";
+import { emitStatusChanged } from "@/lib/status-surface-sync";
 import {
   EditorField,
   EditorShell,
@@ -18,6 +19,8 @@ type StatusEditorProps = {
   initialText?: string;
   /** When set, PATCH edits the current active status instead of publishing new. */
   mode?: "create" | "edit";
+  memberId?: string;
+  memberSlug?: string;
 };
 
 type LimitState = {
@@ -28,17 +31,30 @@ type LimitState = {
   serverNow?: string;
 };
 
+type StatusPayload = {
+  id: string;
+  text: string;
+  postedAt: string;
+  expiresAt: string;
+  version?: number;
+};
+
 export function StatusEditor({
   onClose,
   initialText = "",
   mode = "create",
+  memberId,
+  memberSlug,
 }: StatusEditorProps) {
   const router = useRouter();
-  const { showToast } = useAppUi();
+  const { showToast, account } = useAppUi();
   const [text, setText] = useState(initialText);
   const [busy, setBusy] = useState(false);
   const [limit, setLimit] = useState<LimitState | null>(null);
-  const idempotencyKeyRef = useRef(`status_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const idempotencyKeyRef = useRef(
+    `status_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  );
+  const appliedVersionRef = useRef(0);
 
   useEffect(() => {
     if (mode !== "create") return;
@@ -68,6 +84,20 @@ export function StatusEditor({
     (limit.cooldownRemainingMs || 0) > 0;
   const publishDisabled = busy || blockedByDaily || blockedByCooldown;
 
+  function applyCanonical(status: StatusPayload | null) {
+    const version =
+      status?.version ??
+      (status ? Date.parse(status.postedAt) : Date.now());
+    if (version && version < appliedVersionRef.current) return;
+    appliedVersionRef.current = Math.max(appliedVersionRef.current, version || 0);
+    emitStatusChanged({
+      memberId: memberId || account?.id,
+      memberSlug: memberSlug || account?.slug || undefined,
+      status,
+      version,
+    });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (publishDisabled && mode === "create") return;
@@ -75,7 +105,11 @@ export function StatusEditor({
     setBusy(true);
     try {
       if (mode === "edit") {
-        await apiJson("/api/status", jsonBody("PATCH", { text: text.trim() }));
+        const json = (await apiJson(
+          "/api/status",
+          jsonBody("PATCH", { text: text.trim() }),
+        )) as { status?: StatusPayload };
+        if (json.status) applyCanonical(json.status);
         showToast("Status updated.");
       } else {
         const json = (await apiJson(
@@ -84,9 +118,22 @@ export function StatusEditor({
             text: text.trim(),
             idempotencyKey: idempotencyKeyRef.current,
           }),
-        )) as { limit?: LimitState };
-        if (json.limit) setLimit(json.limit);
-        showToast("Status published successfully.");
+        )) as { status?: StatusPayload; limit?: LimitState; existing?: boolean };
+        if (json.limit) {
+          setLimit({
+            remaining: Number(json.limit.remaining ?? 0),
+            allowed: Boolean(json.limit.allowed),
+            nextAllowedAt: json.limit.nextAllowedAt ?? null,
+            cooldownRemainingMs: Number(json.limit.cooldownRemainingMs ?? 0),
+            serverNow: json.limit.serverNow,
+          });
+        }
+        if (json.status) applyCanonical(json.status);
+        showToast(
+          json.existing
+            ? "Status already published."
+            : "Status published successfully.",
+        );
       }
       onClose();
       router.refresh();
@@ -102,6 +149,7 @@ export function StatusEditor({
     setBusy(true);
     try {
       await apiJson("/api/status", { method: "DELETE" });
+      applyCanonical(null);
       showToast("Status removed.");
       onClose();
       router.refresh();
@@ -151,6 +199,7 @@ export function StatusEditor({
             required
             autoFocus
             disabled={busy || publishDisabled}
+            data-testid="status-text-input"
           />
           <span className="mt-1 block text-right text-xs text-white/35">
             {text.length}/{STATUS_TEXT_MAX}
@@ -165,12 +214,13 @@ export function StatusEditor({
               ? "Save status"
               : "Publish status"}
         </EditorSubmit>
-        {mode === "edit" ? (
+        {mode === "edit" || (mode === "create" && Boolean(initialText)) ? (
           <button
             type="button"
             disabled={busy}
             onClick={() => void onDelete()}
             className="w-full rounded-lg border border-amber-400/30 px-3 py-2 text-xs text-amber-100 disabled:opacity-50"
+            data-testid="status-delete"
           >
             Delete status
           </button>

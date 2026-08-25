@@ -55,16 +55,19 @@ function formatTripRange(arrival: string, departure: string): string {
 
 function activeStatus(statuses: DbStatus[] | undefined): MemberStatus | null {
   if (!statuses?.length) return null;
+  // Prefer newest still-active row (do not stop at a newer expired supersession).
   const sorted = [...statuses].sort(
     (a, b) => b.postedAt.getTime() - a.postedAt.getTime(),
   );
-  const newest = sorted[0];
-  const mapped: MemberStatus = {
-    text: newest.text,
-    postedAt: newest.postedAt.toISOString(),
-    expiresAt: newest.expiresAt.toISOString(),
-  };
-  return isStatusActive(mapped) ? mapped : null;
+  for (const row of sorted) {
+    const mapped: MemberStatus = {
+      text: row.text,
+      postedAt: row.postedAt.toISOString(),
+      expiresAt: row.expiresAt.toISOString(),
+    };
+    if (isStatusActive(mapped)) return mapped;
+  }
+  return null;
 }
 
 function isOpportunityActive(o: DbOpportunity, now = new Date()): boolean {

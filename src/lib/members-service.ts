@@ -402,6 +402,8 @@ export async function buildMergedLiveFeed(
 
 const DIRECTORY_INCLUDE = {
   networkLocations: { orderBy: { sortOrder: "asc" as const }, take: 1 },
+  /** Newest status row — activeStatus() filters expired for member-card / API. */
+  statuses: { orderBy: { postedAt: "desc" as const }, take: 3 },
 } as const;
 
 export const DIRECTORY_PAGE_SIZE_MOBILE = 24;

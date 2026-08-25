@@ -10,6 +10,7 @@ import { useAppUi } from "@/components/providers/AppProviders";
 import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestComposer";
 import { memberPhoto } from "@/lib/placeholders";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
+import { isStatusActive } from "@/lib/member-status";
 
 type MemberCardProps = {
   member: Member;
@@ -39,6 +40,10 @@ export function MemberCard({ member }: MemberCardProps) {
   const { account, requireAuth, showToast } = useAppUi();
   const verified = isIdentityVerified(member);
   const message = displayMessage(member);
+  const activeStatus =
+    isStatusActive(member.status) && member.status?.text?.trim()
+      ? member.status
+      : null;
   const networkPreview = member.network.slice(0, 3);
   const photo = memberPhoto(member.photo);
   const isOwner = Boolean(account && account.id === member.id);
@@ -116,6 +121,15 @@ export function MemberCard({ member }: MemberCardProps) {
               : ""}
           </p>
         </div>
+      ) : null}
+
+      {activeStatus ? (
+        <p
+          className="mt-4 text-sm leading-snug text-white/80"
+          data-testid="member-card-status"
+        >
+          {activeStatus.text}
+        </p>
       ) : null}
 
       {message ? (

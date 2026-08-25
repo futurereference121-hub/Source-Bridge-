@@ -64,6 +64,53 @@ function MemberProfileViewInner({
   const searchParams = useSearchParams();
   const { showToast } = useAppUi();
   const activeTab = parseProfileTab(searchParams.get("tab"), isOwner);
+  const [statusOverride, setStatusOverride] = useState<
+    Member["status"] | undefined
+  >(undefined);
+
+  const liveMember: Member = {
+    ...member,
+    status: statusOverride !== undefined ? statusOverride : member.status,
+  };
+
+  useEffect(() => {
+    // Only clear the optimistic override once RSC props catch up (or surpass).
+    if (statusOverride === undefined) return;
+    if (!statusOverride) {
+      if (!member.status || !isStatusActive(member.status)) {
+        setStatusOverride(undefined);
+      }
+      return;
+    }
+    const serverTs = member.status ? Date.parse(member.status.postedAt) : 0;
+    const localTs = Date.parse(statusOverride.postedAt);
+    if (
+      member.status?.text === statusOverride.text &&
+      serverTs >= localTs
+    ) {
+      setStatusOverride(undefined);
+    }
+  }, [member.status, statusOverride]);
+
+  useEffect(() => {
+    let unsub: () => void = () => {};
+    void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
+      unsub = subscribeStatusChanged((payload) => {
+        if (payload.memberId && payload.memberId !== member.id) return;
+        if (payload.memberSlug && payload.memberSlug !== member.slug) return;
+        setStatusOverride(
+          payload.status
+            ? {
+                text: payload.status.text,
+                postedAt: payload.status.postedAt,
+                expiresAt: payload.status.expiresAt,
+              }
+            : null,
+        );
+      });
+    });
+    return () => unsub();
+  }, [member.id, member.slug]);
 
   useEffect(() => {
     if (!isOwner) return;
@@ -102,20 +149,20 @@ function MemberProfileViewInner({
             Identity verification is pending review (usually within 48 hours).
           </div>
         ) : null}
-        <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileHeader member={liveMember} isOwner={isOwner} />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active={activeTab} />
 
         <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
           {activeTab === "public" ? (
             <PublicProfilePanels
-              member={member}
+              member={liveMember}
               isOwner={isOwner}
               listings={listings}
             />
           ) : null}
 
           {activeTab === "activity" && isOwner ? (
-            <ActivityTab member={member} />
+            <ActivityTab member={liveMember} />
           ) : null}
 
           {activeTab === "listings" ? (
@@ -143,7 +190,7 @@ function MemberProfileViewInner({
           ) : null}
         </div>
 
-        {isOwner ? <ProfileEditHost member={member} /> : null}
+        {isOwner ? <ProfileEditHost member={liveMember} /> : null}
       </Container>
     </div>
   );

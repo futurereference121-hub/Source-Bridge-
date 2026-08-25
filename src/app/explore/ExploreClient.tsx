@@ -158,9 +158,17 @@ export function ExploreClient({
       }
     }
     const soft = window.setTimeout(() => void refreshFeed(), 4000);
+    let unsub: () => void = () => {};
+    void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
+      unsub = subscribeStatusChanged(() => {
+        void refreshFeed();
+        void fetchMembersPage({ q: queryRef.current, page: 1, append: false });
+      });
+    });
     return () => {
       cancelled = true;
       window.clearTimeout(soft);
+      unsub();
     };
   }, []);
 

@@ -173,7 +173,16 @@ function ProfileDashboardInner() {
       );
       setStatus(data.status?.text || status);
       setStatusLimit(data.limit);
-      showToast("Status published");
+      if (data.status) {
+        const { emitStatusChanged } = await import("@/lib/status-surface-sync");
+        emitStatusChanged({
+          memberId: account?.id,
+          memberSlug: account?.slug || undefined,
+          status: data.status,
+          version: data.status.version ?? Date.parse(data.status.postedAt),
+        });
+      }
+      showToast(data.existing ? "Status already published." : "Status published");
     });
   }
 
