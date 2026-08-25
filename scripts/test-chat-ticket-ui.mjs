@@ -137,6 +137,12 @@ assert.match(
 
 // --- REALTIME / FORM STATE ---
 assert.match(propose, /useState\(Boolean\(forceOpen \|\| editFromTicket\)\)/);
+assert.match(propose, /draftInitializedForTicketIdRef/);
+assert.match(
+  propose,
+  /draftInitializedForTicketIdRef\.current === ticketId/,
+  "edit form must not reset draft when parent re-renders with a new editFromTicket object",
+);
 assert.doesNotMatch(
   convGet,
   /Cache-Control": "public/,

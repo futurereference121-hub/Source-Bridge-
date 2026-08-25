@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, ShieldCheck, X } from "lucide-react";
 import type { PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
@@ -8,6 +8,7 @@ import {
   formatMinor,
   majorToMinor,
   minorToMajor as minorToMajorUnits,
+  parseHumanAmountToMinor,
 } from "@/lib/payments/money";
 import { TICKET_CURRENCY_OPTIONS } from "@/lib/payments/supported-currencies";
 
@@ -58,6 +59,8 @@ export type EditTicketPrefill = {
   conversationId: string;
   /** Specific ticket to supersede (required for multi-ticket conversations). */
   reviseFromTicketId?: string;
+  /** Saved revision at open — used for remote conflict notice only. */
+  revision?: number;
   title?: string;
   currency?: string;
   itemCostMinor: number;
@@ -109,6 +112,62 @@ function minorToMajor(minor: number | undefined, currency = "EUR"): string {
   return major.toFixed(2);
 }
 
+/** Parse a draft major-unit string; empty → 0 when allowEmptyZero. */
+function parseDraftMajorToMinor(
+  raw: string,
+  currency: string,
+  opts?: { allowEmptyZero?: boolean },
+): number | null {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return opts?.allowEmptyZero ? 0 : null;
+  return parseHumanAmountToMinor(trimmed, currency);
+}
+
+/** Best-effort minor for live estimate; incomplete drafts like "12." still estimate. */
+function estimateDraftMinor(raw: string, currency: string): number {
+  const parsed = parseDraftMajorToMinor(raw, currency, { allowEmptyZero: true });
+  if (parsed != null) return parsed;
+  const n = Number(String(raw ?? "").trim());
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return majorToMinor(n, currency);
+}
+
+/** Normalize a typed amount on blur when it is a complete valid value. */
+function formatDraftMajorOnBlur(raw: string, currency: string): string {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "";
+  const minor = parseHumanAmountToMinor(trimmed, currency);
+  if (minor == null) return raw;
+  return minorToMajor(minor, currency);
+}
+
+function applyEditPrefillToDraft(
+  prefill: EditTicketPrefill,
+  myId: string,
+  setters: {
+    setItemMajor: (v: string) => void;
+    setShippingMajor: (v: string) => void;
+    setServiceMajor: (v: string) => void;
+    setTitle: (v: string) => void;
+    setCurrency: (v: string) => void;
+    setProcurement: (v: boolean) => void;
+    setBuyerIsMe: (v: boolean | null) => void;
+    setDraftRevision: (v: number | null) => void;
+  },
+) {
+  const cur = prefill.currency || "EUR";
+  setters.setItemMajor(minorToMajor(prefill.itemCostMinor, cur));
+  setters.setShippingMajor(minorToMajor(prefill.shippingMinor ?? 0, cur));
+  setters.setServiceMajor(minorToMajor(prefill.sellerServiceFeeMinor ?? 0, cur));
+  setters.setTitle(prefill.title || "");
+  setters.setCurrency(cur);
+  setters.setProcurement(Boolean(prefill.procurementAdvanceAgreed));
+  setters.setBuyerIsMe(prefill.buyerId ? prefill.buyerId === myId : null);
+  setters.setDraftRevision(
+    typeof prefill.revision === "number" ? prefill.revision : null,
+  );
+}
+
 /**
  * Compact action to propose a Payment Ticket (no funding).
  * Visible when TEST payments are enabled for eligible authenticated users.
@@ -158,11 +217,22 @@ export function ProposePaymentTicketButton({
     if (editFromTicket?.buyerId) return editFromTicket.buyerId === myId;
     return null;
   });
+  const [draftRevision, setDraftRevision] = useState<number | null>(() =>
+    typeof editFromTicket?.revision === "number" ? editFromTicket.revision : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(isEdit);
   const [procurementFlag, setProcurementFlag] = useState(false);
   const [mounted, setMounted] = useState(false);
+  /**
+   * Edit draft is snapshotted once per ticket id (CLOSED→OPEN / different ticket).
+   * Parent soft-poll / ticketSnapshot re-renders pass a new editFromTicket object
+   * every time — must NOT re-apply saved amounts into local draft while typing.
+   */
+  const draftInitializedForTicketIdRef = useRef<string | null>(
+    editFromTicket?.reviseFromTicketId ?? null,
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -178,15 +248,34 @@ export function ProposePaymentTicketButton({
   }, [forceOpen, editFromTicket]);
 
   useEffect(() => {
-    if (!editFromTicket) return;
-    setItemMajor(minorToMajor(editFromTicket.itemCostMinor, editFromTicket.currency));
-    setShippingMajor(minorToMajor(editFromTicket.shippingMinor ?? 0, editFromTicket.currency));
-    setServiceMajor(minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0, editFromTicket.currency));
-    setTitle(editFromTicket.title || "");
-    setCurrency(editFromTicket.currency || "EUR");
-    setProcurement(Boolean(editFromTicket.procurementAdvanceAgreed));
-    setBuyerIsMe(editFromTicket.buyerId ? editFromTicket.buyerId === myId : null);
+    if (!editFromTicket?.reviseFromTicketId) {
+      draftInitializedForTicketIdRef.current = null;
+      return;
+    }
+    const ticketId = editFromTicket.reviseFromTicketId;
+    if (draftInitializedForTicketIdRef.current === ticketId) {
+      return;
+    }
+    draftInitializedForTicketIdRef.current = ticketId;
+    applyEditPrefillToDraft(editFromTicket, myId, {
+      setItemMajor,
+      setShippingMajor,
+      setServiceMajor,
+      setTitle,
+      setCurrency,
+      setProcurement,
+      setBuyerIsMe,
+      setDraftRevision,
+    });
   }, [editFromTicket, myId]);
+
+  const remoteRevision =
+    typeof editFromTicket?.revision === "number" ? editFromTicket.revision : null;
+  const revisionConflict =
+    isEdit &&
+    draftRevision != null &&
+    remoteRevision != null &&
+    remoteRevision !== draftRevision;
 
   useEffect(() => {
     if (!open || isEdit) return;
@@ -266,11 +355,25 @@ export function ProposePaymentTicketButton({
     setError("");
 
     const cur = currency || "EUR";
-    const item = majorToMinor(Number(itemMajor) || 0, cur);
-    const shipping = majorToMinor(Number(shippingMajor || "0") || 0, cur);
-    const service = majorToMinor(Number(serviceMajor || "0") || 0, cur);
-    if (!Number.isFinite(item) || item <= 0) {
+    const item = parseDraftMajorToMinor(itemMajor, cur, { allowEmptyZero: false });
+    const shipping = parseDraftMajorToMinor(shippingMajor, cur, {
+      allowEmptyZero: true,
+    });
+    const service = parseDraftMajorToMinor(serviceMajor, cur, {
+      allowEmptyZero: true,
+    });
+    if (item == null || !Number.isFinite(item) || item <= 0) {
       setError(`Enter a valid item cost. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
+    if (shipping == null || !Number.isFinite(shipping) || shipping < 0) {
+      setError(`Enter a valid shipping amount. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
+    if (service == null || !Number.isFinite(service) || service < 0) {
+      setError(`Enter a valid sourcer fee. Ref: ${proposalTraceId}`);
       setBusy(false);
       return;
     }
@@ -321,10 +424,8 @@ export function ProposePaymentTicketButton({
         body: JSON.stringify({
           conversationId: convId,
           itemCostMinor: item,
-          shippingMinor: Number.isFinite(shipping) ? Math.max(0, shipping) : 0,
-          sellerServiceFeeMinor: Number.isFinite(service)
-            ? Math.max(0, service)
-            : 0,
+          shippingMinor: Math.max(0, shipping),
+          sellerServiceFeeMinor: Math.max(0, service),
           title: title || undefined,
           currency: currency || "EUR",
           paymentOption: "PROTECTED",
@@ -495,6 +596,7 @@ export function ProposePaymentTicketButton({
   }
 
   function closeForm() {
+    draftInitializedForTicketIdRef.current = null;
     setOpen(false);
     onCloseEdit?.();
   }
@@ -518,6 +620,17 @@ export function ProposePaymentTicketButton({
         <p className="mt-2 text-[11px] text-amber-300/90">
           Warning: proposing revised terms supersedes the current ticket
           and requires re-acceptance before funding.
+        </p>
+      ) : null}
+      {revisionConflict ? (
+        <p
+          className="mt-2 text-[11px] text-amber-300"
+          data-testid="ticket-edit-revision-conflict"
+        >
+          Remote update detected (saved v{draftRevision}, server now v
+          {remoteRevision}). Your draft was not overwritten. Cancel and
+          reopen Edit to load the latest terms, or save to propose your draft
+          as a new revision.
         </p>
       ) : null}
       {peerMissing ? (
@@ -597,11 +710,15 @@ export function ProposePaymentTicketButton({
         <input
           value={itemMajor}
           onChange={(e) => setItemMajor(e.target.value)}
+          onBlur={() =>
+            setItemMajor((v) => formatDraftMajorOnBlur(v, currency || "EUR"))
+          }
           inputMode="decimal"
           required
           className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           placeholder="5.00"
           disabled={busy}
+          data-testid="ticket-edit-item-cost"
         />
       </label>
       <label className="mt-2 block min-w-0 text-[11px] text-white/55">
@@ -609,10 +726,17 @@ export function ProposePaymentTicketButton({
         <input
           value={shippingMajor}
           onChange={(e) => setShippingMajor(e.target.value)}
+          onBlur={() =>
+            setShippingMajor((v) => {
+              const next = formatDraftMajorOnBlur(v, currency || "EUR");
+              return next === "" ? "0" : next;
+            })
+          }
           inputMode="decimal"
           className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           placeholder="1.00"
           disabled={busy}
+          data-testid="ticket-edit-shipping"
         />
       </label>
       <label className="mt-2 block min-w-0 text-[11px] text-white/55">
@@ -620,10 +744,17 @@ export function ProposePaymentTicketButton({
         <input
           value={serviceMajor}
           onChange={(e) => setServiceMajor(e.target.value)}
+          onBlur={() =>
+            setServiceMajor((v) => {
+              const next = formatDraftMajorOnBlur(v, currency || "EUR");
+              return next === "" ? "0" : next;
+            })
+          }
           inputMode="decimal"
           className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           placeholder="1.00"
           disabled={busy}
+          data-testid="ticket-edit-sourcer-fee"
         />
       </label>
       {procurementFlag || isEdit ? (
@@ -650,9 +781,9 @@ export function ProposePaymentTicketButton({
           Estimated buyer total:{" "}
           {(() => {
             const cur = currency || "EUR";
-            const item = majorToMinor(Number(itemMajor || 0) || 0, cur);
-            const ship = majorToMinor(Number(shippingMajor || 0) || 0, cur);
-            const svc = majorToMinor(Number(serviceMajor || 0) || 0, cur);
+            const item = estimateDraftMinor(itemMajor, cur);
+            const ship = estimateDraftMinor(shippingMajor, cur);
+            const svc = estimateDraftMinor(serviceMajor, cur);
             const base = item + ship;
             const fee = base > 0 ? Math.ceil((base * 200) / 10_000) : 0;
             const total = base + svc + fee;

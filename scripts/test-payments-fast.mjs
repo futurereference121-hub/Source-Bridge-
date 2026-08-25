@@ -38,6 +38,7 @@ runNodeTestScripts(
     "scripts/test-dedicated-search.mjs",
     "scripts/test-conversation-delete-cutoff.mjs",
     "scripts/test-ticket-edit-delete-menu.mjs",
+    "scripts/test-ticket-edit-draft-isolation.mjs",
     "scripts/test-status-rate-limits.mjs",
   ],
   { label: "payments:fast" },

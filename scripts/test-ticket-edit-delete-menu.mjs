@@ -40,6 +40,13 @@ assert.match(
 );
 assert.match(propose, /reviseFromTicketId/);
 assert.match(propose, /Revised Terms/);
+assert.match(propose, /draftInitializedForTicketIdRef/);
+assert.match(
+  propose,
+  /draftInitializedForTicketIdRef\.current === ticketId/,
+  "edit draft must initialize once per ticket — not on every soft-poll object identity",
+);
+assert.match(propose, /parseHumanAmountToMinor/);
 
 // --- API: revise uses createOrRevise; delete is DELETE handler ---
 assert.match(createRoute, /reviseFromTicketId/);

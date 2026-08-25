@@ -2745,6 +2745,7 @@ export function PaymentTicketCard({
             editFromTicket={{
               conversationId: ticket.conversationId,
               reviseFromTicketId: ticket.id,
+              revision: ticket.revision,
               title: ticket.title,
               currency: ticket.currency,
               itemCostMinor: ticket.itemCostMinor,
