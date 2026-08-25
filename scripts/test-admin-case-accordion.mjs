@@ -28,6 +28,13 @@ assert.doesNotMatch(
 );
 assert.match(purchases, /AdminCaseAccordion/);
 assert.match(purchasesRedirect, /\/admin\/payments#listed-product-purchases/);
+
+const purchasesDetail = read("src/app/admin/purchases/[txnId]/page.tsx");
+assert.match(
+  purchasesDetail,
+  /\/admin\/payments#listed-product-purchases/,
+  "legacy purchase detail must redirect into Protected Payments",
+);
 assert.doesNotMatch(
   purchases,
   /href=\{`\/admin\/purchases\/\$\{t\.id\}`\}/,

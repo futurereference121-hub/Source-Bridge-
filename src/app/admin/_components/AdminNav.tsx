@@ -6,7 +6,7 @@ import { useTransition } from "react";
 import AdminSignOutButton from "./AdminSignOutButton";
 
 const TABS = [
-  { href: "/admin/verifications", label: "Verification" },
+  { href: "/admin/verifications", label: "Verification Applicants" },
   { href: "/admin/payments", label: "Protected Payments" },
   { href: "/admin/reviews", label: "Reviews & Disputes" },
 ] as const;

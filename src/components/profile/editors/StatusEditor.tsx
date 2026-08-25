@@ -123,16 +123,21 @@ export function StatusEditor({
       </p>
       {mode === "create" && blockedByDaily ? (
         <p className="mb-3 text-xs text-amber-200/90" data-testid="status-daily-limit">
-          Daily Status limit reached (3/day). Try again tomorrow.
+          You&apos;ve used your 3 Status updates for today.
         </p>
       ) : null}
       {mode === "create" && blockedByCooldown && !blockedByDaily ? (
         <p className="mb-3 text-xs text-amber-200/90" data-testid="status-cooldown">
-          Wait at least 1 hour between Status updates
-          {limit?.nextAllowedAt
-            ? ` (available ${new Date(limit.nextAllowedAt).toLocaleString()})`
-            : ""}
-          .
+          {limit?.cooldownRemainingMs
+            ? `You can update your Status again in ${Math.max(
+                1,
+                Math.ceil(limit.cooldownRemainingMs / 60_000),
+              )} minute${
+                Math.max(1, Math.ceil(limit.cooldownRemainingMs / 60_000)) === 1
+                  ? ""
+                  : "s"
+              }.`
+            : "Wait at least 1 hour between Status updates."}
         </p>
       ) : null}
       <form onSubmit={onSubmit} className="space-y-4">

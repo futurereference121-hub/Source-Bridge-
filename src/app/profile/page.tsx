@@ -12,7 +12,14 @@ import { uploadProfileImageFile } from "@/lib/client-image-upload";
 import type { Listing } from "@/lib/types";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 
-type Limit = { used: number; remaining: number; limit: number };
+type Limit = {
+  used: number;
+  remaining: number;
+  limit: number;
+  allowed?: boolean;
+  nextAllowedAt?: string | null;
+  cooldownRemainingMs?: number;
+};
 type OpportunityRow = {
   id: string; title: string; description: string; city: string; country: string;
   category: string; startsAt?: string | null; expiresAt?: string | null; active: boolean;
@@ -147,9 +154,26 @@ function ProfileDashboardInner() {
 
   async function publishStatus(e: FormEvent) {
     e.preventDefault();
+    if (busy === "status") return;
+    const coolMs = Number(statusLimit?.cooldownRemainingMs || 0);
+    if (statusLimit && statusLimit.allowed === false) {
+      showToast("You've used your 3 Status updates for today.");
+      return;
+    }
+    if (coolMs > 0) {
+      const mins = Math.max(1, Math.ceil(coolMs / 60_000));
+      showToast(`You can update your Status again in ${mins} minute${mins === 1 ? "" : "s"}.`);
+      return;
+    }
     await run("status", async () => {
-      const data = await api("/api/status", json("POST", { text: status }));
-      setStatusLimit(data.limit); showToast("Status published");
+      const idempotencyKey = `status_profile_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const data = await api(
+        "/api/status",
+        json("POST", { text: status.trim(), idempotencyKey }),
+      );
+      setStatus(data.status?.text || status);
+      setStatusLimit(data.limit);
+      showToast("Status published");
     });
   }
 
@@ -337,10 +361,50 @@ function ProfileDashboardInner() {
         </Panel>
 
         <Panel title="Status Update" id="status">
-          <p className="text-sm text-white/45">Expires after 24 hours. {statusLimit ? `${statusLimit.remaining} of ${statusLimit.limit} posts remaining today.` : "Maximum 3 per day."}</p>
+          <p className="text-sm text-white/45">
+            Expires after 24 hours. Maximum 3 per day, at least 1 hour apart.
+            {statusLimit
+              ? ` ${statusLimit.remaining} of ${statusLimit.limit} posts remaining today.`
+              : ""}
+          </p>
+          {statusLimit && statusLimit.allowed === false ? (
+            <p className="mt-2 text-xs text-amber-200/90" data-testid="status-daily-limit">
+              You&apos;ve used your 3 Status updates for today.
+            </p>
+          ) : null}
+          {statusLimit &&
+          (statusLimit.cooldownRemainingMs || 0) > 0 &&
+          statusLimit.allowed !== false ? (
+            <p className="mt-2 text-xs text-amber-200/90" data-testid="status-cooldown">
+              You can update your Status again in{" "}
+              {Math.max(1, Math.ceil((statusLimit.cooldownRemainingMs || 0) / 60_000))}{" "}
+              minutes.
+            </p>
+          ) : null}
           <form onSubmit={publishStatus} className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <input className={inputClass} maxLength={120} value={status} onChange={(e) => setStatus(e.target.value)} placeholder="Share a short update" required />
-            <SubmitButton busy={busy === "status"}>Publish</SubmitButton>
+            <input
+              className={inputClass}
+              maxLength={160}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              placeholder="Share a short update"
+              required
+              disabled={
+                busy === "status" ||
+                statusLimit?.allowed === false ||
+                (statusLimit?.cooldownRemainingMs || 0) > 0
+              }
+            />
+            <SubmitButton
+              busy={busy === "status"}
+              busyLabel="Publishing…"
+              disabled={
+                statusLimit?.allowed === false ||
+                (statusLimit?.cooldownRemainingMs || 0) > 0
+              }
+            >
+              Publish
+            </SubmitButton>
           </form>
         </Panel>
 
@@ -466,8 +530,8 @@ function Panel({ title, children, className = "", id }: { title: string; childre
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="block"><span className="mb-1.5 block text-xs text-white/45">{label}</span>{children}</label>;
 }
-function SubmitButton({ children, busy }: { children: ReactNode; busy?: boolean }) {
-  return <button disabled={busy} type="submit" className="inline-flex h-11 items-center justify-center rounded-lg bg-electric px-5 text-xs font-medium uppercase tracking-[0.12em] text-white transition-colors hover:bg-electric-hover disabled:opacity-50">{busy ? "Saving…" : children}</button>;
+function SubmitButton({ children, busy, disabled, busyLabel = "Saving…" }: { children: ReactNode; busy?: boolean; disabled?: boolean; busyLabel?: string }) {
+  return <button disabled={Boolean(busy || disabled)} type="submit" className="inline-flex h-11 items-center justify-center rounded-lg bg-electric px-5 text-xs font-medium uppercase tracking-[0.12em] text-white transition-colors hover:bg-electric-hover disabled:opacity-50">{busy ? busyLabel : children}</button>;
 }
 function MiniButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="text-xs text-white/50 hover:text-electric">{children}</button>;

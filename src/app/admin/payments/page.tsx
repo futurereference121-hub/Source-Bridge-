@@ -11,10 +11,19 @@ import { AdminShipmentPhoto } from "@/components/admin/AdminShipmentPhoto";
 import PaymentIssueActions from "./issue-actions";
 import InactivityReleasePanel from "./inactivity-release-panel";
 import AdminListedPurchasesSection from "./listed-purchases-section";
+import AdminCaseAccordion from "../reviews/admin-case-accordion";
 
 function paymentTypeLabel(origin: string | null | undefined): string {
   if (origin === "PRODUCT_CHECKOUT") return "LISTED PRODUCT PURCHASE";
   return "SOURCING PAYMENT";
+}
+
+function partyLabel(u: {
+  username: string | null;
+  name: string | null;
+} | null): string {
+  if (!u) return "—";
+  return u.username ? `@${u.username}` : u.name || "—";
 }
 
 export default async function AdminPaymentsPage() {
@@ -92,7 +101,8 @@ export default async function AdminPaymentsPage() {
       },
     }),
     prisma.protectedTransaction.findMany({
-      take: 25,
+      take: 40,
+      where: { origin: { not: "PRODUCT_CHECKOUT" } },
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
@@ -102,11 +112,32 @@ export default async function AdminPaymentsPage() {
         title: true,
         currency: true,
         totalChargeMinor: true,
+        itemCostMinor: true,
+        shippingMinor: true,
+        sellerServiceFeeMinor: true,
+        protectionFeeMinor: true,
+        platformFeeRefundedMinor: true,
+        procurementAdvanceAgreed: true,
+        procurementAdvanceMinor: true,
+        procurementTransferredMinor: true,
+        finalTransferredMinor: true,
+        refundedMinor: true,
         stripeMode: true,
         updatedAt: true,
+        fundedAt: true,
+        shippedAt: true,
         trackingCarrier: true,
         trackingNumber: true,
         shipmentPhotoUrl: true,
+        conversationId: true,
+        buyer: { select: { username: true, name: true } },
+        seller: { select: { username: true, name: true } },
+        paymentTicket: { select: { id: true } },
+        disputes: {
+          where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
+          select: { id: true, status: true },
+          take: 1,
+        },
       },
     }),
   ]);
@@ -126,7 +157,9 @@ export default async function AdminPaymentsPage() {
         Financial operations
       </p>
       <h1 className="mt-2 font-display text-4xl">Protected Payments</h1>
-      <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45" id="sourcing-payments">SOURCING PAYMENT · LISTED PRODUCT PURCHASE</p>
+      <p className="mt-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45">
+        SOURCING PAYMENT · LISTED PRODUCT PURCHASE
+      </p>
       <p className="mt-2 max-w-2xl text-sm text-white/55">
         Stripe is the processor ({CHARGE_MODEL}). Source Bridge owns transaction
         state and transfer timing. Live mode is forced off.
@@ -304,48 +337,149 @@ export default async function AdminPaymentsPage() {
         <AdminListedPurchasesSection />
       </section>
 
-      <h2 className="mt-10 text-lg font-semibold text-white">SOURCING PAYMENT · recent</h2>
+      <h2
+        id="sourcing-payments"
+        className="mt-10 text-lg font-semibold text-white"
+      >
+        SOURCING PAYMENT
+      </h2>
+      <p className="mt-1 text-sm text-white/50">
+        Expand a sourcing payment in place for parties, shipping proof, and
+        status. Collapsed by default.
+      </p>
       <div className="mt-4 space-y-3">
-        {recent.filter((r) => r.origin !== "PRODUCT_CHECKOUT").length === 0 ? (
+        {recent.length === 0 ? (
           <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/40">
             No sourcing protected transactions yet.
           </p>
         ) : (
-          recent
-            .filter((r) => r.origin !== "PRODUCT_CHECKOUT")
-            .map((row) => (
-              <div
+          recent.map((row) => {
+            const books = computeProtectedFinancials(row);
+            const dispute = row.disputes[0];
+            return (
+              <AdminCaseAccordion
                 key={row.id}
-                className="rounded-xl border border-white/10 bg-white/5 p-4"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium text-white">
-                      {row.title || "Sourcing payment"}
-                    </p>
-                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-electric/80">
-                      {paymentTypeLabel(row.origin)}
-                    </p>
-                    <p className="mt-1 font-mono text-xs text-white/45">
-                      {row.id.slice(0, 12)}…
-                    </p>
-                    <p className="mt-1 text-xs text-white/50">
-                      {row.status} · {row.paymentOption} ·{" "}
-                      {formatMinor(row.totalChargeMinor, row.currency)} ·{" "}
-                      {row.stripeMode}
-                    </p>
-                    {row.trackingNumber ? (
-                      <p className="mt-1 text-xs text-white/45">
-                        {row.trackingCarrier || "Carrier"} {row.trackingNumber}
+                id={row.id}
+                summary={
+                  <div className="flex w-full flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 text-left">
+                      <p className="font-medium text-white">
+                        {row.title || "Sourcing payment"}
                       </p>
-                    ) : null}
+                      <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-electric/80">
+                        SOURCING PAYMENT
+                      </p>
+                      <p className="mt-1 text-xs text-white/45">
+                        {row.status.replace(/_/g, " ")} · Buyer{" "}
+                        {partyLabel(row.buyer)} · Sourcer{" "}
+                        {partyLabel(row.seller)}
+                      </p>
+                      <p className="mt-1 text-xs text-white/40">
+                        {row.updatedAt.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-white/55">
+                      <p>
+                        {formatMinor(row.totalChargeMinor, row.currency)}
+                      </p>
+                      <p>{row.paymentOption}</p>
+                    </div>
                   </div>
-                </div>
+                }
+              >
+                <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-white/40">Gross charged</dt>
+                    <dd>
+                      {formatMinor(books.grossFundedMinor, row.currency)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-white/40">Remaining seller residual</dt>
+                    <dd>
+                      {formatMinor(books.finalResidualMinor, row.currency)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-white/40">Platform fee</dt>
+                    <dd>
+                      {formatMinor(books.platformFeeMinor, row.currency)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-white/40">Mode</dt>
+                    <dd>{row.stripeMode}</dd>
+                  </div>
+                </dl>
+                {(row.trackingNumber || row.trackingCarrier) ? (
+                  <p className="mt-3 text-xs text-white/50">
+                    {row.trackingCarrier || "Carrier"} {row.trackingNumber || ""}
+                    {row.shippedAt
+                      ? ` · shipped ${row.shippedAt.toLocaleString()}`
+                      : ""}
+                  </p>
+                ) : null}
                 {row.shipmentPhotoUrl ? (
                   <AdminShipmentPhoto url={row.shipmentPhotoUrl} />
                 ) : null}
-              </div>
-            ))
+                {row.conversationId ? (
+                  <Link
+                    href={`/inbox/${row.conversationId}`}
+                    className="mt-3 inline-block text-xs text-electric hover:underline"
+                  >
+                    View chat
+                  </Link>
+                ) : null}
+                {dispute ? (
+                  <PaymentIssueActions
+                    disputeId={dispute.id}
+                    currency={row.currency}
+                    totalPaidMinor={row.totalChargeMinor}
+                    platformFeeMinor={books.platformFeeMinor}
+                    platformFeeRefundedMinor={row.platformFeeRefundedMinor ?? 0}
+                    finalResidualMinor={books.finalResidualMinor}
+                    refundableMinor={books.refundableMinor}
+                    sellerEntitledMinor={books.sellerEntitledMinor}
+                    alreadyReleasedMinor={
+                      books.procurementTransferredMinor +
+                      books.finalTransferredMinor
+                    }
+                    protectedRemainingMinor={books.protectedRemainingMinor}
+                  />
+                ) : (
+                  <PaymentIssueActions
+                    protectedTxnId={row.id}
+                    currency={row.currency}
+                    totalPaidMinor={row.totalChargeMinor}
+                    platformFeeMinor={books.platformFeeMinor}
+                    platformFeeRefundedMinor={row.platformFeeRefundedMinor ?? 0}
+                    finalResidualMinor={books.finalResidualMinor}
+                    refundableMinor={books.refundableMinor}
+                    sellerEntitledMinor={books.sellerEntitledMinor}
+                    alreadyReleasedMinor={
+                      books.procurementTransferredMinor +
+                      books.finalTransferredMinor
+                    }
+                    protectedRemainingMinor={books.protectedRemainingMinor}
+                  />
+                )}
+                <details className="mt-4 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/45">
+                  <summary className="cursor-pointer text-white/55">
+                    Advanced / Audit
+                  </summary>
+                  <p className="mt-2 font-mono break-all">
+                    txn {row.id}
+                    {row.paymentTicket?.id ? (
+                      <>
+                        <br />
+                        ticket {row.paymentTicket.id}
+                      </>
+                    ) : null}
+                  </p>
+                </details>
+              </AdminCaseAccordion>
+            );
+          })
         )}
       </div>
 

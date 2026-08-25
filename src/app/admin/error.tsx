@@ -41,7 +41,7 @@ export default function AdminError({
           href="/admin/verifications"
           className="inline-flex h-11 items-center rounded-lg border border-white/20 px-5 text-xs uppercase tracking-[0.12em] text-white/80 hover:border-white/40"
         >
-          Verification
+          Verification Applicants
         </Link>
         <Link
           href="/admin/payments"

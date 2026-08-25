@@ -22,7 +22,7 @@ assert.match(layout, /AdminNav/);
 assert.match(nav, /useTransition/);
 assert.match(nav, /router\.push/);
 assert.match(nav, /admin-nav/);
-assert.match(nav, /Verification/);
+assert.match(nav, /Verification Applicants/);
 assert.match(nav, /Protected Payments/);
 assert.match(nav, /Reviews & Disputes/);
 assert.doesNotMatch(nav, /Protected Purchases/);
@@ -31,6 +31,13 @@ assert.match(err, /admin-error/);
 assert.match(err, /Retry/);
 assert.doesNotMatch(err, /href=["']\/["']/);
 assert.match(err, /\/admin\/verifications/);
+assert.match(err, /Verification Applicants/);
+
+const payments = read("src/app/admin/payments/page.tsx");
+assert.match(payments, /SOURCING PAYMENT/);
+assert.match(payments, /LISTED PRODUCT PURCHASE/);
+assert.match(payments, /AdminCaseAccordion/);
+assert.match(payments, /id="sourcing-payments"/);
 
 assert.match(loading, /admin-loading/);
 assert.match(loading, /SourceBridgeLoader/);

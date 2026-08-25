@@ -107,13 +107,15 @@ export async function POST(req: NextRequest) {
       typeof body?.idempotencyKey === "string"
         ? body.idempotencyKey.trim().slice(0, 120)
         : "";
+    void idempotencyKey; // accepted for client double-click; server uses same-text window
 
     const now = new Date();
     const cool = await cooldownState(user.id, now);
     if (!cool.allowed) {
       const limit = await checkDailyLimit(user.id, "status");
+      const mins = Math.max(1, Math.ceil(cool.cooldownRemainingMs / 60_000));
       return jsonError(
-        `Wait at least 1 hour between Status updates. Try again after ${cool.nextAllowedAt}.`,
+        `You can update your Status again in ${mins} minute${mins === 1 ? "" : "s"}.`,
         429,
         {
           code: "STATUS_COOLDOWN",
@@ -126,39 +128,57 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await assertDailyLimit(user.id, "status");
-    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
-
-    // Idempotency BEFORE expire — never burn a daily slot on a retry.
-    if (idempotencyKey) {
-      const recent = await prisma.statusUpdate.findFirst({
-        where: {
-          userId: user.id,
-          text: parsed.data.text,
-          postedAt: { gte: new Date(now.getTime() - 60_000) },
+    // Idempotency BEFORE expire / daily burn — never burn a slot on retry.
+    const recentSame = await prisma.statusUpdate.findFirst({
+      where: {
+        userId: user.id,
+        text: parsed.data.text,
+        postedAt: { gte: new Date(now.getTime() - 60_000) },
+      },
+      orderBy: { postedAt: "desc" },
+    });
+    if (recentSame) {
+      const limit = await checkDailyLimit(user.id, "status");
+      const coolAfter = await cooldownState(user.id, now);
+      return Response.json({
+        ok: true,
+        existing: true,
+        status: {
+          id: recentSame.id,
+          text: recentSame.text,
+          postedAt: recentSame.postedAt.toISOString(),
+          expiresAt: recentSame.expiresAt.toISOString(),
         },
-        orderBy: { postedAt: "desc" },
+        limit: statusLimitPayload(limit, {
+          serverNow: now,
+          nextAllowedAt: coolAfter.nextAllowedAt,
+          cooldownRemainingMs: coolAfter.cooldownRemainingMs,
+        }),
       });
-      if (recent) {
+    }
+
+    try {
+      await assertDailyLimit(user.id, "status");
+    } catch (err) {
+      if ((err as { status?: number }).status === 429) {
         const limit = await checkDailyLimit(user.id, "status");
         const coolAfter = await cooldownState(user.id, now);
-        return Response.json({
-          ok: true,
-          existing: true,
-          status: {
-            id: recent.id,
-            text: recent.text,
-            postedAt: recent.postedAt.toISOString(),
-            expiresAt: recent.expiresAt.toISOString(),
+        return jsonError(
+          "You've used your 3 Status updates for today.",
+          429,
+          {
+            code: "STATUS_DAILY_LIMIT",
+            limit: statusLimitPayload(limit, {
+              serverNow: now,
+              nextAllowedAt: coolAfter.nextAllowedAt,
+              cooldownRemainingMs: coolAfter.cooldownRemainingMs,
+            }),
           },
-          limit: statusLimitPayload(limit, {
-            serverNow: now,
-            nextAllowedAt: coolAfter.nextAllowedAt,
-            cooldownRemainingMs: coolAfter.cooldownRemainingMs,
-          }),
-        });
+        );
       }
+      throw err;
     }
+    const expiresAt = new Date(now.getTime() + STATUS_TTL_MS);
 
     const row = await prisma.$transaction(async (tx) => {
       await tx.statusUpdate.updateMany({

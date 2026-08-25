@@ -61,7 +61,12 @@ export default async function AdminListedPurchasesSection() {
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-electric">
         LISTED PRODUCT PURCHASE
       </p>
-      <h2 id="listed-product-purchases" className="mt-2 text-lg font-semibold text-white">LISTED PRODUCT PURCHASE</h2>
+      <h2
+        id="listed-product-purchases"
+        className="mt-2 text-lg font-semibold text-white"
+      >
+        LISTED PRODUCT PURCHASE
+      </h2>
       <p className="mt-2 max-w-2xl text-sm text-white/55">
         Expand a purchase in place for status and admin financial controls.
         Cases are collapsed by default.
@@ -91,14 +96,21 @@ export default async function AdminListedPurchasesSection() {
                       <p className="font-medium text-white">
                         {t.listing?.name || t.title}
                       </p>
+                      <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-electric/80">
+                        LISTED PRODUCT PURCHASE
+                      </p>
                       <p className="mt-1 text-xs text-white/45">
-                        LISTED PRODUCT PURCHASE ·{" "}
                         {isDirectPaymentOption(t.paymentOption)
                           ? "Direct Payment"
                           : "Protected Payment"}{" "}
                         · {t.status.replace(/_/g, " ")} · Buyer {buyer} · Seller{" "}
                         {seller}
                       </p>
+                      {t.fundedAt ? (
+                        <p className="mt-1 text-xs text-white/40">
+                          {t.fundedAt.toLocaleString()}
+                        </p>
+                      ) : null}
                       {dispute ? (
                         <p className="mt-1 text-xs text-amber-200/80">
                           Item issue — {dispute.status.replace(/_/g, " ")}
