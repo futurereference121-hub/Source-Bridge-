@@ -21,12 +21,25 @@ import {
 } from "@/lib/payments/breakdown";
 
 /**
- * Release engine â€” Separate Charges and Transfers.
+ * Release engine — Separate Charges and Transfers.
  * Rechecks domain state before every money movement.
  *
  * Procurement is buyer-authorized only (never auto from fund webhook).
  * Final residual only: procurementTransferred + finalTransferred <= sellerEntitled.
+ *
+ * Stage A (platform → connected Stripe balance): `stripe.transfers.create`
+ * runs synchronously inside releaseFinal / releaseProcurement — no SB delay
+ * queue after authorization. Buyer/admin paths call these immediately.
+ * Inspection-timer expiry is polled by /api/cron/payments-release (every 10m).
+ *
+ * Stage B (connected balance → external bank): Connect accounts use
+ * dashboard=express. Source Bridge does NOT create Instant or bank payouts
+ * on connected accounts — bank payout scheduling stays Stripe/account controlled.
+ * Instant Payout would only be safe with verified Instant Payouts capability,
+ * eligible external method, available balance, and country/currency support;
+ * Express dashboard model leaves that to the connected account.
  */
+
 export async function releaseProcurement(opts: {
   protectedTxnId: string;
   actorUserId?: string | null;

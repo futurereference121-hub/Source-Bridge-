@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
+import { bumpConversationActivity } from "@/lib/conversation-activity";
 import { adminDisputeThreadPairKey, adminSupportThreadPairKey } from "@/lib/conversation-pair";
-import { isAllowedAttachmentUrl, participantUserSelect } from "@/lib/messaging";
+import { getParticipantDeleteCutoff } from "@/lib/conversation-hide";
+import { isAllowedAttachmentUrl, markRead, participantUserSelect } from "@/lib/messaging";
 import { createNotification } from "@/lib/notifications";
 import {
   buildDisputeContextStructured,
@@ -136,21 +138,14 @@ export async function getOrCreateAdminDisputeThread(opts: {
         },
       });
     }
-    // Dedupe by dispute age — do not require raw IDs in the message body.
-    const markerExists = await prisma.message.findFirst({
-      where: {
-        conversationId: existing.id,
-        systemEventType: "DISPUTE_CONTEXT",
-        createdAt: { gte: dispute.createdAt },
-      },
-      select: { id: true },
+    // Topic once per dispute, and again after a party's Delete cutoff so
+    // resurfaced chats get a fresh context block without restoring old history.
+    await ensureVisibleDisputeContextMarker({
+      conversationId: existing.id,
+      partyId,
+      disputeCreatedAt: dispute.createdAt,
+      markerPayload,
     });
-    if (!markerExists) {
-      await insertDisputeContextMarker({
-        conversationId: existing.id,
-        ...markerPayload,
-      });
-    }
     return {
       conversation: existing,
       created: false,
@@ -273,6 +268,56 @@ export async function listAdminDisputeThreads(disputeCaseId: string) {
   return [...byRole.values()];
 }
 
+/**
+ * Insert DISPUTE_CONTEXT when missing for this dispute, or when the party
+ * deleted the chat so prior markers sit behind deletedBeforeAt.
+ */
+async function ensureVisibleDisputeContextMarker(opts: {
+  conversationId: string;
+  partyId: string;
+  disputeCreatedAt: Date;
+  markerPayload: {
+    disputeCaseId: string;
+    protectedTxnId: string;
+    paymentTicketId: string | null;
+    title: string;
+    category?: string | null;
+    reason?: string | null;
+    status?: string | null;
+    buyerUsername?: string | null;
+    sellerUsername?: string | null;
+    createdAt: Date;
+  };
+}) {
+  const cutoff = await getParticipantDeleteCutoff(
+    opts.conversationId,
+    opts.partyId,
+  );
+  const lowerBound =
+    cutoff && cutoff.getTime() > opts.disputeCreatedAt.getTime()
+      ? cutoff
+      : opts.disputeCreatedAt;
+  const useExclusive = Boolean(
+    cutoff && cutoff.getTime() > opts.disputeCreatedAt.getTime(),
+  );
+  const markerExists = await prisma.message.findFirst({
+    where: {
+      conversationId: opts.conversationId,
+      systemEventType: "DISPUTE_CONTEXT",
+      createdAt: useExclusive
+        ? { gt: lowerBound }
+        : { gte: lowerBound },
+    },
+    select: { id: true },
+  });
+  if (markerExists) return false;
+  await insertDisputeContextMarker({
+    conversationId: opts.conversationId,
+    ...opts.markerPayload,
+  });
+  return true;
+}
+
 export async function sendAdminDisputeMessage(opts: {
   adminUserId: string;
   conversationId: string;
@@ -293,6 +338,19 @@ export async function sendAdminDisputeMessage(opts: {
     where: { id: opts.conversationId },
     include: {
       participants: true,
+      disputeCase: {
+        include: {
+          protectedTxn: {
+            select: {
+              id: true,
+              title: true,
+              buyer: { select: { username: true } },
+              seller: { select: { username: true } },
+              paymentTicket: { select: { id: true } },
+            },
+          },
+        },
+      },
     },
   });
   if (!conversation || conversation.contextType !== ADMIN_DISPUTE_CONTEXT) {
@@ -308,8 +366,30 @@ export async function sendAdminDisputeMessage(opts: {
   )?.userId;
   if (!partyId) throwHttp("Party not found", 404);
 
-  const now = new Date();
-  const message = await prisma.$transaction(async (tx) => {
+  const dispute = conversation.disputeCase;
+  if (dispute?.protectedTxn) {
+    await ensureVisibleDisputeContextMarker({
+      conversationId: conversation.id,
+      partyId,
+      disputeCreatedAt: dispute.createdAt,
+      markerPayload: {
+        disputeCaseId: dispute.id,
+        protectedTxnId: dispute.protectedTxn.id,
+        paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
+        title: dispute.protectedTxn.title,
+        category: dispute.category,
+        reason: dispute.reason,
+        status: dispute.status,
+        buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
+        sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+        createdAt: dispute.createdAt,
+      },
+    });
+  }
+
+  // Persist → activityVersion (clears hiddenAt) → admin markRead → notify.
+  // Party stays unread; Inbox softList on PAYMENT_DISPUTE + MESSAGE.
+  const { message, activityVersion } = await prisma.$transaction(async (tx) => {
     const msg = await tx.message.create({
       data: {
         conversationId: conversation.id,
@@ -332,11 +412,11 @@ export async function sendAdminDisputeMessage(opts: {
         attachments: true,
       },
     });
-    await tx.conversation.update({
-      where: { id: conversation.id },
-      data: { lastMessageAt: now },
+    const version = await bumpConversationActivity(conversation.id, tx, {
+      touchLastMessage: true,
     });
-    return msg;
+    await markRead(conversation.id, opts.adminUserId, tx);
+    return { message: msg, activityVersion: version };
   });
 
   await createNotification({
@@ -350,5 +430,10 @@ export async function sendAdminDisputeMessage(opts: {
     dedupeKey: `admin-dispute-msg:${message.id}`,
   });
 
-  return { message, conversationId: conversation.id, partyId };
+  return {
+    message,
+    conversationId: conversation.id,
+    partyId,
+    activityVersion,
+  };
 }

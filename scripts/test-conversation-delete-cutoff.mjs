@@ -45,8 +45,8 @@ assert.match(inbox, /setInterval\(\(\) => void softList\(\), 8000\)/);
 assert.match(inbox, /floorMs/);
 assert.match(
   inbox,
-  /subscribeToNewNotifications[\s\S]*type === "MESSAGE"[\s\S]*softList/,
-  "MESSAGE notifications must trigger Inbox softList (no notify-ahead)",
+  /subscribeToNewNotifications[\s\S]*(MESSAGE|PAYMENT_DISPUTE)[\s\S]*softList/,
+  "MESSAGE / PAYMENT_DISPUTE notifications must trigger Inbox softList (no notify-ahead)",
 );
 assert.match(messaging, /deletedBeforeAt/);
 assert.match(messaging, /hides: \{ none: \{ userId \} \}/);

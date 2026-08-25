@@ -37,6 +37,8 @@ runNodeTestScripts(
     "scripts/test-shipping-activity-sync.mjs",
     "scripts/test-dedicated-search.mjs",
     "scripts/test-conversation-delete-cutoff.mjs",
+    "scripts/test-sourcer-release-immediacy.mjs",
+    "scripts/test-admin-dispute-message-inbox.mjs",
     "scripts/test-ticket-edit-delete-menu.mjs",
     "scripts/test-ticket-edit-draft-isolation.mjs",
     "scripts/test-status-rate-limits.mjs",

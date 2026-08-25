@@ -641,9 +641,16 @@ export function MessagesInbox({
       if (document.visibilityState === "visible") void softList();
     };
     document.addEventListener("visibilitychange", onVis);
-    // Keep Inbox in lockstep with MESSAGE notifications (never notify-ahead).
+    // Keep Inbox in lockstep with MESSAGE / admin dispute notifications
+    // (never notify-ahead of the conversation row).
     const unsubNotify = subscribeToNewNotifications((items) => {
-      if (items.some((n) => n.type === "MESSAGE")) void softList();
+      if (
+        items.some(
+          (n) => n.type === "MESSAGE" || n.type === "PAYMENT_DISPUTE",
+        )
+      ) {
+        void softList();
+      }
     });
     return () => {
       cancelled = true;
