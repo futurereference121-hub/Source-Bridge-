@@ -1,5 +1,10 @@
 /** Integer minor-unit money helpers. Never trust client totals. */
 
+import {
+  STRIPE_THREE_DECIMAL_CURRENCIES,
+  STRIPE_ZERO_DECIMAL_CURRENCIES,
+} from "@/lib/payments/supported-currencies";
+
 export type MoneyBreakdownInput = {
   itemCostMinor: number;
   shippingMinor: number;
@@ -33,26 +38,31 @@ export function totalChargeMinor(b: MoneyBreakdownInput): number {
   ]);
 }
 
+function currencyExponent(currency: string): number {
+  const c = currency.toUpperCase();
+  if (STRIPE_ZERO_DECIMAL_CURRENCIES.has(c)) return 0;
+  if (STRIPE_THREE_DECIMAL_CURRENCIES.has(c)) return 3;
+  return 2;
+}
+
 /** Convert major units (float display) to minor — only for bootstrap from listing.price. */
 export function majorToMinor(major: number, currency: string): number {
-  const c = currency.toUpperCase();
-  const zeroDecimal = new Set(["JPY", "KRW", "VND"]);
-  if (zeroDecimal.has(c)) {
-    return Math.round(major);
-  }
-  return Math.round(major * 100);
+  const exp = currencyExponent(currency);
+  if (exp === 0) return Math.round(major);
+  const factor = 10 ** exp;
+  return Math.round(major * factor);
 }
 
 export function minorToMajor(minor: number, currency: string): number {
-  const c = currency.toUpperCase();
-  const zeroDecimal = new Set(["JPY", "KRW", "VND"]);
-  if (zeroDecimal.has(c)) return minor;
-  return minor / 100;
+  const exp = currencyExponent(currency);
+  if (exp === 0) return minor;
+  return minor / 10 ** exp;
 }
 
 /**
  * Parse a human currency amount ("100.00", "50") into integer minor units.
- * Rejects raw minor-unit integers disguised as pounds (no more than 2 decimals).
+ * Rejects raw minor-unit integers disguised as pounds (no more than 2 decimals
+ * for standard currencies; zero-decimal currencies accept whole numbers only).
  */
 export function parseHumanAmountToMinor(
   raw: string,
@@ -61,9 +71,16 @@ export function parseHumanAmountToMinor(
   const trimmed = String(raw ?? "")
     .trim()
     .replace(/,/g, "")
-    .replace(/^[£$€]\s?/, "");
+    .replace(/^[£$€¥]\s?/, "");
   if (!trimmed) return null;
-  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  const exp = currencyExponent(currency);
+  const decimalRe =
+    exp === 0
+      ? /^\d+$/
+      : exp === 3
+        ? /^\d+(\.\d{1,3})?$/
+        : /^\d+(\.\d{1,2})?$/;
+  if (!decimalRe.test(trimmed)) return null;
   const major = Number(trimmed);
   if (!Number.isFinite(major) || major < 0) return null;
   return majorToMinor(major, currency);
@@ -75,9 +92,12 @@ export function formatMinor(minor: number, currency: string): string {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency: currency.toUpperCase(),
+      maximumFractionDigits: currencyExponent(currency),
+      minimumFractionDigits: currencyExponent(currency) === 0 ? 0 : undefined,
     }).format(major);
   } catch {
-    return `${major.toFixed(2)} ${currency.toUpperCase()}`;
+    const exp = currencyExponent(currency);
+    return `${exp === 0 ? String(major) : major.toFixed(exp)} ${currency.toUpperCase()}`;
   }
 }
 

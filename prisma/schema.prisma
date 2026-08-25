@@ -790,7 +790,7 @@ model PlatformPaymentConfig {
   procurementMinTrustLevel        Int      @default(2)
   /// Global kill-switch for procurement advances (also gated by feature flag).
   procurementAdvancesGloballyOn   Boolean  @default(true)
-  /// Allowed currencies (JSON string[]). Empty = USD only until expanded.
+  /// Allowed currencies (JSON string[]). Empty/legacy ["USD"] = all Stripe presentment currencies (see supported-currencies.ts).
   allowedCurrenciesJson           String   @default("[\"USD\"]")
   /// Stripe platform country hint for Connect capability docs (ISO 3166-1 alpha-2).
   stripePlatformCountry           String   @default("")

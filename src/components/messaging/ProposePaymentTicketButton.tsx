@@ -4,6 +4,12 @@ import { useEffect, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, ShieldCheck, X } from "lucide-react";
 import type { PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
+import {
+  formatMinor,
+  majorToMinor,
+  minorToMajor as minorToMajorUnits,
+} from "@/lib/payments/money";
+import { TICKET_CURRENCY_OPTIONS } from "@/lib/payments/supported-currencies";
 
 /** Deploy/build fingerprint for production diagnostics (safe, non-secret). */
 declare global {
@@ -95,9 +101,12 @@ type ProposePaymentTicketButtonProps = {
 
 const BUILD_FINGERPRINT = "pt-propose-v9-no-fee-checkbox";
 
-function minorToMajor(minor: number | undefined): string {
+function minorToMajor(minor: number | undefined, currency = "EUR"): string {
   if (minor == null || !Number.isFinite(minor)) return "0";
-  return (minor / 100).toFixed(2);
+  const major = minorToMajorUnits(minor, currency);
+  const c = (currency || "EUR").toUpperCase();
+  if (c === "JPY" || c === "KRW" || c === "VND") return String(Math.round(major));
+  return major.toFixed(2);
 }
 
 /**
@@ -130,18 +139,18 @@ export function ProposePaymentTicketButton({
 
   const [open, setOpen] = useState(Boolean(forceOpen || editFromTicket));
   const [itemMajor, setItemMajor] = useState(
-    editFromTicket ? minorToMajor(editFromTicket.itemCostMinor) : "",
+    editFromTicket ? minorToMajor(editFromTicket.itemCostMinor, editFromTicket.currency) : "",
   );
   const [shippingMajor, setShippingMajor] = useState(
-    editFromTicket ? minorToMajor(editFromTicket.shippingMinor ?? 0) : "0",
+    editFromTicket ? minorToMajor(editFromTicket.shippingMinor ?? 0, editFromTicket.currency) : "0",
   );
   const [serviceMajor, setServiceMajor] = useState(
     editFromTicket
-      ? minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0)
+      ? minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0, editFromTicket.currency)
       : "0",
   );
   const [title, setTitle] = useState(editFromTicket?.title || "");
-  const [currency, setCurrency] = useState(editFromTicket?.currency || "GBP");
+  const [currency, setCurrency] = useState(editFromTicket?.currency || "EUR");
   const [procurement, setProcurement] = useState(
     Boolean(editFromTicket?.procurementAdvanceAgreed),
   );
@@ -170,11 +179,11 @@ export function ProposePaymentTicketButton({
 
   useEffect(() => {
     if (!editFromTicket) return;
-    setItemMajor(minorToMajor(editFromTicket.itemCostMinor));
-    setShippingMajor(minorToMajor(editFromTicket.shippingMinor ?? 0));
-    setServiceMajor(minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0));
+    setItemMajor(minorToMajor(editFromTicket.itemCostMinor, editFromTicket.currency));
+    setShippingMajor(minorToMajor(editFromTicket.shippingMinor ?? 0, editFromTicket.currency));
+    setServiceMajor(minorToMajor(editFromTicket.sellerServiceFeeMinor ?? 0, editFromTicket.currency));
     setTitle(editFromTicket.title || "");
-    setCurrency(editFromTicket.currency || "GBP");
+    setCurrency(editFromTicket.currency || "EUR");
     setProcurement(Boolean(editFromTicket.procurementAdvanceAgreed));
     setBuyerIsMe(editFromTicket.buyerId ? editFromTicket.buyerId === myId : null);
   }, [editFromTicket, myId]);
@@ -256,9 +265,10 @@ export function ProposePaymentTicketButton({
     setBusy(true);
     setError("");
 
-    const item = Math.round(Number(itemMajor) * 100);
-    const shipping = Math.round(Number(shippingMajor || "0") * 100);
-    const service = Math.round(Number(serviceMajor || "0") * 100);
+    const cur = currency || "EUR";
+    const item = majorToMinor(Number(itemMajor) || 0, cur);
+    const shipping = majorToMinor(Number(shippingMajor || "0") || 0, cur);
+    const service = majorToMinor(Number(serviceMajor || "0") || 0, cur);
     if (!Number.isFinite(item) || item <= 0) {
       setError(`Enter a valid item cost. Ref: ${proposalTraceId}`);
       setBusy(false);
@@ -316,7 +326,7 @@ export function ProposePaymentTicketButton({
             ? Math.max(0, service)
             : 0,
           title: title || undefined,
-          currency: currency || "GBP",
+          currency: currency || "EUR",
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
           // Fee is always calculated server-side (2% on item+shipping) and
@@ -575,8 +585,11 @@ export function ProposePaymentTicketButton({
           className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           disabled={busy}
         >
-          <option value="GBP">GBP (£)</option>
-          <option value="USD">USD ($)</option>
+          {TICKET_CURRENCY_OPTIONS.map((opt) => (
+            <option key={opt.code} value={opt.code}>
+              {opt.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className="mt-2 block min-w-0 text-[11px] text-white/55">
@@ -636,13 +649,14 @@ export function ProposePaymentTicketButton({
         <p className="mt-2 text-[11px] text-white/45">
           Estimated buyer total:{" "}
           {(() => {
-            const item = Math.round(parseFloat(itemMajor || "0") * 100) || 0;
-            const ship = Math.round(parseFloat(shippingMajor || "0") * 100) || 0;
-            const svc = Math.round(parseFloat(serviceMajor || "0") * 100) || 0;
+            const cur = currency || "EUR";
+            const item = majorToMinor(Number(itemMajor || 0) || 0, cur);
+            const ship = majorToMinor(Number(shippingMajor || 0) || 0, cur);
+            const svc = majorToMinor(Number(serviceMajor || 0) || 0, cur);
             const base = item + ship;
-            const fee = base > 0 ? Math.max(Math.ceil(base * 0.02), 1) : 0;
+            const fee = base > 0 ? Math.ceil((base * 200) / 10_000) : 0;
             const total = base + svc + fee;
-            return `£${(total / 100).toFixed(2)}`;
+            return formatMinor(total, cur);
           })()}
           {" "}
           (includes Source Bridge fee)

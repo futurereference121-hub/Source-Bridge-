@@ -18,6 +18,7 @@ runNodeTestScripts(
     "scripts/test-payment-journey-regression.mjs",
     "scripts/test-payment-ticket-lifecycle.mjs",
     "scripts/test-payments-domain.mjs",
+    "scripts/test-payment-currencies.mjs",
     "scripts/test-direct-payment.mjs",
     "scripts/test-procurement-release.mjs",
     "scripts/test-fulfilment.mjs",
@@ -41,3 +42,4 @@ runNodeTestScripts(
   ],
   { label: "payments:fast" },
 );
+
