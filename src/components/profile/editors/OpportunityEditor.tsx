@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { emitOpportunityChanged } from "@/lib/opportunity-surface-sync";
 import {
   EditorField,
   EditorShell,
@@ -37,7 +38,7 @@ export function OpportunityEditor({
   defaults,
   onPublished,
 }: OpportunityEditorProps) {
-  const { showToast } = useAppUi();
+  const { showToast, account } = useAppUi();
   const [form, setForm] = useState({
     ...blank,
     description: defaults?.description || "",
@@ -46,6 +47,7 @@ export function OpportunityEditor({
   });
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(opportunityId));
+  const appliedVersionRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,13 +100,46 @@ export function OpportunityEditor({
           : null,
       };
       if (opportunityId) {
-        await apiJson(
+        const json = (await apiJson(
           `/api/opportunities/${opportunityId}`,
           jsonBody("PATCH", payload),
-        );
+        )) as {
+          opportunity?: { id: string; postedAt: string };
+        };
+        const opp = json.opportunity;
+        if (opp?.id && opp.postedAt) {
+          const version = Date.parse(opp.postedAt) || Date.now();
+          if (version >= appliedVersionRef.current) {
+            appliedVersionRef.current = version;
+            emitOpportunityChanged({
+              memberId: account?.id,
+              memberSlug: account?.slug || undefined,
+              opportunity: { id: opp.id, postedAt: opp.postedAt, version },
+              version,
+            });
+          }
+        }
         showToast("Opportunity updated successfully.");
       } else {
-        await apiJson("/api/opportunities", jsonBody("POST", payload));
+        const json = (await apiJson(
+          "/api/opportunities",
+          jsonBody("POST", payload),
+        )) as {
+          opportunity?: { id: string; postedAt: string };
+        };
+        const opp = json.opportunity;
+        if (opp?.id && opp.postedAt) {
+          const version = Date.parse(opp.postedAt) || Date.now();
+          if (version >= appliedVersionRef.current) {
+            appliedVersionRef.current = version;
+            emitOpportunityChanged({
+              memberId: account?.id,
+              memberSlug: account?.slug || undefined,
+              opportunity: { id: opp.id, postedAt: opp.postedAt, version },
+              version,
+            });
+          }
+        }
         showToast("Opportunity posted successfully.");
         onPublished?.();
       }

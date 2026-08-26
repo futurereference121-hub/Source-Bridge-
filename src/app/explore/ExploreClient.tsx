@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { FeedItem, Member } from "@/lib/types";
+import {
+  maxFeedContentVersion,
+  shouldApplyExploreFeedPayload,
+} from "@/lib/explore-feed-activity";
 import { SearchBar } from "@/components/search/SearchBar";
 import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
 import { MemberDirectoryCard } from "@/components/members/MemberCard";
@@ -14,16 +18,8 @@ const SEARCH_EXAMPLES =
   "Japan · Coffee from Colombia · Someone travelling to Bangkok · Watches in Switzerland";
 
 const FEED_PREVIEW_LIMIT = 8;
-
-function maxStatusFeedVersion(items: FeedItem[]): number {
-  let max = 0;
-  for (const item of items) {
-    if (item.kind !== "status") continue;
-    const ts = Date.parse(item.postedAt);
-    if (Number.isFinite(ts) && ts > max) max = ts;
-  }
-  return max;
-}
+/** Match chat soft-poll cadence — version check only; full feed when changed. */
+const EXPLORE_FEED_SOFT_POLL_MS = 2500;
 
 type ExploreClientProps = {
   initialMembers: Member[];
@@ -47,6 +43,13 @@ function mapApiMember(raw: Record<string, unknown>): Member | null {
 function directoryLimit(): number {
   if (typeof window === "undefined") return 24;
   return window.matchMedia("((min-width: 768px))").matches ? 36 : 24;
+}
+
+function feedItemsEqual(a: FeedItem[], b: FeedItem[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (item, i) => item.id === b[i]?.id && item.text === b[i]?.text,
+  );
 }
 
 export function ExploreClient({
@@ -158,44 +161,159 @@ export function ExploreClient({
   useEffect(() => {
     let cancelled = false;
     let feedSeq = 0;
-    let feedVersion = maxStatusFeedVersion(initialFeed);
+    let appliedFeedVersion = "";
+    let appliedContentMax = maxFeedContentVersion(initialFeed);
+    let softPollInFlight = false;
 
-    async function refreshFeed() {
+    function applyItems(
+      items: FeedItem[],
+      nextFeedVersion: string | undefined,
+      opts: { force?: boolean; requestSeq: number },
+    ) {
+      if (opts.requestSeq !== feedSeq) return;
+      const incomingContentMax = maxFeedContentVersion(items);
+      const incomingVersion =
+        typeof nextFeedVersion === "string" && nextFeedVersion
+          ? nextFeedVersion
+          : null;
+
+      if (opts.force) {
+        if (
+          !incomingVersion &&
+          incomingContentMax > 0 &&
+          incomingContentMax < appliedContentMax
+        ) {
+          return;
+        }
+      } else if (
+        !shouldApplyExploreFeedPayload({
+          requestSeq: opts.requestSeq,
+          latestSeq: feedSeq,
+          incomingVersion,
+          appliedVersion: appliedFeedVersion,
+          incomingContentMax,
+          appliedContentMax,
+        })
+      ) {
+        return;
+      }
+
+      if (incomingVersion) appliedFeedVersion = incomingVersion;
+      appliedContentMax = Math.max(appliedContentMax, incomingContentMax);
+      setFeed((prev) => (feedItemsEqual(prev, items) ? prev : items));
+    }
+
+    async function refreshFeed(opts?: { force?: boolean }) {
       const seq = ++feedSeq;
       try {
         const feedRes = await fetch("/api/feed?limit=8", { cache: "no-store" });
         if (!feedRes.ok || cancelled || seq !== feedSeq) return;
-        const feedData = (await feedRes.json()) as { items?: FeedItem[] };
+        const feedData = (await feedRes.json()) as {
+          items?: FeedItem[];
+          feedVersion?: string;
+        };
         if (!Array.isArray(feedData.items)) return;
-        const nextVersion = maxStatusFeedVersion(feedData.items);
-        // Ignore out-of-order non-empty Status payloads older than what we show.
-        // Allow nextVersion===0 so expiry can clear the Status column.
-        if (nextVersion > 0 && nextVersion < feedVersion) return;
-        feedVersion = Math.max(feedVersion, nextVersion);
-        setFeed(feedData.items);
+        applyItems(feedData.items, feedData.feedVersion, {
+          force: opts?.force,
+          requestSeq: seq,
+        });
       } catch {
         /* keep SSR feed */
       }
     }
 
+    async function softPollFeed() {
+      if (cancelled || softPollInFlight) return;
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+      softPollInFlight = true;
+      const seq = ++feedSeq;
+      try {
+        const since = appliedFeedVersion
+          ? `&sinceVersion=${encodeURIComponent(appliedFeedVersion)}`
+          : "";
+        const res = await fetch(`/api/feed?poll=1&limit=8${since}`, {
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled || seq !== feedSeq) return;
+        const data = (await res.json()) as {
+          unchanged?: boolean;
+          feedVersion?: string;
+          items?: FeedItem[];
+        };
+        if (cancelled || seq !== feedSeq) return;
+        if (data.unchanged) {
+          if (typeof data.feedVersion === "string") {
+            appliedFeedVersion = data.feedVersion;
+          }
+          return;
+        }
+        if (!Array.isArray(data.items)) return;
+        applyItems(data.items, data.feedVersion, { requestSeq: seq });
+      } catch {
+        /* silent — avoid toast spam */
+      } finally {
+        softPollInFlight = false;
+      }
+    }
+
     // Immediate refresh — client navigation can reuse a stale RSC payload.
-    void refreshFeed();
-    let unsub: () => void = () => {};
+    void refreshFeed({ force: true });
+
+    const pollId = window.setInterval(
+      () => void softPollFeed(),
+      EXPLORE_FEED_SOFT_POLL_MS,
+    );
+    const onVis = () => {
+      if (document.visibilityState === "visible") void softPollFeed();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    window.addEventListener("online", onVis);
+
+    let unsubStatus: () => void = () => {};
+    let unsubOpp: () => void = () => {};
     void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
-      unsub = subscribeStatusChanged((payload) => {
+      unsubStatus = subscribeStatusChanged((payload) => {
         const version =
           payload.version ??
           payload.status?.version ??
           (payload.status ? Date.parse(payload.status.postedAt) : 0);
-        if (version && version < feedVersion) return;
-        if (version) feedVersion = Math.max(feedVersion, version);
-        void refreshFeed();
+        if (version && version < appliedContentMax) return;
+        if (version) appliedContentMax = Math.max(appliedContentMax, version);
+        // Publisher / same-tab: apply immediately (do not wait for poll).
+        void refreshFeed({ force: true });
         void fetchMembersPage({ q: queryRef.current, page: 1, append: false });
       });
     });
+    void import("@/lib/opportunity-surface-sync").then(
+      ({ subscribeOpportunityChanged }) => {
+        unsubOpp = subscribeOpportunityChanged((payload) => {
+          const version =
+            payload.version ??
+            payload.opportunity?.version ??
+            (payload.opportunity
+              ? Date.parse(payload.opportunity.postedAt)
+              : 0);
+          if (version && version < appliedContentMax) return;
+          if (version) appliedContentMax = Math.max(appliedContentMax, version);
+          void refreshFeed({ force: true });
+        });
+      },
+    );
+
     return () => {
       cancelled = true;
-      unsub();
+      window.clearInterval(pollId);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+      window.removeEventListener("online", onVis);
+      unsubStatus();
+      unsubOpp();
     };
     // initialFeed is only the mount baseline for version; do not re-bind on prop churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-time feed sync

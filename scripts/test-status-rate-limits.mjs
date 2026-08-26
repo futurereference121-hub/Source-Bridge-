@@ -49,8 +49,31 @@ assert.match(sync, /stale/);
 const explore = read("src/app/explore/ExploreClient.tsx");
 assert.match(explore, /refreshFeed/);
 assert.match(explore, /subscribeStatusChanged/);
-assert.match(explore, /maxStatusFeedVersion|feedVersion/);
+assert.match(explore, /subscribeOpportunityChanged/);
+assert.match(explore, /softPollFeed|poll=1/);
+assert.match(explore, /sinceVersion/);
+assert.match(explore, /EXPLORE_FEED_SOFT_POLL_MS\s*=\s*2500/);
+assert.match(explore, /visibilityState/);
+assert.match(explore, /feedVersion|appliedFeedVersion/);
+// Forbid aggressive full-feed timers (1–2s or fixed 4s refreshFeed loops).
 assert.doesNotMatch(explore, /setTimeout\(\s*\(\)\s*=>\s*void refreshFeed\(\),\s*4000\)/);
+assert.doesNotMatch(explore, /setInterval\(\s*\(\)\s*=>\s*void refreshFeed/);
+assert.doesNotMatch(
+  explore,
+  /SOFT_POLL_MS\s*=\s*(1|2)000\b/,
+);
+
+const feedRoute = read("src/app/api/feed/route.ts");
+assert.match(feedRoute, /poll/);
+assert.match(feedRoute, /sinceVersion/);
+assert.match(feedRoute, /getExploreFeedVersion|unchanged/);
+
+const oppSync = read("src/lib/opportunity-surface-sync.ts");
+assert.match(oppSync, /OPPORTUNITY_CHANGED_EVENT/);
+assert.match(oppSync, /stale/);
+
+const oppEditor = read("src/components/profile/editors/OpportunityEditor.tsx");
+assert.match(oppEditor, /emitOpportunityChanged/);
 
 const membersService = read("src/lib/members-service.ts");
 assert.match(membersService, /dedupeStatusesByUser/);
