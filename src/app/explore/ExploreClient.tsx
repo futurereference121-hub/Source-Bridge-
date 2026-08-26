@@ -15,6 +15,16 @@ const SEARCH_EXAMPLES =
 
 const FEED_PREVIEW_LIMIT = 8;
 
+function maxStatusFeedVersion(items: FeedItem[]): number {
+  let max = 0;
+  for (const item of items) {
+    if (item.kind !== "status") continue;
+    const ts = Date.parse(item.postedAt);
+    if (Number.isFinite(ts) && ts > max) max = ts;
+  }
+  return max;
+}
+
 type ExploreClientProps = {
   initialMembers: Member[];
   initialFeed: FeedItem[];
@@ -147,30 +157,49 @@ export function ExploreClient({
 
   useEffect(() => {
     let cancelled = false;
+    let feedSeq = 0;
+    let feedVersion = maxStatusFeedVersion(initialFeed);
+
     async function refreshFeed() {
+      const seq = ++feedSeq;
       try {
         const feedRes = await fetch("/api/feed?limit=8", { cache: "no-store" });
-        if (!feedRes.ok || cancelled) return;
+        if (!feedRes.ok || cancelled || seq !== feedSeq) return;
         const feedData = (await feedRes.json()) as { items?: FeedItem[] };
-        if (Array.isArray(feedData.items)) setFeed(feedData.items);
+        if (!Array.isArray(feedData.items)) return;
+        const nextVersion = maxStatusFeedVersion(feedData.items);
+        // Ignore out-of-order non-empty Status payloads older than what we show.
+        // Allow nextVersion===0 so expiry can clear the Status column.
+        if (nextVersion > 0 && nextVersion < feedVersion) return;
+        feedVersion = Math.max(feedVersion, nextVersion);
+        setFeed(feedData.items);
       } catch {
         /* keep SSR feed */
       }
     }
-    const soft = window.setTimeout(() => void refreshFeed(), 4000);
+
+    // Immediate refresh — client navigation can reuse a stale RSC payload.
+    void refreshFeed();
     let unsub: () => void = () => {};
     void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
-      unsub = subscribeStatusChanged(() => {
+      unsub = subscribeStatusChanged((payload) => {
+        const version =
+          payload.version ??
+          payload.status?.version ??
+          (payload.status ? Date.parse(payload.status.postedAt) : 0);
+        if (version && version < feedVersion) return;
+        if (version) feedVersion = Math.max(feedVersion, version);
         void refreshFeed();
         void fetchMembersPage({ q: queryRef.current, page: 1, append: false });
       });
     });
     return () => {
       cancelled = true;
-      window.clearTimeout(soft);
       unsub();
     };
-  }, []);
+    // initialFeed is only the mount baseline for version; do not re-bind on prop churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-time feed sync
+  }, [fetchMembersPage]);
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-24 pb-24 text-white sm:pt-28 sm:pb-28">

@@ -11,24 +11,41 @@ export function ActivityClient() {
 
   useEffect(() => {
     let cancelled = false;
+    let seq = 0;
+    let feedVersion = 0;
+
     async function load() {
+      const mySeq = ++seq;
       try {
         const res = await fetch("/api/feed?limit=50", {
           cache: "no-store",
         });
         if (!res.ok) throw new Error("Failed to load feed");
         const data = (await res.json()) as { items?: FeedItem[] };
-        if (!cancelled) {
-          setItems(Array.isArray(data.items) ? data.items : []);
-        }
+        if (cancelled || mySeq !== seq) return;
+        const next = Array.isArray(data.items) ? data.items : [];
+        const nextVersion = next.reduce((max, item) => {
+          if (item.kind !== "status") return max;
+          const ts = Date.parse(item.postedAt);
+          return Number.isFinite(ts) && ts > max ? ts : max;
+        }, 0);
+        if (nextVersion > 0 && nextVersion < feedVersion) return;
+        feedVersion = Math.max(feedVersion, nextVersion);
+        setItems(next);
       } catch {
-        if (!cancelled) setItems([]);
+        if (!cancelled && mySeq === seq) setItems([]);
       }
     }
     void load();
     let unsub: () => void = () => {};
     void import("@/lib/status-surface-sync").then(({ subscribeStatusChanged }) => {
-      unsub = subscribeStatusChanged(() => {
+      unsub = subscribeStatusChanged((payload) => {
+        const version =
+          payload.version ??
+          payload.status?.version ??
+          (payload.status ? Date.parse(payload.status.postedAt) : 0);
+        if (version && version < feedVersion) return;
+        if (version) feedVersion = Math.max(feedVersion, version);
         void load();
       });
     });

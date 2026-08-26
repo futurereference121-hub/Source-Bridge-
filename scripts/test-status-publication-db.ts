@@ -43,6 +43,10 @@ async function cleanup(userId: string) {
   await prisma.statusUpdate.deleteMany({ where: { userId } });
   await prisma.session.deleteMany({ where: { userId } });
   await prisma.user.delete({ where: { id: userId } }).catch(() => null);
+  const gone = await prisma.user.findUnique({ where: { id: userId } });
+  if (gone) {
+    throw new Error(`Status fixture cleanup failed for ${userId}`);
+  }
 }
 
 async function actives(userId: string, now: Date) {
@@ -202,7 +206,12 @@ async function main() {
     console.error(err);
     process.exitCode = 1;
   } finally {
-    await cleanup(user.id);
+    try {
+      await cleanup(user.id);
+    } catch (cleanupErr) {
+      console.error(cleanupErr);
+      process.exitCode = 1;
+    }
     await prisma.$disconnect();
   }
 }

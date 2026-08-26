@@ -46,10 +46,32 @@ assert.match(editor, /idempotencyKey/);
 assert.match(sync, /STATUS_CHANGED_EVENT/);
 assert.match(sync, /stale/);
 
+const explore = read("src/app/explore/ExploreClient.tsx");
+assert.match(explore, /refreshFeed/);
+assert.match(explore, /subscribeStatusChanged/);
+assert.match(explore, /maxStatusFeedVersion|feedVersion/);
+assert.doesNotMatch(explore, /setTimeout\(\s*\(\)\s*=>\s*void refreshFeed\(\),\s*4000\)/);
+
+const membersService = read("src/lib/members-service.ts");
+assert.match(membersService, /dedupeStatusesByUser/);
+assert.match(membersService, /statusFeed|statusItems/);
+
+const memberStatus = read("src/lib/member-status.ts");
+assert.match(memberStatus, /pickActiveStatus/);
+
 const profile = read("src/app/profile/page.tsx");
 assert.match(profile, /idempotencyKey/);
 assert.match(profile, /Publishing…/);
 assert.match(profile, /status-cooldown/);
 assert.match(profile, /emitStatusChanged/);
+
+const repro = read("scripts/_status-repro-signin.mjs");
+assert.match(repro, /CLEANUP_FAILED|cleanupOk/);
+assert.match(repro, /user\.delete/);
+assert.doesNotMatch(repro, /leave-user/);
+
+const observe = read("scripts/_status-postdeploy-observe.mjs");
+assert.match(observe, /user\.delete/);
+assert.doesNotMatch(observe, /leaveUser/);
 
 console.log("[test-status-rate-limits] passed");

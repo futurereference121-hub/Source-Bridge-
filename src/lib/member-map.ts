@@ -19,7 +19,7 @@ import type {
   Trip as DbTrip,
   User,
 } from "@prisma/client";
-import { isStatusActive } from "@/lib/member-status";
+import { pickActiveStatus } from "@/lib/member-status";
 import { memberCover, memberPhoto, PLACEHOLDER_PRODUCT } from "@/lib/placeholders";
 
 export type DbUserBundle = User & {
@@ -54,20 +54,8 @@ function formatTripRange(arrival: string, departure: string): string {
 }
 
 function activeStatus(statuses: DbStatus[] | undefined): MemberStatus | null {
-  if (!statuses?.length) return null;
   // Prefer newest still-active row (do not stop at a newer expired supersession).
-  const sorted = [...statuses].sort(
-    (a, b) => b.postedAt.getTime() - a.postedAt.getTime(),
-  );
-  for (const row of sorted) {
-    const mapped: MemberStatus = {
-      text: row.text,
-      postedAt: row.postedAt.toISOString(),
-      expiresAt: row.expiresAt.toISOString(),
-    };
-    if (isStatusActive(mapped)) return mapped;
-  }
-  return null;
+  return pickActiveStatus(statuses);
 }
 
 function isOpportunityActive(o: DbOpportunity, now = new Date()): boolean {

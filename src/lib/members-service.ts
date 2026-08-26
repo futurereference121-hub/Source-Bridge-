@@ -26,7 +26,7 @@ const selfViewableWhere = {
 const userInclude = {
   networkLocations: { orderBy: { sortOrder: "asc" as const } },
   trips: { orderBy: { arrival: "asc" as const } },
-  statuses: { orderBy: { postedAt: "desc" as const }, take: 1 },
+  statuses: { orderBy: { postedAt: "desc" as const }, take: 3 },
   opportunities: { orderBy: { postedAt: "desc" as const }, take: 3 },
 };
 
@@ -246,7 +246,8 @@ export async function isUsernameAvailable(
 function feedFromMembers(members: Member[], limit: number): FeedItem[] {
   // Live Activity must only show real, active accounts — never seed prototypes
   // and never soft-deleted / anonymized users.
-  const fromDb: FeedItem[] = [];
+  const statusItems: FeedItem[] = [];
+  const oppItems: FeedItem[] = [];
   for (const m of members.filter(
     (m) =>
       m.isRealAccount &&
@@ -255,7 +256,7 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
       Boolean(m.slug),
   )) {
     if (isStatusActive(m.status) && m.status) {
-      fromDb.push({
+      statusItems.push({
         id: `status-${m.id}-${m.status.postedAt}`,
         kind: "status",
         memberId: m.id,
@@ -271,7 +272,7 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
     for (const o of m.opportunities ?? []) {
       if (o.closedAt) continue;
       if (o.expiresAt && Date.parse(o.expiresAt) <= Date.now()) continue;
-      fromDb.push({
+      oppItems.push({
         id: `opp-${o.id}`,
         kind: "opportunity",
         memberId: m.id,
@@ -288,9 +289,30 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
       });
     }
   }
-  return fromDb
+  // Preserve per-kind budgets so Explore Status is not starved by opportunities.
+  const statuses = dedupeStatusesByUser(statusItems).slice(0, limit);
+  const opportunities = oppItems
     .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
     .slice(0, limit);
+  return [...statuses, ...opportunities].sort(
+    (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
+  );
+}
+
+/** One active Status card per user (newest wins). */
+function dedupeStatusesByUser(items: FeedItem[]): FeedItem[] {
+  const seen = new Set<string>();
+  const out: FeedItem[] = [];
+  const sorted = [...items].sort(
+    (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
+  );
+  for (const item of sorted) {
+    if (item.kind !== "status") continue;
+    if (seen.has(item.memberId)) continue;
+    seen.add(item.memberId);
+    out.push(item);
+  }
+  return out;
 }
 
 async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
@@ -302,6 +324,8 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
     name: true,
     photo: true,
   } as const;
+  // Over-fetch slightly so per-user dedupe still fills the Status column.
+  const statusTake = Math.min(Math.max(limit * 3, limit), 100);
 
   try {
     const [statuses, opportunities] = await Promise.all([
@@ -311,11 +335,13 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
           user: publicMemberWhere,
         },
         orderBy: { postedAt: "desc" },
-        take: limit,
+        take: statusTake,
         select: {
+          id: true,
           text: true,
           postedAt: true,
           expiresAt: true,
+          userId: true,
           user: { select: userSelect },
         },
       }),
@@ -341,12 +367,12 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
       }),
     ]);
 
-    const fromDb: FeedItem[] = [];
+    const statusItems: FeedItem[] = [];
     for (const s of statuses) {
       const u = s.user;
       if (!u.slug || !u.username) continue;
-      fromDb.push({
-        id: `status-${u.id}-${s.postedAt.toISOString()}`,
+      statusItems.push({
+        id: `status-${s.id}`,
         kind: "status",
         memberId: u.id,
         memberSlug: u.slug,
@@ -358,10 +384,11 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
         expiresAt: s.expiresAt.toISOString(),
       });
     }
+    const oppItems: FeedItem[] = [];
     for (const o of opportunities) {
       const u = o.user;
       if (!u.slug || !u.username) continue;
-      fromDb.push({
+      oppItems.push({
         id: `opp-${o.id}`,
         kind: "opportunity",
         memberId: u.id,
@@ -379,9 +406,12 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
     }
 
     // Real DB activity only — seed prototypes must never appear in Live Activity.
-    return fromDb
-      .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
-      .slice(0, limit);
+    // Keep independent Status + Opportunity budgets (do not merge-slice away Status).
+    const statusFeed = dedupeStatusesByUser(statusItems).slice(0, limit);
+    const oppFeed = oppItems.slice(0, limit);
+    return [...statusFeed, ...oppFeed].sort(
+      (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
+    );
   } catch (err) {
     console.error("[members] feed query failed", err);
     return [];
