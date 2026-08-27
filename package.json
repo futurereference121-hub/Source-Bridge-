@@ -53,6 +53,8 @@
     "test:critical": "node scripts/test-payments-fast.mjs",
     "test:sourcebridge": "node scripts/test-sourcebridge-release.mjs",
     "test:live-guard": "node scripts/test-live-payments-guard.mjs",
+    "check:live-readiness": "node scripts/check-live-payments-readiness.mjs",
+    "test:stripe-dual-mode": "node scripts/test-stripe-dual-mode.mjs",
     "test:procurement": "node scripts/test-procurement-release.mjs",
     "test:payment-ticket-timeline": "node --env-file=.env scripts/test-payment-ticket-timeline.mjs",
     "test:chat-ticket-ui": "node scripts/test-chat-ticket-ui.mjs",

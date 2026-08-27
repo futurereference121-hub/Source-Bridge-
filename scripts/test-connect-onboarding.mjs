@@ -32,7 +32,8 @@ function isStripeConfiguredForPayments({ paymentsEnabled, secretKey }) {
 
 /**
  * Connect onboarding API readiness (isConnectOnboardingApiReady).
- * Does NOT require PAYMENTS_ENABLED. Live keys / live mode refused.
+ * Does NOT require PAYMENTS_ENABLED.
+ * TEST: TEST secret. LIVE: kill switch + LIVE secret.
  */
 function isConnectOnboardingApiReady({
   connectOnboardingEnabled,
@@ -43,8 +44,10 @@ function isConnectOnboardingApiReady({
 }) {
   void paymentsEnabled;
   void connectOnboardingEnabled;
-  if (envBool(livePaymentsEnabled)) return false;
-  if (stripeMode !== "TEST") return false;
+  if (stripeMode === "LIVE") {
+    if (!envBool(livePaymentsEnabled)) return false;
+    return hasLiveKey(secretKey);
+  }
   if (hasLiveKey(secretKey)) return false;
   return hasTestKey(secretKey);
 }
@@ -75,9 +78,21 @@ function payoutsHelpCopy({ stripeTestConfigured, connectOnboardingEnabled, onboa
   return "Set up payouts securely through Stripe.";
 }
 
-function wouldCreateDuplicateAccount({ existingUserId, candidateUserId }) {
-  // Local mapping is 1:1 on userId — second onboard reuses, never inserts another.
-  return existingUserId === candidateUserId;
+function wouldCreateDuplicateAccount({
+  existingUserId,
+  candidateUserId,
+  existingMode,
+  candidateMode,
+}) {
+  // Same user + same mode reuses the row; different mode is a separate row.
+  return (
+    existingUserId === candidateUserId &&
+    normalizeMode(existingMode) === normalizeMode(candidateMode)
+  );
+}
+
+function normalizeMode(m) {
+  return String(m || "TEST").toUpperCase() === "LIVE" ? "LIVE" : "TEST";
 }
 
 function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
@@ -153,7 +168,7 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
   assert.equal(hasLiveKey("sk_live_should_refuse"), true);
 }
 
-// ── LIVE_PAYMENTS_ENABLED true → onboarding API ready false
+// ── LIVE_PAYMENTS_ENABLED true + TEST mode path → onboarding false (active mode would be LIVE)
 {
   assert.equal(
     isConnectOnboardingApiReady({
@@ -163,16 +178,38 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
       stripeMode: "TEST",
       secretKey: "sk_test_unit_only",
     }),
+    true, // TEST secret still valid for TEST mode helper; platform getStripeMode would be LIVE
+  );
+  assert.equal(
+    isConnectOnboardingApiReady({
+      connectOnboardingEnabled: "true",
+      paymentsEnabled: "false",
+      livePaymentsEnabled: "true",
+      stripeMode: "LIVE",
+      secretKey: "sk_live_unit_only",
+    }),
+    true,
+  );
+  assert.equal(
+    isConnectOnboardingApiReady({
+      connectOnboardingEnabled: "true",
+      paymentsEnabled: "false",
+      livePaymentsEnabled: "false",
+      stripeMode: "LIVE",
+      secretKey: "sk_live_unit_only",
+    }),
     false,
   );
 }
 
-// ── No duplicate accounts (same user re-onboards)
+// ── No duplicate accounts (same user + same mode re-onboards)
 {
   assert.equal(
     wouldCreateDuplicateAccount({
       existingUserId: "user_a",
       candidateUserId: "user_a",
+      existingMode: "TEST",
+      candidateMode: "TEST",
     }),
     true, // reuse path, not a second row
   );
@@ -180,6 +217,18 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
     wouldCreateDuplicateAccount({
       existingUserId: "user_a",
       candidateUserId: "user_b",
+      existingMode: "TEST",
+      candidateMode: "TEST",
+    }),
+    false,
+  );
+  // Dual-mode: same user may have TEST and LIVE rows
+  assert.equal(
+    wouldCreateDuplicateAccount({
+      existingUserId: "user_a",
+      candidateUserId: "user_a",
+      existingMode: "TEST",
+      candidateMode: "LIVE",
     }),
     false,
   );

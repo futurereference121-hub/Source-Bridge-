@@ -4,13 +4,13 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Final 12-step QA — Steps 9–10 checkpoint (shared ADD PHOTO control + shipping proof persist / Admin VIEW PHOTO). Steps 11–12 not started in this commit. Deploy deferred. Migration skipped (ops agent).
-- **Last verified commit:** (this checkpoint; see `git log -1`)
-- **Last TEST deployment:** `dpl_E4Aj5vkJpwXZVeXMyztY7fAvFwHW` (`source-bridge-5bowg9g3s-canna-cake.vercel.app`) → www.sourcebridge.app — **not redeployed for Steps 9–10**
-- **Known blocker:** Live browser QA still required for Steps 5–10. Steps 11–12 pending.
-- **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST (`getStripeMode()` still hard-refuses Live)
-- **Last critical regression:** Steps 9–10 targeted source tests PASS; typecheck PASS; full suite / deploy / live QA not claimed here
-- **Migration status:** `20260821193000_message_hide_shipment_photo` APPLIED on Production TEST Neon (MessageHide + ProtectedTransaction.shipmentPhotoUrl). Prior `20260820140000_activity_version_platform_fee_refund` already APPLIED. `20260823160000_conversation_delete_cutoff` (`deletedBeforeAt`) — confirm with ops agent; not part of this Steps 9–10 product commit.
+- **Workstream:** Dual-mode Stripe Connect + Live configuration readiness (architecture only; Live not activated).
+- **Last verified commit:** (pending commit of dual-mode; was local-only after prior uncommitted deploy was overwritten by `ec928a9`)
+- **Last TEST deployment:** Production was on `ec928a9` (Status soft-poll) without dual-mode; redeploy of dual-mode commit pending — Live OFF
+- **Known blocker:** Dual-mode must be on Production before Live activation. LIVE env names may already be present; activation remains a separate dedicated task.
+- **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST active; architecture supports LIVE when kill switch + keys present
+- **Last critical regression:** `test:payments:fast` PASS · `test:stripe-dual-mode` PASS · `test:live-guard` PASS
+- **Migration status:** `20260826120000_connect_dual_mode_isolation` APPLIED on Neon (Connect `@@unique([userId, stripeMode])`; TEST IDs preserved)
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 

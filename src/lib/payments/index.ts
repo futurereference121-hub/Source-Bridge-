@@ -9,7 +9,9 @@ export {
   isTrackingAutomationEnabled,
   isLivePaymentsEnabled,
   getStripeMode,
+  normalizeStripeMode,
   assertStripeModeCompatible,
+  assertMoneyOpEnvironmentMatch,
 } from "@/lib/payments/flags";
 export {
   assertPaymentsTestAllowlisted,
@@ -36,4 +38,6 @@ export {
   isStripeConfigured,
   isConnectOnboardingApiReady,
   hasStripeTestSecretKey,
+  hasStripeLiveSecretKey,
+  getLivePaymentsReadinessReport,
 } from "@/lib/payments/stripe/client";

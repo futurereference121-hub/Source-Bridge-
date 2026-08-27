@@ -1,6 +1,7 @@
 /**
  * Protected Payments feature flags.
- * LIVE_PAYMENTS_ENABLED must remain false until legal + Connect go-live checklist.
+ * LIVE_PAYMENTS_ENABLED is the Live kill switch (default false).
+ * Architecture supports TEST and LIVE; Live stays off until a dedicated activation task.
  */
 
 function envBool(name: string, defaultValue = false): boolean {
@@ -15,15 +16,84 @@ export function isLivePaymentsEnabled(): boolean {
   return envBool("LIVE_PAYMENTS_ENABLED", false);
 }
 
-/** Effective Stripe mode — LIVE only when explicitly enabled AND live keys present. */
+/**
+ * Normalize stored / inbound mode labels. Unknown → TEST (safe default).
+ */
+export function normalizeStripeMode(raw: string | null | undefined): StripeMode {
+  return String(raw || "").trim().toUpperCase() === "LIVE" ? "LIVE" : "TEST";
+}
+
+/**
+ * Effective Stripe mode for *new* platform activity.
+ * LIVE only when LIVE_PAYMENTS_ENABLED is explicitly true.
+ * When the kill switch is off, always TEST (even if Live keys exist for readiness).
+ */
 export function getStripeMode(): StripeMode {
-  if (isLivePaymentsEnabled()) {
-    // Hard refuse: live mode is not activated for Source Bridge yet.
-    // Even if someone sets LIVE_PAYMENTS_ENABLED=true, we stay on TEST until
-    // the activation checklist is completed in code review.
-    return "TEST";
+  if (!isLivePaymentsEnabled()) return "TEST";
+  return "LIVE";
+}
+
+/**
+ * Guard for money ops / webhook mutation on an existing financial record.
+ * - LIVE records refuse while kill switch is off.
+ * - Does NOT require recordMode === getStripeMode(): TEST history stays operable
+ *   with the TEST Stripe client even after Live activation.
+ */
+export function assertStripeModeCompatible(recordMode: string): void {
+  const mode = normalizeStripeMode(recordMode);
+  if (mode === "LIVE" && !isLivePaymentsEnabled()) {
+    throw Object.assign(
+      new Error(
+        "Stripe mode conflict: LIVE record refused while LIVE_PAYMENTS_ENABLED=false",
+      ),
+      { status: 409, code: "STRIPE_MODE_CONFLICT" },
+    );
   }
-  return "TEST";
+}
+
+/**
+ * Refuse cross-environment money movement.
+ * txn mode + Connect account mode + Stripe client mode must all match.
+ */
+export function assertMoneyOpEnvironmentMatch(opts: {
+  txnStripeMode: string;
+  connectStripeMode?: string | null;
+  /** Optional explicit client mode (defaults to txn mode). */
+  clientStripeMode?: string | null;
+}): StripeMode {
+  const txnMode = normalizeStripeMode(opts.txnStripeMode);
+  assertStripeModeCompatible(txnMode);
+
+  const clientMode = normalizeStripeMode(
+    opts.clientStripeMode != null && String(opts.clientStripeMode).trim()
+      ? opts.clientStripeMode
+      : txnMode,
+  );
+  if (clientMode !== txnMode) {
+    throw Object.assign(
+      new Error(
+        `Stripe mode conflict: txn is ${txnMode}, client is ${clientMode}`,
+      ),
+      { status: 409, code: "STRIPE_MODE_CONFLICT" },
+    );
+  }
+
+  if (
+    opts.connectStripeMode != null &&
+    String(opts.connectStripeMode).trim() !== ""
+  ) {
+    const connectMode = normalizeStripeMode(opts.connectStripeMode);
+    if (connectMode !== txnMode) {
+      throw Object.assign(
+        new Error(
+          `Stripe mode conflict: txn is ${txnMode}, Connect account is ${connectMode}`,
+        ),
+        { status: 409, code: "STRIPE_MODE_CONFLICT" },
+      );
+    }
+  }
+
+  return txnMode;
 }
 
 export function isPaymentsEnabled(): boolean {
@@ -31,8 +101,8 @@ export function isPaymentsEnabled(): boolean {
 }
 
 /**
- * TEST-only Connect onboarding (Account create + Account Link + status sync).
- * Does NOT enable checkout, PaymentIntents, transfers, refunds, or live mode.
+ * Connect onboarding (Account create + Account Link + status sync).
+ * Does NOT enable checkout, PaymentIntents, transfers, refunds by itself.
  */
 export function isConnectOnboardingEnabled(): boolean {
   return envBool("CONNECT_ONBOARDING_ENABLED", false);
@@ -68,18 +138,6 @@ export function isTrackingAutomationEnabled(): boolean {
   return envBool("TRACKING_AUTOMATION_ENABLED", false);
 }
 
-export function assertStripeModeCompatible(recordMode: string): void {
-  const active = getStripeMode();
-  if (recordMode && recordMode !== active) {
-    throw Object.assign(
-      new Error(
-        `Stripe mode conflict: record is ${recordMode}, platform is ${active}`,
-      ),
-      { status: 409, code: "STRIPE_MODE_CONFLICT" },
-    );
-  }
-}
-
 export function paymentFlagsSnapshot() {
   // Lazy import pattern avoided — keep flags pure env reads.
   // Allowlist configured status is safe to expose (not the entries themselves).
@@ -99,8 +157,8 @@ export function paymentFlagsSnapshot() {
     INSTANT_PAYMENTS_ENABLED: isDirectPaymentsEnabled(),
     PROCUREMENT_ADVANCES_ENABLED: isProcurementAdvancesEnabled(),
     TRACKING_AUTOMATION_ENABLED: isTrackingAutomationEnabled(),
-    /** Hard-coded off while activation checklist incomplete (matches getStripeMode). */
-    LIVE_PAYMENTS_ENABLED: false,
+    /** Kill switch — default false; Live activation is a dedicated task. */
+    LIVE_PAYMENTS_ENABLED: isLivePaymentsEnabled(),
     stripeMode: getStripeMode(),
     /**
      * Legacy: whether PAYMENTS_TEST_ALLOWLIST has entries.

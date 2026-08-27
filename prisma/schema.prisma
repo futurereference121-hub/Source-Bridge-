@@ -101,7 +101,8 @@ model User {
   trustLevel                    Int     @default(0)
   /// When false, this account cannot receive procurement advances.
   procurementAdvancesEnabled    Boolean @default(true)
-  stripeConnectAccount          StripeConnectAccount?
+  /// One Connect row per (user, stripeMode) — TEST and LIVE accounts stay isolated.
+  stripeConnectAccounts         StripeConnectAccount[]
   protectedTxAsBuyer            ProtectedTransaction[] @relation("ProtectedTxnBuyer")
   protectedTxAsSeller           ProtectedTransaction[] @relation("ProtectedTxnSeller")
   paymentTicketsCreated         PaymentTicket[]        @relation("PaymentTicketCreator")
@@ -799,12 +800,13 @@ model PlatformPaymentConfig {
 }
 
 /// Stripe Connect Express/Custom account linkage for a seller.
+/// Dual-mode: one row per (userId, stripeMode). TEST and LIVE IDs never overwrite each other.
 model StripeConnectAccount {
   id                    String    @id @default(cuid())
-  userId                String    @unique
+  userId                String
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   stripeAccountId       String    @unique
-  /// TEST | LIVE — refuse mode conflicts with platform keys.
+  /// TEST | LIVE — authoritative; refuse money ops that cross modes.
   stripeMode            String    @default("TEST")
   chargesEnabled        Boolean   @default(false)
   payoutsEnabled        Boolean   @default(false)
@@ -821,7 +823,9 @@ model StripeConnectAccount {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
+  @@unique([userId, stripeMode])
   @@index([stripeMode, chargesEnabled, payoutsEnabled])
+  @@index([userId])
 }
 
 /// Chat Payment Ticket — terms negotiation before funding. Both parties must approve same revision.

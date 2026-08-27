@@ -3,7 +3,7 @@ import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
 import { paymentFlagsSnapshot } from "@/lib/payments/flags";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
-import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
+import { CHARGE_MODEL, getLivePaymentsReadinessReport, isStripeConfigured } from "@/lib/payments/stripe/client";
 
 export const runtime = "nodejs";
 
@@ -65,6 +65,7 @@ export async function GET() {
       flags: paymentFlagsSnapshot(),
       chargeModel: CHARGE_MODEL,
       stripeConfigured: isStripeConfigured(),
+      liveReadiness: getLivePaymentsReadinessReport(),
       config,
       stats: {
         funded,

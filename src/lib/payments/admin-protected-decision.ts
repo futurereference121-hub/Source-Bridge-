@@ -16,6 +16,11 @@ import {
   getStripe,
   isStripeConfigured,
 } from "@/lib/payments/stripe/client";
+import {
+  assertMoneyOpEnvironmentMatch,
+  assertStripeModeCompatible,
+  normalizeStripeMode,
+} from "@/lib/payments/flags";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 
 export type AdminMoneyResolution =
@@ -197,7 +202,13 @@ export async function executeAdminProtectedMoneyDecision(
         );
       }
 
-      const stripe = getStripe();
+      const txnMode = normalizeStripeMode(working.stripeMode);
+      assertStripeModeCompatible(txnMode);
+      assertMoneyOpEnvironmentMatch({
+        txnStripeMode: txnMode,
+        clientStripeMode: txnMode,
+      });
+      const stripe = getStripe(txnMode);
       const refund = await stripe.refunds.create(
         {
           payment_intent: working.stripePaymentIntentId,

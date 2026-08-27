@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/db";
 import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
+  assertMoneyOpEnvironmentMatch,
   assertStripeModeCompatible,
-  getStripeMode,
   isPaymentsEnabled,
+  normalizeStripeMode,
 } from "@/lib/payments/flags";
 import { getStripe, isStripeConfigured, CHARGE_MODEL } from "@/lib/payments/stripe/client";
 import {
@@ -58,8 +59,9 @@ export async function releaseProcurement(opts: {
     throw Object.assign(new Error("Transaction not found"), { status: 404 });
   }
   assertStripeModeCompatible(txn.stripeMode);
+  const txnMode = normalizeStripeMode(txn.stripeMode);
 
-  // Direct uses Destination Charges only â€” never platform procurement transfer.
+  // Direct uses Destination Charges only — never platform procurement transfer.
   if (isDirectPaymentOption(txn.paymentOption)) {
     throw Object.assign(
       new Error("Procurement release is not available for Direct Payment"),
@@ -92,16 +94,34 @@ export async function releaseProcurement(opts: {
   }
 
   const connect = await prisma.stripeConnectAccount.findUnique({
-    where: { userId: txn.sellerId },
+    where: {
+      userId_stripeMode: {
+        userId: txn.sellerId,
+        stripeMode: txnMode,
+      },
+    },
   });
   if (!connect?.chargesEnabled || !connect.payoutsEnabled) {
     throw Object.assign(
       new Error(
-        "Sourcer must complete payment onboarding before funds can be transferred.",
+        txnMode === "LIVE"
+          ? "Sourcer must complete Live payment onboarding before funds can be transferred."
+          : "Sourcer must complete payment onboarding before funds can be transferred.",
       ),
-      { status: 409, code: "CONNECT_NOT_READY" },
+      {
+        status: 409,
+        code:
+          txnMode === "LIVE"
+            ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
+            : "CONNECT_NOT_READY",
+      },
     );
   }
+  assertMoneyOpEnvironmentMatch({
+    txnStripeMode: txnMode,
+    connectStripeMode: connect.stripeMode,
+    clientStripeMode: txnMode,
+  });
 
   const books = computeProtectedFinancials(txn);
   const amount = books.procurementAdvanceMinor - books.procurementTransferredMinor;
@@ -140,13 +160,13 @@ export async function releaseProcurement(opts: {
         kind: "PROCUREMENT",
         amountMinor: amount,
         currency: txn.currency,
-        stripeMode: getStripeMode(),
+        stripeMode: txnMode,
         idempotencyKey,
         status: "PENDING",
       },
     }));
 
-  const stripe = getStripe();
+  const stripe = getStripe(txnMode);
   try {
     let sourceTransaction = (txn.stripeChargeId || "").trim();
     if (!sourceTransaction && txn.stripePaymentIntentId) {
@@ -267,9 +287,10 @@ export async function releaseFinal(opts: {
     throw Object.assign(new Error("Transaction not found"), { status: 404 });
   }
   assertStripeModeCompatible(txn.stripeMode);
+  const txnMode = normalizeStripeMode(txn.stripeMode);
 
   const status = txn.status as ProtectedStatus;
-  // Direct uses Destination Charges only â€” never platform transfers.create.
+  // Direct uses Destination Charges only — never platform transfers.create.
   const isDirect = isDirectPaymentOption(txn.paymentOption);
   if (isDirect) {
     if (status === "RELEASED" || txn.releasedAt) {
@@ -302,16 +323,34 @@ export async function releaseFinal(opts: {
   }
 
   const connect = await prisma.stripeConnectAccount.findUnique({
-    where: { userId: txn.sellerId },
+    where: {
+      userId_stripeMode: {
+        userId: txn.sellerId,
+        stripeMode: txnMode,
+      },
+    },
   });
   if (!connect?.payoutsEnabled) {
     throw Object.assign(
       new Error(
-        "Sourcer must complete payment onboarding before funds can be transferred.",
+        txnMode === "LIVE"
+          ? "Sourcer must complete Live payment onboarding before funds can be transferred."
+          : "Sourcer must complete payment onboarding before funds can be transferred.",
       ),
-      { status: 409, code: "CONNECT_NOT_READY" },
+      {
+        status: 409,
+        code:
+          txnMode === "LIVE"
+            ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
+            : "CONNECT_NOT_READY",
+      },
     );
   }
+  assertMoneyOpEnvironmentMatch({
+    txnStripeMode: txnMode,
+    connectStripeMode: connect.stripeMode,
+    clientStripeMode: txnMode,
+  });
 
   const books = computeProtectedFinancials(txn);
   const residual = books.finalResidualMinor;
@@ -413,7 +452,7 @@ export async function releaseFinal(opts: {
         kind: "FINAL",
         amountMinor: amount,
         currency: txn.currency,
-        stripeMode: getStripeMode(),
+        stripeMode: txnMode,
         idempotencyKey,
         status: "PENDING",
       },
@@ -426,7 +465,7 @@ export async function releaseFinal(opts: {
     });
   }
 
-  const stripe = getStripe();
+  const stripe = getStripe(txnMode);
   try {
     // Prefer charge id; fall back to PaymentIntent.latest_charge.
     let sourceTransaction = (txn.stripeChargeId || "").trim();

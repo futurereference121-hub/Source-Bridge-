@@ -510,8 +510,8 @@ assert.match(
 );
 assert.match(
   releaseEngine,
-  /where: \{ userId: txn\.sellerId \}/,
-  "sourcer release destination is that sourcer's Connect account",
+  /userId_stripeMode:\s*\{\s*userId:\s*txn\.sellerId/,
+  "sourcer release destination is that sourcer's Connect account (mode-scoped)",
 );
 
 console.log("[test-chat-ticket-ui] passed");

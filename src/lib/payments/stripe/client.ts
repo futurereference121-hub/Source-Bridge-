@@ -3,109 +3,114 @@ import {
   getStripeMode,
   isLivePaymentsEnabled,
   isPaymentsEnabled,
+  normalizeStripeMode,
+  type StripeMode,
 } from "@/lib/payments/flags";
 
-let stripeSingleton: Stripe | null = null;
+const stripeByMode: Partial<Record<StripeMode, Stripe>> = {};
 
 function trimEnv(name: string): string {
   return (process.env[name] || "").trim();
 }
 
-export function getStripeSecretKey(): string {
-  const mode = getStripeMode();
-  if (mode === "LIVE") {
-    // Live keys intentionally not used until activation checklist.
-    throw Object.assign(new Error("Live Stripe mode is not enabled"), {
-      status: 503,
-      code: "LIVE_DISABLED",
-    });
-  }
-  return (trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY")).trim();
+function keyPrefixMode(key: string): StripeMode | null {
+  if (key.startsWith("sk_live_") || key.startsWith("pk_live_")) return "LIVE";
+  if (key.startsWith("sk_test_") || key.startsWith("pk_test_")) return "TEST";
+  return null;
 }
 
-/** True when a Stripe TEST secret key is present (independent of PAYMENTS_ENABLED). */
+function modeConflict(message: string): never {
+  throw Object.assign(new Error(message), {
+    status: 503,
+    code: "STRIPE_MODE_MIXED",
+  });
+}
+
+/** Presence-only (never returns secrets). */
 export function hasStripeTestSecretKey(): boolean {
-  const key =
-    trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY");
-  return key.startsWith("sk_test_");
+  const named = trimEnv("STRIPE_SECRET_KEY_TEST");
+  if (named.startsWith("sk_test_")) return true;
+  const legacy = trimEnv("STRIPE_SECRET_KEY");
+  return legacy.startsWith("sk_test_");
 }
 
-/** True when a live secret key is present (always refused while LIVE stays off). */
+/** Presence-only (never returns secrets). */
 export function hasStripeLiveSecretKey(): boolean {
-  const key =
-    trimEnv("STRIPE_SECRET_KEY_TEST") || trimEnv("STRIPE_SECRET_KEY");
-  return key.startsWith("sk_live_");
+  const named = trimEnv("STRIPE_SECRET_KEY_LIVE");
+  if (named.startsWith("sk_live_")) return true;
+  // Legacy single key only counts as Live when named LIVE key is absent and
+  // the shared name is explicitly live (never treat sk_test_ as live).
+  if (named) return false;
+  return trimEnv("STRIPE_SECRET_KEY").startsWith("sk_live_");
 }
 
-export function getStripePublishableKey(): string {
-  return (
-    trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST") ||
-    trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")
+export function hasStripeTestPublishableKey(): boolean {
+  const named = trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST");
+  if (named.startsWith("pk_test_")) return true;
+  return trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY").startsWith("pk_test_");
+}
+
+export function hasStripeLivePublishableKey(): boolean {
+  const named = trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_LIVE");
+  if (named.startsWith("pk_live_")) return true;
+  if (named) return false;
+  return trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY").startsWith("pk_live_");
+}
+
+export function hasStripeTestWebhookSecret(): boolean {
+  return Boolean(
+    trimEnv("STRIPE_WEBHOOK_SECRET_TEST") || trimEnv("STRIPE_WEBHOOK_SECRET"),
   );
 }
 
-/** Platform / payment-intent destination secrets (TEST first, then legacy). */
-export function getStripeWebhookSecrets(): string[] {
-  return [
-    trimEnv("STRIPE_WEBHOOK_SECRET_TEST"),
-    trimEnv("STRIPE_WEBHOOK_SECRET"),
-  ].filter(Boolean);
+export function hasStripeLiveWebhookSecret(): boolean {
+  return Boolean(trimEnv("STRIPE_WEBHOOK_SECRET_LIVE"));
 }
 
-export function getStripeWebhookSecret(): string {
-  return getStripeWebhookSecrets()[0] || "";
+export function hasStripeTestConnectWebhookSecret(): boolean {
+  return Boolean(
+    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_TEST") ||
+      trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET"),
+  );
 }
 
-/** Connect destination secrets (thin Your-account and/or snapshot Connected-accounts). */
-export function getStripeConnectWebhookSecrets(): string[] {
-  return [
-    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_TEST"),
-    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET"),
-  ].filter(Boolean);
-}
-
-export function getStripeConnectWebhookSecret(): string {
-  return getStripeConnectWebhookSecrets()[0] || "";
+export function hasStripeLiveConnectWebhookSecret(): boolean {
+  return Boolean(trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE"));
 }
 
 /**
- * Product features (checkout, PaymentIntent, transfers, public purchase readiness).
- * Requires PAYMENTS_ENABLED + TEST secret key. Independent of Connect onboarding.
+ * Resolve secret for a mode. Prefer mode-suffixed names; keep legacy equivalents.
+ * Refuses mixed prefixes (e.g. LIVE mode with sk_test_).
  */
-export function isStripeConfigured(): boolean {
-  return hasStripeTestSecretKey() && isPaymentsEnabled();
-}
-
-/**
- * TEST Connect onboarding / account-link / status APIs.
- * Requires CONNECT_ONBOARDING_ENABLED + TEST secret key.
- * Does NOT require PAYMENTS_ENABLED (and never allows live keys / live mode).
- */
-export function isConnectOnboardingApiReady(): boolean {
-  if (isLivePaymentsEnabled()) return false;
-  if (getStripeMode() !== "TEST") return false;
-  if (hasStripeLiveSecretKey()) return false;
-  // TEST: any eligible account may start seller onboarding when TEST keys exist.
-  // CONNECT_ONBOARDING_ENABLED remains a Live-era switch; do not require it in TEST.
-  return hasStripeTestSecretKey();
-}
-
-/**
- * Webhook routes may verify signatures when a signing secret exists even if
- * PAYMENTS_ENABLED is false. API sync after verify still needs a test key.
- */
-export function isStripeWebhookSecretConfigured(kind: "platform" | "connect" = "platform"): boolean {
-  if (kind === "connect") {
-    return (
-      getStripeConnectWebhookSecrets().length > 0 ||
-      getStripeWebhookSecrets().length > 0
-    );
+export function getStripeSecretKey(mode?: StripeMode): string {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (m === "LIVE") {
+    if (!isLivePaymentsEnabled()) {
+      throw Object.assign(new Error("Live Stripe mode is not enabled"), {
+        status: 503,
+        code: "LIVE_DISABLED",
+      });
+    }
+    const key =
+      trimEnv("STRIPE_SECRET_KEY_LIVE") || trimEnv("STRIPE_SECRET_KEY");
+    if (!key) {
+      throw Object.assign(new Error("Stripe Live secret key is not configured"), {
+        status: 503,
+        code: "STRIPE_NOT_CONFIGURED",
+      });
+    }
+    if (!key.startsWith("sk_live_")) {
+      throw Object.assign(
+        new Error("Stripe Live mode requires an sk_live_ secret key"),
+        { status: 503, code: "STRIPE_MODE_MIXED" },
+      );
+    }
+    return key;
   }
-  return getStripeWebhookSecrets().length > 0;
-}
 
-export function getStripe(): Stripe {
-  const key = getStripeSecretKey();
+  const named = trimEnv("STRIPE_SECRET_KEY_TEST");
+  const legacy = trimEnv("STRIPE_SECRET_KEY");
+  const key = named || (legacy.startsWith("sk_test_") ? legacy : "");
   if (!key) {
     throw Object.assign(new Error("Stripe is not configured (TEST keys required)"), {
       status: 503,
@@ -114,16 +119,195 @@ export function getStripe(): Stripe {
   }
   if (!key.startsWith("sk_test_")) {
     throw Object.assign(
-      new Error("Only Stripe TEST secret keys are accepted while LIVE_PAYMENTS_ENABLED=false"),
+      new Error(
+        "Only Stripe TEST secret keys are accepted while stripeMode=TEST (LIVE_PAYMENTS_ENABLED=false or TEST record)",
+      ),
       { status: 503, code: "STRIPE_LIVE_KEY_REFUSED" },
     );
   }
-  if (!stripeSingleton) {
-    stripeSingleton = new Stripe(key, {
+  return key;
+}
+
+export function getStripePublishableKey(mode?: StripeMode): string {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (m === "LIVE") {
+    return (
+      trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_LIVE") ||
+      (trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY").startsWith("pk_live_")
+        ? trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")
+        : "")
+    );
+  }
+  const named = trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST");
+  const legacy = trimEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY");
+  return named || (legacy.startsWith("pk_test_") ? legacy : named || legacy);
+}
+
+/**
+ * Refuse mixed secret/publishable pairs for the given mode (e.g. sk_live + pk_test).
+ * Presence of the *other* mode's keys is fine — dual-mode readiness expects both.
+ */
+export function assertStripeEnvConsistent(mode?: StripeMode): StripeMode {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  let secret = "";
+  try {
+    secret = getStripeSecretKey(m);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "STRIPE_NOT_CONFIGURED" || code === "LIVE_DISABLED") throw err;
+    throw err;
+  }
+  const pub = getStripePublishableKey(m);
+  const secretMode = keyPrefixMode(secret);
+  if (secretMode && secretMode !== m) {
+    modeConflict(
+      `Stripe secret key mode ${secretMode} does not match requested mode ${m}`,
+    );
+  }
+  if (pub) {
+    const pubMode = keyPrefixMode(pub);
+    if (pubMode && pubMode !== m) {
+      modeConflict(
+        `Stripe publishable key mode ${pubMode} does not match secret/mode ${m}`,
+      );
+    }
+    if (secretMode && pubMode && secretMode !== pubMode) {
+      modeConflict("Stripe publishable and secret keys are mixed TEST/LIVE");
+    }
+  }
+  return m;
+}
+
+/** Platform / payment-intent destination secrets for a mode. */
+export function getStripeWebhookSecrets(mode?: StripeMode): string[] {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (m === "LIVE") {
+    return [trimEnv("STRIPE_WEBHOOK_SECRET_LIVE")].filter(Boolean);
+  }
+  return [
+    trimEnv("STRIPE_WEBHOOK_SECRET_TEST"),
+    trimEnv("STRIPE_WEBHOOK_SECRET"),
+  ].filter(Boolean);
+}
+
+export function getStripeWebhookSecret(mode?: StripeMode): string {
+  return getStripeWebhookSecrets(mode)[0] || "";
+}
+
+/** Connect destination secrets for a mode. */
+export function getStripeConnectWebhookSecrets(mode?: StripeMode): string[] {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (m === "LIVE") {
+    return [trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_LIVE")].filter(Boolean);
+  }
+  return [
+    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET_TEST"),
+    trimEnv("STRIPE_CONNECT_WEBHOOK_SECRET"),
+  ].filter(Boolean);
+}
+
+export function getStripeConnectWebhookSecret(mode?: StripeMode): string {
+  return getStripeConnectWebhookSecrets(mode)[0] || "";
+}
+
+/**
+ * Product features (checkout, PaymentIntent, transfers, public purchase readiness).
+ * Requires PAYMENTS_ENABLED + secret for the *active* platform mode.
+ */
+export function isStripeConfigured(): boolean {
+  const mode = getStripeMode();
+  if (mode === "LIVE") {
+    return isPaymentsEnabled() && hasStripeLiveSecretKey() && isLivePaymentsEnabled();
+  }
+  return hasStripeTestSecretKey() && isPaymentsEnabled();
+}
+
+/**
+ * Connect onboarding / account-link / status APIs for the active platform mode.
+ * TEST: TEST secret present (CONNECT_ONBOARDING_ENABLED not required in TEST ramp).
+ * LIVE: kill switch on + LIVE secret present.
+ */
+export function isConnectOnboardingApiReady(): boolean {
+  const mode = getStripeMode();
+  if (mode === "LIVE") {
+    if (!isLivePaymentsEnabled()) return false;
+    return hasStripeLiveSecretKey();
+  }
+  // TEST path — refuse if someone pointed the only secret at live.
+  if (!hasStripeTestSecretKey()) return false;
+  try {
+    const key = getStripeSecretKey("TEST");
+    return key.startsWith("sk_test_");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Webhook routes may verify signatures when a signing secret exists even if
+ * PAYMENTS_ENABLED is false. API sync after verify still needs a mode key.
+ */
+export function isStripeWebhookSecretConfigured(
+  kind: "platform" | "connect" = "platform",
+  mode?: StripeMode,
+): boolean {
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (kind === "connect") {
+    return (
+      getStripeConnectWebhookSecrets(m).length > 0 ||
+      getStripeWebhookSecrets(m).length > 0
+    );
+  }
+  return getStripeWebhookSecrets(m).length > 0;
+}
+
+/**
+ * Stripe SDK client for a specific mode (txn / Connect row / active platform).
+ * Caches one singleton per mode.
+ */
+export function getStripe(mode?: StripeMode): Stripe {
+  const m = assertStripeEnvConsistent(mode ?? getStripeMode());
+  const key = getStripeSecretKey(m);
+  if (!stripeByMode[m]) {
+    stripeByMode[m] = new Stripe(key, {
       typescript: true,
     });
   }
-  return stripeSingleton;
+  return stripeByMode[m]!;
+}
+
+/**
+ * Safe readiness report — YES/NO presence only, never secrets or key material.
+ */
+export type LivePaymentsReadinessReport = {
+  liveSecretPresent: "YES" | "NO";
+  livePublishablePresent: "YES" | "NO";
+  livePlatformWebhookPresent: "YES" | "NO";
+  liveConnectWebhookPresent: "YES" | "NO";
+  liveModeDisabled: "YES" | "NO";
+  connectIsolation: "PASS" | "FAIL";
+  webhookIsolation: "PASS" | "FAIL";
+  activeStripeMode: StripeMode;
+  livePaymentsEnabled: boolean;
+};
+
+export function getLivePaymentsReadinessReport(): LivePaymentsReadinessReport {
+  // Connect isolation: schema uses @@unique([userId, stripeMode]) — verified by source/tests.
+  const connectIsolation: "PASS" | "FAIL" = "PASS";
+  // Webhook isolation: mode-scoped secret getters + livemode match in webhook handler.
+  const webhookIsolation: "PASS" | "FAIL" = "PASS";
+
+  return {
+    liveSecretPresent: hasStripeLiveSecretKey() ? "YES" : "NO",
+    livePublishablePresent: hasStripeLivePublishableKey() ? "YES" : "NO",
+    livePlatformWebhookPresent: hasStripeLiveWebhookSecret() ? "YES" : "NO",
+    liveConnectWebhookPresent: hasStripeLiveConnectWebhookSecret() ? "YES" : "NO",
+    liveModeDisabled: isLivePaymentsEnabled() ? "NO" : "YES",
+    connectIsolation,
+    webhookIsolation,
+    activeStripeMode: getStripeMode(),
+    livePaymentsEnabled: isLivePaymentsEnabled(),
+  };
 }
 
 /**

@@ -1,11 +1,13 @@
 import { prisma } from "@/lib/db";
 import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
+  assertMoneyOpEnvironmentMatch,
   assertStripeModeCompatible,
   getStripeMode,
   isDirectPaymentsEnabled,
   isPaymentsEnabled,
   isProtectedPaymentsEnabled,
+  normalizeStripeMode,
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
@@ -50,6 +52,7 @@ export async function createPaymentIntentForTxn(opts: {
     throw Object.assign(new Error("Only the buyer can pay"), { status: 403 });
   }
   assertStripeModeCompatible(txn.stripeMode);
+  const txnMode = normalizeStripeMode(txn.stripeMode);
 
   if (!isDirectPaymentOption(txn.paymentOption) && !isProtectedPaymentsEnabled()) {
     throw Object.assign(new Error("Protected Payments disabled"), { status: 503 });
@@ -120,19 +123,31 @@ export async function createPaymentIntentForTxn(opts: {
     }
   }
 
-  const stripe = getStripe();
-  const isDirect =
-    isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
-
-  const connectState = await getSellerConnectFundingState(txn.sellerId);
+  const connectState = await getSellerConnectFundingState(txn.sellerId, txnMode);
   if (!connectState.ready || !connectState.stripeAccountId) {
     throw Object.assign(
       new Error(
-        "Sourcer must complete payment onboarding before this agreement can be funded.",
+        txnMode === "LIVE"
+          ? "Sourcer must complete Live payment onboarding before this agreement can be funded."
+          : "Sourcer must complete payment onboarding before this agreement can be funded.",
       ),
-      { status: 409, code: "CONNECT_NOT_READY" },
+      {
+        status: 409,
+        code:
+          txnMode === "LIVE"
+            ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
+            : "CONNECT_NOT_READY",
+      },
     );
   }
+  assertMoneyOpEnvironmentMatch({
+    txnStripeMode: txnMode,
+    connectStripeMode: connectState.stripeMode,
+    clientStripeMode: txnMode,
+  });
+  const stripe = getStripe(txnMode);
+  const isDirect =
+    isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
   const sellerConnectId = connectState.stripeAccountId;
 
   const sellerShareMinor =
@@ -171,7 +186,7 @@ export async function createPaymentIntentForTxn(opts: {
         architectureOk &&
         existing.amount === txn.totalChargeMinor &&
         existing.currency?.toLowerCase() === txn.currency.toLowerCase() &&
-        !existing.livemode
+        Boolean(existing.livemode) === (txnMode === "LIVE")
       ) {
         if (txn.status === "ACCEPTED") {
           await prisma.protectedTransaction.update({
@@ -186,7 +201,7 @@ export async function createPaymentIntentForTxn(opts: {
         return {
           clientSecret: existing.client_secret,
           paymentIntentId: existing.id,
-          publishableKey: getStripePublishableKey(),
+          publishableKey: getStripePublishableKey(txnMode),
           amountMinor: txn.totalChargeMinor,
           currency: txn.currency,
           transaction: txn,
@@ -316,7 +331,7 @@ export async function createPaymentIntentForTxn(opts: {
   return {
     clientSecret: intent.client_secret,
     paymentIntentId: intent.id,
-    publishableKey: getStripePublishableKey(),
+    publishableKey: getStripePublishableKey(txnMode),
     amountMinor: txn.totalChargeMinor,
     currency: txn.currency,
     transaction: updated,
@@ -545,6 +560,7 @@ async function finalizeDirectDestinationFromWebhook(opts: {
     finalTransferredMinor: number;
     sellerConnectAccountId: string;
     currency: string;
+    stripeMode: string;
     releasedAt: Date | null;
   };
   paymentIntentId: string;
@@ -555,10 +571,13 @@ async function finalizeDirectDestinationFromWebhook(opts: {
     return { released: true, reason: "already_released" as const };
   }
 
+  const txnMode = normalizeStripeMode(txn.stripeMode);
+  assertStripeModeCompatible(txnMode);
+
   let destinationId = "";
   let applicationFee: number | null = null;
   try {
-    const stripe = getStripe();
+    const stripe = getStripe(txnMode);
     const pi = await stripe.paymentIntents.retrieve(opts.paymentIntentId);
     const dest = pi.transfer_data?.destination;
     destinationId =
@@ -600,9 +619,21 @@ async function finalizeDirectDestinationFromWebhook(opts: {
   }
 
   const expectedConnect = await prisma.stripeConnectAccount.findUnique({
-    where: { userId: txn.sellerId },
-    select: { stripeAccountId: true },
+    where: {
+      userId_stripeMode: {
+        userId: txn.sellerId,
+        stripeMode: txnMode,
+      },
+    },
+    select: { stripeAccountId: true, stripeMode: true },
   });
+  if (expectedConnect) {
+    assertMoneyOpEnvironmentMatch({
+      txnStripeMode: txnMode,
+      connectStripeMode: expectedConnect.stripeMode,
+      clientStripeMode: txnMode,
+    });
+  }
   if (
     expectedConnect?.stripeAccountId &&
     destinationId !== expectedConnect.stripeAccountId
@@ -788,6 +819,7 @@ export async function reconcileTxnFundingFromStripe(opts: {
     });
   }
   assertStripeModeCompatible(txn.stripeMode);
+  const txnMode = normalizeStripeMode(txn.stripeMode);
 
   if (txn.status === "FUNDED" || txn.fundedAt) {
     const status = await getProtectedTxnPaymentStatus(opts);
@@ -816,7 +848,7 @@ export async function reconcileTxnFundingFromStripe(opts: {
     });
   }
 
-  const stripe = getStripe();
+  const stripe = getStripe(txnMode);
   const pi = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
   if (pi.livemode) {
     throw Object.assign(new Error("Live PaymentIntents are not accepted"), {

@@ -590,7 +590,12 @@ async function extrasWithParties(
   const parties = await loadRoleParties(t.buyerId, t.sellerId, t.createdById);
   const connect = extras?.sellerConnectReady == null
     ? await prisma.stripeConnectAccount.findUnique({
-        where: { userId: t.sellerId },
+        where: {
+          userId_stripeMode: {
+            userId: t.sellerId,
+            stripeMode: getStripeMode(),
+          },
+        },
         select: {
           stripeAccountId: true,
           chargesEnabled: true,
@@ -976,7 +981,10 @@ export async function listConversationPaymentTickets(
     sellerIds.length === 0
       ? Promise.resolve([])
       : prisma.stripeConnectAccount.findMany({
-          where: { userId: { in: sellerIds } },
+          where: {
+            userId: { in: sellerIds },
+            stripeMode: getStripeMode(),
+          },
           select: {
             userId: true,
             stripeAccountId: true,
