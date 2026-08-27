@@ -5,10 +5,10 @@ Update only when finishing a meaningful workstream. Keep this short.
 ## Current
 
 - **Workstream:** Dual-mode Stripe Connect + Live configuration readiness (architecture only; Live not activated).
-- **Last verified commit:** (pending commit of dual-mode; was local-only after prior uncommitted deploy was overwritten by `ec928a9`)
-- **Last TEST deployment:** Production was on `ec928a9` (Status soft-poll) without dual-mode; redeploy of dual-mode commit pending — Live OFF
-- **Known blocker:** Dual-mode must be on Production before Live activation. LIVE env names may already be present; activation remains a separate dedicated task.
-- **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST active; architecture supports LIVE when kill switch + keys present
+- **Last verified commit:** `87f6932` (on `origin/main`)
+- **Last TEST deployment:** `dpl_CEV5RFr9uxeWuGwWcBkdzAVoME8m` (`source-bridge-otf0t9tb5-canna-cake.vercel.app`) → www.sourcebridge.app — Live OFF
+- **Known blocker:** Live activation remains a separate dedicated task (do not flip `LIVE_PAYMENTS_ENABLED`).
+- **Payment environment:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST active; dual-mode architecture on Production
 - **Last critical regression:** `test:payments:fast` PASS · `test:stripe-dual-mode` PASS · `test:live-guard` PASS
 - **Migration status:** `20260826120000_connect_dual_mode_isolation` APPLIED on Neon (Connect `@@unique([userId, stripeMode])`; TEST IDs preserved)
 
