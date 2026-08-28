@@ -7,6 +7,7 @@ import { runNodeTestScripts } from "./_run-node-tests.mjs";
 runNodeTestScripts(
   [
     "scripts/test-live-payments-guard.mjs",
+    "scripts/test-live-checkout-mode-guards.mjs",
     "scripts/test-stripe-dual-mode.mjs",
     "scripts/test-pci-no-raw-cards.mjs",
     "scripts/test-ticket-acceptance-and-access.mjs",

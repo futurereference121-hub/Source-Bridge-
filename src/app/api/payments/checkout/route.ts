@@ -95,6 +95,7 @@ export async function POST(req: NextRequest) {
       clientSecret: result.clientSecret,
       paymentIntentId: result.paymentIntentId,
       publishableKey: result.publishableKey,
+      stripeMode: result.stripeMode,
       amountMinor: result.amountMinor,
       currency: result.currency,
       chargeModel: result.chargeModel,
@@ -103,11 +104,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Checkout failed";
+    const code = (err as { code?: string }).code;
     if (status === 401) return jsonError("Sign in required", 401);
-    if (status >= 400 && status < 500) {
-      return jsonError(message, status, {
-        code: (err as { code?: string }).code,
-      });
+    if (status >= 400 && status < 600 && (status < 500 || code)) {
+      return jsonError(message, status, code ? { code } : undefined);
     }
     console.error("[payments:checkout]", err);
     return jsonError("Checkout failed", 500);

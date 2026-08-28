@@ -12,6 +12,7 @@ export {
   normalizeStripeMode,
   assertStripeModeCompatible,
   assertMoneyOpEnvironmentMatch,
+  assertPaymentIntentModeMatch,
 } from "@/lib/payments/flags";
 export {
   assertPaymentsTestAllowlisted,

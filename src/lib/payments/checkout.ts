@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
   assertMoneyOpEnvironmentMatch,
+  assertPaymentIntentModeMatch,
   assertStripeModeCompatible,
   getStripeMode,
   isDirectPaymentsEnabled,
@@ -202,6 +203,7 @@ export async function createPaymentIntentForTxn(opts: {
           clientSecret: existing.client_secret,
           paymentIntentId: existing.id,
           publishableKey: getStripePublishableKey(txnMode),
+          stripeMode: txnMode,
           amountMinor: txn.totalChargeMinor,
           currency: txn.currency,
           transaction: txn,
@@ -292,12 +294,10 @@ export async function createPaymentIntentForTxn(opts: {
         { idempotencyKey: opts.idempotencyKey },
       );
 
-  if (intent.livemode) {
-    throw Object.assign(new Error("Live PaymentIntents are refused"), {
-      status: 503,
-      code: "LIVE_PI_REFUSED",
-    });
-  }
+  assertPaymentIntentModeMatch({
+    txnStripeMode: txnMode,
+    paymentIntentLivemode: intent.livemode,
+  });
 
   const status = txn.status as ProtectedStatus;
   const updated = await prisma.protectedTransaction.update({
@@ -332,6 +332,7 @@ export async function createPaymentIntentForTxn(opts: {
     clientSecret: intent.client_secret,
     paymentIntentId: intent.id,
     publishableKey: getStripePublishableKey(txnMode),
+    stripeMode: txnMode,
     amountMinor: txn.totalChargeMinor,
     currency: txn.currency,
     transaction: updated,
@@ -850,12 +851,10 @@ export async function reconcileTxnFundingFromStripe(opts: {
 
   const stripe = getStripe(txnMode);
   const pi = await stripe.paymentIntents.retrieve(txn.stripePaymentIntentId);
-  if (pi.livemode) {
-    throw Object.assign(new Error("Live PaymentIntents are not accepted"), {
-      status: 403,
-      code: "LIVE_PI_REFUSED",
-    });
-  }
+  assertPaymentIntentModeMatch({
+    txnStripeMode: txnMode,
+    paymentIntentLivemode: pi.livemode,
+  });
 
   if (pi.status === "processing") {
     const status = await getProtectedTxnPaymentStatus(opts);

@@ -295,9 +295,19 @@ function CheckoutForm({
   );
 }
 
+type PublishableKeyMode = "TEST" | "LIVE" | null;
+
+function publishableKeyMode(key: string): PublishableKeyMode {
+  if (key.startsWith("pk_test_")) return "TEST";
+  if (key.startsWith("pk_live_")) return "LIVE";
+  return null;
+}
+
 export type ProtectedPaymentCheckoutProps = {
   clientSecret: string;
   publishableKey: string;
+  /** Authoritative txn Stripe mode — publishable key prefix must match. */
+  stripeMode?: "TEST" | "LIVE";
   amountMinor: number;
   currency: string;
   /** Where Stripe may redirect after 3DS — must not be treated as FUNDED. */
@@ -314,6 +324,7 @@ export type ProtectedPaymentCheckoutProps = {
 export function ProtectedPaymentCheckout({
   clientSecret,
   publishableKey,
+  stripeMode,
   amountMinor,
   currency,
   returnPath = "/inbox?payment=return",
@@ -328,13 +339,15 @@ export function ProtectedPaymentCheckout({
     null,
   );
 
+  const keyMode = publishableKeyMode(publishableKey);
+
   useEffect(() => {
-    if (!publishableKey || !publishableKey.startsWith("pk_test_")) {
+    if (!publishableKey || !keyMode || (stripeMode && keyMode !== stripeMode)) {
       setStripePromise(null);
       return;
     }
     setStripePromise(loadStripe(publishableKey));
-  }, [publishableKey]);
+  }, [publishableKey, keyMode, stripeMode]);
 
   const options = useMemo(
     () => ({
@@ -352,10 +365,19 @@ export function ProtectedPaymentCheckout({
     [clientSecret],
   );
 
-  if (!publishableKey.startsWith("pk_test_")) {
+  if (!keyMode) {
     return (
       <p className="text-xs text-amber-300">
-        Stripe TEST publishable key required (pk_test_…).
+        Stripe publishable key must match platform mode (pk_test_… or pk_live_…).
+      </p>
+    );
+  }
+
+  if (stripeMode && keyMode !== stripeMode) {
+    return (
+      <p className="text-xs text-amber-300">
+        Stripe publishable key mode ({keyMode}) does not match transaction mode (
+        {stripeMode}).
       </p>
     );
   }
@@ -370,9 +392,15 @@ export function ProtectedPaymentCheckout({
 
   return (
     <div className="mt-4 rounded-xl border border-electric/30 bg-[#050f20] p-3">
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/80">
-        TEST PAYMENT · Sandbox — no real money
-      </p>
+      {keyMode === "TEST" ? (
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/80">
+          TEST PAYMENT · Sandbox — no real money
+        </p>
+      ) : (
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200/80">
+          LIVE PAYMENT · Real funds will be charged
+        </p>
+      )}
       <Elements stripe={stripePromise} options={options}>
         <CheckoutForm
           amountMinor={amountMinor}

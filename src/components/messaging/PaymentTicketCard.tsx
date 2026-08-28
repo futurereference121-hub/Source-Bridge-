@@ -275,6 +275,7 @@ export function PaymentTicketCard({
   const [checkout, setCheckout] = useState<{
     clientSecret: string;
     publishableKey: string;
+    stripeMode?: "TEST" | "LIVE";
     amountMinor: number;
     currency: string;
   } | null>(null);
@@ -668,6 +669,7 @@ export function PaymentTicketCard({
         code?: string;
         clientSecret?: string;
         publishableKey?: string;
+        stripeMode?: "TEST" | "LIVE";
         amountMinor?: number;
         currency?: string;
       };
@@ -698,6 +700,10 @@ export function PaymentTicketCard({
         setCheckout({
           clientSecret: json.clientSecret,
           publishableKey: json.publishableKey,
+          stripeMode:
+            json.stripeMode === "LIVE" || json.stripeMode === "TEST"
+              ? json.stripeMode
+              : undefined,
           amountMinor: json.amountMinor ?? ticket.totalChargeMinor,
           currency: json.currency ?? ticket.currency,
         });
@@ -2784,6 +2790,7 @@ export function PaymentTicketCard({
         <ProtectedPaymentCheckout
           clientSecret={checkout.clientSecret}
           publishableKey={checkout.publishableKey}
+          stripeMode={checkout.stripeMode}
           amountMinor={checkout.amountMinor}
           currency={checkout.currency}
           paymentMode={isDirect ? "direct" : "protected"}

@@ -96,6 +96,31 @@ export function assertMoneyOpEnvironmentMatch(opts: {
   return txnMode;
 }
 
+/**
+ * PaymentIntent livemode must match transaction mode (and thus Stripe client mode).
+ * TEST txn → livemode=false; LIVE txn → livemode=true when kill switch on.
+ */
+export function assertPaymentIntentModeMatch(opts: {
+  txnStripeMode: string;
+  paymentIntentLivemode: boolean;
+}): void {
+  const txnMode = normalizeStripeMode(opts.txnStripeMode);
+  assertStripeModeCompatible(txnMode);
+  const piIsLive = Boolean(opts.paymentIntentLivemode);
+  const expectLive = txnMode === "LIVE";
+  if (piIsLive === expectLive) return;
+  if (piIsLive) {
+    throw Object.assign(
+      new Error("Live PaymentIntent refused for TEST transaction"),
+      { status: 503, code: "LIVE_PI_REFUSED" },
+    );
+  }
+  throw Object.assign(
+    new Error("TEST PaymentIntent refused for LIVE transaction"),
+    { status: 503, code: "TEST_PI_REFUSED" },
+  );
+}
+
 export function isPaymentsEnabled(): boolean {
   return envBool("PAYMENTS_ENABLED", false);
 }
