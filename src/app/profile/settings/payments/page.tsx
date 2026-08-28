@@ -7,50 +7,17 @@ import { Loader2, ShieldCheck } from "lucide-react";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
-
-type ConnectStatus = {
-  configured: boolean;
-  stripeTestConfigured: boolean;
-  onboardingReady: boolean;
-  stripeMode: string;
-  hasAccount: boolean;
-  chargesEnabled: boolean;
-  payoutsEnabled: boolean;
-  detailsSubmitted: boolean;
-  requirementsDueCount: number;
-  canReceiveProtectedPayments: boolean;
-  country: string;
-  disabledReason: string;
-  lastSyncedAt: string | null;
-};
-
-type Flags = {
-  PAYMENTS_ENABLED: boolean;
-  CONNECT_ONBOARDING_ENABLED: boolean;
-  PROTECTED_PAYMENTS_ENABLED: boolean;
-  DIRECT_PAYMENTS_ENABLED?: boolean;
-  INSTANT_PAYMENTS_ENABLED: boolean;
-  LIVE_PAYMENTS_ENABLED: boolean;
-  stripeMode: string;
-};
-
-function payoutsHelpCopy(connect: ConnectStatus | null, flags: Flags | null): string {
-  if (!connect?.stripeTestConfigured) {
-    return "Stripe test configuration is unavailable.";
-  }
-  if (!connect.onboardingReady) {
-    return "Payout setup is not currently available.";
-  }
-  void flags;
-  return "Set up payouts securely through Stripe.";
-}
+import {
+  deriveConnectPayoutUi,
+  shouldSyncOnConnectReturn,
+} from "@/lib/payments/stripe/connectPayoutUi";
+import type { ConnectStatus } from "@/lib/payments/stripe/connect";
 
 function PaymentsSettingsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { account, signedIn, authReady, showToast } = useAppUi();
   const [connect, setConnect] = useState<ConnectStatus | null>(null);
-  const [flags, setFlags] = useState<Flags | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const returnSynced = useRef(false);
@@ -62,12 +29,10 @@ function PaymentsSettingsInner() {
       const json = (await res.json()) as {
         ok?: boolean;
         connect?: ConnectStatus;
-        flags?: Flags;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setConnect(json.connect || null);
-      setFlags(json.flags || null);
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to load payments");
     } finally {
@@ -110,11 +75,10 @@ function PaymentsSettingsInner() {
     }
   }
 
-  // After Stripe Account Link return/refresh: re-sync local status from Stripe.
   useEffect(() => {
-    if (!signedIn || loading || returnSynced.current) return;
+    if (!signedIn || loading) return;
     const connectParam = searchParams.get("connect");
-    if (connectParam !== "return" && connectParam !== "refresh") return;
+    if (!shouldSyncOnConnectReturn(connectParam, returnSynced.current)) return;
     returnSynced.current = true;
     void (async () => {
       try {
@@ -123,12 +87,15 @@ function PaymentsSettingsInner() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "sync" }),
         });
-        if (res.ok) await refresh();
+        if (res.ok) {
+          await refresh();
+          router.replace("/profile/settings/payments", { scroll: false });
+        }
       } catch {
         // Best-effort; user can still click Refresh status.
       }
     })();
-  }, [signedIn, loading, searchParams, refresh]);
+  }, [signedIn, loading, searchParams, refresh, router]);
 
   if (!authReady || !account) {
     return (
@@ -140,13 +107,8 @@ function PaymentsSettingsInner() {
     );
   }
 
-  const canOnboard = Boolean(connect?.onboardingReady);
-  const helpCopy = payoutsHelpCopy(connect, flags);
-  // Money-moving product surfaces stay off when payments flags are false.
-  const showProtectedProduct = Boolean(flags?.PROTECTED_PAYMENTS_ENABLED);
-  const showDirectProduct = Boolean(
-    flags?.DIRECT_PAYMENTS_ENABLED || flags?.INSTANT_PAYMENTS_ENABLED,
-  );
+  const ui = deriveConnectPayoutUi(connect);
+  const disabledReason = connect?.disabledReason?.trim() || "";
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -171,123 +133,63 @@ function PaymentsSettingsInner() {
             <Loader2 className="animate-spin" size={16} /> Loading…
           </div>
         ) : (
-          <>
-            <section className="panel-navy mt-8 rounded-xl px-5 py-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
-                Status
-              </p>
-              <ul className="mt-4 space-y-2 text-sm text-white/75">
-                <li>
-                  Mode:{" "}
-                  <span className="text-white">{flags?.stripeMode || "TEST"}</span>
-                  {flags?.LIVE_PAYMENTS_ENABLED ? null : (
-                    <span className="ml-2 text-xs text-white/40">
-                      (live payments disabled)
-                    </span>
-                  )}
-                </li>
-                <li>
-                  Payments enabled:{" "}
-                  {flags?.PAYMENTS_ENABLED ? "Yes" : "No (feature flag)"}
-                </li>
-                <li>
-                  Connect onboarding:{" "}
-                  {flags?.CONNECT_ONBOARDING_ENABLED ? "On" : "Off"}
-                </li>
-                {showProtectedProduct ? (
-                  <li>
-                    Protected Payments:{" "}
-                    {flags?.PROTECTED_PAYMENTS_ENABLED ? "On" : "Off"}
-                  </li>
-                ) : null}
-                {showDirectProduct ? (
-                  <li>
-                    Direct Payment:{" "}
-                    {flags?.DIRECT_PAYMENTS_ENABLED ||
-                    flags?.INSTANT_PAYMENTS_ENABLED
-                      ? "On"
-                      : "Off"}
-                  </li>
-                ) : null}
-                <li>
-                  Connect linked: {connect?.hasAccount ? "Yes" : "Not yet"}
-                </li>
-                <li>
-                  Charges enabled: {connect?.chargesEnabled ? "Yes" : "No"}
-                </li>
-                <li>
-                  Payouts enabled: {connect?.payoutsEnabled ? "Yes" : "No"}
-                </li>
-                <li>
-                  Details submitted:{" "}
-                  {connect?.detailsSubmitted ? "Yes" : "No"}
-                </li>
-                <li>
-                  Requirements due:{" "}
-                  {connect?.requirementsDueCount
-                    ? String(connect.requirementsDueCount)
-                    : "None"}
-                </li>
-                <li>
-                  Ready for Protected Payments:{" "}
-                  {connect?.canReceiveProtectedPayments ? "Yes" : "Not yet"}
-                </li>
-                {connect?.disabledReason ? (
-                  <li className="text-amber-300">
-                    Attention: {connect.disabledReason}
-                  </li>
-                ) : null}
-              </ul>
-            </section>
-
-            <section className="panel-navy mt-6 rounded-xl px-5 py-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
-                Stripe Connect
-              </p>
-              <p className="mt-2 text-sm text-white/55">
-                Complete onboarding so Source Bridge can transfer your share
-                after delivery and inspection (or promptly for Direct Payment).
-                Source Bridge never stores your bank or card details.
-              </p>
-              <div className="mt-5 flex flex-wrap gap-3">
+          <section className="panel-navy mt-8 rounded-xl px-5 py-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
+              {ui.headline}
+              {ui.statusLine ? (
+                <span className="text-white/70"> / {ui.statusLine}</span>
+              ) : null}
+            </p>
+            <p className="mt-3 text-sm text-white/75">{ui.helpCopy}</p>
+            {disabledReason ? (
+              <p className="mt-2 text-sm text-amber-300">Attention: {disabledReason}</p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              {ui.showSetUpPayouts ? (
                 <PrimaryButton
                   showArrow={false}
                   className="rounded-lg"
-                  disabled={busy || !canOnboard}
+                  disabled={busy || !ui.actionsEnabled}
                   onClick={() => void runAction("onboard")}
                 >
-                  {connect?.hasAccount ? "Continue onboarding" : "Set up payouts"}
+                  Set up payouts
                 </PrimaryButton>
-                {connect?.hasAccount ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busy || !canOnboard}
-                      onClick={() => void runAction("sync")}
-                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                    >
-                      Refresh status
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || !canOnboard}
-                      onClick={() => void runAction("login")}
-                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                    >
-                      Open Stripe dashboard
-                    </button>
-                  </>
-                ) : null}
-              </div>
-              <p
-                className={`mt-4 text-xs ${
-                  canOnboard ? "text-white/55" : "text-amber-300/90"
-                }`}
-              >
-                {helpCopy}
-              </p>
-            </section>
-          </>
+              ) : null}
+              {ui.showContinueOnboarding ? (
+                <PrimaryButton
+                  showArrow={false}
+                  className="rounded-lg"
+                  disabled={busy || !ui.actionsEnabled}
+                  onClick={() => void runAction("onboard")}
+                >
+                  Continue onboarding
+                </PrimaryButton>
+              ) : null}
+              {ui.showRefreshStatus ? (
+                <button
+                  type="button"
+                  disabled={busy || !ui.actionsEnabled}
+                  onClick={() => void runAction("sync")}
+                  className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                >
+                  Refresh status
+                </button>
+              ) : null}
+              {ui.showOpenStripeDashboard ? (
+                <button
+                  type="button"
+                  disabled={busy || !ui.actionsEnabled}
+                  onClick={() => void runAction("login")}
+                  className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                >
+                  Open Stripe dashboard
+                </button>
+              ) : null}
+            </div>
+            {ui.footnote ? (
+              <p className="mt-4 text-xs text-white/45">{ui.footnote}</p>
+            ) : null}
+          </section>
         )}
       </Container>
     </div>

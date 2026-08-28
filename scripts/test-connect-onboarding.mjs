@@ -100,6 +100,63 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
   return Boolean(chargesEnabled && payoutsEnabled);
 }
 
+/**
+ * Mirrors src/lib/payments/stripe/connectPayoutUi.ts
+ */
+function isConnectPayoutReady(connect) {
+  return (
+    connect.hasAccount &&
+    connect.detailsSubmitted &&
+    connect.chargesEnabled &&
+    connect.payoutsEnabled &&
+    connect.requirementsDueCount === 0 &&
+    connect.canReceiveProtectedPayments
+  );
+}
+
+function deriveConnectPayoutUi(connect) {
+  const actionsEnabled = Boolean(connect?.onboardingReady);
+  if (!connect?.hasAccount) {
+    return {
+      state: "not_started",
+      showSetUpPayouts: actionsEnabled,
+      showContinueOnboarding: false,
+      showRefreshStatus: false,
+      showOpenStripeDashboard: false,
+    };
+  }
+  if (isConnectPayoutReady(connect)) {
+    return {
+      state: "ready",
+      showSetUpPayouts: false,
+      showContinueOnboarding: false,
+      showRefreshStatus: false,
+      showOpenStripeDashboard: true,
+    };
+  }
+  if (connect.detailsSubmitted && connect.requirementsDueCount === 0) {
+    return {
+      state: "pending_review",
+      showSetUpPayouts: false,
+      showContinueOnboarding: false,
+      showRefreshStatus: true,
+      showOpenStripeDashboard: true,
+    };
+  }
+  return {
+    state: "onboarding_incomplete",
+    showSetUpPayouts: false,
+    showContinueOnboarding: actionsEnabled,
+    showRefreshStatus: true,
+    showOpenStripeDashboard: true,
+  };
+}
+
+function shouldSyncOnConnectReturn(connectParam, alreadySynced) {
+  if (alreadySynced) return false;
+  return connectParam === "return" || connectParam === "refresh";
+}
+
 // ── Onboarding with CONNECT_ONBOARDING_ENABLED=true, PAYMENTS_ENABLED=false
 {
   const secretKey = "sk_test_unit_only";
@@ -325,6 +382,78 @@ function canReceiveProtectedPayments({ chargesEnabled, payoutsEnabled }) {
   const showInstant = Boolean(flags.INSTANT_PAYMENTS_ENABLED);
   assert.equal(showProtected, false);
   assert.equal(showInstant, false);
+}
+
+// ── Connect payout UI states (payments settings page)
+{
+  const readyBase = {
+    hasAccount: true,
+    detailsSubmitted: true,
+    chargesEnabled: true,
+    payoutsEnabled: true,
+    requirementsDueCount: 0,
+    canReceiveProtectedPayments: true,
+    onboardingReady: true,
+    stripeTestConfigured: true,
+  };
+
+  const notStarted = deriveConnectPayoutUi({
+    hasAccount: false,
+    detailsSubmitted: false,
+    chargesEnabled: false,
+    payoutsEnabled: false,
+    requirementsDueCount: 0,
+    canReceiveProtectedPayments: false,
+    onboardingReady: true,
+    stripeTestConfigured: true,
+  });
+  assert.equal(notStarted.state, "not_started");
+  assert.equal(notStarted.showSetUpPayouts, true);
+  assert.equal(notStarted.showContinueOnboarding, false);
+
+  const incomplete = deriveConnectPayoutUi({
+    ...readyBase,
+    detailsSubmitted: false,
+    chargesEnabled: false,
+    payoutsEnabled: false,
+    canReceiveProtectedPayments: false,
+  });
+  assert.equal(incomplete.state, "onboarding_incomplete");
+  assert.equal(incomplete.showContinueOnboarding, true);
+  assert.equal(incomplete.showSetUpPayouts, false);
+
+  const pending = deriveConnectPayoutUi({
+    ...readyBase,
+    chargesEnabled: false,
+    payoutsEnabled: false,
+    canReceiveProtectedPayments: false,
+  });
+  assert.equal(pending.state, "pending_review");
+  assert.equal(pending.showContinueOnboarding, false);
+  assert.equal(pending.showRefreshStatus, true);
+
+  const ready = deriveConnectPayoutUi(readyBase);
+  assert.equal(ready.state, "ready");
+  assert.equal(ready.showContinueOnboarding, false);
+  assert.equal(ready.showOpenStripeDashboard, true);
+  assert.equal(ready.showRefreshStatus, false);
+
+  // LIVE-ready account must not offer Continue onboarding
+  const liveReady = deriveConnectPayoutUi({
+    ...readyBase,
+    stripeTestConfigured: false,
+    onboardingReady: true,
+  });
+  assert.equal(liveReady.state, "ready");
+  assert.equal(liveReady.showContinueOnboarding, false);
+}
+
+// ── Connect return auto-sync (one shot, no loop)
+{
+  assert.equal(shouldSyncOnConnectReturn("return", false), true);
+  assert.equal(shouldSyncOnConnectReturn("refresh", false), true);
+  assert.equal(shouldSyncOnConnectReturn("return", true), false);
+  assert.equal(shouldSyncOnConnectReturn(null, false), false);
 }
 
 console.log("test-connect-onboarding: all assertions passed");
