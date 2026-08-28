@@ -80,7 +80,13 @@ assert.match(release, /source_transaction/);
 // Idempotency keys
 assert.match(release, /idempotencyKey/);
 assert.match(release, /final_xfer_/);
+assert.match(release, /proc_xfer_/);
 assert.match(release, /transferAttempt/);
+assert.match(
+  release,
+  /releaseProcurement[\s\S]*settleCurrency[\s\S]*source_transaction/,
+  "procurement release must convert settle currency when using source_transaction",
+);
 
 // Failure must not mark RELEASED (mark only after SUCCEEDED transfer)
 const failBlock = release.match(

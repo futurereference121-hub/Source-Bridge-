@@ -165,6 +165,13 @@ export async function releaseProcurement(opts: {
         status: "PENDING",
       },
     }));
+  // Reopen FAILED for retry (new Stripe idempotency key when params evolve).
+  if (existingAttempt && existingAttempt.status === "FAILED") {
+    await prisma.transferAttempt.update({
+      where: { id: existingAttempt.id },
+      data: { status: "PENDING", lastAttemptAt: new Date() },
+    });
+  }
 
   const stripe = getStripe(txnMode);
   try {
@@ -176,6 +183,39 @@ export async function releaseProcurement(opts: {
         typeof lc === "string" ? lc : lc && typeof lc === "object" ? lc.id : "";
     }
 
+    const presentmentCurrency = txn.currency.toLowerCase();
+    let transferCurrency = presentmentCurrency;
+    let transferAmountMinor = amount;
+
+    // UK/EUR platforms often settle non-local charges into local currency.
+    // source_transaction + matching settle currency is required for SCT releases.
+    if (sourceTransaction) {
+      const charge = await stripe.charges.retrieve(sourceTransaction, {
+        expand: ["balance_transaction"],
+      });
+      const bt =
+        charge.balance_transaction &&
+        typeof charge.balance_transaction === "object"
+          ? charge.balance_transaction
+          : null;
+      const settleCurrency = (bt?.currency || charge.currency || "").toLowerCase();
+      if (settleCurrency && settleCurrency !== presentmentCurrency) {
+        if (!bt || !charge.amount) {
+          throw Object.assign(
+            new Error(
+              `Cannot convert procurement transfer ${presentmentCurrency}→${settleCurrency}: missing balance transaction`,
+            ),
+            { status: 409, code: "SETTLEMENT_FX_MISSING" },
+          );
+        }
+        transferCurrency = settleCurrency;
+        transferAmountMinor = Math.max(
+          1,
+          Math.floor((amount * bt.amount) / charge.amount),
+        );
+      }
+    }
+
     const transferParams: {
       amount: number;
       currency: string;
@@ -184,23 +224,34 @@ export async function releaseProcurement(opts: {
       metadata: Record<string, string>;
       source_transaction?: string;
     } = {
-      amount,
-      currency: txn.currency.toLowerCase(),
+      amount: transferAmountMinor,
+      currency: transferCurrency,
       destination: connect.stripeAccountId,
       transfer_group: txn.id,
       metadata: {
         protectedTxnId: txn.id,
         kind: "PROCUREMENT",
         chargeModel: CHARGE_MODEL,
+        presentmentCurrency,
+        presentmentAmountMinor: String(amount),
+        settleCurrency: transferCurrency,
+        settleAmountMinor: String(transferAmountMinor),
       },
     };
     if (sourceTransaction) {
       transferParams.source_transaction = sourceTransaction;
     }
 
-    const stripeIdempotencyKey = sourceTransaction
-      ? `${idempotencyKey}_src`
-      : idempotencyKey;
+    // When prior attempt failed without settlement FX, Stripe idempotency
+    // forbids changing params under the same key — bump retries.
+    const stripeIdempotencyKey =
+      existingAttempt &&
+      (existingAttempt.status === "FAILED" || existingAttempt.status === "PENDING") &&
+      existingAttempt.attemptCount > 0
+        ? `${idempotencyKey}_srcfx_a${existingAttempt.attemptCount}`
+        : sourceTransaction
+          ? `${idempotencyKey}_srcfx`
+          : idempotencyKey;
 
     const transfer = await stripe.transfers.create(transferParams, {
       idempotencyKey: stripeIdempotencyKey,
@@ -237,12 +288,24 @@ export async function releaseProcurement(opts: {
       idempotencyKey: `ledger_${idempotencyKey}`,
       stripeObjectId: transfer.id,
       stripeObjectType: "transfer",
+      meta: {
+        settleCurrency: transferCurrency,
+        settleAmountMinor: transferAmountMinor,
+        sourceTransaction: sourceTransaction || null,
+      },
     });
     await recordAuditEvent({
       protectedTxnId: txn.id,
       actorUserId: opts.actorUserId,
       action: "RELEASE_PROCUREMENT",
-      meta: { transferId: transfer.id, amountMinor: amount },
+      meta: {
+        transferId: transfer.id,
+        amountMinor: amount,
+        presentmentCurrency,
+        settleCurrency: transferCurrency,
+        settleAmountMinor: transferAmountMinor,
+        sourceTransaction: sourceTransaction || null,
+      },
     });
 
     return { alreadyReleased: false, txn: updated, transferId: transfer.id };
