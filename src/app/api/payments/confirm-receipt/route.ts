@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/validation";
 import { confirmReceipt } from "@/lib/payments/fulfilment";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { getPaymentTicket } from "@/lib/payments/tickets";
 
 export const runtime = "nodejs";
 
@@ -95,6 +96,20 @@ export async function POST(req: NextRequest) {
           })
         : null;
 
+    const activityVersion =
+      (result as { activityVersion?: number }).activityVersion ?? 0;
+    const linkedTicketId =
+      (result as { linkedTicketId?: string | null }).linkedTicketId ?? null;
+
+    let ticket = null;
+    if (linkedTicketId) {
+      try {
+        ticket = await getPaymentTicket(linkedTicketId, user.id);
+      } catch (err) {
+        console.error("[payments:confirm-receipt:ticket]", err);
+      }
+    }
+
     return Response.json({
       ok: true,
       alreadyConfirmed: result.alreadyConfirmed,
@@ -104,6 +119,8 @@ export async function POST(req: NextRequest) {
         (result as { alreadyReleased?: boolean }).alreadyReleased,
       ),
       transferId: (result as { transferId?: string | null }).transferId ?? null,
+      activityVersion,
+      ticket,
       dispute: (result as { dispute?: unknown }).dispute ?? null,
       transaction: {
         id: t.id,

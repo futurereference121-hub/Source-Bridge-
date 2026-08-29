@@ -12,6 +12,7 @@ import { releaseProcurement } from "@/lib/payments/release";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { formatMinor } from "@/lib/payments/money";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { getPaymentTicket } from "@/lib/payments/tickets";
 
 export const runtime = "nodejs";
 
@@ -142,10 +143,27 @@ export async function POST(req: NextRequest) {
 
     const fresh = result.txn;
     const books = computeProtectedFinancials(fresh);
+    const activityVersion =
+      "activityVersion" in result ? result.activityVersion ?? 0 : 0;
+    const linkedTicketId =
+      "linkedTicketId" in result ? result.linkedTicketId ?? null : null;
+
+    let ticket = null;
+    const ticketId = linkedTicketId ?? txn.paymentTicket?.id ?? null;
+    if (ticketId) {
+      try {
+        ticket = await getPaymentTicket(ticketId, user.id);
+      } catch (err) {
+        console.error("[payments:release-procurement:ticket]", err);
+      }
+    }
+
     return Response.json({
       ok: true,
       alreadyReleased: result.alreadyReleased,
       transferId: "transferId" in result ? result.transferId : undefined,
+      activityVersion,
+      ticket,
       message: result.alreadyReleased
         ? "Item funds were already released"
         : `Item funds released (${formatMinor(txn.procurementAdvanceMinor, txn.currency)}). Shipping and remaining amounts stay protected until delivery.`,

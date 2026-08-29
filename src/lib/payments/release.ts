@@ -20,6 +20,7 @@ import {
   assertProcurementReleaseInvariants,
   computeProtectedFinancials,
 } from "@/lib/payments/breakdown";
+import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -308,7 +309,19 @@ export async function releaseProcurement(opts: {
       },
     });
 
-    return { alreadyReleased: false, txn: updated, transferId: transfer.id };
+    const participantSync = await afterProtectedTxnMoneyEvent({
+      txn: updated,
+      event: "PROCUREMENT_RELEASED",
+      actorUserId: opts.actorUserId,
+    });
+
+    return {
+      alreadyReleased: false,
+      txn: updated,
+      transferId: transfer.id,
+      activityVersion: participantSync.activityVersion,
+      linkedTicketId: participantSync.linkedTicketId,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Transfer failed";
     await prisma.transferAttempt.update({
@@ -678,11 +691,19 @@ export async function releaseFinal(opts: {
       await markListingSoldIfLinked(txn.listingId);
     }
 
+    const participantSync = await afterProtectedTxnMoneyEvent({
+      txn: updated,
+      event: "FINAL_RELEASED",
+      actorUserId: opts.actorUserId,
+    });
+
     return {
       alreadyReleased: false,
       txn: updated,
       transferId: transfer.id,
       amountMinor: amount,
+      activityVersion: participantSync.activityVersion,
+      linkedTicketId: participantSync.linkedTicketId,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Transfer failed";

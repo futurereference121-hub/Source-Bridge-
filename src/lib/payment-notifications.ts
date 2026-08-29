@@ -113,6 +113,78 @@ export async function notifyPaymentFunded(opts: {
   });
 }
 
+export async function notifyProcurementReleased(opts: {
+  protectedTxnId: string;
+  conversationId: string;
+  sellerId: string;
+  buyerId: string;
+  title: string;
+  ticketId?: string | null;
+  origin?: string | null;
+  actorUserId: string;
+  actorUsername?: string | null;
+}): Promise<void> {
+  const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const href = isProduct
+    ? "/profile/sales"
+    : opts.ticketId
+      ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+      : inboxHref(opts.conversationId);
+  const who = opts.actorUsername
+    ? `@${opts.actorUsername.replace(/^@/, "")}`
+    : "Buyer";
+  await createNotification({
+    userId: opts.sellerId,
+    type: "PAYMENT_STATUS",
+    title: isProduct
+      ? `${who} released item funds for your order`
+      : `${who} released item funds`,
+    body: isProduct
+      ? "Open Sales & Fulfilment to ship when ready."
+      : opts.title.slice(0, 140),
+    href,
+    actorId: opts.actorUserId,
+    actorName: who,
+    dedupeKey: `pt-proc-released:${opts.protectedTxnId}`,
+  });
+}
+
+export async function notifyFinalReleased(opts: {
+  protectedTxnId: string;
+  conversationId: string;
+  sellerId: string;
+  buyerId: string;
+  title: string;
+  ticketId?: string | null;
+  origin?: string | null;
+  actorUserId: string;
+  actorUsername?: string | null;
+}): Promise<void> {
+  const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const href = isProduct
+    ? "/profile/sales"
+    : opts.ticketId
+      ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+      : inboxHref(opts.conversationId);
+  const who = opts.actorUsername
+    ? `@${opts.actorUsername.replace(/^@/, "")}`
+    : "Buyer";
+  await createNotification({
+    userId: opts.sellerId,
+    type: "PAYMENT_STATUS",
+    title: isProduct
+      ? `${who} released remaining funds for your order`
+      : `${who} released remaining seller funds`,
+    body: isProduct
+      ? "Funds are on your connected account per Stripe payout timing."
+      : "Remaining seller entitlement transferred to your connected account.",
+    href,
+    actorId: opts.actorUserId,
+    actorName: who,
+    dedupeKey: `pt-final-released:${opts.protectedTxnId}`,
+  });
+}
+
 export async function notifyShipmentUpdate(opts: {
   protectedTxnId: string;
   conversationId: string;

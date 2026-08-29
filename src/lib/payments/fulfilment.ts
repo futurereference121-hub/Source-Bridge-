@@ -855,6 +855,10 @@ async function releaseNowAfterReceipt(opts: {
     alreadyReleased: Boolean(result.alreadyReleased),
     transferId: result.transferId ?? null,
     transaction: result.txn,
+    activityVersion:
+      "activityVersion" in result ? result.activityVersion ?? 0 : 0,
+    linkedTicketId:
+      "linkedTicketId" in result ? result.linkedTicketId ?? null : null,
   };
 }
 

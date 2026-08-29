@@ -737,6 +737,13 @@ export function PaymentTicketCard({
         error?: string;
         message?: string;
         alreadyReleased?: boolean;
+        activityVersion?: number;
+        ticket?: PaymentTicketView;
+        transaction?: {
+          status?: string;
+          procurementTransferredMinor?: number;
+          procurementReleasedAt?: string | null;
+        };
       };
       if (!res.ok) {
         setError(
@@ -749,8 +756,42 @@ export function PaymentTicketCard({
             "Item funds released. Shipping and remaining amount stay protected.",
         );
         setConfirmRelease(false);
-        await load();
+        let nextLocal: PaymentTicketView | null = null;
+        if (json.ticket) {
+          const next = normalizeTicketView(json.ticket);
+          delete (next as { viewer?: unknown }).viewer;
+          setTicket((prev) => {
+            if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
+            nextLocal = next;
+            return next;
+          });
+        } else if (json.transaction) {
+          setTicket((prev) => {
+            if (!prev) return prev;
+            const nextStatus =
+              json.transaction?.status || prev.protectedTxnStatus;
+            nextLocal = {
+              ...prev,
+              protectedTxnStatus: nextStatus,
+              lifecycleStage:
+                nextStatus === "PROCUREMENT_RELEASED" ||
+                nextStatus === "AWAITING_SHIPMENT"
+                  ? "ITEM_FUNDS_RELEASED"
+                  : prev.lifecycleStage,
+              actions: {
+                ...prev.actions,
+                canReleaseProcurement: false,
+                canMarkShipped: true,
+              },
+            };
+            return nextLocal;
+          });
+        }
+        if (nextLocal) {
+          onTicketUpdated?.(nextLocal);
+        }
         onChanged?.();
+        void load({ silent: true });
       }
     } catch {
       setError(
@@ -922,10 +963,13 @@ export function PaymentTicketCard({
         alreadyConfirmed?: boolean;
         transferTriggered?: boolean;
         decision?: string;
+        activityVersion?: number;
+        ticket?: PaymentTicketView;
         transaction?: {
           status?: string;
           inspectionEndsAt?: string | null;
           deliveredAt?: string | null;
+          releasedAt?: string | null;
         };
       };
       if (!res.ok) {
@@ -962,44 +1006,67 @@ export function PaymentTicketCard({
         setIssueDetails("");
         setIssueEvidenceUrls([]);
         let nextLocal: PaymentTicketView | null = null;
-        setTicket((prev) => {
-          if (!prev) return prev;
-          nextLocal = {
-            ...prev,
-            inspectionEndsAt:
-              json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
-            deliveredAt:
-              json.transaction?.deliveredAt ?? prev.deliveredAt,
-            protectedTxnStatus:
+        if (json.ticket) {
+          const next = normalizeTicketView(json.ticket);
+          delete (next as { viewer?: unknown }).viewer;
+          setTicket((prev) => {
+            if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
+            nextLocal = next;
+            return next;
+          });
+        } else {
+          setTicket((prev) => {
+            if (!prev) return prev;
+            const txnStatus =
               decision === "START_INSPECTION"
                 ? "IN_INSPECTION"
                 : decision === "REPORT_ISSUE"
                   ? "DISPUTED"
-                  : json.transaction?.status || prev.protectedTxnStatus,
-            lifecycleStage:
-              decision === "START_INSPECTION"
-                ? "IN_INSPECTION"
-                : decision === "RELEASE_NOW"
-                  ? "READY_TO_RELEASE"
-                  : decision === "REPORT_ISSUE"
-                    ? "DISPUTED"
-                    : prev.lifecycleStage,
-            actions: {
-              ...prev.actions,
-              ...(decision === "START_INSPECTION"
-                ? { canReleaseNow: true, canReportIssue: true }
-                : {}),
-              ...(decision === "REPORT_ISSUE"
-                ? { canReleaseNow: false, canReportIssue: false }
-                : {}),
-            },
-            openDisputeStatus:
-              decision === "REPORT_ISSUE"
-                ? "UNDER_REVIEW"
-                : prev.openDisputeStatus,
-          };
-          return nextLocal;
-        });
+                  : json.transaction?.status || prev.protectedTxnStatus;
+            const released =
+              txnStatus === "RELEASED" ||
+              Boolean(json.transaction?.releasedAt);
+            nextLocal = {
+              ...prev,
+              inspectionEndsAt:
+                json.transaction?.inspectionEndsAt ?? prev.inspectionEndsAt,
+              deliveredAt:
+                json.transaction?.deliveredAt ?? prev.deliveredAt,
+              protectedTxnStatus: txnStatus,
+              lifecycleStage:
+                decision === "START_INSPECTION"
+                  ? "IN_INSPECTION"
+                  : decision === "RELEASE_NOW" && released
+                    ? "RELEASED"
+                    : decision === "RELEASE_NOW"
+                      ? "READY_TO_RELEASE"
+                      : decision === "REPORT_ISSUE"
+                        ? "DISPUTED"
+                        : prev.lifecycleStage,
+              actions: {
+                ...prev.actions,
+                ...(decision === "START_INSPECTION"
+                  ? { canReleaseNow: true, canReportIssue: true }
+                  : {}),
+                ...(decision === "REPORT_ISSUE"
+                  ? { canReleaseNow: false, canReportIssue: false }
+                  : {}),
+                ...(decision === "RELEASE_NOW" && released
+                  ? {
+                      canReleaseNow: false,
+                      canReportIssue: false,
+                      canMarkShipped: false,
+                    }
+                  : {}),
+              },
+              openDisputeStatus:
+                decision === "REPORT_ISSUE"
+                  ? "UNDER_REVIEW"
+                  : prev.openDisputeStatus,
+            };
+            return nextLocal;
+          });
+        }
         if (nextLocal) {
           onTicketUpdated?.(nextLocal);
         }
