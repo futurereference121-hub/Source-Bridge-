@@ -5,12 +5,12 @@ Update only when finishing a meaningful workstream. Keep this short.
 ## Current
 
 - **Workstream:** Platform fee 2% → 7% (700 bps); historical stored fees preserved.
-- **Last verified commit:** (pending commit on this workstream)
-- **Production deployment:** pending after push
-- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true`, Stripe runtime LIVE on Production; TEST history remains operable via mode-scoped clients
+- **Last verified commit:** `1469590` on `origin/main`
+- **Production deployment:** `dpl_BwUhSiTnGApQnZnmWWsYDzhgUwZ6` (`source-bridge-n70zrfo76-canna-cake.vercel.app`) → www.sourcebridge.app — Live ON
+- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true` (unchanged); Stripe runtime LIVE on Production; TEST history remains operable via mode-scoped clients
 - **Last critical regression:** `test:payments:fast` PASS · `test:payments:full` PASS · `test:sourcebridge` PASS · `test:live-guard` PASS · typecheck PASS · build PASS
-- **Migration:** `20260829140000_source_bridge_fee_7pct` — updates `PlatformPaymentConfig` defaults/singleton 200→700 bps; does **not** mutate ticket/txn stored fees
-- **STOP:** User creates next LIVE transaction manually to verify 7% — no automated LIVE charges
+- **Migration:** `20260829140000_source_bridge_fee_7pct` APPLIED on Neon — `PlatformPaymentConfig` now 700/700 bps, floor 0; ticket/txn stored fees untouched
+- **STOP:** User creates next LIVE transaction manually to verify 7% — no automated LIVE charges created
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 
