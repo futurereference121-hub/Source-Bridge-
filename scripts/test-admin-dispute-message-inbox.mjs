@@ -58,7 +58,7 @@ assert.match(
 );
 
 // D — human topic block, no raw IDs in primary body
-assert.match(copy, /SOURCE BRIDGE REVIEW/);
+assert.match(copy, /PAYMENT TICKET ISSUE/);
 assert.match(copy, /formatHumanDisputeContextBody/);
 assert.doesNotMatch(
   threads,
@@ -67,9 +67,14 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(threads, /`txn \$\{/);
 assert.doesNotMatch(threads, /`ticket \$\{/);
-assert.match(card, /DisputeContextMessage|SOURCE BRIDGE REVIEW/);
-assert.match(card, /View Review/);
-assert.match(card, /Advanced \/ Audit/);
+assert.match(card, /DisputeContextMessage|PAYMENT TICKET ISSUE/);
+assert.match(card, /View review/);
+assert.doesNotMatch(card, /Advanced \/ Audit/);
+assert.doesNotMatch(
+  threads,
+  /category:\s*dispute\.category/,
+  "D. must not dump dispute category into support chat",
+);
 
 // F — two-way: party still a normal conversation participant (USER messages)
 assert.match(threads, /ADMIN_DISPUTE_CONTEXT/);

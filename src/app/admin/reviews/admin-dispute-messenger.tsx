@@ -248,6 +248,7 @@ export default function AdminDisputeMessenger({
                   <DisputeContextMessage
                     body={m.body || ""}
                     createdAt={m.createdAt}
+                    showReviewLink
                     structured={{
                       disputeCaseId: disputeId,
                       paymentTicketId:

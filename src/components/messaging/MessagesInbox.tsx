@@ -1804,16 +1804,12 @@ export function MessagesInbox({
                                 body={m.body || ""}
                                 createdAt={m.createdAt}
                                 structured={{
-                                  disputeCaseId:
-                                    activeConversation?.disputeCaseId ?? null,
+                                  // Party inbox: concise card only — no admin IDs / audit.
                                   paymentTicketId:
                                     m.paymentTicketId ||
                                     activeConversation?.paymentTicketId ||
                                     null,
-                                  // Party inbox: stay in support thread (not admin UI).
-                                  reviewHref: activeConversation?.id
-                                    ? `/inbox/${activeConversation.id}`
-                                    : "#",
+                                  reviewHref: "#",
                                 }}
                               />
                             ) : m.body?.trim() ? (

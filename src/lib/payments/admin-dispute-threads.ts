@@ -23,27 +23,27 @@ async function insertDisputeContextMarker(opts: {
   protectedTxnId: string;
   paymentTicketId: string | null;
   title: string;
-  category?: string | null;
-  reason?: string | null;
   status?: string | null;
   buyerUsername?: string | null;
   sellerUsername?: string | null;
+  amountMinor?: number | null;
+  currency?: string | null;
   createdAt: Date;
 }) {
   const structured = buildDisputeContextStructured({
     title: opts.title,
-    category: opts.category,
-    reason: opts.reason,
     status: opts.status,
     buyerUsername: opts.buyerUsername,
     sellerUsername: opts.sellerUsername,
+    amountMinor: opts.amountMinor,
+    currency: opts.currency,
     createdAt: opts.createdAt,
     reviewHref: `/admin/reviews/${opts.disputeCaseId}`,
     disputeCaseId: opts.disputeCaseId,
     protectedTxnId: opts.protectedTxnId,
     paymentTicketId: opts.paymentTicketId,
   });
-  // Human body only — IDs live on Conversation + Advanced/Audit UI.
+  // Concise human reference only — evidence stays in Admin → Reviews.
   const body = formatHumanDisputeContextBody(structured);
   await prisma.message.create({
     data: {
@@ -77,6 +77,8 @@ export async function getOrCreateAdminDisputeThread(opts: {
           conversationId: true,
           paymentTicket: { select: { id: true } },
           title: true,
+          totalChargeMinor: true,
+          currency: true,
           buyer: { select: { username: true } },
           seller: { select: { username: true } },
         },
@@ -115,11 +117,11 @@ export async function getOrCreateAdminDisputeThread(opts: {
     protectedTxnId: dispute.protectedTxn.id,
     paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
     title: dispute.protectedTxn.title,
-    category: dispute.category,
-    reason: dispute.reason,
     status: dispute.status,
     buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
     sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+    amountMinor: dispute.protectedTxn.totalChargeMinor ?? null,
+    currency: dispute.protectedTxn.currency ?? null,
     createdAt: dispute.createdAt,
   };
 
@@ -183,11 +185,11 @@ export async function getOrCreateAdminDisputeThread(opts: {
       });
       const structured = buildDisputeContextStructured({
         title: dispute.protectedTxn.title,
-        category: dispute.category,
-        reason: dispute.reason,
         status: dispute.status,
         buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
         sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+        amountMinor: dispute.protectedTxn.totalChargeMinor ?? null,
+        currency: dispute.protectedTxn.currency ?? null,
         createdAt: dispute.createdAt,
         reviewHref: `/admin/reviews/${dispute.id}`,
         disputeCaseId: dispute.id,
@@ -269,8 +271,9 @@ export async function listAdminDisputeThreads(disputeCaseId: string) {
 }
 
 /**
- * Insert DISPUTE_CONTEXT when missing for this dispute, or when the party
- * deleted the chat so prior markers sit behind deletedBeforeAt.
+ * Insert DISPUTE_CONTEXT when missing for this dispute/ticket, or when the
+ * party deleted the chat so prior markers sit behind deletedBeforeAt.
+ * Idempotent per payment ticket (or dispute window when ticket is absent).
  */
 async function ensureVisibleDisputeContextMarker(opts: {
   conversationId: string;
@@ -281,11 +284,11 @@ async function ensureVisibleDisputeContextMarker(opts: {
     protectedTxnId: string;
     paymentTicketId: string | null;
     title: string;
-    category?: string | null;
-    reason?: string | null;
     status?: string | null;
     buyerUsername?: string | null;
     sellerUsername?: string | null;
+    amountMinor?: number | null;
+    currency?: string | null;
     createdAt: Date;
   };
 }) {
@@ -293,20 +296,26 @@ async function ensureVisibleDisputeContextMarker(opts: {
     opts.conversationId,
     opts.partyId,
   );
-  const lowerBound =
+  const ticketId = opts.markerPayload.paymentTicketId;
+  const afterDelete =
     cutoff && cutoff.getTime() > opts.disputeCreatedAt.getTime()
       ? cutoff
-      : opts.disputeCreatedAt;
-  const useExclusive = Boolean(
-    cutoff && cutoff.getTime() > opts.disputeCreatedAt.getTime(),
-  );
+      : null;
+
   const markerExists = await prisma.message.findFirst({
     where: {
       conversationId: opts.conversationId,
       systemEventType: "DISPUTE_CONTEXT",
-      createdAt: useExclusive
-        ? { gt: lowerBound }
-        : { gte: lowerBound },
+      ...(ticketId
+        ? {
+            paymentTicketId: ticketId,
+            ...(afterDelete ? { createdAt: { gt: afterDelete } } : {}),
+          }
+        : {
+            createdAt: afterDelete
+              ? { gt: afterDelete }
+              : { gte: opts.disputeCreatedAt },
+          }),
     },
     select: { id: true },
   });
@@ -344,6 +353,8 @@ export async function sendAdminDisputeMessage(opts: {
             select: {
               id: true,
               title: true,
+              totalChargeMinor: true,
+              currency: true,
               buyer: { select: { username: true } },
               seller: { select: { username: true } },
               paymentTicket: { select: { id: true } },
@@ -377,11 +388,11 @@ export async function sendAdminDisputeMessage(opts: {
         protectedTxnId: dispute.protectedTxn.id,
         paymentTicketId: dispute.protectedTxn.paymentTicket?.id ?? null,
         title: dispute.protectedTxn.title,
-        category: dispute.category,
-        reason: dispute.reason,
         status: dispute.status,
         buyerUsername: dispute.protectedTxn.buyer?.username ?? null,
         sellerUsername: dispute.protectedTxn.seller?.username ?? null,
+        amountMinor: dispute.protectedTxn.totalChargeMinor ?? null,
+        currency: dispute.protectedTxn.currency ?? null,
         createdAt: dispute.createdAt,
       },
     });
