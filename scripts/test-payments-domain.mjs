@@ -8,7 +8,6 @@ import { createHash } from "node:crypto";
 
 // Inline mirrors of pure helpers so this script runs without ts-node.
 function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeMinorOverride, paymentOption }) {
-  const base = itemCostMinor + shippingMinor;
   const direct = paymentOption === "INSTANT" || paymentOption === "DIRECT";
   const bps = direct
     ? (config.directServiceFeeBps ?? config.protectionFeeBps)
@@ -16,15 +15,20 @@ function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeM
   const floor = direct
     ? (config.directServiceFeeFloorMinor ?? config.protectionFeeFloorMinor)
     : config.protectionFeeFloorMinor;
-  const protectionRaw = Math.ceil((base * Math.max(0, bps)) / 10_000);
-  const protectionFeeMinor = Math.max(
-    protectionRaw,
-    base > 0 ? Math.max(0, floor) : 0,
-  );
   const sellerServiceFeeMinor =
     sellerServiceFeeMinorOverride !== undefined
       ? sellerServiceFeeMinorOverride
-      : Math.ceil((base * Math.max(0, config.sellerServiceFeeBps)) / 10_000);
+      : Math.ceil(
+          ((itemCostMinor + shippingMinor) *
+            Math.max(0, config.sellerServiceFeeBps)) /
+            10_000,
+        );
+  const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
+  const protectionRaw = Math.ceil((feeBaseMinor * Math.max(0, bps)) / 10_000);
+  const protectionFeeMinor = Math.max(
+    protectionRaw,
+    feeBaseMinor > 0 ? Math.max(0, floor) : 0,
+  );
   return { itemCostMinor, shippingMinor, sellerServiceFeeMinor, protectionFeeMinor };
 }
 
@@ -134,7 +138,55 @@ const feeConfig7pct = {
   assert.equal(totalChargeMinor(f40), 4_280);
 }
 
-// ── Sourcing: £50 + £15 + £20 sourcer → fee base £65 → £4.55; buyer £89.55; seller £85
+// ── TEST A: £100 + £20 + £30 sourcer → seller £150; SB £10.50; buyer £160.50
+{
+  const fees = calculateFees({
+    itemCostMinor: 10_000,
+    shippingMinor: 2_000,
+    config: feeConfig7pct,
+    sellerServiceFeeMinorOverride: 3_000,
+  });
+  assert.equal(
+    fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+    15_000,
+  );
+  assert.equal(fees.protectionFeeMinor, 1_050);
+  assert.equal(totalChargeMinor(fees), 16_050);
+}
+
+// ── TEST B: $50 + $10 + $40 → seller $100; SB $7; buyer $107
+{
+  const fees = calculateFees({
+    itemCostMinor: 5_000,
+    shippingMinor: 1_000,
+    config: feeConfig7pct,
+    sellerServiceFeeMinorOverride: 4_000,
+  });
+  assert.equal(
+    fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+    10_000,
+  );
+  assert.equal(fees.protectionFeeMinor, 700);
+  assert.equal(totalChargeMinor(fees), 10_700);
+}
+
+// ── TEST C: £10 + £0 + £10 → seller £20; SB £1.40; buyer £21.40
+{
+  const fees = calculateFees({
+    itemCostMinor: 1_000,
+    shippingMinor: 0,
+    config: feeConfig7pct,
+    sellerServiceFeeMinorOverride: 1_000,
+  });
+  assert.equal(
+    fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+    2_000,
+  );
+  assert.equal(fees.protectionFeeMinor, 140);
+  assert.equal(totalChargeMinor(fees), 2_140);
+}
+
+// ── Sourcing: £50 + £15 + £20 sourcer → fee base £85 → £5.95; buyer £90.95; seller £85
 {
   const fees = calculateFees({
     itemCostMinor: 5_000,
@@ -142,15 +194,15 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 2_000,
   });
-  assert.equal(fees.protectionFeeMinor, 455); // ceil(6500 * 700 / 10000)
+  assert.equal(fees.protectionFeeMinor, 595); // ceil(8500 * 700 / 10000)
   assert.equal(
     fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
     8_500,
   );
-  assert.equal(totalChargeMinor(fees), 8_955);
+  assert.equal(totalChargeMinor(fees), 9_095);
 }
 
-// ── Sourcer fee exclusion: £20 → £100 must NOT change SB fee
+// ── Sourcer fee INCLUDED in fee base: £20 → £100 MUST change SB fee
 {
   const a = calculateFees({
     itemCostMinor: 5_000,
@@ -164,9 +216,28 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 10_000,
   });
-  assert.equal(a.protectionFeeMinor, 455);
-  assert.equal(b.protectionFeeMinor, 455);
-  assert.equal(totalChargeMinor(b), 16_955); // 50+15+100+4.55
+  assert.equal(a.protectionFeeMinor, 595); // ceil(8500*700/10000)
+  assert.equal(b.protectionFeeMinor, 1_155); // ceil(16500*700/10000)
+  assert.notEqual(a.protectionFeeMinor, b.protectionFeeMinor);
+  assert.equal(totalChargeMinor(b), 17_655); // 50+15+100+11.55
+}
+
+// ── No compounding: SB fee never enters its own base
+{
+  const fees = calculateFees({
+    itemCostMinor: 10_000,
+    shippingMinor: 2_000,
+    config: feeConfig7pct,
+    sellerServiceFeeMinorOverride: 3_000,
+  });
+  const sellerSubtotal =
+    fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor;
+  assert.equal(fees.protectionFeeMinor, Math.ceil((sellerSubtotal * 700) / 10_000));
+  assert.equal(totalChargeMinor(fees), sellerSubtotal + fees.protectionFeeMinor);
+  assert.notEqual(
+    fees.protectionFeeMinor,
+    Math.ceil(((sellerSubtotal + fees.protectionFeeMinor) * 700) / 10_000),
+  );
 }
 
 // ── Rounding / uneven amounts (ceil) at 7%
@@ -233,7 +304,7 @@ const feeConfig7pct = {
   ); // odd minor → ceil
 }
 
-// ── New ticket / edited revision: always recalculate at current 7%
+// ── TEST E — New ticket / edited revision: always recalculate at full-base 7%
 {
   const newTicket = calculateFees({
     itemCostMinor: 10_000,
@@ -241,19 +312,42 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 5_000,
   });
-  assert.equal(newTicket.protectionFeeMinor, 840); // ceil(12000*700/10000)
-  assert.equal(totalChargeMinor(newTicket), 17_840);
+  assert.equal(newTicket.protectionFeeMinor, 1_190); // ceil(17000*700/10000)
+  assert.equal(totalChargeMinor(newTicket), 18_190);
 
-  // Edit unfunded → new revision uses 7%, not prior stored 2%
-  const priorStoredFeeAt2pct = 240; // historical revision at 2% of same base
+  // Edit unfunded → new revision uses full seller entitlement base, not prior stored
+  const priorStoredFeeAtOldBase = 840; // historical: 7% of item+shipping only
   const revised = calculateFees({
     itemCostMinor: 10_000,
     shippingMinor: 2_000,
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 5_000,
   });
-  assert.equal(revised.protectionFeeMinor, 840);
-  assert.notEqual(revised.protectionFeeMinor, priorStoredFeeAt2pct);
+  assert.equal(revised.protectionFeeMinor, 1_190);
+  assert.notEqual(revised.protectionFeeMinor, priorStoredFeeAtOldBase);
+}
+
+// ── TEST D — Historical: stored fee under old base is NOT recalculated
+{
+  const historicalFundedOldBase = {
+    itemCostMinor: 10_000,
+    shippingMinor: 2_000,
+    sellerServiceFeeMinor: 5_000,
+    protectionFeeMinor: 840, // stored under old item+shipping base
+    totalChargeMinor: 17_840,
+  };
+  const current = calculateFees({
+    itemCostMinor: historicalFundedOldBase.itemCostMinor,
+    shippingMinor: historicalFundedOldBase.shippingMinor,
+    config: feeConfig7pct,
+    sellerServiceFeeMinorOverride: historicalFundedOldBase.sellerServiceFeeMinor,
+  });
+  assert.equal(historicalFundedOldBase.protectionFeeMinor, 840);
+  assert.equal(current.protectionFeeMinor, 1_190);
+  assert.notEqual(
+    historicalFundedOldBase.protectionFeeMinor,
+    current.protectionFeeMinor,
+  );
 }
 
 // ── Checkout invariant: displayed fee = DB stored = PI amount (same calc)
@@ -284,7 +378,7 @@ const feeConfig7pct = {
   const sellerEntitled =
     fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor;
   assert.equal(sellerEntitled, 8_500);
-  assert.equal(fees.protectionFeeMinor, 455);
+  assert.equal(fees.protectionFeeMinor, 595);
   assert.equal(totalChargeMinor(fees) - sellerEntitled, fees.protectionFeeMinor);
 }
 
@@ -428,7 +522,7 @@ assert.notEqual(a, c);
 const DEFAULT = "CONTACT_ONLY";
 assert.equal(DEFAULT, "CONTACT_ONLY");
 
-// ── Test amounts (GBP): £5 + £1 + £1 service + 7% of £6 = 42p
+// ── Test amounts (GBP): £5 + £1 + £1 service + 7% of £7 = 49p
 {
   const fees = calculateFees({
     itemCostMinor: 500,
@@ -439,9 +533,9 @@ assert.equal(DEFAULT, "CONTACT_ONLY");
   assert.equal(fees.itemCostMinor, 500);
   assert.equal(fees.shippingMinor, 100);
   assert.equal(fees.sellerServiceFeeMinor, 100);
-  // base 600 → ceil(600*700/10000)=42
-  assert.equal(fees.protectionFeeMinor, 42);
-  assert.equal(totalChargeMinor(fees), 742);
+  // fee base 700 → ceil(700*700/10000)=49
+  assert.equal(fees.protectionFeeMinor, 49);
+  assert.equal(totalChargeMinor(fees), 749);
 }
 
 // ── Allowlist parse (mirrors src/lib/payments/allowlist.ts)

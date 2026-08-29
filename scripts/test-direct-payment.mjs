@@ -13,17 +13,21 @@ function normalizeTxnPaymentOption(raw) {
   if (isDirectPaymentOption(raw)) return "INSTANT";
   return "PROTECTED";
 }
-function calculateFees({ itemCostMinor, shippingMinor, config, paymentOption }) {
-  const base = itemCostMinor + shippingMinor;
+function calculateFees({ itemCostMinor, shippingMinor, config, paymentOption, sellerServiceFeeMinorOverride }) {
   const direct = isDirectPaymentOption(paymentOption);
   const feeBps = direct ? config.directServiceFeeBps : config.protectionFeeBps;
   const feeFloor = direct ? config.directServiceFeeFloorMinor : config.protectionFeeFloorMinor;
-  const platformRaw = Math.ceil((base * Math.max(0, feeBps)) / 10_000);
-  const protectionFeeMinor = Math.max(platformRaw, base > 0 ? Math.max(0, feeFloor) : 0);
+  const sellerServiceFeeMinor =
+    sellerServiceFeeMinorOverride !== undefined
+      ? sellerServiceFeeMinorOverride
+      : 0;
+  const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
+  const platformRaw = Math.ceil((feeBaseMinor * Math.max(0, feeBps)) / 10_000);
+  const protectionFeeMinor = Math.max(platformRaw, feeBaseMinor > 0 ? Math.max(0, feeFloor) : 0);
   return {
     itemCostMinor,
     shippingMinor,
-    sellerServiceFeeMinor: 0,
+    sellerServiceFeeMinor,
     protectionFeeMinor,
     feeKind: direct ? "SERVICE" : "PROTECTION",
   };
@@ -125,6 +129,19 @@ assert.equal(
   }).protectionFeeMinor,
   280,
 );
+
+// Full seller entitlement base: item+shipping+service → 7% of $100 = $7
+{
+  const withSvc = calculateFees({
+    itemCostMinor: 5000,
+    shippingMinor: 1000,
+    config,
+    paymentOption: "DIRECT",
+    sellerServiceFeeMinorOverride: 4000,
+  });
+  assert.equal(withSvc.protectionFeeMinor, 700);
+  assert.equal(totalChargeMinor(withSvc), 10_700);
+}
 
 // Fee approach: application_fee_amount = platform service fee (7%)
 const directTxn = {

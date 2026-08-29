@@ -784,9 +784,12 @@ export function ProposePaymentTicketButton({
             const item = estimateDraftMinor(itemMajor, cur);
             const ship = estimateDraftMinor(shippingMajor, cur);
             const svc = estimateDraftMinor(serviceMajor, cur);
-            const base = item + ship;
-            const fee = base > 0 ? Math.ceil((base * 700) / 10_000) : 0;
-            const total = base + svc + fee;
+            const sellerSubtotal = item + ship + svc;
+            const fee =
+              sellerSubtotal > 0
+                ? Math.ceil((sellerSubtotal * 700) / 10_000)
+                : 0;
+            const total = sellerSubtotal + fee;
             return formatMinor(total, cur);
           })()}
           {" "}

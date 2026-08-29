@@ -9,8 +9,9 @@ import {
 /**
  * Authoritative Source Bridge platform fee rate.
  * 700 bps = 7%. Used for Protected + Direct product and sourcing tickets.
- * Fee base = itemCost + shipping (never seller/sourcer service fee).
- * Historical funded deals keep the fee stored at creation — never recalculate.
+ * Fee base = itemCost + shipping + sourcer/service fee (full seller entitlement).
+ * Platform fee is never part of its own base. Historical funded deals keep the
+ * fee stored at creation — never recalculate.
  */
 export const SOURCE_BRIDGE_FEE_BPS = 700;
 

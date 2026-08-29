@@ -75,8 +75,8 @@ function deriveAccept(opts) {
 }
 
 function fees({ itemCostMinor, shippingMinor, sourcerFeeMinor, option }) {
-  const base = itemCostMinor + shippingMinor;
-  const protectionFeeMinor = Math.ceil((base * FEE_BPS) / 10_000);
+  const feeBaseMinor = itemCostMinor + shippingMinor + sourcerFeeMinor;
+  const protectionFeeMinor = Math.ceil((feeBaseMinor * FEE_BPS) / 10_000);
   return {
     itemCostMinor,
     shippingMinor,
@@ -130,7 +130,7 @@ function hashTerms(obj) {
   return createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
-// ── 7% fee (Protected + Direct); historical 2% stored fee untouched ──
+// ── 7% fee on full seller entitlement (Protected + Direct); historical stored fee untouched ──
 {
   const p = fees({
     itemCostMinor: 10_000,
@@ -138,15 +138,15 @@ function hashTerms(obj) {
     sourcerFeeMinor: 5_000,
     option: "PROTECTED",
   });
-  assert.equal(p.protectionFeeMinor, 840); // ceil(12000*700/10000)
-  assert.equal(p.total, 17_840);
+  assert.equal(p.protectionFeeMinor, 1_190); // ceil(17000*700/10000)
+  assert.equal(p.total, 18_190);
   const d = fees({
     itemCostMinor: 10_000,
     shippingMinor: 2_000,
     sourcerFeeMinor: 5_000,
     option: "DIRECT",
   });
-  assert.equal(d.protectionFeeMinor, 840);
+  assert.equal(d.protectionFeeMinor, 1_190);
   // Historical funded fixture at 2% keeps stored fee
   const historicalFunded2pct = {
     itemCostMinor: 10_000,
@@ -157,6 +157,16 @@ function hashTerms(obj) {
   };
   assert.equal(historicalFunded2pct.protectionFeeMinor, 240);
   assert.notEqual(historicalFunded2pct.protectionFeeMinor, p.protectionFeeMinor);
+  // Historical funded under old item+shipping-only 7% base also preserved
+  const historicalFundedOldBase = {
+    itemCostMinor: 10_000,
+    shippingMinor: 2_000,
+    sellerServiceFeeMinor: 5_000,
+    protectionFeeMinor: 840,
+    totalChargeMinor: 17_840,
+  };
+  assert.equal(historicalFundedOldBase.protectionFeeMinor, 840);
+  assert.notEqual(historicalFundedOldBase.protectionFeeMinor, p.protectionFeeMinor);
 }
 
 // ── Role permutations A/B (account independence) ──

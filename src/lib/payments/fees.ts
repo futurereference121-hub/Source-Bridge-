@@ -12,7 +12,7 @@ export type FeeConfig = {
   protectionFeeBps: number;
   protectionFeeFloorMinor: number;
   sellerServiceFeeBps: number;
-  /** Direct Payment platform service fee (basis points of item+shipping). */
+  /** Direct Payment platform service fee (bps of full seller entitlement). */
   directServiceFeeBps: number;
   directServiceFeeFloorMinor: number;
 };
@@ -33,11 +33,12 @@ export type FeeLineItems = MoneyBreakdownInput & {
  * Server-side fee calculation. Client may propose item/shipping/sellerService only;
  * platform fee is ALWAYS recalculated here (never trust client fee/total).
  *
- * Fee base = itemCost + shipping (seller/sourcer service fee excluded).
+ * Fee base (seller entitlement) = itemCost + shipping + sourcer/service fee.
+ * Platform fee is NOT part of its own base (no compounding).
  * Protected → Protection Fee (protectionFeeBps / floor).
  * Direct (INSTANT/DIRECT) → Source Bridge service fee (directServiceFeeBps / floor).
  * Platform fee is stored in protectionFeeMinor for both paths (existing ledger field).
- * Rounding: ceil(base * bps / 10_000), then max with floor when base > 0.
+ * Rounding: ceil(feeBase * bps / 10_000), then max with floor when feeBase > 0.
  */
 export function calculateFees(opts: {
   itemCostMinor: number;
@@ -50,8 +51,25 @@ export function calculateFees(opts: {
 }): FeeLineItems {
   const itemCostMinor = assertNonNegativeInt(opts.itemCostMinor, "itemCostMinor");
   const shippingMinor = assertNonNegativeInt(opts.shippingMinor, "shippingMinor");
-  const base = itemCostMinor + shippingMinor;
   const direct = isDirectPaymentOption(opts.paymentOption);
+
+  // Resolve sourcer/service fee first so platform fee can include it in the base.
+  let sellerServiceFeeMinor: number;
+  if (opts.sellerServiceFeeMinorOverride !== undefined) {
+    sellerServiceFeeMinor = assertNonNegativeInt(
+      opts.sellerServiceFeeMinorOverride,
+      "sellerServiceFeeMinor",
+    );
+  } else {
+    const sellerServiceBase = itemCostMinor + shippingMinor;
+    sellerServiceFeeMinor = Math.ceil(
+      (sellerServiceBase * Math.max(0, opts.config.sellerServiceFeeBps)) /
+        10_000,
+    );
+  }
+
+  const feeBaseMinor =
+    itemCostMinor + shippingMinor + sellerServiceFeeMinor;
 
   const feeBps = direct
     ? opts.config.directServiceFeeBps
@@ -60,23 +78,11 @@ export function calculateFees(opts: {
     ? opts.config.directServiceFeeFloorMinor
     : opts.config.protectionFeeFloorMinor;
 
-  const platformRaw = Math.ceil((base * Math.max(0, feeBps)) / 10_000);
+  const platformRaw = Math.ceil((feeBaseMinor * Math.max(0, feeBps)) / 10_000);
   const protectionFeeMinor = Math.max(
     platformRaw,
-    base > 0 ? Math.max(0, feeFloor) : 0,
+    feeBaseMinor > 0 ? Math.max(0, feeFloor) : 0,
   );
-
-  let sellerServiceFeeMinor: number;
-  if (opts.sellerServiceFeeMinorOverride !== undefined) {
-    sellerServiceFeeMinor = assertNonNegativeInt(
-      opts.sellerServiceFeeMinorOverride,
-      "sellerServiceFeeMinor",
-    );
-  } else {
-    sellerServiceFeeMinor = Math.ceil(
-      (base * Math.max(0, opts.config.sellerServiceFeeBps)) / 10_000,
-    );
-  }
 
   const platformFeeLabel = platformFeePublicLabel(
     direct ? "INSTANT" : "PROTECTED",
