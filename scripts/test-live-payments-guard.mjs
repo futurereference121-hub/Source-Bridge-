@@ -28,6 +28,18 @@ const config = read("src/lib/payments/config.ts");
 assert.match(config, /export const SOURCE_BRIDGE_FEE_BPS = 700/);
 assert.match(config, /inspectionHours:\s*12/);
 
+const money = read("src/lib/payments/money.ts");
+assert.match(money, /export function roundBpsToMinor/);
+assert.match(money, /remainder >= 5_000/);
+
+const fees = read("src/lib/payments/fees.ts");
+assert.match(fees, /roundBpsToMinor\(feeBaseMinor,\s*feeBps\)/);
+assert.doesNotMatch(
+  fees,
+  /Math\.ceil\(\(feeBaseMinor \* Math\.max\(0, feeBps\)\) \/ 10_000\)/,
+  "platform fee must use nearest-minor rounding, not Math.ceil",
+);
+
 const lifecycle = read("src/lib/payments/ticket-lifecycle.ts");
 assert.match(lifecycle, /MAX_ACTIVE_PAYMENT_TICKETS = 3/);
 

@@ -74,9 +74,18 @@ function deriveAccept(opts) {
   };
 }
 
+function roundBpsToMinor(amountMinor, bps) {
+  const amount = Math.max(0, amountMinor);
+  const rate = Math.max(0, bps);
+  const product = amount * rate;
+  const quotient = Math.trunc(product / 10_000);
+  const remainder = product % 10_000;
+  return remainder >= 5_000 ? quotient + 1 : quotient;
+}
+
 function fees({ itemCostMinor, shippingMinor, sourcerFeeMinor, option }) {
   const feeBaseMinor = itemCostMinor + shippingMinor + sourcerFeeMinor;
-  const protectionFeeMinor = Math.ceil((feeBaseMinor * FEE_BPS) / 10_000);
+  const protectionFeeMinor = roundBpsToMinor(feeBaseMinor, FEE_BPS);
   return {
     itemCostMinor,
     shippingMinor,
@@ -138,7 +147,7 @@ function hashTerms(obj) {
     sourcerFeeMinor: 5_000,
     option: "PROTECTED",
   });
-  assert.equal(p.protectionFeeMinor, 1_190); // ceil(17000*700/10000)
+  assert.equal(p.protectionFeeMinor, 1_190); // round(17000*700/10000)
   assert.equal(p.total, 18_190);
   const d = fees({
     itemCostMinor: 10_000,

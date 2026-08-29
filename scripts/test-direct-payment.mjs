@@ -13,6 +13,14 @@ function normalizeTxnPaymentOption(raw) {
   if (isDirectPaymentOption(raw)) return "INSTANT";
   return "PROTECTED";
 }
+function roundBpsToMinor(amountMinor, bps) {
+  const amount = Math.max(0, amountMinor);
+  const rate = Math.max(0, bps);
+  const product = amount * rate;
+  const quotient = Math.trunc(product / 10_000);
+  const remainder = product % 10_000;
+  return remainder >= 5_000 ? quotient + 1 : quotient;
+}
 function calculateFees({ itemCostMinor, shippingMinor, config, paymentOption, sellerServiceFeeMinorOverride }) {
   const direct = isDirectPaymentOption(paymentOption);
   const feeBps = direct ? config.directServiceFeeBps : config.protectionFeeBps;
@@ -22,7 +30,7 @@ function calculateFees({ itemCostMinor, shippingMinor, config, paymentOption, se
       ? sellerServiceFeeMinorOverride
       : 0;
   const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
-  const platformRaw = Math.ceil((feeBaseMinor * Math.max(0, feeBps)) / 10_000);
+  const platformRaw = roundBpsToMinor(feeBaseMinor, feeBps);
   const protectionFeeMinor = Math.max(platformRaw, feeBaseMinor > 0 ? Math.max(0, feeFloor) : 0);
   return {
     itemCostMinor,
@@ -103,7 +111,7 @@ const directFees = calculateFees({
   config,
   paymentOption: "DIRECT",
 });
-// base 11000 → ceil(11000*700/10000)=770
+// base 11000 → round(11000*700/10000)=770
 assert.equal(protectedFees.protectionFeeMinor, 770);
 assert.equal(directFees.protectionFeeMinor, 770);
 assert.equal(protectedFees.feeKind, "PROTECTION");

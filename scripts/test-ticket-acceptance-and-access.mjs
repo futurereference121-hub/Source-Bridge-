@@ -268,6 +268,15 @@ function sellerDestinationUserId({ sellerId }) {
   return (sellerId || "").trim();
 }
 
+function roundBpsToMinor(amountMinor, bps) {
+  const amount = Math.max(0, amountMinor);
+  const rate = Math.max(0, bps);
+  const product = amount * rate;
+  const quotient = Math.trunc(product / 10_000);
+  const remainder = product % 10_000;
+  return remainder >= 5_000 ? quotient + 1 : quotient;
+}
+
 function calculateFees({
   itemCostMinor,
   shippingMinor,
@@ -276,9 +285,7 @@ function calculateFees({
 }) {
   const sellerServiceFeeMinor = sellerServiceFeeMinorOverride ?? 0;
   const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
-  const protectionRaw = Math.ceil(
-    (feeBaseMinor * Math.max(0, protectionFeeBps)) / 10_000,
-  );
+  const protectionRaw = roundBpsToMinor(feeBaseMinor, protectionFeeBps);
   return {
     itemCostMinor,
     shippingMinor,

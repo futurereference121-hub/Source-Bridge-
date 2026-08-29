@@ -1,5 +1,6 @@
 import {
   assertNonNegativeInt,
+  roundBpsToMinor,
   totalChargeMinor,
   type MoneyBreakdownInput,
 } from "@/lib/payments/money";
@@ -38,7 +39,7 @@ export type FeeLineItems = MoneyBreakdownInput & {
  * Protected → Protection Fee (protectionFeeBps / floor).
  * Direct (INSTANT/DIRECT) → Source Bridge service fee (directServiceFeeBps / floor).
  * Platform fee is stored in protectionFeeMinor for both paths (existing ledger field).
- * Rounding: ceil(feeBase * bps / 10_000), then max with floor when feeBase > 0.
+ * Rounding: nearest minor unit of (feeBase * bps / 10_000), then max with floor when feeBase > 0.
  */
 export function calculateFees(opts: {
   itemCostMinor: number;
@@ -78,7 +79,7 @@ export function calculateFees(opts: {
     ? opts.config.directServiceFeeFloorMinor
     : opts.config.protectionFeeFloorMinor;
 
-  const platformRaw = Math.ceil((feeBaseMinor * Math.max(0, feeBps)) / 10_000);
+  const platformRaw = roundBpsToMinor(feeBaseMinor, feeBps);
   const protectionFeeMinor = Math.max(
     platformRaw,
     feeBaseMinor > 0 ? Math.max(0, feeFloor) : 0,

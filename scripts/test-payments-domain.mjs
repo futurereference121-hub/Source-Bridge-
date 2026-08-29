@@ -7,6 +7,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 // Inline mirrors of pure helpers so this script runs without ts-node.
+function roundBpsToMinor(amountMinor, bps) {
+  const amount = Math.max(0, amountMinor);
+  const rate = Math.max(0, bps);
+  const product = amount * rate;
+  const quotient = Math.trunc(product / 10_000);
+  const remainder = product % 10_000;
+  return remainder >= 5_000 ? quotient + 1 : quotient;
+}
+
 function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeMinorOverride, paymentOption }) {
   const direct = paymentOption === "INSTANT" || paymentOption === "DIRECT";
   const bps = direct
@@ -24,7 +33,7 @@ function calculateFees({ itemCostMinor, shippingMinor, config, sellerServiceFeeM
             10_000,
         );
   const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
-  const protectionRaw = Math.ceil((feeBaseMinor * Math.max(0, bps)) / 10_000);
+  const protectionRaw = roundBpsToMinor(feeBaseMinor, bps);
   const protectionFeeMinor = Math.max(
     protectionRaw,
     feeBaseMinor > 0 ? Math.max(0, floor) : 0,
@@ -194,7 +203,7 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 2_000,
   });
-  assert.equal(fees.protectionFeeMinor, 595); // ceil(8500 * 700 / 10000)
+  assert.equal(fees.protectionFeeMinor, 595); // round(8500 * 700 / 10000)
   assert.equal(
     fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
     8_500,
@@ -216,8 +225,8 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 10_000,
   });
-  assert.equal(a.protectionFeeMinor, 595); // ceil(8500*700/10000)
-  assert.equal(b.protectionFeeMinor, 1_155); // ceil(16500*700/10000)
+  assert.equal(a.protectionFeeMinor, 595); // round(8500*700/10000)
+  assert.equal(b.protectionFeeMinor, 1_155); // round(16500*700/10000)
   assert.notEqual(a.protectionFeeMinor, b.protectionFeeMinor);
   assert.equal(totalChargeMinor(b), 17_655); // 50+15+100+11.55
 }
@@ -232,16 +241,67 @@ const feeConfig7pct = {
   });
   const sellerSubtotal =
     fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor;
-  assert.equal(fees.protectionFeeMinor, Math.ceil((sellerSubtotal * 700) / 10_000));
+  assert.equal(fees.protectionFeeMinor, roundBpsToMinor(sellerSubtotal, 700));
   assert.equal(totalChargeMinor(fees), sellerSubtotal + fees.protectionFeeMinor);
   assert.notEqual(
     fees.protectionFeeMinor,
-    Math.ceil(((sellerSubtotal + fees.protectionFeeMinor) * 700) / 10_000),
+    roundBpsToMinor(sellerSubtotal + fees.protectionFeeMinor, 700),
   );
 }
 
-// ── Rounding / uneven amounts (ceil) at 7%
+// ── Nearest-minor rounding at 7% (A–D + uneven amounts)
 {
+  // A: $0.75 base → $0.05 fee (NOT always-round-up $0.06)
+  const a75 = calculateFees({
+    itemCostMinor: 75,
+    shippingMinor: 0,
+    config: feeConfig7pct,
+  });
+  assert.equal(a75.protectionFeeMinor, 5);
+  assert.notEqual(a75.protectionFeeMinor, 6);
+  assert.equal(totalChargeMinor(a75), 80);
+
+  // B: 10000 → 700
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 10_000,
+      shippingMinor: 0,
+      config: feeConfig7pct,
+    }).protectionFeeMinor,
+    700,
+  );
+
+  // C: 15000 → 1050
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 15_000,
+      shippingMinor: 0,
+      config: feeConfig7pct,
+    }).protectionFeeMinor,
+    1_050,
+  );
+
+  // D: half-minor boundary — 50 * 700 / 10000 = 3.5 → 4 (half-up)
+  assert.equal(roundBpsToMinor(50, 700), 4);
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 50,
+      shippingMinor: 0,
+      config: feeConfig7pct,
+    }).protectionFeeMinor,
+    4,
+  );
+  // Just below half: 72 * 700 / 10000 = 5.04 → 5 (ceil would be 6)
+  assert.equal(roundBpsToMinor(72, 700), 5);
+  assert.equal(
+    calculateFees({
+      itemCostMinor: 72,
+      shippingMinor: 0,
+      config: feeConfig7pct,
+    }).protectionFeeMinor,
+    5,
+  );
+
   assert.equal(
     calculateFees({
       itemCostMinor: 100,
@@ -249,7 +309,7 @@ const feeConfig7pct = {
       config: feeConfig7pct,
     }).protectionFeeMinor,
     7,
-  ); // £1.00 → ceil(7)=7
+  ); // £1.00 → 7
   assert.equal(
     calculateFees({
       itemCostMinor: 199,
@@ -257,7 +317,7 @@ const feeConfig7pct = {
       config: feeConfig7pct,
     }).protectionFeeMinor,
     14,
-  ); // £1.99 → ceil(13.93)=14
+  ); // £1.99 → round(13.93)=14
   assert.equal(
     calculateFees({
       itemCostMinor: 9999,
@@ -265,7 +325,7 @@ const feeConfig7pct = {
       config: feeConfig7pct,
     }).protectionFeeMinor,
     700,
-  ); // £99.99 → ceil(699.93)=700
+  ); // £99.99 → round(699.93)=700
   assert.equal(
     calculateFees({
       itemCostMinor: 50_000,
@@ -301,7 +361,7 @@ const feeConfig7pct = {
       config: feeConfig7pct,
     }).protectionFeeMinor,
     14,
-  ); // odd minor → ceil
+  ); // odd minor → nearest
 }
 
 // ── TEST E — New ticket / edited revision: always recalculate at full-base 7%
@@ -312,7 +372,7 @@ const feeConfig7pct = {
     config: feeConfig7pct,
     sellerServiceFeeMinorOverride: 5_000,
   });
-  assert.equal(newTicket.protectionFeeMinor, 1_190); // ceil(17000*700/10000)
+  assert.equal(newTicket.protectionFeeMinor, 1_190); // round(17000*700/10000)
   assert.equal(totalChargeMinor(newTicket), 18_190);
 
   // Edit unfunded → new revision uses full seller entitlement base, not prior stored
@@ -452,7 +512,7 @@ const feeConfig7pct = {
       protectionFeeFloorMinor: 50,
     },
   });
-  assert.equal(fees.protectionFeeMinor, 50); // ceil(7) < floor 50
+  assert.equal(fees.protectionFeeMinor, 50); // round(7) < floor 50
 }
 
 // ── State transitions
@@ -533,7 +593,7 @@ assert.equal(DEFAULT, "CONTACT_ONLY");
   assert.equal(fees.itemCostMinor, 500);
   assert.equal(fees.shippingMinor, 100);
   assert.equal(fees.sellerServiceFeeMinor, 100);
-  // fee base 700 → ceil(700*700/10000)=49
+  // fee base 700 → round(700*700/10000)=49
   assert.equal(fees.protectionFeeMinor, 49);
   assert.equal(totalChargeMinor(fees), 749);
 }

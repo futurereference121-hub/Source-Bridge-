@@ -22,6 +22,22 @@ export function assertNonNegativeInt(n: number, label: string): number {
   return n;
 }
 
+/**
+ * Apply basis points to a minor-unit amount, rounding to the nearest minor unit.
+ * Half-up for non-negative values (same direction as Math.round on exact halves).
+ * Integer-only arithmetic — never use floating-point for money.
+ *
+ * feeMinor = roundBpsToMinor(feeBaseMinor, 700)  // 7%
+ */
+export function roundBpsToMinor(amountMinor: number, bps: number): number {
+  const amount = Math.max(0, amountMinor);
+  const rate = Math.max(0, bps);
+  const product = amount * rate;
+  const quotient = Math.trunc(product / 10_000);
+  const remainder = product % 10_000;
+  return remainder >= 5_000 ? quotient + 1 : quotient;
+}
+
 export function sumMinor(parts: number[]): number {
   return parts.reduce((acc, n) => {
     assertNonNegativeInt(n, "amount");

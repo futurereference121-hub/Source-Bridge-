@@ -9,6 +9,7 @@ import {
   majorToMinor,
   minorToMajor as minorToMajorUnits,
   parseHumanAmountToMinor,
+  roundBpsToMinor,
 } from "@/lib/payments/money";
 import { TICKET_CURRENCY_OPTIONS } from "@/lib/payments/supported-currencies";
 
@@ -786,9 +787,7 @@ export function ProposePaymentTicketButton({
             const svc = estimateDraftMinor(serviceMajor, cur);
             const sellerSubtotal = item + ship + svc;
             const fee =
-              sellerSubtotal > 0
-                ? Math.ceil((sellerSubtotal * 700) / 10_000)
-                : 0;
+              sellerSubtotal > 0 ? roundBpsToMinor(sellerSubtotal, 700) : 0;
             const total = sellerSubtotal + fee;
             return formatMinor(total, cur);
           })()}
