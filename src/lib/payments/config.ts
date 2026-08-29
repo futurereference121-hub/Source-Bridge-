@@ -8,14 +8,15 @@ import {
 
 /**
  * Authoritative Source Bridge platform fee rate.
- * 200 bps = 2%. Used for Protected + Direct product and sourcing tickets.
+ * 700 bps = 7%. Used for Protected + Direct product and sourcing tickets.
  * Fee base = itemCost + shipping (never seller/sourcer service fee).
+ * Historical funded deals keep the fee stored at creation — never recalculate.
  */
-export const SOURCE_BRIDGE_FEE_BPS = 200;
+export const SOURCE_BRIDGE_FEE_BPS = 700;
 
 /**
- * Minimum platform fee in minor units. Product decision is pure 2% (no minimum).
- * Historical default was 50 (at 3.5%); zeroed so $20 → $0.40.
+ * Minimum platform fee in minor units. Product decision is pure 7% (no minimum).
+ * Historical default was 50 (at 3.5%); then 0 at 2%; remains 0 at 7%.
  * Floor is applied in the transaction's own currency minor units (no FX).
  */
 export const SOURCE_BRIDGE_FEE_FLOOR_MINOR = 0;

@@ -625,15 +625,15 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
   assert.equal(rolesLockedAfterFunding(false), false);
 }
 
-// 2% fee display: £50 + £15 + £20 sourcer → SB £1.30; remaining seller £35
+// 7% fee display: £50 + £15 + £20 sourcer → SB £4.55; remaining seller £35
 {
   const fees = calculateFees({
     itemCostMinor: 5000,
     shippingMinor: 1500,
     sellerServiceFeeMinorOverride: 2000,
-    protectionFeeBps: 200,
+    protectionFeeBps: 700,
   });
-  assert.equal(fees.protectionFeeMinor, 130);
+  assert.equal(fees.protectionFeeMinor, 455);
   const remaining = remainingProtectedSellerShareMinor({
     itemCostMinor: 5000,
     shippingMinor: 1500,
@@ -641,7 +641,7 @@ const OWL = "cms62cfan0000ih04giwg7ee3";
     procurementAdvanceMinor: 5000,
   });
   assert.equal(remaining, 3500);
-  assert.equal(remaining + fees.protectionFeeMinor, 3630);
+  assert.equal(remaining + fees.protectionFeeMinor, 3955);
 }
 
 // Open TEST ramp: empty allowlist does not deny when Live off + TEST

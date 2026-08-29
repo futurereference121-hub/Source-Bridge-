@@ -1,5 +1,5 @@
 ---
-description: Protected, Direct, and sourcing Payment Ticket architectures plus 2% fee
+description: Protected, Direct, and sourcing Payment Ticket architectures plus 7% fee
 globs: src/lib/payments/**,src/app/api/payments/**,src/app/api/checkout/**,src/app/api/webhooks/**,prisma/**
 alwaysApply: false
 ---
@@ -22,7 +22,7 @@ Full buyer funding → seller entitlement protected → optional **buyer-authori
 
 ## Fee (current baseline)
 
-**2% / 200 bps** (`SOURCE_BRIDGE_FEE_BPS`). Product fee base = listing price. Sourcing fee base = item + shipping (**sourcer service fee excluded**). Platform fee is held separately from seller entitlement.
+**7% / 700 bps** (`SOURCE_BRIDGE_FEE_BPS`). Product fee base = listing price. Sourcing fee base = item + shipping (**sourcer service fee excluded**). Platform fee is held separately from seller entitlement. Historical funded records keep the fee stored at creation.
 
 Invariant: `procurementTransferredMinor + finalTransferredMinor <= sellerEntitledMinor`. On full completion they are equal. Never duplicate procurement, final, refund, or destination payment.
 

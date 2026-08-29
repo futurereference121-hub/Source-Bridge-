@@ -775,14 +775,14 @@ model StoryReport {
 /// Singleton-style platform fee / inspection / trust thresholds (admin-editable).
 model PlatformPaymentConfig {
   id                              String   @id @default("default")
-  /// Basis points of item+shipping charged as Source Bridge fee (200 = 2%).
-  protectionFeeBps                Int      @default(200)
+  /// Basis points of item+shipping charged as Source Bridge fee (700 = 7%).
+  protectionFeeBps                Int      @default(700)
   /// Flat protection fee floor in minor units (0 = pure %; was 50 at 3.5%).
   protectionFeeFloorMinor         Int      @default(0)
   /// Seller service fee basis points (shown separately from protection fee).
   sellerServiceFeeBps             Int      @default(0)
   /// Direct Payment platform service fee bps (item+shipping). Not Protection Fee.
-  directServiceFeeBps             Int      @default(200)
+  directServiceFeeBps             Int      @default(700)
   /// Direct Payment service fee floor in minor units (0 = pure %).
   directServiceFeeFloorMinor      Int      @default(0)
   /// Default inspection window hours after delivery confirmed by tracking.

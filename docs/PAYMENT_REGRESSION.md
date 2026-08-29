@@ -17,7 +17,7 @@ Critical Source Bridge payment flows, invariants, and which command covers them.
 
 ## Invariants (must not change accidentally)
 
-- Fee **2% / 200 bps**. Product base = listing price. Sourcing base = item + shipping (sourcer fee excluded).
+- Fee **7% / 700 bps**. Product base = listing price. Sourcing base = item + shipping (sourcer fee excluded). Historical deals keep stored fee.
 - `procurementTransferredMinor + finalTransferredMinor <= sellerEntitledMinor`
 - Max **3 active** Payment Tickets per conversation
 - Proposer / Buyer / Sourcer distinct; counterparty Accept; only `buyerId` funds

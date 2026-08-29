@@ -53,9 +53,9 @@ export function paymentOptionPublicLabel(
 export function platformFeePublicLabel(
   option: string | null | undefined,
 ):
-  | "Source Bridge Protection Fee (2%)"
-  | "Source Bridge service fee (2%)" {
+  | "Source Bridge Protection Fee (7%)"
+  | "Source Bridge service fee (7%)" {
   return isDirectPaymentOption(option)
-    ? "Source Bridge service fee (2%)"
-    : "Source Bridge Protection Fee (2%)";
+    ? "Source Bridge service fee (7%)"
+    : "Source Bridge Protection Fee (7%)";
 }

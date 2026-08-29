@@ -20,11 +20,11 @@ export type FeeConfig = {
 export type FeeLineItems = MoneyBreakdownInput & {
   /** Public label depends on payment option. */
   platformFeeLabel:
-    | "Source Bridge Protection Fee (2%)"
-    | "Source Bridge service fee (2%)";
+    | "Source Bridge Protection Fee (7%)"
+    | "Source Bridge service fee (7%)";
   protectionFeeLabel:
-    | "Source Bridge Protection Fee (2%)"
-    | "Source Bridge service fee (2%)";
+    | "Source Bridge Protection Fee (7%)"
+    | "Source Bridge service fee (7%)";
   sellerServiceFeeLabel: "Seller Service Fee";
   feeKind: "PROTECTION" | "SERVICE";
 };

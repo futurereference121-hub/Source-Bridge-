@@ -430,7 +430,7 @@ export function ProposePaymentTicketButton({
           currency: currency || "EUR",
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
-          // Fee is always calculated server-side (2% on item+shipping) and
+          // Fee is always calculated server-side (7% on item+shipping) and
           // shown in the breakdown — no client acknowledgment / "included" toggle.
           platformFeeIncludedInPrice: false,
           proposalTraceId,
@@ -785,7 +785,7 @@ export function ProposePaymentTicketButton({
             const ship = estimateDraftMinor(shippingMajor, cur);
             const svc = estimateDraftMinor(serviceMajor, cur);
             const base = item + ship;
-            const fee = base > 0 ? Math.ceil((base * 200) / 10_000) : 0;
+            const fee = base > 0 ? Math.ceil((base * 700) / 10_000) : 0;
             const total = base + svc + fee;
             return formatMinor(total, cur);
           })()}

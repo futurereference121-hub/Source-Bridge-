@@ -25,7 +25,7 @@ assert.match(flags, /return "LIVE"/);
 assert.match(flags, /assertMoneyOpEnvironmentMatch/);
 
 const config = read("src/lib/payments/config.ts");
-assert.match(config, /export const SOURCE_BRIDGE_FEE_BPS = 200/);
+assert.match(config, /export const SOURCE_BRIDGE_FEE_BPS = 700/);
 assert.match(config, /inspectionHours:\s*12/);
 
 const lifecycle = read("src/lib/payments/ticket-lifecycle.ts");
@@ -53,5 +53,5 @@ assert.match(connect, /userId_stripeMode/);
 assert.match(connect, /LIVE_CONNECT_ONBOARDING_REQUIRED|liveConnectOnboardingRequired/);
 
 console.log(
-  "live-payments guard passed (kill switch default false → TEST; dual-mode keys+Connect isolation present; 2% fee, 3-active, 12h inspection)",
+  "live-payments guard passed (kill switch default false → TEST; dual-mode keys+Connect isolation present; 7% fee, 3-active, 12h inspection)",
 );

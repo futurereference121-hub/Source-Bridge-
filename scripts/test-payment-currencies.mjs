@@ -56,7 +56,7 @@ import {
 } from "../src/lib/payments/money.ts";
 import { calculateFees } from "../src/lib/payments/fees.ts";
 
-const SOURCE_BRIDGE_FEE_BPS = 200;
+const SOURCE_BRIDGE_FEE_BPS = 700;
 
 const legacy = resolveAllowedPaymentCurrencies({ dbJson: '["USD"]', envRaw: null });
 assert.ok(legacy.includes("EUR"), "legacy USD DB default must allow EUR");
@@ -106,7 +106,7 @@ const feeEur = calculateFees({
   config: feeCfg,
   paymentOption: "PROTECTED",
 });
-assert.equal(feeEur.protectionFeeMinor, 100);
+assert.equal(feeEur.protectionFeeMinor, 350);
 
 const feeJpy = calculateFees({
   itemCostMinor: 5000,
@@ -114,7 +114,7 @@ const feeJpy = calculateFees({
   config: feeCfg,
   paymentOption: "PROTECTED",
 });
-assert.equal(feeJpy.protectionFeeMinor, 100);
+assert.equal(feeJpy.protectionFeeMinor, 350);
 
 const formatted = formatMinor(5000, "EUR");
 assert.ok(/50/.test(formatted), "EUR format: " + formatted);

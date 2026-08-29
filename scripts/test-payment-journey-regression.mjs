@@ -18,7 +18,7 @@ const B = "user-b";
 const C = "user-c";
 const D = "user-d";
 const MAX_ACTIVE = 3;
-const FEE_BPS = 200;
+const FEE_BPS = 700;
 
 function partyAccepted(approved, revision) {
   return approved != null && Number(approved) === Number(revision);
@@ -130,7 +130,7 @@ function hashTerms(obj) {
   return createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
-// ── 2% fee unchanged (Protected + Direct) ──
+// ── 7% fee (Protected + Direct); historical 2% stored fee untouched ──
 {
   const p = fees({
     itemCostMinor: 10_000,
@@ -138,15 +138,25 @@ function hashTerms(obj) {
     sourcerFeeMinor: 5_000,
     option: "PROTECTED",
   });
-  assert.equal(p.protectionFeeMinor, 240);
-  assert.equal(p.total, 17_240);
+  assert.equal(p.protectionFeeMinor, 840); // ceil(12000*700/10000)
+  assert.equal(p.total, 17_840);
   const d = fees({
     itemCostMinor: 10_000,
     shippingMinor: 2_000,
     sourcerFeeMinor: 5_000,
     option: "DIRECT",
   });
-  assert.equal(d.protectionFeeMinor, 240);
+  assert.equal(d.protectionFeeMinor, 840);
+  // Historical funded fixture at 2% keeps stored fee
+  const historicalFunded2pct = {
+    itemCostMinor: 10_000,
+    shippingMinor: 2_000,
+    sellerServiceFeeMinor: 5_000,
+    protectionFeeMinor: 240,
+    totalChargeMinor: 17_240,
+  };
+  assert.equal(historicalFunded2pct.protectionFeeMinor, 240);
+  assert.notEqual(historicalFunded2pct.protectionFeeMinor, p.protectionFeeMinor);
 }
 
 // ── Role permutations A/B (account independence) ──
