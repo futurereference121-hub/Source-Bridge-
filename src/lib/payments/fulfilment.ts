@@ -14,6 +14,7 @@ import {
   type ProtectedStatus,
 } from "@/lib/payments/state-machine";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 
 export {
@@ -179,7 +180,9 @@ export function mapProtectedTxnSummary(
     trackingStatus: string;
     shipmentPhotoUrl?: string | null;
     createdAt: Date;
+    updatedAt?: Date;
     listingId: string | null;
+    openDispute?: boolean;
     conversationId?: string | null;
     listing?: {
       id: string;
@@ -236,9 +239,24 @@ export function mapProtectedTxnSummary(
       procurementTransferredMinor: t.procurementTransferredMinor,
     });
 
+  const displayState = derivePurchaseDisplayState({
+    status: t.status,
+    paymentOption: t.paymentOption,
+    origin: t.origin,
+    shippedAt: t.shippedAt,
+    trackingNumber: t.trackingNumber,
+    shipmentPhotoUrl: t.shipmentPhotoUrl,
+    deliveredAt: t.deliveredAt,
+    inspectionEndsAt: t.inspectionEndsAt,
+    releasedAt: t.releasedAt,
+    fundedAt: t.fundedAt,
+    openDispute: t.openDispute,
+  });
+
   return {
     id: t.id,
     status: t.status,
+    displayState,
     origin: t.origin,
     paymentOption: t.paymentOption,
     title: t.title,
@@ -264,6 +282,7 @@ export function mapProtectedTxnSummary(
     trackingStatus: t.trackingStatus || "",
     shipmentPhotoUrl: t.shipmentPhotoUrl || "",
     createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt?.toISOString?.() ?? null,
     conversationId: t.conversationId ?? null,
     paymentTicketId: t.paymentTicket?.id ?? null,
     listing: t.listing
@@ -471,13 +490,71 @@ export async function listProtectedOrdersForUser(opts: {
       seller: {
         select: { id: true, username: true, name: true, slug: true },
       },
+      disputes: {
+        where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
+        select: { id: true },
+        take: 1,
+      },
     },
   });
 
   return rows.map((t) =>
-    mapProtectedTxnSummary(t, opts.role, {
-      procurementFlagOn: isProcurementAdvancesEnabled(),
-    }),
+    mapProtectedTxnSummary(
+      {
+        ...t,
+        openDispute: t.disputes.length > 0,
+      },
+      opts.role,
+      {
+        procurementFlagOn: isProcurementAdvancesEnabled(),
+      },
+    ),
+  );
+}
+
+export async function getProtectedOrderForUser(opts: {
+  userId: string;
+  email?: string | null;
+  protectedTxnId: string;
+}) {
+  assertFulfilmentAccess();
+  assertPaymentsTestAllowlisted(
+    { id: opts.userId, email: opts.email },
+    { action: "view protected order" },
+  );
+
+  const t = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.protectedTxnId },
+    include: {
+      listing: {
+        select: { id: true, slug: true, name: true, saleStatus: true },
+      },
+      paymentTicket: { select: { id: true } },
+      buyer: {
+        select: { id: true, username: true, name: true, slug: true },
+      },
+      seller: {
+        select: { id: true, username: true, name: true, slug: true },
+      },
+      disputes: {
+        where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+  if (!t) {
+    throw Object.assign(new Error("Order not found"), { status: 404 });
+  }
+  if (t.buyerId !== opts.userId && t.sellerId !== opts.userId) {
+    throw Object.assign(new Error("Not a party to this order"), { status: 403 });
+  }
+  const role: ProtectedTxnListRole =
+    t.sellerId === opts.userId ? "seller" : "buyer";
+  return mapProtectedTxnSummary(
+    { ...t, openDispute: t.disputes.length > 0 },
+    role,
+    { procurementFlagOn: isProcurementAdvancesEnabled() },
   );
 }
 

@@ -4,6 +4,7 @@ import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import PaymentIssueActions from "../payments/issue-actions";
 import DisputeReviewActions from "./dispute-review-actions";
 import AdminDisputeMessageLink from "./admin-dispute-message-link";
@@ -121,6 +122,15 @@ export default async function AdminReviewsPage() {
             const sellerLabel = t.seller.username
               ? `@${t.seller.username}`
               : t.seller.name || t.seller.email;
+            const orderDisplay =
+              t.origin === "PRODUCT_CHECKOUT"
+                ? derivePurchaseDisplayState({
+                    status: t.status,
+                    paymentOption: t.paymentOption,
+                    origin: t.origin,
+                    openDispute: true,
+                  }).shortLabel
+                : t.status.replace(/_/g, " ");
             return (
               <AdminCaseAccordion
                 key={issue.id}
@@ -135,8 +145,8 @@ export default async function AdminReviewsPage() {
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-white/45">
-                        {new Date(issue.createdAt).toLocaleString()} · Buyer{" "}
-                        {buyerLabel} · Sourcer {sellerLabel}
+                        {new Date(issue.createdAt).toLocaleString()} · {orderDisplay}{" "}
+                        · Buyer {buyerLabel} · Sourcer {sellerLabel}
                       </p>
                       {issue.category || issue.reason ? (
                         <p className="mt-1 truncate text-xs text-white/55">

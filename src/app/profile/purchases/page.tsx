@@ -1,17 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
+import {
+  useProtectedOrders,
+  type ProtectedOrderSummary,
+} from "@/hooks/useProtectedOrders";
 
-type Order = {
-  id: string;
-  status: string;
+type Order = ProtectedOrderSummary & {
   origin?: string;
   title: string;
   currency: string;
@@ -51,6 +53,11 @@ type Order = {
     platformFeeMinor?: number;
     sellerEntitledMinor?: number;
   };
+  displayState?: {
+    phase: string;
+    label: string;
+    shortLabel: string;
+  };
 };
 
 type Decision = "ACKNOWLEDGE" | "RELEASE_NOW" | "START_INSPECTION" | "REPORT_ISSUE";
@@ -67,38 +74,25 @@ function fmtDate(iso: string | null) {
 export default function PurchasesPage() {
   const router = useRouter();
   const { account, signedIn, authReady, showToast } = useAppUi();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const {
+    orders: rawOrders,
+    loading,
+    error,
+    reload,
+    publishOrderUpdate,
+  } = useProtectedOrders({
+    role: "buyer",
+    enabled: authReady && signedIn,
+  });
+  const orders = rawOrders as Order[];
   const [busyId, setBusyId] = useState<string | null>(null);
   const [issueId, setIssueId] = useState<string | null>(null);
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/payments/orders?role=buyer", {
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to load purchases");
-      setOrders((data.orders || []) as Order[]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (authReady && !signedIn) router.replace("/sign-in");
   }, [authReady, signedIn, router]);
-
-  useEffect(() => {
-    if (authReady && signedIn) void load();
-  }, [authReady, signedIn, load]);
 
   async function submitDecision(orderId: string, decision: Decision) {
     if (decision === "REPORT_ISSUE" && issueReason.trim().length < 3) {
@@ -153,7 +147,7 @@ export default function PurchasesPage() {
       setIssueId(null);
       setIssueReason("");
       setIssueDetails("");
-      await load();
+      await reload();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -182,7 +176,7 @@ export default function PurchasesPage() {
         data.message ||
           "Item funds released. Remaining amount stays protected.",
       );
-      await load();
+      await reload();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -258,7 +252,17 @@ export default function PurchasesPage() {
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="font-display text-xl text-white">{o.title}</p>
+                    <Link
+                      href={`/profile/purchases/${o.id}`}
+                      className="font-display text-xl text-white hover:text-electric"
+                    >
+                      {o.title}
+                    </Link>
+                    <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-electric/80">
+                      {o.displayState?.shortLabel ||
+                        o.displayState?.label ||
+                        o.status.replace(/_/g, " ")}
+                    </p>
                     <p className="mt-1 text-sm text-white/55">
                       Seller:{" "}
                       {o.counterparty?.username
@@ -279,6 +283,13 @@ export default function PurchasesPage() {
                   </div>
                 </div>
                 <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-white/40">Status</dt>
+                    <dd className="text-white/85">
+                      {o.displayState?.label ||
+                        o.status.replace(/_/g, " ")}
+                    </dd>
+                  </div>
                   <div>
                     <dt className="text-white/40">Payment</dt>
                     <dd className="text-white/85">{o.labels.payment}</dd>

@@ -41,6 +41,7 @@ export const mobileNavItems: NavItem[] = [
   { label: "Search", href: "/search" },
   { label: "Explore", href: "/explore" },
   { label: "Inbox", href: "/inbox" },
+  { label: "Purchases", href: "/profile/purchases" },
   { label: "Profile", href: "/profile" },
 ];
 

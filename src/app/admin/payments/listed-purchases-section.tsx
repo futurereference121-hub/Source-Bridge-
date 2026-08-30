@@ -2,6 +2,7 @@
 import { prisma } from "@/lib/db";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import AdminCaseAccordion from "../reviews/admin-case-accordion";
 import { AdminShipmentPhoto } from "@/components/admin/AdminShipmentPhoto";
@@ -86,6 +87,18 @@ export default async function AdminListedPurchasesSection() {
               ? `@${t.seller.username}`
               : t.seller.name;
             const dispute = t.disputes[0];
+            const displayState = derivePurchaseDisplayState({
+              status: t.status,
+              paymentOption: t.paymentOption,
+              origin: "PRODUCT_CHECKOUT",
+              shippedAt: t.shippedAt,
+              trackingNumber: t.trackingNumber,
+              shipmentPhotoUrl: t.shipmentPhotoUrl,
+              deliveredAt: t.deliveredAt,
+              inspectionEndsAt: t.inspectionEndsAt,
+              fundedAt: t.fundedAt,
+              openDispute: Boolean(dispute),
+            });
             return (
               <AdminCaseAccordion
                 key={t.id}
@@ -103,7 +116,7 @@ export default async function AdminListedPurchasesSection() {
                         {isDirectPaymentOption(t.paymentOption)
                           ? "Direct Payment"
                           : "Protected Payment"}{" "}
-                        · {t.status.replace(/_/g, " ")} · Buyer {buyer} · Seller{" "}
+                        · {displayState.shortLabel} · Buyer {buyer} · Seller{" "}
                         {seller}
                       </p>
                       {t.fundedAt ? (

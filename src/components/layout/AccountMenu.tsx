@@ -209,7 +209,9 @@ export function AccountMenuMobileLinks({
     : [
         { label: "My Profile", href: accountHomePath(account) },
         { label: "Inbox", href: "/inbox" },
+        { label: "Purchases", href: "/profile/purchases" },
         { label: "Manage Profile", href: "/profile" },
+        { label: "Sales & Fulfilment", href: "/profile/sales" },
         { label: "Followers", href: "/profile/followers" },
         { label: "Following", href: "/profile/following" },
         { label: "Account Settings", href: "/profile/settings" },

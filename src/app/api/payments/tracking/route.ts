@@ -19,7 +19,8 @@ import {
   isTrackingAutomationEnabled,
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
-import { sellerCanAddTracking } from "@/lib/payments/fulfilment";
+import { sellerCanAddTracking, getProtectedOrderForUser } from "@/lib/payments/fulfilment";
+import { getOrdersListVersion } from "@/lib/payments/order-list-version";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { bumpConversationActivity } from "@/lib/conversation-activity";
 import { getPaymentTicket } from "@/lib/payments/tickets";
@@ -260,9 +261,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    let order = null;
+    let ordersVersion = 0;
+    try {
+      order = await getProtectedOrderForUser({
+        userId: user.id,
+        email: user.email,
+        protectedTxnId: updated.id,
+      });
+      ordersVersion = await getOrdersListVersion(user.id, "seller");
+    } catch (err) {
+      console.error("[payments:tracking:order]", err);
+    }
+
     return Response.json({
       ok: true,
       activityVersion,
+      ordersVersion,
+      order,
       ticket,
       transaction: {
         id: updated.id,

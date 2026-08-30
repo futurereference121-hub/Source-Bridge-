@@ -196,7 +196,7 @@ export async function notifyShipmentUpdate(opts: {
 }): Promise<void> {
   const isProduct = opts.origin === "PRODUCT_CHECKOUT";
   const href = isProduct
-    ? "/profile/purchases"
+    ? `/profile/purchases/${opts.protectedTxnId}`
     : opts.ticketId
       ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
       : inboxHref(opts.conversationId);

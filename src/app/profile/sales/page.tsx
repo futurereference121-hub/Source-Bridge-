@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
@@ -10,10 +10,12 @@ import { formatMinor } from "@/lib/payments/money";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { AddPhotoControl } from "@/components/media/AddPhotoControl";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
+import {
+  useProtectedOrders,
+  type ProtectedOrderSummary,
+} from "@/hooks/useProtectedOrders";
 
-type Order = {
-  id: string;
-  status: string;
+type Order = ProtectedOrderSummary & {
   paymentOption: string;
   origin?: string;
   title: string;
@@ -49,6 +51,11 @@ type Order = {
     canRefreshTracking: boolean;
     canConfirmReceipt: boolean;
   };
+  displayState?: {
+    phase: string;
+    label: string;
+    shortLabel: string;
+  };
 };
 
 function fmtDate(iso: string | null) {
@@ -63,9 +70,16 @@ function fmtDate(iso: string | null) {
 export default function SalesFulfilmentPage() {
   const router = useRouter();
   const { account, signedIn, authReady, showToast } = useAppUi();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const {
+    orders: rawOrders,
+    loading,
+    error,
+    publishOrderUpdate,
+  } = useProtectedOrders({
+    role: "seller",
+    enabled: authReady && signedIn,
+  });
+  const orders = rawOrders as Order[];
   const [openId, setOpenId] = useState<string | null>(null);
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -73,30 +87,9 @@ export default function SalesFulfilmentPage() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/payments/orders?role=seller", {
-        cache: "no-store",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to load sales");
-      setOrders((data.orders || []) as Order[]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (authReady && !signedIn) router.replace("/sign-in");
   }, [authReady, signedIn, router]);
-
-  useEffect(() => {
-    if (authReady && signedIn) void load();
-  }, [authReady, signedIn, load]);
 
   async function submitTracking(e: FormEvent, orderId: string) {
     e.preventDefault();
@@ -126,12 +119,14 @@ export default function SalesFulfilmentPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Could not save tracking");
+      if (data.order) {
+        publishOrderUpdate(data.order as Order, data.ordersVersion);
+      }
       showToast("Tracking added — item marked shipped");
       setOpenId(null);
       setCarrier("");
       setTrackingNumber("");
       setShipmentPhotoUrl("");
-      await load();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -216,7 +211,11 @@ export default function SalesFulfilmentPage() {
                 <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
                   <div>
                     <dt className="text-white/40">Status</dt>
-                    <dd className="text-white/85">{o.status}</dd>
+                    <dd className="text-white/85">
+                      {o.displayState?.shortLabel ||
+                        o.displayState?.label ||
+                        o.status.replace(/_/g, " ")}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-white/40">Payment</dt>
@@ -260,7 +259,9 @@ export default function SalesFulfilmentPage() {
                       </p>
                     </div>
                   ) : null}
-                  {o.status === "AWAITING_SHIPMENT" || o.status === "IN_TRANSIT" ? (
+                  {o.displayState?.phase === "SHIPPED_AWAITING_BUYER" ||
+                  o.displayState?.phase === "IN_TRANSIT" ||
+                  o.status === "IN_TRANSIT" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
                         Shipped — waiting for buyer confirmation (release now or
