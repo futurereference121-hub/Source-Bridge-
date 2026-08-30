@@ -138,6 +138,8 @@ export async function POST(req: NextRequest) {
     const currency = normalizeCurrency(listing.currency || "USD");
     assertCurrencyAllowed(currency, config);
     const itemCostMinor = majorToMinor(listing.price, currency);
+    // Snapshot listing price into ProtectedTransaction — paid purchases keep
+    // these minor amounts even if the seller edits the listing later.
     // Server recalculates fees — never trust client totals.
     const fees = calculateFees({
       itemCostMinor,

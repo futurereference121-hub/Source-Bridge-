@@ -1,4 +1,5 @@
 import type { Listing } from "@/lib/types";
+import { currencyExponent } from "@/lib/payments/money";
 
 /**
  * Mock marketplace listings. Every listing belongs to a member profile.
@@ -694,10 +695,12 @@ export function getSubcategoriesForCategory(category: string): string[] {
 
 export function formatPrice(price: number, currency: string): string {
   try {
+    const exp = currencyExponent(currency);
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency,
-      maximumFractionDigits: 0,
+      minimumFractionDigits: exp === 0 ? 0 : exp,
+      maximumFractionDigits: exp,
     }).format(price);
   } catch {
     return `${currency} ${price}`;

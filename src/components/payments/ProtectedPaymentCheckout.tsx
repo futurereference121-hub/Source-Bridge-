@@ -15,6 +15,11 @@ import {
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
 import { Loader2 } from "lucide-react";
 import { formatMinor } from "@/lib/payments/money";
+import {
+  checkoutFormCopy,
+  checkoutPayButtonLabel,
+  type CheckoutStripeMode,
+} from "@/lib/payments/checkout-copy";
 
 type PaymentUiPhase =
   | "ready"
@@ -32,6 +37,7 @@ type CheckoutInnerProps = {
   onSubmitted: () => void;
   onFailed?: () => void;
   paymentMode?: "protected" | "direct";
+  stripeMode?: CheckoutStripeMode;
   protectedTxnId?: string;
   ordersHref?: string;
 };
@@ -108,6 +114,7 @@ function CheckoutForm({
   onSubmitted,
   onFailed,
   paymentMode = "protected",
+  stripeMode = "TEST",
   protectedTxnId,
   ordersHref = "/profile/purchases",
 }: CheckoutInnerProps) {
@@ -247,9 +254,7 @@ function CheckoutForm({
         </span>
       </p>
       <p className="text-[11px] text-white/40">
-        {paymentMode === "direct"
-          ? "Direct Payment · TEST mode · Released to seller after Stripe confirms (Destination Charges · no Source Bridge protection hold)."
-          : "Protected by Source Bridge · TEST mode · Funds stay protected until delivery (no seller transfer on payment)."}
+        {checkoutFormCopy(stripeMode, paymentMode)}
       </p>
       <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
         <PaymentElement
@@ -280,7 +285,7 @@ function CheckoutForm({
               ? "PAYMENT PROCESSING"
               : phase === "error"
                 ? "Try Payment Again"
-                : "Pay securely (TEST)"}
+                : checkoutPayButtonLabel(stripeMode)}
         </button>
         <button
           type="button"
@@ -407,6 +412,7 @@ export function ProtectedPaymentCheckout({
           currency={currency}
           returnPath={returnPath}
           paymentMode={paymentMode}
+          stripeMode={keyMode}
           protectedTxnId={protectedTxnId}
           ordersHref={ordersHref}
           onDismiss={onDismiss}

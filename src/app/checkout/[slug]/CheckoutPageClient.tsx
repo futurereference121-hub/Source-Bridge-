@@ -11,6 +11,13 @@ import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPayment
 import type { Listing } from "@/lib/types";
 import { formatPrice } from "@/lib/listings-service";
 import { formatMinor } from "@/lib/payments/money";
+import {
+  checkoutContinueLabel,
+  checkoutStartedToast,
+  checkoutSummaryCopy,
+  resolveCheckoutStripeMode,
+  type CheckoutStripeMode,
+} from "@/lib/payments/checkout-copy";
 
 type SellerInfo = {
   id: string;
@@ -46,6 +53,7 @@ type CheckoutBootstrap = {
   };
   sellerConnectReady?: boolean;
   isDemo?: boolean;
+  stripeMode?: "TEST" | "LIVE";
   message?: string | null;
 };
 
@@ -93,6 +101,7 @@ export function CheckoutPageClient({ slug }: Props) {
     currency: string;
     protectedTxnId: string;
     mode: PayMode;
+    stripeMode: CheckoutStripeMode;
   } | null>(null);
   const [paymentSubmitted, setPaymentSubmitted] = useState(false);
 
@@ -229,6 +238,12 @@ export function CheckoutPageClient({ slug }: Props) {
       if (!pi.clientSecret || !pi.publishableKey) {
         throw new Error("Payment form unavailable");
       }
+      const piMode = resolveCheckoutStripeMode(
+        pi.stripeMode === "LIVE" || pi.stripeMode === "TEST"
+          ? pi.stripeMode
+          : null,
+        String(pi.publishableKey || ""),
+      );
       setPayMode(mode);
       setStripePay({
         clientSecret: String(pi.clientSecret),
@@ -237,12 +252,9 @@ export function CheckoutPageClient({ slug }: Props) {
         currency: String(pi.currency || created.currency || "usd"),
         protectedTxnId,
         mode,
+        stripeMode: piMode,
       });
-      showToast(
-        mode === "direct"
-          ? "Enter card details for Direct Payment (TEST)"
-          : "Enter your card details to fund the Protected Payment (TEST)",
-      );
+      showToast(checkoutStartedToast(piMode, mode));
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Checkout failed");
     } finally {
@@ -359,6 +371,13 @@ export function CheckoutPageClient({ slug }: Props) {
   const bothAvailable = canP && canD;
   const activeMode: PayMode | null =
     payMode || (canP ? "protected" : canD ? "direct" : null);
+  const activeCheckoutStripeMode: CheckoutStripeMode = stripePay
+    ? stripePay.stripeMode
+    : resolveCheckoutStripeMode(
+        data.stripeMode === "LIVE" || data.stripeMode === "TEST"
+          ? data.stripeMode
+          : null,
+      );
   const cover = listing.images[0] || "";
   const shippedFrom =
     listing.shipFromCity && listing.shipFromCountry
@@ -483,9 +502,9 @@ export function CheckoutPageClient({ slug }: Props) {
                   </div>
                 ) : null}
                 <p className="mt-3 text-sm leading-relaxed text-white/70">
-                  {activeMode === "direct"
-                    ? "Direct Payment (Stripe TEST). After Stripe confirms, funds are released to the seller. No Source Bridge inspection hold."
-                    : "Protected by Source Bridge (Stripe TEST). Payment is held until protected release rules are met."}
+                  {activeMode
+                    ? checkoutSummaryCopy(activeCheckoutStripeMode, activeMode)
+                    : null}
                 </p>
                 {activeMode ? (
                   <p className="mt-2 text-xs uppercase tracking-[0.14em] text-electric/80">
@@ -511,6 +530,7 @@ export function CheckoutPageClient({ slug }: Props) {
                   <ProtectedPaymentCheckout
                     clientSecret={stripePay.clientSecret}
                     publishableKey={stripePay.publishableKey}
+                    stripeMode={stripePay.stripeMode}
                     amountMinor={stripePay.amountMinor}
                     currency={stripePay.currency}
                     paymentMode={stripePay.mode}
@@ -537,7 +557,15 @@ export function CheckoutPageClient({ slug }: Props) {
                       onClick={() => activeMode && void startStripeCheckout(activeMode)}
                       className="rounded-lg"
                     >
-                      {busy ? "Starting checkout…" : activeMode === "direct" ? "Continue with Direct Payment (TEST)" : "Continue with Protected Payment (TEST)"}
+                      {busy
+                        ? "Starting checkout…"
+                        : activeMode
+                          ? checkoutContinueLabel(
+                              activeCheckoutStripeMode,
+                              activeMode,
+                              busy,
+                            )
+                          : "Continue"}
                     </PrimaryButton>
                   </div>
                 ) : null}

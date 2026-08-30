@@ -54,7 +54,7 @@ export function totalChargeMinor(b: MoneyBreakdownInput): number {
   ]);
 }
 
-function currencyExponent(currency: string): number {
+export function currencyExponent(currency: string): number {
   const c = currency.toUpperCase();
   if (STRIPE_ZERO_DECIMAL_CURRENCIES.has(c)) return 0;
   if (STRIPE_THREE_DECIMAL_CURRENCIES.has(c)) return 3;

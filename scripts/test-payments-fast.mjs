@@ -15,6 +15,7 @@ runNodeTestScripts(
     "scripts/test-chat-ticket-ui.mjs",
     "scripts/test-explore-directory.mjs",
     "scripts/test-product-purchase-ticket.mjs",
+    "scripts/test-listed-product-price.mjs",
     "scripts/test-shipping-activity-sync.mjs",
     "scripts/test-payment-release-activity-sync.mjs",
     "scripts/test-photo-upload-control.mjs",
