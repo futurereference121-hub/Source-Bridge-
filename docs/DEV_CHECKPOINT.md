@@ -4,13 +4,12 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** 7% platform fee rounds to nearest minor unit (no Math.ceil).
-- **Last verified commit:** `1ec75ed` on `origin/main`
-- **Production deployment:** `dpl_ENCqLp1xTi79cH5YwpepRqFYrT7s` (`source-bridge-e02qpfa3g-canna-cake.vercel.app`) → www.sourcebridge.app — Live ON
-- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true` (unchanged); Stripe runtime LIVE on Production; TEST history remains operable via mode-scoped clients
+- **Workstream:** Clean TEST Payment Tickets out of chats; admin live queues exclude TEST sourcing
+- **Last verified commit:** `67ec7e9` on `origin/main` (push/deploy in progress)
+- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true` (unchanged); Stripe runtime LIVE on Production; TEST history retained via `hiddenFromChatAt` / ledger
+- **Chat cleanup (DB):** 12 unfunded TEST tickets deleted; 11 funded/completed TEST hidden; 3 LIVE sourcing tickets preserved (`cmtcipey60003km0a86vyv54w` + 2); listed-product untouched; LIVE ledger unchanged
 - **Last critical regression:** `test:payments:fast` PASS · `test:payments:full` PASS · `test:sourcebridge` PASS · `test:live-guard` PASS · typecheck PASS · build PASS
-- **Migration:** `20260829140000_source_bridge_fee_7pct` APPLIED on Neon — `PlatformPaymentConfig` now 700/700 bps, floor 0; ticket/txn stored fees untouched
-- **STOP:** User creates next LIVE transaction manually to verify corrected 7% rounding ($0.75 → $0.05) — no automated LIVE charges created
+- **STOP:** Live browser QA of inbox chats recommended to confirm no TEST cards remain and LIVE tickets still visible
 
 ## Baseline (approved, do not “fix” in tooling tasks)
 
