@@ -58,9 +58,15 @@ export function shouldApplyOrdersPayload(opts: {
   latestSeq: number;
   incomingVersion: number;
   appliedVersion: number;
+  /** True once a non-empty list has been applied (or force reload). */
+  hasAppliedOrders?: boolean;
+  force?: boolean;
 }): boolean {
   if (opts.requestSeq < opts.latestSeq) return false;
-  if (opts.incomingVersion <= opts.appliedVersion) return false;
+  if (opts.force) return true;
+  if (!opts.hasAppliedOrders) return true;
+  if (opts.incomingVersion < opts.appliedVersion) return false;
+  if (opts.incomingVersion === opts.appliedVersion) return false;
   return true;
 }
 

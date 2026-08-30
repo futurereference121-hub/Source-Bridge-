@@ -79,7 +79,6 @@ export default function PurchasesPage() {
     loading,
     error,
     reload,
-    publishOrderUpdate,
   } = useProtectedOrders({
     role: "buyer",
     enabled: authReady && signedIn,

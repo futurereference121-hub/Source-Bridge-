@@ -44,6 +44,12 @@ assert.match(card, /json\.ticket/);
 assert.match(card, /shouldApplyTicketUpdate/);
 assert.match(card, /onTicketUpdated\?\.\(nextLocal\)/);
 
+assert.match(
+  tracking,
+  /txn\.origin === "PRODUCT_CHECKOUT"/,
+  "listed product shipping must notify buyer without inbox-only guard",
+);
+assert.match(notify, /title\?:/);
 assert.match(notify, /ticketId\?:/);
 assert.match(notify, /\?ticket=/);
 

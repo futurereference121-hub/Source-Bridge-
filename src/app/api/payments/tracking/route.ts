@@ -236,13 +236,14 @@ export async function POST(req: NextRequest) {
     });
 
     // Notify only after authoritative state + activityVersion are committed.
-    if (txn.conversationId) {
+    if (txn.conversationId || txn.origin === "PRODUCT_CHECKOUT") {
       try {
         await notifyShipmentUpdate({
           protectedTxnId: txn.id,
-          conversationId: txn.conversationId,
+          conversationId: txn.conversationId || "",
           buyerId: txn.buyerId,
           sellerId: txn.sellerId,
+          title: txn.title,
           trackingNumber: parsed.data.trackingNumber,
           ticketId: linkedTicketId,
           origin: txn.origin,

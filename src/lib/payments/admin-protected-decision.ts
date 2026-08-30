@@ -375,6 +375,24 @@ export async function executeAdminProtectedMoneyDecision(
     },
   });
 
+  if (refundAppliedMinor > 0) {
+    try {
+      const { notifyBuyerPurchaseRefunded } = await import(
+        "@/lib/payment-notifications"
+      );
+      await notifyBuyerPurchaseRefunded({
+        protectedTxnId: working.id,
+        buyerId: working.buyerId,
+        sellerId: working.sellerId,
+        title: working.title || "your order",
+        origin: working.origin,
+        partial: working.status === "PARTIALLY_REFUNDED",
+      });
+    } catch (err) {
+      console.error("[admin-protected-decision:notify-refund]", err);
+    }
+  }
+
   return {
     working,
     refundAppliedMinor,

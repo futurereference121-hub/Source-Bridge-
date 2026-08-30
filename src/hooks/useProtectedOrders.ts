@@ -32,6 +32,7 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const ordersVersionRef = useRef(0);
+  const hasAppliedOrdersRef = useRef(false);
   const requestSeqRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -66,18 +67,23 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
         if (data.unchanged) return;
         const incomingVersion =
           typeof data.ordersVersion === "number" ? data.ordersVersion : 0;
+        const incomingOrders = (data.orders || []) as ProtectedOrderSummary[];
         if (
           !shouldApplyOrdersPayload({
             requestSeq: seq,
             latestSeq: requestSeqRef.current,
             incomingVersion,
             appliedVersion: ordersVersionRef.current,
+            hasAppliedOrders: hasAppliedOrdersRef.current,
+            force: opts2?.force,
           })
         ) {
           return;
         }
         ordersVersionRef.current = incomingVersion;
-        setOrders((data.orders || []) as ProtectedOrderSummary[]);
+        hasAppliedOrdersRef.current =
+          incomingOrders.length > 0 || hasAppliedOrdersRef.current;
+        setOrders(incomingOrders);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -97,14 +103,21 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
     return subscribePurchaseOrderChanged((payload) => {
       if (payload.order && typeof payload.order === "object") {
         applyOrderPatch(payload.order as ProtectedOrderSummary);
+        hasAppliedOrdersRef.current = true;
       }
-      if (typeof payload.ordersVersion === "number") {
+      if (
+        typeof payload.ordersVersion === "number" &&
+        hasAppliedOrdersRef.current
+      ) {
         ordersVersionRef.current = Math.max(
           ordersVersionRef.current,
           payload.ordersVersion,
         );
       }
-      void load({ silent: true });
+      void load({
+        silent: true,
+        force: !hasAppliedOrdersRef.current,
+      });
     });
   }, [applyOrderPatch, enabled, load]);
 
@@ -146,6 +159,7 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
   const publishOrderUpdate = useCallback(
     (order: ProtectedOrderSummary, ordersVersion?: number) => {
       applyOrderPatch(order);
+      hasAppliedOrdersRef.current = true;
       if (typeof ordersVersion === "number") {
         ordersVersionRef.current = Math.max(
           ordersVersionRef.current,

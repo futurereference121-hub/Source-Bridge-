@@ -33,10 +33,12 @@ function matches(list, user) {
   return false;
 }
 
-/** Mirrors product: Live off + TEST → empty allowlist is open ramp. */
+/** Mirrors product: Live off + TEST → empty allowlist is open ramp; Live on → open. */
 function assertPaymentsTestAllowlisted({ live, mode, list, users }) {
-  const rampOpen = !live && mode === "TEST";
-  if (rampOpen) return { ok: true, reason: "ramp-open" };
+  const rampOpen = (!live && mode === "TEST") || live;
+  if (rampOpen) {
+    return { ok: true, reason: live ? "live-open" : "ramp-open" };
+  }
   if (!list.length) {
     return { ok: false, reason: "empty-deny" };
   }
@@ -83,10 +85,22 @@ assert.equal(matches([], { id: buyer }), false);
   assert.equal(r.reason, "ramp-open");
 }
 
-// Without open ramp, empty list denies
+// Live production: empty list allows any eligible user
 {
   const r = assertPaymentsTestAllowlisted({
     live: true,
+    mode: "LIVE",
+    list: [],
+    users: [ordinary],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.reason, "live-open");
+}
+
+// Closed pre-Live staging: empty list denies
+{
+  const r = assertPaymentsTestAllowlisted({
+    live: false,
     mode: "LIVE",
     list: [],
     users: [ordinary],

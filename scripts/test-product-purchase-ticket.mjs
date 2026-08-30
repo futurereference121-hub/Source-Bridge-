@@ -60,6 +60,9 @@ assert.match(layout, /AdminNav/);
 assert.match(productCheckout, /origin: "PRODUCT_CHECKOUT"/);
 assert.match(notify, /\/profile\/sales/);
 assert.match(notify, /\/profile\/purchases/);
+assert.match(notify, /notifyBuyerPaymentConfirmed/);
+assert.match(notify, /buyer-funded:/);
+assert.match(checkout, /notifyBuyerPaymentConfirmed/);
 assert.match(
   notify,
   /Open Sales & Fulfilment to fulfil the order/,

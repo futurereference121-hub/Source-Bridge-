@@ -48,6 +48,11 @@ export function isPaymentsTestRampOpen(): boolean {
   return !isLivePaymentsEnabled() && getStripeMode() === "TEST";
 }
 
+/** Live production: any eligible authenticated user may view/fund (no TEST allowlist). */
+export function isPaymentsLiveAccessOpen(): boolean {
+  return isLivePaymentsEnabled();
+}
+
 /** True when at least one id/email is configured (legacy restrict list). */
 export function isPaymentsTestAllowlistConfigured(): boolean {
   return parseAllowlistRaw().length > 0;
@@ -62,8 +67,8 @@ export function getPaymentsTestAllowlistEntryCount(): number {
 }
 
 export function userMatchesPaymentsAllowlist(user: AllowlistIdentity): boolean {
-  // Open TEST ramp: every identity is treated as allowed for gate checks.
-  if (isPaymentsTestRampOpen()) return true;
+  // Open TEST ramp or Live production: every identity passes allowlist gate checks.
+  if (isPaymentsTestRampOpen() || isPaymentsLiveAccessOpen()) return true;
   const list = parseAllowlistRaw();
   if (!list.length) return false;
   const id = normalizeAllowlistToken(user.id || "");
@@ -83,7 +88,7 @@ export function assertPaymentsTestAllowlisted(
   users: AllowlistIdentity | AllowlistIdentity[],
   opts?: { action?: string; labels?: string[] },
 ): void {
-  if (isPaymentsTestRampOpen()) {
+  if (isPaymentsTestRampOpen() || isPaymentsLiveAccessOpen()) {
     return;
   }
   const list = Array.isArray(users) ? users : [users];
@@ -118,13 +123,19 @@ export function assertPaymentsTestAllowlisted(
 /** Snapshot for client UI — never include raw allowlist entries publicly. */
 export function paymentsAllowlistGateSnapshot(user?: AllowlistIdentity | null) {
   const rampOpen = isPaymentsTestRampOpen();
+  const liveOpen = isPaymentsLiveAccessOpen();
   const configured = isPaymentsTestAllowlistConfigured();
   return {
     allowlistConfigured: configured,
     allowlistEntryCount: getPaymentsTestAllowlistEntryCount(),
     /** Open TEST ramp: any authenticated user may use TEST flows when flags are on. */
     testRampOpen: rampOpen,
+    /** Live kill switch on — TEST allowlist does not gate session access. */
+    liveAccessOpen: liveOpen,
     /** Current session may create/accept tickets and fund when payments flags are on. */
-    testAccessAllowed: Boolean(user && (rampOpen || (configured && userMatchesPaymentsAllowlist(user)))),
+    testAccessAllowed: Boolean(
+      user &&
+        (rampOpen || liveOpen || (configured && userMatchesPaymentsAllowlist(user))),
+    ),
   };
 }

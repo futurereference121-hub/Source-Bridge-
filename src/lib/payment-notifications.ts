@@ -13,6 +13,10 @@ function inboxHref(conversationId: string): string {
   return `/inbox/${conversationId}`;
 }
 
+function productPurchaseHref(protectedTxnId: string): string {
+  return `/profile/purchases/${protectedTxnId}`;
+}
+
 /** Counterparty notification when a Payment Ticket is proposed or revised. */
 export async function notifyPaymentTicketProposed(opts: {
   ticketId: string;
@@ -113,6 +117,55 @@ export async function notifyPaymentFunded(opts: {
   });
 }
 
+/** Buyer confirmation after a listed product purchase is funded. */
+export async function notifyBuyerPaymentConfirmed(opts: {
+  protectedTxnId: string;
+  buyerId: string;
+  sellerId: string;
+  title: string;
+  origin?: string | null;
+}): Promise<void> {
+  if (opts.origin !== "PRODUCT_CHECKOUT") return;
+  const productTitle = opts.title.slice(0, 80) || "your order";
+  await createNotification({
+    userId: opts.buyerId,
+    type: "PAYMENT_STATUS",
+    title: `Payment confirmed for ${productTitle}`,
+    body: "Open Purchases to track your order.",
+    href: productPurchaseHref(opts.protectedTxnId),
+    actorId: opts.sellerId,
+    actorName: "Seller",
+    dedupeKey: `buyer-funded:${opts.protectedTxnId}`,
+  });
+}
+
+/** Buyer refund notice for listed product purchases (admin / support resolution). */
+export async function notifyBuyerPurchaseRefunded(opts: {
+  protectedTxnId: string;
+  buyerId: string;
+  sellerId: string;
+  title: string;
+  origin?: string | null;
+  partial?: boolean;
+}): Promise<void> {
+  if (opts.origin !== "PRODUCT_CHECKOUT") return;
+  const productTitle = opts.title.slice(0, 80) || "your order";
+  await createNotification({
+    userId: opts.buyerId,
+    type: "PAYMENT_STATUS",
+    title: opts.partial
+      ? `Partial refund issued for ${productTitle}`
+      : `Refund issued for ${productTitle}`,
+    body: "Open Purchases for order details.",
+    href: productPurchaseHref(opts.protectedTxnId),
+    actorId: opts.sellerId,
+    actorName: "Source Bridge",
+    dedupeKey: opts.partial
+      ? `buyer-partial-refund:${opts.protectedTxnId}`
+      : `buyer-refund:${opts.protectedTxnId}`,
+  });
+}
+
 export async function notifyProcurementReleased(opts: {
   protectedTxnId: string;
   conversationId: string;
@@ -190,20 +243,24 @@ export async function notifyShipmentUpdate(opts: {
   conversationId: string;
   buyerId: string;
   sellerId: string;
+  title?: string;
   trackingNumber?: string;
   ticketId?: string | null;
   origin?: string | null;
 }): Promise<void> {
   const isProduct = opts.origin === "PRODUCT_CHECKOUT";
   const href = isProduct
-    ? `/profile/purchases/${opts.protectedTxnId}`
+    ? productPurchaseHref(opts.protectedTxnId)
     : opts.ticketId
       ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
       : inboxHref(opts.conversationId);
+  const productTitle = (opts.title || "").trim().slice(0, 80);
   await createNotification({
     userId: opts.buyerId,
     type: "PAYMENT_SHIPPING",
-    title: "Your order was marked shipped",
+    title: isProduct && productTitle
+      ? `${productTitle} was marked shipped`
+      : "Your order was marked shipped",
     body: opts.trackingNumber
       ? `Tracking: ${opts.trackingNumber.slice(0, 80)}`
       : "The sourcer added shipping details.",

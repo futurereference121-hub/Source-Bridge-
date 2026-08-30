@@ -8,7 +8,6 @@ import {
   Inbox,
   MessageSquare,
   Search,
-  ShoppingBag,
   UserRound,
 } from "lucide-react";
 import { mobileNavItems } from "@/lib/site";
@@ -24,7 +23,6 @@ const ICONS = {
   "/requests": Inbox,
   "/inbox": MessageSquare,
   "/messages": MessageSquare,
-  "/profile/purchases": ShoppingBag,
   "/profile": UserRound,
 } as const;
 

@@ -52,7 +52,10 @@ function derivePurchaseDisplayState(input) {
 
 function shouldApplyOrdersPayload(opts) {
   if (opts.requestSeq < opts.latestSeq) return false;
-  if (opts.incomingVersion <= opts.appliedVersion) return false;
+  if (opts.force) return true;
+  if (!opts.hasAppliedOrders) return true;
+  if (opts.incomingVersion < opts.appliedVersion) return false;
+  if (opts.incomingVersion === opts.appliedVersion) return false;
   return true;
 }
 
@@ -101,6 +104,7 @@ assert.equal(
     latestSeq: 2,
     incomingVersion: 200,
     appliedVersion: 200,
+    hasAppliedOrders: true,
   }),
   false,
 );
@@ -108,8 +112,20 @@ assert.equal(
   shouldApplyOrdersPayload({
     requestSeq: 2,
     latestSeq: 2,
+    incomingVersion: 200,
+    appliedVersion: 200,
+    hasAppliedOrders: false,
+  }),
+  true,
+  "first buyer load must apply even when version unchanged",
+);
+assert.equal(
+  shouldApplyOrdersPayload({
+    requestSeq: 2,
+    latestSeq: 2,
     incomingVersion: 300,
     appliedVersion: 200,
+    hasAppliedOrders: true,
   }),
   true,
 );
@@ -154,10 +170,22 @@ assert.match(hook, /visibilityState/);
 assert.match(sync, /PURCHASE_ORDER_CHANGED_EVENT/);
 assert.match(sync, /emitPurchaseOrderChanged/);
 
-assert.match(site, /Purchases.*profile\/purchases/);
-assert.match(mobileNav, /ShoppingBag/);
+const accountMenu = read("src/components/layout/AccountMenu.tsx");
 
-assert.match(notify, /profile\/purchases\/\$\{opts\.protectedTxnId\}/);
+assert.match(site, /Inbox.*\/inbox/);
+assert.match(site, /Profile.*\/profile/);
+assert.doesNotMatch(
+  site,
+  /Purchases.*profile\/purchases/,
+  "Purchases must not be in mobile bottom nav",
+);
+assert.match(accountMenu, /Purchases.*profile\/purchases/);
+assert.doesNotMatch(mobileNav, /ShoppingBag/);
+
+assert.match(notify, /productPurchaseHref\(opts\.protectedTxnId\)/);
+assert.match(notify, /notifyBuyerPaymentConfirmed/);
+assert.match(notify, /notifyBuyerPurchaseRefunded/);
+assert.match(notify, /Payment confirmed for/);
 
 assert.match(listed, /derivePurchaseDisplayState/);
 assert.match(detail, /profile\/purchases/);

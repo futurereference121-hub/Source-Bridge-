@@ -497,9 +497,11 @@ export async function markTxnFundedFromWebhook(opts: {
     }
   }
 
-  if (!directPath && updated.conversationId) {
+  if (!directPath && (updated.conversationId || updated.origin === "PRODUCT_CHECKOUT")) {
     try {
-      const { notifyPaymentFunded } = await import("@/lib/payment-notifications");
+      const { notifyPaymentFunded, notifyBuyerPaymentConfirmed } = await import(
+        "@/lib/payment-notifications"
+      );
       const [buyer, ticket] = await Promise.all([
         prisma.user.findUnique({
           where: { id: updated.buyerId },
@@ -519,6 +521,13 @@ export async function markTxnFundedFromWebhook(opts: {
         title: updated.title || "Protected Payment",
         ticketId: ticket?.id,
         buyerUsername: buyer?.username,
+        origin: updated.origin,
+      });
+      await notifyBuyerPaymentConfirmed({
+        protectedTxnId: updated.id,
+        buyerId: updated.buyerId,
+        sellerId: updated.sellerId,
+        title: updated.title || "Protected Payment",
         origin: updated.origin,
       });
     } catch (err) {
