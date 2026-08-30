@@ -1,14 +1,14 @@
 ---
-description: TEST vs Live environments, deploy discipline, and Live-activation isolation
+description: TEST vs Live environments, deploy discipline, and Live kill-switch isolation
 globs: .env*,vercel.json,docs/legal/**,docs/PROTECTED_PAYMENTS.md,src/lib/payments/flags.ts
 alwaysApply: false
 ---
 
 # Deployment and environments
 
-Production currently serves **TEST** Stripe. Pushing `main` may auto-deploy on Vercel — do not treat a tooling-only push as a product release, but confirm no runtime files changed.
+Production currently serves **LIVE** Stripe (`LIVE_PAYMENTS_ENABLED=true`). Payment architecture is **PRODUCTION-FROZEN**. Pushing `main` may auto-deploy on Vercel — do not treat a tooling-only push as a product release, but confirm no runtime files changed.
 
-Live enablement is **never** a side effect. Checklist: `docs/legal/live-activation-checklist.md`. Until that dedicated task: `LIVE_PAYMENTS_ENABLED=false`.
+Do not flip Live off as a side effect. Emergency kill switch only after a verified Live money invariant failure. Historical checklist: `docs/legal/live-activation-checklist.md`.
 
 Do not deploy solely because Cursor rules/docs/tests changed unless runtime code changed.
 

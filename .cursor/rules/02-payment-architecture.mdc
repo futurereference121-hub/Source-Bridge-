@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Payment architecture
 
-Preserve these three systems. Do not rewrite proven money engines to fix ticket/UI/cache bugs.
+**PRODUCTION-FROZEN** — see `00-payment-production-freeze.mdc`. Preserve these three systems. Do not rewrite proven money engines to fix ticket/UI/cache bugs.
 
 ## 1. Protected product
 

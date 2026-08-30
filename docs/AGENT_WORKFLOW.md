@@ -5,7 +5,7 @@ Permanent operating procedure for Cursor work on this repo. Rules: `.cursor/rule
 ## Standard sequence
 
 1. Understand the requested behaviour (and only that).
-2. Identify affected architecture (payments / tickets / chat / unrelated).
+2. Identify affected architecture (payments / tickets / chat / unrelated). Payment architecture is **PRODUCTION-FROZEN** (rule `00`); do not edit frozen money paths unless the user explicitly requested a payment-system change or a verified production defect.
 3. Inspect existing code before editing.
 4. Use **read-only** parallel investigation when it helps (trace, search, git compare, schema, tests, security, diff).
 5. Choose **one implementation owner** for the final edit — especially payment logic.

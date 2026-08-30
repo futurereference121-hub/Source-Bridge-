@@ -1,17 +1,13 @@
 ---
-description: Pre-Live Stripe, PCI, Connect destination, and environment safety
+description: Live Stripe, PCI, Connect destination, and environment safety
 alwaysApply: true
 ---
 
-# Payment safety (pre-Live)
+# Payment safety (Live activated)
 
-Until a **dedicated Live-activation task**:
+Production: **`LIVE_PAYMENTS_ENABLED=true`** (Stripe runtime LIVE). Payment architecture is **PRODUCTION-FROZEN** (see `00-payment-production-freeze.mdc`).
 
-- `LIVE_PAYMENTS_ENABLED=false`
-- Stripe financial ops **TEST** only
-- Do not enable Live as a side effect of UI, fee, ticket, test, deploy, or env cleanup
-
-`getStripeMode()` currently forces TEST even if the env flag is flipped. Do not remove that refuse without an explicit Live task.
+Do not flip the kill switch off except as an emergency after a verified Live money invariant failure. TEST history stays operable via mode-scoped clients. Do not change Live flags as a side effect of UI, fee, ticket, test, deploy, or env cleanup.
 
 ## PCI
 
@@ -23,8 +19,8 @@ Sourcer/seller destination = **that user’s own** Connect account (`txn.sellerI
 
 ## QA
 
-Do not create PaymentIntent / Charge / Transfer / Refund / payout unless the task explicitly requires TEST financial verification. Ordinary ticket/UI work: no Stripe money objects.
+Do not create PaymentIntent / Charge / Transfer / Refund / payout unless the task explicitly requires Live (or TEST-history) financial verification. Ordinary ticket/UI work: no Stripe money objects.
 
 ## Guard
 
-`npm run test:live-guard` must pass the pre-Live regression. Changing Live flags requires an explicit Live-activation task.
+`npm run test:live-guard` must pass (source default remains false; Production env is true). Do not change Live flags except an explicit emergency or Live-ops task.

@@ -13,9 +13,9 @@ Do not report a single vague “DONE”. Use:
 | **TESTED** | Targeted + required regression passed |
 | **DEPLOYED** | TEST production is serving the commit |
 | **LIVE VERIFIED** | User-facing flow seen in deployed TEST UI |
-| **PRODUCTION READY TEST** | All of the above for TEST; Live still off |
+| **PRODUCTION READY TEST** | All of the above for the TEST QA track |
 
-User-facing payment functionality **cannot** be Production Ready TEST from unit tests, code inspection, DB rows, build, or deploy SHA alone.
+Payment architecture is **PRODUCTION-FROZEN**; `LIVE_PAYMENTS_ENABLED=true`. User-facing payment functionality **cannot** be Production Ready TEST from unit tests, code inspection, DB rows, build, or deploy SHA alone.
 
 If Cursor cannot authenticate to the required account: **IMPLEMENTED — LIVE QA REQUIRED**, Production Ready TEST = **NO**.
 

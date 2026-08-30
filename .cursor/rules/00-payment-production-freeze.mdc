@@ -1,0 +1,42 @@
+---
+description: PRODUCTION FREEZE of the payment architecture — do not modify frozen money paths unless explicitly requested or a verified production defect
+alwaysApply: true
+---
+
+# PAYMENT SYSTEM PRODUCTION FREEZE
+
+Treat the Source Bridge payment architecture as **PRODUCTION-FROZEN**.
+
+`LIVE_PAYMENTS_ENABLED=true` (Stripe runtime LIVE). New product development **may continue**. Do not flip the kill switch off except as an emergency after a verified Live money invariant failure.
+
+**DO NOT** modify frozen areas unless: **(A)** the user explicitly requests a payment-system change, or **(B)** a verified production defect requires a focused correction.
+
+## Frozen areas
+
+Stripe client/config; TEST/LIVE selection; kill switch; Connect resolution; PaymentIntent; Checkout; ProtectedTransaction; platform fee; fee base; rounding; seller entitlement; buyer total; currency/minor-unit; FX settlement; procurement/final/listed-product releases; refunds; split/admin resolutions; Transfers; Refunds; `source_transaction`; idempotency; ledger; webhooks; protected balances; payout/release architecture; historical snapshots; financial authorization.
+
+## Frozen business rules
+
+- Fee: **7% / 700 bps** (`SOURCE_BRIDGE_FEE_BPS`)
+- Fee base: item + shipping + Sourcer/service fee (does not compound on itself)
+- Seller entitlement: item + shipping + Sourcer fee
+- Buyer total: seller entitlement + Source Bridge fee
+- Rounding: nearest valid currency minor unit
+- Historical: retain stored snapshots; no silent reprice
+
+## New features
+
+Integrate with existing payment services. No duplicate fee calculation, no bypass of ProtectedTransaction, no second Stripe abstraction, no incidental architecture changes.
+
+## Payment-adjacent UI (allowed)
+
+Presentation, layout, nav, wording, receipt styling, status labels, notifications, TEST filtering — **only if** financial calc, Stripe ops, authoritative state, and release/refund semantics are unchanged.
+
+## Verified defect policy
+
+Reproduce → root cause → smallest fix → preserve unrelated frozen behaviour → `npm run test:payments:full` → document. No broad refactor.
+
+## MEDIUM audit notes (non-blocking)
+
+1. `stripePaymentIntentId` is indexed, not UNIQUE — do not change for cleanup alone.
+2. Purchases/Sales may expose TEST rows in dual-mode — fix presentation/query only if it is a UI issue.

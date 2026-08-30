@@ -1,8 +1,8 @@
 # Payment regression manifest
 
-Critical Source Bridge payment flows, invariants, and which command covers them. Product detail: `docs/PROTECTED_PAYMENTS.md`.
+Critical Source Bridge payment flows, invariants, and which command covers them. Product detail: `docs/PROTECTED_PAYMENTS.md`. Freeze: `.cursor/rules/00-payment-production-freeze.mdc`.
 
-**Pre-Live:** `LIVE_PAYMENTS_ENABLED=false`, Stripe TEST. These suites must not create PaymentIntent / Charge / Transfer / Refund.
+**PRODUCTION-FROZEN.** Live payments **enabled** (`LIVE_PAYMENTS_ENABLED=true`). New development may continue. Automated suites must not create PaymentIntent / Charge / Transfer / Refund unless the task explicitly requires financial verification.
 
 ## Commands
 

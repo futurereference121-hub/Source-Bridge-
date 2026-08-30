@@ -21,8 +21,8 @@ Use isolated worktrees only for truly independent work (docs vs unrelated module
 
 ## Pre-task (payment-sensitive)
 
-Read applicable `.cursor/rules`, identify critical flows, inspect current code, confirm/run `npm run test:payments:fast` if appropriate, state exact scope, then edit.
+Read `00-payment-production-freeze.mdc` first. Treat frozen money paths as off-limits unless the user explicitly requested a payment-system change or a verified production defect requires a focused fix. Identify critical flows, inspect current code, confirm/run `npm run test:payments:fast` if appropriate, state exact scope, then edit.
 
 ## Post-task (payment-sensitive)
 
-Targeted tests → fast suite → full suite before completion → git diff → verify Live flag untouched → typecheck/build → TEST deploy if appropriate → live browser QA → report unverified items explicitly.
+Targeted tests → fast suite → full suite before completion → git diff → verify Live flag still `true` and freeze scope respected → typecheck/build → TEST deploy if appropriate → live browser QA → report unverified items explicitly.

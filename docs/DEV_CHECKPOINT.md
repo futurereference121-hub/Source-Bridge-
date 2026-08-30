@@ -4,9 +4,10 @@ Update only when finishing a meaningful workstream. Keep this short.
 
 ## Current
 
-- **Workstream:** Clean TEST Payment Tickets out of chats; admin live queues exclude TEST sourcing
-- **Last verified commit:** `67ec7e9` on `origin/main` (push/deploy in progress)
-- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true` (unchanged); Stripe runtime LIVE on Production; TEST history retained via `hiddenFromChatAt` / ledger
+- **Payment system:** **PRODUCTION-FROZEN** (`.cursor/rules/00-payment-production-freeze.mdc`). New development may continue; do not change frozen money paths unless explicitly requested or a verified production defect.
+- **Workstream:** Payment architecture freeze recorded in persistent rules/docs (prior: TEST Payment Tickets cleaned from chats; admin live queues exclude TEST sourcing)
+- **Last verified commit:** `3b30249` on `origin/main` (runtime unchanged; this freeze is docs/rules only)
+- **Payment environment:** `LIVE_PAYMENTS_ENABLED=true` (keep on); Stripe runtime LIVE on Production; TEST history retained via `hiddenFromChatAt` / ledger
 - **Chat cleanup (DB):** 12 unfunded TEST tickets deleted; 11 funded/completed TEST hidden; 3 LIVE sourcing tickets preserved (`cmtcipey60003km0a86vyv54w` + 2); listed-product untouched; LIVE ledger unchanged
 - **Last critical regression:** `test:payments:fast` PASS · `test:payments:full` PASS · `test:sourcebridge` PASS · `test:live-guard` PASS · typecheck PASS · build PASS
 - **STOP:** Live browser QA of inbox chats recommended to confirm no TEST cards remain and LIVE tickets still visible

@@ -27,4 +27,4 @@ Integer minor units. Server calculation is authoritative; UI estimates are not. 
 
 ## This repo
 
-Next.js App Router, Prisma, Stripe TEST until a dedicated Live-activation task. Do not change product behaviour in tooling/docs tasks.
+Next.js App Router, Prisma, Stripe LIVE (`LIVE_PAYMENTS_ENABLED=true`). Payment architecture is **PRODUCTION-FROZEN**. Do not change product behaviour in tooling/docs tasks.

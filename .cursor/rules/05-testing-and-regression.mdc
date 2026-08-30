@@ -6,13 +6,13 @@ alwaysApply: false
 
 # Testing and regression
 
-Previously working payment behaviour is never assumed unaffected. UI/chat/poll changes can break payments.
+Previously working payment behaviour is never assumed unaffected. UI/chat/poll changes can break payments. Payment architecture is **PRODUCTION-FROZEN** — full suite before any allowed payment-system exception.
 
 ## Commands
 
 - Fast (iteration): `npm run test:payments:fast`
 - Full (before payment completion): `npm run test:payments:full`
-- Pre-Live flag guard: `npm run test:live-guard`
+- Live-flag source guard: `npm run test:live-guard`
 - Release-oriented: `npm run test:sourcebridge`
 
 Do not duplicate test logic — aggregators invoke existing `scripts/test-*.mjs`. Fast/full suites must **not** create Stripe network financial objects.

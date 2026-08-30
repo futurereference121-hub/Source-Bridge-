@@ -8,6 +8,10 @@ User-to-user sourcing marketplace. Public language: **Protected Payment** / **Di
 
 Financial roles are distinct: **Proposer** (current revision), **Buyer** (`buyerId`, pays), **Sourcer** (`sellerId`, seller entitlement / Connect destination). Do not infer one from another. Marketplace flows must work for any eligible accounts (generic-user fixtures), not only historical test accounts. Do not hardcode `futureman` / `theowlsaid` except explicit QA fixtures.
 
+## Payment system: PRODUCTION-FROZEN
+
+Payment architecture is **PRODUCTION-FROZEN** (`.cursor/rules/00-payment-production-freeze.mdc`). Do not modify frozen money paths unless the user explicitly requests a payment-system change or a verified production defect requires a focused correction. New development may continue; integrate with existing payment services.
+
 ## Live payments (activated)
 
 Production kill switch is **`LIVE_PAYMENTS_ENABLED=true`** (Stripe runtime LIVE). Do not flip it off except as an emergency kill switch after a verified Live money invariant failure. TEST history stays operable via mode-scoped clients. No PaymentIntent / Charge / Transfer / Refund unless the task explicitly requires Live financial verification. LIVE Connect ≠ TEST Connect — never reuse TEST `acct_*` for Live money.
