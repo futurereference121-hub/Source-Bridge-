@@ -50,6 +50,7 @@ runNodeTestScripts(
     "scripts/test-ticket-edit-delete-menu.mjs",
     "scripts/test-ticket-edit-draft-isolation.mjs",
     "scripts/test-status-rate-limits.mjs",
+    "scripts/test-admin-live-queue.mjs",
   ],
   { label: "payments:fast" },
 );

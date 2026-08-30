@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { adminLiveQueueDisputeWhere } from "@/lib/payments/admin-live-queue";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
@@ -25,7 +26,7 @@ export default async function AdminReviewsPage() {
   if (user.mustChangePassword) redirect("/admin/change-password");
 
   const disputes = await prisma.disputeCase.findMany({
-    where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
+    where: adminLiveQueueDisputeWhere({ in: ["OPEN", "UNDER_REVIEW"] }),
     orderBy: { createdAt: "asc" },
     take: 100,
     include: {
@@ -67,7 +68,7 @@ export default async function AdminReviewsPage() {
   });
 
   const resolvedDisputes = await prisma.disputeCase.findMany({
-    where: { status: { in: [...resolvedStatuses] } },
+    where: adminLiveQueueDisputeWhere({ in: [...resolvedStatuses] }),
     orderBy: { resolvedAt: "desc" },
     take: 20,
     include: {

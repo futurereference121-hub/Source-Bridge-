@@ -3,6 +3,12 @@ import { redirect } from "next/navigation";
 import { getSessionUser, isAdminUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { paymentFlagsSnapshot } from "@/lib/payments/flags";
+import {
+  adminLiveFailedTransferWhere,
+  adminLiveQueueDisputeWhere,
+  adminLiveQueueProtectedTxnWhere,
+  adminLiveSourcingProtectedTxnWhere,
+} from "@/lib/payments/admin-live-queue";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
 import { formatMinor } from "@/lib/payments/money";
@@ -34,6 +40,8 @@ export default async function AdminPaymentsPage() {
 
   const flags = paymentFlagsSnapshot();
   const config = await getPlatformPaymentConfig();
+  const liveTxnWhere = adminLiveQueueProtectedTxnWhere();
+  const sourcingWhere = adminLiveSourcingProtectedTxnWhere();
 
   const [
     funded,
@@ -44,8 +52,11 @@ export default async function AdminPaymentsPage() {
     openDisputes,
     openIssues,
     recent,
+    testSourcingHidden,
   ] = await Promise.all([
-    prisma.protectedTransaction.count({ where: { status: "FUNDED" } }),
+    prisma.protectedTransaction.count({
+      where: { status: "FUNDED", ...liveTxnWhere },
+    }),
     prisma.protectedTransaction.count({
       where: {
         status: {
@@ -58,14 +69,21 @@ export default async function AdminPaymentsPage() {
             "READY_TO_RELEASE",
           ],
         },
+        ...liveTxnWhere,
       },
     }),
-    prisma.protectedTransaction.count({ where: { status: "DISPUTED" } }),
-    prisma.protectedTransaction.count({ where: { status: "RELEASED" } }),
-    prisma.transferAttempt.count({ where: { status: "FAILED" } }),
-    prisma.disputeCase.count({ where: { status: "OPEN" } }),
+    prisma.protectedTransaction.count({
+      where: { status: "DISPUTED", ...liveTxnWhere },
+    }),
+    prisma.protectedTransaction.count({
+      where: { status: "RELEASED", ...liveTxnWhere },
+    }),
+    prisma.transferAttempt.count({ where: adminLiveFailedTransferWhere() }),
+    prisma.disputeCase.count({
+      where: adminLiveQueueDisputeWhere({ in: ["OPEN", "UNDER_REVIEW"] }),
+    }),
     prisma.disputeCase.findMany({
-      where: { status: "OPEN" },
+      where: adminLiveQueueDisputeWhere("OPEN"),
       orderBy: { createdAt: "asc" },
       take: 50,
       include: {
@@ -102,7 +120,7 @@ export default async function AdminPaymentsPage() {
     }),
     prisma.protectedTransaction.findMany({
       take: 40,
-      where: { origin: { not: "PRODUCT_CHECKOUT" } },
+      where: sourcingWhere,
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
@@ -140,6 +158,11 @@ export default async function AdminPaymentsPage() {
         },
       },
     }),
+    flags.LIVE_PAYMENTS_ENABLED
+      ? prisma.protectedTransaction.count({
+          where: { origin: { not: "PRODUCT_CHECKOUT" }, stripeMode: "TEST" },
+        })
+      : Promise.resolve(0),
   ]);
 
   const cards = [
@@ -162,13 +185,15 @@ export default async function AdminPaymentsPage() {
       </p>
       <p className="mt-2 max-w-2xl text-sm text-white/55">
         Stripe is the processor ({CHARGE_MODEL}). Source Bridge owns transaction
-        state and transfer timing. Live mode is forced off.
+        state and transfer timing. Live mode is{" "}
+        {flags.LIVE_PAYMENTS_ENABLED ? "on" : "forced off"}.
       </p>
 
       <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
         <p>
           Stripe configured: {isStripeConfigured() ? "yes" : "no"} · Mode:{" "}
-          {flags.stripeMode} · LIVE_PAYMENTS_ENABLED: false
+          {flags.stripeMode} · LIVE_PAYMENTS_ENABLED:{" "}
+          {String(flags.LIVE_PAYMENTS_ENABLED)}
         </p>
         <p className="mt-1">
           Flags — payments: {String(flags.PAYMENTS_ENABLED)}, connect
@@ -347,6 +372,12 @@ export default async function AdminPaymentsPage() {
         Expand a sourcing payment in place for parties, shipping proof, and
         status. Collapsed by default.
       </p>
+      {testSourcingHidden > 0 ? (
+        <p className="mt-1 text-xs text-white/40">
+          TEST sourcing history is hidden from this live queue ({testSourcingHidden}{" "}
+          records remain in audit).
+        </p>
+      ) : null}
       <div className="mt-4 space-y-3">
         {recent.length === 0 ? (
           <p className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/40">

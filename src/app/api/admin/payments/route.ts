@@ -2,6 +2,11 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
 import { paymentFlagsSnapshot } from "@/lib/payments/flags";
+import {
+  adminLiveFailedTransferWhere,
+  adminLiveQueueDisputeWhere,
+  adminLiveQueueProtectedTxnWhere,
+} from "@/lib/payments/admin-live-queue";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import { CHARGE_MODEL, getLivePaymentsReadinessReport, isStripeConfigured } from "@/lib/payments/stripe/client";
 
@@ -10,6 +15,8 @@ export const runtime = "nodejs";
 export async function GET() {
   try {
     await requireAdmin();
+
+    const liveTxnWhere = adminLiveQueueProtectedTxnWhere();
 
     const [
       funded,
@@ -20,7 +27,9 @@ export async function GET() {
       openDisputes,
       config,
     ] = await Promise.all([
-      prisma.protectedTransaction.count({ where: { status: "FUNDED" } }),
+      prisma.protectedTransaction.count({
+        where: { status: "FUNDED", ...liveTxnWhere },
+      }),
       prisma.protectedTransaction.count({
         where: {
           status: {
@@ -33,17 +42,25 @@ export async function GET() {
               "READY_TO_RELEASE",
             ],
           },
+          ...liveTxnWhere,
         },
       }),
-      prisma.protectedTransaction.count({ where: { status: "DISPUTED" } }),
-      prisma.protectedTransaction.count({ where: { status: "RELEASED" } }),
-      prisma.transferAttempt.count({ where: { status: "FAILED" } }),
-      prisma.disputeCase.count({ where: { status: "OPEN" } }),
+      prisma.protectedTransaction.count({
+        where: { status: "DISPUTED", ...liveTxnWhere },
+      }),
+      prisma.protectedTransaction.count({
+        where: { status: "RELEASED", ...liveTxnWhere },
+      }),
+      prisma.transferAttempt.count({ where: adminLiveFailedTransferWhere() }),
+      prisma.disputeCase.count({
+        where: adminLiveQueueDisputeWhere({ in: ["OPEN", "UNDER_REVIEW"] }),
+      }),
       getPlatformPaymentConfig(),
     ]);
 
     const recent = await prisma.protectedTransaction.findMany({
       take: 20,
+      where: liveTxnWhere,
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,

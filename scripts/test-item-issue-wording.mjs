@@ -35,7 +35,7 @@ assert.match(card, /The Buyer reported an issue with the item/);
 assert.match(card, /UNDER REVIEW BY SOURCE BRIDGE/);
 assert.match(
   adminIssues,
-  /status:\s*\{\s*in:\s*\["OPEN",\s*"UNDER_REVIEW"\]\s*\}/,
+  /adminLiveQueueDisputeWhere\(\{\s*in:\s*\["OPEN",\s*"UNDER_REVIEW"\]\s*\}\)/,
   "admin queue must include immediately-reviewed cases",
 );
 

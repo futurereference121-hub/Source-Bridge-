@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { jsonError } from "@/lib/validation";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { isPaymentsEnabled } from "@/lib/payments/flags";
+import { adminLiveQueueDisputeWhere } from "@/lib/payments/admin-live-queue";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { executeAdminProtectedMoneyDecision } from "@/lib/payments/admin-protected-decision";
 
@@ -49,7 +50,7 @@ export async function GET() {
     await requireAdmin();
 
     const open = await prisma.disputeCase.findMany({
-      where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
+      where: adminLiveQueueDisputeWhere({ in: ["OPEN", "UNDER_REVIEW"] }),
       orderBy: { createdAt: "asc" },
       take: 100,
       include: {
