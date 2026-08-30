@@ -18,6 +18,7 @@ runNodeTestScripts(
     "scripts/test-listed-product-price.mjs",
     "scripts/test-shipping-activity-sync.mjs",
     "scripts/test-order-status-sync.mjs",
+    "scripts/test-buyer-purchase-detail.mjs",
     "scripts/test-payment-release-activity-sync.mjs",
     "scripts/test-photo-upload-control.mjs",
     "scripts/test-payment-journey-regression.mjs",

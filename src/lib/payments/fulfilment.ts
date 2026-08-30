@@ -516,6 +516,8 @@ export async function getProtectedOrderForUser(opts: {
   userId: string;
   email?: string | null;
   protectedTxnId: string;
+  /** When set, caller must be that party (buyer vs seller route). */
+  expectedRole?: ProtectedTxnListRole;
 }) {
   assertFulfilmentAccess();
   assertPaymentsTestAllowlisted(
@@ -547,10 +549,13 @@ export async function getProtectedOrderForUser(opts: {
     throw Object.assign(new Error("Order not found"), { status: 404 });
   }
   if (t.buyerId !== opts.userId && t.sellerId !== opts.userId) {
-    throw Object.assign(new Error("Not a party to this order"), { status: 403 });
+    throw Object.assign(new Error("Order not found"), { status: 404 });
   }
   const role: ProtectedTxnListRole =
     t.sellerId === opts.userId ? "seller" : "buyer";
+  if (opts.expectedRole && opts.expectedRole !== role) {
+    throw Object.assign(new Error("Order not found"), { status: 404 });
+  }
   return mapProtectedTxnSummary(
     { ...t, openDispute: t.disputes.length > 0 },
     role,
