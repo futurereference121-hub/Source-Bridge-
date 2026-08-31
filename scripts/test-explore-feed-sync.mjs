@@ -163,8 +163,11 @@ function oppCardsFor(feed, userId) {
       opportunityMaxMs: 20,
       opportunityCount: 3,
       opportunityIdSig: "def",
+      liveMaxMs: 0,
+      liveCount: 0,
+      liveIdSig: "0",
     }),
-    "s10c2iabc|o20c3idef",
+    "s10c2iabc|o20c3idef|l0c0i0",
   );
   assert.equal(
     maxFeedContentVersion([
@@ -196,7 +199,7 @@ function oppCardsFor(feed, userId) {
 }
 
 async function main() {
-  const t0 = new Date("2026-08-26T08:00:00.000Z");
+  const t0 = new Date(Date.now() - 30 * 60 * 1000);
   const userA = await makeUser("a");
 
   const v0 = await getExploreFeedVersion(t0);

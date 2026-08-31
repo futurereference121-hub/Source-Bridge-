@@ -49,7 +49,9 @@ export default function RootLayout({
         {/* Early Mux CDN hints — kept in body so App Router Metadata owns <head>. */}
         <link rel="preconnect" href="https://stream.mux.com" />
         <link rel="preconnect" href="https://image.mux.com" />
+        <link rel="preconnect" href="https://cloudflarestream.com" />
         <link rel="dns-prefetch" href="https://stream.mux.com" />
+        <link rel="dns-prefetch" href="https://cloudflarestream.com" />
         <SiteShell>{children}</SiteShell>
       </body>
     </html>

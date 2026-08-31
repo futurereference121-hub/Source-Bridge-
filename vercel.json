@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/payments-release",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/live-cleanup",
+      "schedule": "* * * * *"
     }
   ]
 }

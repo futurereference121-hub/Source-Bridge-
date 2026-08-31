@@ -96,6 +96,8 @@ model User {
   storyClips           StoryClip[]
   storyViews           StoryView[]                   @relation("StoryViewer")
   storyReports         StoryReport[]                 @relation("StoryReporter")
+  liveSessions         LiveSession[]                 @relation("LiveBroadcaster")
+  liveReports          LiveReport[]                  @relation("LiveReporter")
 
   /// 0–3 trust band for procurement advances (admin-configurable).
   trustLevel                    Int     @default(0)
@@ -766,6 +768,65 @@ model StoryReport {
   @@unique([storyClipId, reporterUserId])
   @@index([storyClipId, createdAt])
   @@index([status, createdAt])
+}
+
+/// Source Bridge Live — Cloudflare Stream sessions. Not a financial model.
+/// Status: PREPARING | LIVE | ENDED | TERMINATED | FAILED
+model LiveSession {
+  id                       String    @id @default(cuid())
+  broadcasterId            String
+  broadcaster              User      @relation("LiveBroadcaster", fields: [broadcasterId], references: [id], onDelete: Cascade)
+  /// PREPARING | LIVE | ENDED | TERMINATED | FAILED
+  status                   String
+  title                    String
+  /// Public location label only — never GPS.
+  locationLabel            String
+  provider                 String    @default("CLOUDFLARE")
+  providerInputId          String    @default("")
+  providerVideoId          String    @default("")
+  startedAt                DateTime?
+  endsAt                   DateTime?
+  endedAt                  DateTime?
+  cooldownUntil            DateTime?
+  wasLiveUntil             DateTime?
+  /// BROADCASTER | EXPIRED | ADMIN | FAILED | ABANDONED
+  endedReason              String    @default("")
+  version                  Int       @default(0)
+  /// Equals broadcasterId while PREPARING/LIVE; null otherwise. Enforces one active Live.
+  activeLock               String?   @unique
+  /// PENDING | DONE | FAILED | SKIPPED
+  recordingCleanupStatus   String    @default("")
+  recordingCleanupAttempts Int       @default(0)
+  recordingCleanupError    String    @default("")
+  recordingDeletedAt       DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  reports                  LiveReport[]
+
+  @@index([status, startedAt])
+  @@index([broadcasterId, createdAt])
+  @@index([broadcasterId, status])
+  @@index([wasLiveUntil, status])
+  @@index([cooldownUntil])
+  @@index([endsAt, status])
+  @@index([recordingCleanupStatus, endedAt])
+}
+
+model LiveReport {
+  id             String      @id @default(cuid())
+  liveSessionId  String
+  liveSession    LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  reporterUserId String
+  reporter       User        @relation("LiveReporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  reason         String
+  notes          String      @default("")
+  /// OPEN | REVIEWED | DISMISSED | ACTIONED
+  status         String      @default("OPEN")
+  createdAt      DateTime    @default(now())
+
+  @@unique([liveSessionId, reporterUserId])
+  @@index([status, createdAt])
+  @@index([liveSessionId, createdAt])
 }
 
 // ─── Protected Payments / Stripe Connect (TEST mode gated) ───────────────────

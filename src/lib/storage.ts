@@ -31,7 +31,8 @@ export type UploadFolder =
   | "stock"
   | "misc"
   | "verification"
-  | "stories";
+  | "stories"
+  | "live";
 
 export type StoredImage = {
   /** Absolute URL (Blob) or local path — private verification URLs must not be exposed publicly */
@@ -144,9 +145,15 @@ export function detectImageMimeType(bytes: Buffer): "image/jpeg" | "image/png" |
 }
 
 function isUploadFolder(value: string): value is UploadFolder {
-  return ["avatars", "covers", "stock", "misc", "verification", "stories"].includes(
-    value,
-  );
+  return [
+    "avatars",
+    "covers",
+    "stock",
+    "misc",
+    "verification",
+    "stories",
+    "live",
+  ].includes(value);
 }
 
 export function normalizeUploadFolder(raw: unknown): UploadFolder {
@@ -178,6 +185,7 @@ export function pathnameBelongsToUser(
     clean.startsWith(`misc/${userId}/`) ||
     clean.startsWith(`verification/${userId}/`) ||
     clean.startsWith(`stories/${userId}/`) ||
+    clean.startsWith(`live/${userId}/`) ||
     clean.startsWith(`profile-video/${userId}/`)
   );
 }

@@ -294,9 +294,7 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
   const opportunities = oppItems
     .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt))
     .slice(0, limit);
-  return [...statuses, ...opportunities].sort(
-    (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
-  );
+  return sortFeedWithLive(statuses, opportunities, []);
 }
 
 /** One active Status card per user (newest wins). */
@@ -409,9 +407,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
     // Keep independent Status + Opportunity budgets (do not merge-slice away Status).
     const statusFeed = dedupeStatusesByUser(statusItems).slice(0, limit);
     const oppFeed = oppItems.slice(0, limit);
-    return [...statusFeed, ...oppFeed].sort(
-      (a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt),
-    );
+    return sortFeedWithLive(statusFeed, oppFeed, []);
   } catch (err) {
     console.error("[members] feed query failed", err);
     return [];
@@ -422,12 +418,35 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
  * Live activity feed. Pass `members` when already loaded (e.g. Explore)
  * to avoid a second directory fetch; otherwise queries statuses/opportunities directly.
  */
+function sortFeedWithLive(
+  statuses: FeedItem[],
+  opportunities: FeedItem[],
+  lives: FeedItem[],
+): FeedItem[] {
+  return [...lives, ...statuses, ...opportunities].sort((a, b) => {
+    const rank = (k: FeedItem["kind"]) =>
+      k === "live" ? 2 : k === "was_live" ? 1 : 0;
+    const dr = rank(b.kind) - rank(a.kind);
+    if (dr !== 0) return dr;
+    return Date.parse(b.postedAt) - Date.parse(a.postedAt);
+  });
+}
+
 export async function buildMergedLiveFeed(
   limit = 40,
   members?: Member[],
 ): Promise<FeedItem[]> {
-  if (members) return feedFromMembers(members, limit);
-  return feedFromDbQueries(limit);
+  const { liveFeedItems } = await import("@/lib/live/feed");
+  const lives = await liveFeedItems(limit).catch((err) => {
+    console.error("[members] live feed failed", err);
+    return [] as FeedItem[];
+  });
+  const rest = members
+    ? feedFromMembers(members, limit)
+    : await feedFromDbQueries(limit);
+  const statuses = rest.filter((i) => i.kind === "status");
+  const opportunities = rest.filter((i) => i.kind === "opportunity");
+  return sortFeedWithLive(statuses, opportunities, lives);
 }
 
 const DIRECTORY_INCLUDE = {

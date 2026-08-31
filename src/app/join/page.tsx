@@ -77,8 +77,13 @@ function JoinForm() {
       router.replace("/onboarding");
       return;
     }
+    const next = searchParams.get("next");
+    if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/admin")) {
+      router.replace(next);
+      return;
+    }
     router.replace("/explore");
-  }, [authReady, signedIn, account, router]);
+  }, [authReady, signedIn, account, router, searchParams]);
 
   useEffect(() => {
     const u = username.trim().toLowerCase().replace(/^@/, "");

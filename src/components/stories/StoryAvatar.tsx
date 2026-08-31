@@ -9,6 +9,8 @@ import {
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
+import { LiveBadge } from "@/components/live/LiveBadge";
 import { useAppUi } from "@/components/providers/AppProviders";
 
 type Props = {
@@ -47,6 +49,9 @@ export function StoryAvatar({
   showAddLabel,
 }: Props) {
   const stories = useStoriesOptional();
+  const livePresence = useLivePresenceOptional();
+  const live = livePresence?.presence[userId];
+  const isLive = live?.kind === "live";
   const { account } = useAppUi();
   const ring = stories?.rings[userId];
   const hasActive = Boolean(ring?.hasActiveStory);
@@ -57,11 +62,13 @@ export function StoryAvatar({
 
   // Unseen = strong luminous blue + soft gold glow; seen = solid blue, no gold.
   // Uses box-shadow (not Tailwind ring) so it cannot be clipped by the face crop.
-  const shellRingClass = hasActive
-    ? hasUnseen
-      ? "shadow-[0_0_0_3px_#3b82f6,0_0_0_5px_#020b1c,0_0_16px_2px_rgba(59,130,246,0.65),0_0_22px_1px_rgba(212,168,75,0.4)]"
-      : "shadow-[0_0_0_3px_rgba(59,130,246,0.78),0_0_0_5px_#020b1c]"
-    : "";
+  const shellRingClass = isLive
+    ? "shadow-[0_0_0_3px_#dc2626,0_0_0_5px_#020b1c,0_0_16px_2px_rgba(220,38,38,0.55)]"
+    : hasActive
+      ? hasUnseen
+        ? "shadow-[0_0_0_3px_#3b82f6,0_0_0_5px_#020b1c,0_0_16px_2px_rgba(59,130,246,0.65),0_0_22px_1px_rgba(212,168,75,0.4)]"
+        : "shadow-[0_0_0_3px_rgba(59,130,246,0.78),0_0_0_5px_#020b1c]"
+      : "";
 
   const faceIdleEdge = hasActive ? "" : "ring-1 ring-white/10";
 
@@ -80,6 +87,12 @@ export function StoryAvatar({
   );
 
   function handleAvatarClick(e: MouseEvent) {
+    if (isLive && live?.sessionId && !ownerControls) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.location.assign(`/live/${live.sessionId}`);
+      return;
+    }
     if (!stories) return;
     if (ownerControls) {
       addStory(e);
@@ -129,8 +142,14 @@ export function StoryAvatar({
         padding: RING_PAD,
       }}
       data-story-ring={hasActive ? (hasUnseen ? "unseen" : "seen") : "none"}
+      data-live-ring={isLive ? "live" : live?.kind === "was_live" ? "was-live" : "none"}
     >
       {face}
+      {isLive ? (
+        <span className="pointer-events-none absolute -bottom-0.5 left-1/2 z-10 -translate-x-1/2">
+          <LiveBadge />
+        </span>
+      ) : null}
       {ownerControls ? (
         <>
           <button
@@ -180,6 +199,14 @@ export function StoryAvatar({
           </button>
         ) : null}
       </span>
+    );
+  }
+
+  if (isLive && live?.sessionId && !ownerControls) {
+    return (
+      <Link href={`/live/${live.sessionId}`} className="inline-flex shrink-0">
+        {shell}
+      </Link>
     );
   }
 

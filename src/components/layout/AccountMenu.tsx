@@ -10,6 +10,7 @@ import { useInboxUnread } from "@/hooks/useInboxUnread";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
 import { memberPhoto } from "@/lib/placeholders";
 
 /**
@@ -45,6 +46,7 @@ export function AccountMenu({
 }) {
   const { account, signOut } = useAppUi();
   const stories = useStoriesOptional();
+  const live = useLivePresenceOptional();
   const { unreadCount } = useInboxUnread();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -82,6 +84,7 @@ export function AccountMenu({
         { label: "Change Password", href: "/admin/change-password" },
       ]
     : [
+        ...(live?.available ? [{ label: "Go Live", href: "/live/go" }] : []),
         { label: "My Profile", href: accountHomePath(account) },
         { label: "Inbox", href: "/inbox" },
         { label: "Manage Profile", href: "/profile" },
@@ -199,6 +202,7 @@ export function AccountMenuMobileLinks({
 }) {
   const { account, signOut } = useAppUi();
   const { unreadCount } = useInboxUnread();
+  const live = useLivePresenceOptional();
 
   const isAdmin = Boolean(account?.role === "ADMIN" || account?.isAdmin);
   const links: MenuLink[] = isAdmin
@@ -207,6 +211,7 @@ export function AccountMenuMobileLinks({
         { label: "Change Password", href: "/admin/change-password" },
       ]
     : [
+        ...(live?.available ? [{ label: "Go Live", href: "/live/go" }] : []),
         { label: "My Profile", href: accountHomePath(account) },
         { label: "Inbox", href: "/inbox" },
         { label: "Purchases", href: "/profile/purchases" },

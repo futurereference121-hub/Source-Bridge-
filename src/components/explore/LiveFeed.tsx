@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { CircleDot, MapPin, Sparkles } from "lucide-react";
+import { CircleDot, MapPin, Radio, Sparkles } from "lucide-react";
 import type { FeedItem } from "@/lib/types";
 import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { formatRelativeTime } from "@/lib/format";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
 import { useEffect } from "react";
 
 type LiveFeedProps = {
@@ -15,11 +16,15 @@ type LiveFeedProps = {
 
 export function LiveFeed({ items }: LiveFeedProps) {
   const stories = useStoriesOptional();
+  const livePresence = useLivePresenceOptional();
 
   useEffect(() => {
     const ids = [...new Set(items.map((i) => i.memberId).filter(Boolean))];
-    if (ids.length) void stories?.refreshRings(ids);
-  }, [items, stories?.refreshRings]);
+    if (ids.length) {
+      void stories?.refreshRings(ids);
+      void livePresence?.refreshPresence(ids);
+    }
+  }, [items, stories?.refreshRings, livePresence?.refreshPresence]);
 
   if (!items.length) {
     return (
@@ -56,13 +61,31 @@ function formatOptionalDate(iso?: string): string | null {
 function FeedRow({ item }: { item: FeedItem }) {
   const relative = formatRelativeTime(item.postedAt);
   const isOpportunity = item.kind === "opportunity";
+  const isLive = item.kind === "live" || item.kind === "was_live";
+  const href = isLive && item.liveSessionId
+    ? `/live/${item.liveSessionId}`
+    : `/members/${item.memberSlug}`;
   const place = [item.city, item.country].filter(Boolean).join(", ");
   const start = formatOptionalDate(item.startsAt);
   const end = formatOptionalDate(item.expiresAt);
   const dateRange =
     start && end ? `${start} – ${end}` : start || end || null;
 
-  const kindStyles = isOpportunity
+  const kindStyles = isLive
+    ? {
+        label: item.kind === "live" ? "LIVE" : "Was Live",
+        Icon: Radio,
+        wrapper:
+          item.kind === "live"
+            ? "border border-red-500/35 bg-gradient-to-br from-red-500/[0.12] to-transparent hover:border-red-400/50"
+            : "border border-white/12 bg-white/[0.02] hover:border-white/20",
+        badge:
+          item.kind === "live"
+            ? "border-red-500/50 bg-red-600/20 text-red-300"
+            : "border-white/20 bg-white/5 text-white/60",
+        icon: item.kind === "live" ? "text-red-400" : "text-white/50",
+      }
+    : isOpportunity
     ? {
         label: "Opportunity",
         Icon: Sparkles,
@@ -82,7 +105,7 @@ function FeedRow({ item }: { item: FeedItem }) {
 
   return (
     <Link
-      href={`/members/${item.memberSlug}`}
+      href={href}
       className={`flex items-start gap-3 rounded-xl px-3 py-3 transition-colors sm:gap-3.5 sm:px-3.5 sm:py-3.5 ${kindStyles.wrapper} ${isOpportunity ? "sm:-translate-y-px" : ""}`}
     >
       <div className="relative mt-0.5 shrink-0">
@@ -135,6 +158,12 @@ function FeedRow({ item }: { item: FeedItem }) {
               </span>
             ) : null}
             {dateRange ? <span>{dateRange}</span> : null}
+          </p>
+        ) : null}
+        {isLive && item.city ? (
+          <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-white/40">
+            <MapPin size={11} strokeWidth={1.75} />
+            {item.city}
           </p>
         ) : null}
       </div>

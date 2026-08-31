@@ -13,6 +13,7 @@ import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
 import { MemberDirectoryCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
 
 const SEARCH_EXAMPLES =
   "Japan · Coffee from Colombia · Someone travelling to Bangkok · Watches in Switzerland";
@@ -62,6 +63,7 @@ export function ExploreClient({
 }: ExploreClientProps) {
   const searchParams = useSearchParams();
   const stories = useStoriesOptional();
+  const livePresence = useLivePresenceOptional();
   const initialQ = searchParams.get("q") ?? "";
   const [query, setQuery] = useState(initialQ);
   const [members, setMembers] = useState<Member[]>(initialMembers);
@@ -78,8 +80,11 @@ export function ExploreClient({
 
   useEffect(() => {
     const ids = members.map((m) => m.id);
-    if (ids.length) void stories?.refreshRings(ids);
-  }, [members, stories?.refreshRings]);
+    if (ids.length) {
+      void stories?.refreshRings(ids);
+      void livePresence?.refreshPresence(ids);
+    }
+  }, [members, stories?.refreshRings, livePresence?.refreshPresence]);
 
   useEffect(() => {
     const ids = members.map((m) => m.id);
@@ -306,6 +311,13 @@ export function ExploreClient({
       },
     );
 
+    let unsubLive: () => void = () => {};
+    void import("@/lib/live-surface-sync").then(({ subscribeLiveChanged }) => {
+      unsubLive = subscribeLiveChanged(() => {
+        void refreshFeed({ force: true });
+      });
+    });
+
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
@@ -314,6 +326,7 @@ export function ExploreClient({
       window.removeEventListener("online", onVis);
       unsubStatus();
       unsubOpp();
+      unsubLive();
     };
     // initialFeed is only the mount baseline for version; do not re-bind on prop churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-time feed sync

@@ -52,6 +52,7 @@
     "test:payments:full": "node scripts/test-payments-full.mjs",
     "test:critical": "node scripts/test-payments-fast.mjs",
     "test:sourcebridge": "node scripts/test-sourcebridge-release.mjs",
+    "test:live-streaming": "npx tsx --env-file=.env scripts/test-live-streaming.mjs",
     "test:live-guard": "node scripts/test-live-payments-guard.mjs",
     "check:live-readiness": "node scripts/check-live-payments-readiness.mjs",
     "test:stripe-dual-mode": "node scripts/test-stripe-dual-mode.mjs",

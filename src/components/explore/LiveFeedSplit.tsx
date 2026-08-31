@@ -30,7 +30,7 @@ function EmptyColumn({
       <p className="mt-2 text-sm leading-relaxed">
         {isOpp
           ? "No opportunities yet — travel windows and sourcing asks will appear here."
-          : "No status updates yet — member location posts will appear here."}
+          : "No status or Live yet — member updates will appear here."}
       </p>
     </div>
   );
@@ -56,7 +56,7 @@ export function LiveFeedSplit({ items, perColumnLimit }: Props) {
       <article className="flex min-h-0 flex-col rounded-2xl border border-sky-400/20 bg-gradient-to-br from-sky-500/[0.07] to-white/[0.02] p-3 shadow-[0_12px_32px_-18px_rgba(56,189,248,0.45)] sm:p-4">
         <h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300/80">
           <CircleDot size={12} aria-hidden />
-          Status
+          Status / Live
         </h3>
         <div className="max-h-[min(42vh,22rem)] overflow-y-auto overscroll-contain pr-0.5 md:max-h-[min(48vh,26rem)]">
           {statusItems.length ? (

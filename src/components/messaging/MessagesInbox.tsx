@@ -23,6 +23,7 @@ import {
   type PaymentsProposalAccess,
 } from "@/components/messaging/ProposePaymentTicketButton";
 import { disputeContextInboxPreview } from "@/lib/payments/dispute-context-copy";
+import { LIVE_CAPTURE_DRAFT_KEY } from "@/lib/live/constants";
 import {
   isActiveLifecycleTicket,
   MAX_ACTIVE_PAYMENT_TICKETS,
@@ -483,6 +484,30 @@ export function MessagesInbox({
   const ticketViewerId = threadViewerUserId || myId;
   const ticketViewerUsername = threadViewerUsername || account?.username || null;
   const draft = activeId ? draftByConversation[activeId] ?? "" : "";
+
+  useEffect(() => {
+    if (!activeId || typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem(LIVE_CAPTURE_DRAFT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        conversationId?: string;
+        text?: string;
+        imageUrl?: string;
+      };
+      if (parsed.conversationId !== activeId) return;
+      if (parsed.text) {
+        setDraftByConversation((prev) => ({
+          ...prev,
+          [activeId]: parsed.text || "",
+        }));
+      }
+      if (parsed.imageUrl) setPendingUrls([parsed.imageUrl]);
+      sessionStorage.removeItem(LIVE_CAPTURE_DRAFT_KEY);
+    } catch {
+      sessionStorage.removeItem(LIVE_CAPTURE_DRAFT_KEY);
+    }
+  }, [activeId]);
 
   function setDraft(value: string) {
     if (!activeId) return;

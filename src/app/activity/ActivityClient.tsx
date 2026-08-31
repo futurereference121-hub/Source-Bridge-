@@ -149,12 +149,20 @@ export function ActivityClient() {
       },
     );
 
+    let unsubLive: () => void = () => {};
+    void import("@/lib/live-surface-sync").then(({ subscribeLiveChanged }) => {
+      unsubLive = subscribeLiveChanged(() => {
+        void load(true);
+      });
+    });
+
     return () => {
       cancelled = true;
       window.clearInterval(pollId);
       document.removeEventListener("visibilitychange", onVis);
       unsubStatus();
       unsubOpp();
+      unsubLive();
     };
   }, []);
 

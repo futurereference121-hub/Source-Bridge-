@@ -190,8 +190,8 @@ export interface ActivityItemData {
   dateLabel: string;
 }
 
-/** Live feed item — status or opportunity, no social features. */
-export type FeedItemKind = "status" | "opportunity";
+/** Live feed item — status, opportunity, or Source Bridge Live. */
+export type FeedItemKind = "status" | "opportunity" | "live" | "was_live";
 
 export interface FeedItem {
   id: string;
@@ -202,13 +202,15 @@ export interface FeedItem {
   fullName: string;
   photo: string;
   text: string;
-  /** City for opportunity posts */
+  /** City for opportunity posts; location label for Live. */
   city?: string;
   /** Country for opportunity posts */
   country?: string;
   postedAt: string;
   startsAt?: string;
   expiresAt?: string;
+  liveSessionId?: string;
+  liveKind?: "live" | "was_live";
 }
 
 /** In-app notification centre event types. */

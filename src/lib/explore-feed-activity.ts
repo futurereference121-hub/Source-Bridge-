@@ -14,6 +14,9 @@ export type ExploreFeedVersionParts = {
   opportunityMaxMs: number;
   opportunityCount: number;
   opportunityIdSig: string;
+  liveMaxMs: number;
+  liveCount: number;
+  liveIdSig: string;
 };
 
 /** Stable short signature over active row ids (order-independent). */
@@ -33,7 +36,7 @@ export function idSignature(ids: string[]): string {
 }
 
 export function encodeExploreFeedVersion(parts: ExploreFeedVersionParts): string {
-  return `s${parts.statusMaxMs}c${parts.statusCount}i${parts.statusIdSig}|o${parts.opportunityMaxMs}c${parts.opportunityCount}i${parts.opportunityIdSig}`;
+  return `s${parts.statusMaxMs}c${parts.statusCount}i${parts.statusIdSig}|o${parts.opportunityMaxMs}c${parts.opportunityCount}i${parts.opportunityIdSig}|l${parts.liveMaxMs}c${parts.liveCount}i${parts.liveIdSig}`;
 }
 
 export function maxFeedContentVersion(items: FeedItem[]): number {
@@ -51,7 +54,7 @@ export function maxFeedContentVersion(items: FeedItem[]): number {
 export async function getExploreFeedVersion(
   now: Date = new Date(),
 ): Promise<string> {
-  const [statuses, opportunities] = await Promise.all([
+  const [statuses, opportunities, lives] = await Promise.all([
     prisma.statusUpdate.findMany({
       where: {
         expiresAt: { gt: now },
@@ -67,6 +70,16 @@ export async function getExploreFeedVersion(
       },
       select: { id: true, postedAt: true },
     }),
+    prisma.liveSession.findMany({
+      where: {
+        OR: [
+          { status: "LIVE" },
+          { status: "ENDED", wasLiveUntil: { gt: now } },
+        ],
+        broadcaster: publicMemberWhere,
+      },
+      select: { id: true, startedAt: true, endedAt: true, createdAt: true },
+    }),
   ]);
 
   let statusMaxMs = 0;
@@ -79,6 +92,11 @@ export async function getExploreFeedVersion(
     const t = o.postedAt.getTime();
     if (t > opportunityMaxMs) opportunityMaxMs = t;
   }
+  let liveMaxMs = 0;
+  for (const l of lives) {
+    const t = (l.startedAt || l.endedAt || l.createdAt).getTime();
+    if (t > liveMaxMs) liveMaxMs = t;
+  }
 
   return encodeExploreFeedVersion({
     statusMaxMs,
@@ -87,6 +105,9 @@ export async function getExploreFeedVersion(
     opportunityMaxMs,
     opportunityCount: opportunities.length,
     opportunityIdSig: idSignature(opportunities.map((o) => o.id)),
+    liveMaxMs,
+    liveCount: lives.length,
+    liveIdSig: idSignature(lives.map((l) => l.id)),
   });
 }
 

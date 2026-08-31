@@ -9,6 +9,7 @@ const TABS = [
   { href: "/admin/verifications", label: "Verification Applicants" },
   { href: "/admin/payments", label: "Protected Payments" },
   { href: "/admin/reviews", label: "Reviews & Disputes" },
+  { href: "/admin/live", label: "Live" },
 ] as const;
 
 function tabActive(pathname: string, href: string): boolean {

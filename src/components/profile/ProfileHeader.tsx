@@ -13,6 +13,7 @@ import { SourcingRequestComposer } from "@/components/messaging/SourcingRequestC
 import { memberCover } from "@/lib/placeholders";
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
+import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
 
 type ProfileHeaderProps = {
   member: Member;
@@ -36,6 +37,7 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
   const searchParams = useSearchParams();
   const { follows, followMember, requireAuth, showToast, account } = useAppUi();
   const stories = useStoriesOptional();
+  const livePresence = useLivePresenceOptional();
   const following = follows.includes(member.id);
   const [composerOpen, setComposerOpen] = useState(false);
   const [displayMessageDraft, setDisplayMessageDraft] = useState(
@@ -47,7 +49,8 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
   useEffect(() => {
     void stories?.refreshRings([member.id]);
-  }, [member.id, stories?.refreshRings]);
+    void livePresence?.refreshPresence([member.id]);
+  }, [member.id, stories?.refreshRings, livePresence?.refreshPresence]);
 
   useEffect(() => {
     if (isOwner || !messagingOk) return;
@@ -191,13 +194,24 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
 
         <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
           {isOwner ? (
-            <PrimaryButton
-              href={editHref(member.slug, "profile")}
-              showArrow={false}
-              className="rounded-lg"
-            >
-              Edit Profile
-            </PrimaryButton>
+            <>
+              {livePresence?.available ? (
+                <PrimaryButton
+                  href="/live/go"
+                  showArrow={false}
+                  className="rounded-lg bg-red-600 hover:bg-red-500"
+                >
+                  Go Live
+                </PrimaryButton>
+              ) : null}
+              <PrimaryButton
+                href={editHref(member.slug, "profile")}
+                showArrow={false}
+                className="rounded-lg"
+              >
+                Edit Profile
+              </PrimaryButton>
+            </>
           ) : (
             <>
               <button
