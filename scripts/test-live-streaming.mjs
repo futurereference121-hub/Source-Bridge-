@@ -64,7 +64,14 @@ console.log("=== Live contract ===");
   assert.match(cf, /webRTC/);
   assert.match(cf, /requireSignedURLs/);
   assert.match(cf, /preferLowLatency/);
+  assert.match(cf, /deleteRecordingAfterDays:\s*30/);
+  assert.doesNotMatch(cf, /deleteRecordingAfterDays:\s*1\b/);
+  assert.doesNotMatch(cf, /deleteRecordingAfterDays:\s*0\b/);
+  assert.doesNotMatch(cf, /deleteRecordingAfterDays:\s*29\b/);
   assert.doesNotMatch(cf, /iframe/);
+  const sessionsRoute = read("src/app/api/live/sessions/route.ts");
+  assert.match(sessionsRoute, /LIVE_START_UNAVAILABLE_MESSAGE/);
+  assert.match(constants, /Unable to start Live right now/);
   const watchRoute = read("src/app/api/live/sessions/[id]/watch/route.ts");
   assert.match(watchRoute, /issueLiveWatchGrant/);
   assert.doesNotMatch(watchRoute, /cloudflarestream\.com.*fetch\(/);
@@ -119,6 +126,51 @@ console.log("=== Live contract ===");
   assert.match(eligibility, /getStripeMode/);
   assert.doesNotMatch(eligibility, /PaymentIntent/);
   assert.doesNotMatch(eligibility, /syncConnectAccount/);
+}
+
+console.log("=== Live Cloudflare create body (mock fetch) ===");
+
+{
+  const captured = { body: null };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (
+      typeof url === "string" &&
+      url.includes("/stream/live_inputs") &&
+      init?.method === "POST"
+    ) {
+      captured.body = JSON.parse(String(init.body || "{}"));
+      return new Response(
+        JSON.stringify({
+          success: true,
+          result: {
+            uid: "cf_mock_input",
+            webRTC: { url: "https://customer-mock.cloudflarestream.com/webRTC/publish" },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return originalFetch(url, init);
+  };
+  process.env.CLOUDFLARE_ACCOUNT_ID = "acct_test";
+  process.env.CLOUDFLARE_API_TOKEN = "token_test";
+  process.env.CLOUDFLARE_STREAM_CUSTOMER_CODE = "customer-mock";
+  process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID = "kid_test";
+  const { cloudflareLiveVideoProvider } = await import(
+    "../src/lib/live/cloudflare.ts"
+  );
+  await cloudflareLiveVideoProvider.createLiveInput({
+    name: "Test",
+    sessionId: "sess_mock",
+  });
+  globalThis.fetch = originalFetch;
+  assert.equal(captured.body?.deleteRecordingAfterDays, 30);
+  assert.notEqual(captured.body?.deleteRecordingAfterDays, 0);
+  assert.notEqual(captured.body?.deleteRecordingAfterDays, 1);
+  assert.notEqual(captured.body?.deleteRecordingAfterDays, 29);
+  assert.equal(captured.body?.recording?.mode, "automatic");
+  assert.equal(captured.body?.recording?.requireSignedURLs, true);
 }
 
 console.log("=== Live clock ===");

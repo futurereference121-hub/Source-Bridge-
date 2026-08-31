@@ -51,3 +51,7 @@ export const LIVE_CAPTURE_DRAFT_KEY = "sb-live-capture-draft";
 
 export const LIVE_CAPTURE_SUGGESTED_TEXT =
   "Hi — I saw this during your Live and wanted to ask if you can source it.";
+
+/** Shown when Cloudflare/provider provisioning fails — raw API text is logged only. */
+export const LIVE_START_UNAVAILABLE_MESSAGE =
+  "Unable to start Live right now. Please try again.";

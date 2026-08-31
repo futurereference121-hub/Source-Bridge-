@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireSessionUser } from "@/lib/auth";
 import { listDiscoverableLive } from "@/lib/live/discovery";
+import { LIVE_START_UNAVAILABLE_MESSAGE } from "@/lib/live/constants";
 import { prepareLiveSession } from "@/lib/live/sessions";
 import { jsonError } from "@/lib/validation";
 
@@ -44,6 +45,10 @@ export async function POST(req: Request) {
     if (status === 401) return jsonError("Sign in required", 401, { code });
     if (status >= 400 && status < 500) return jsonError(message, status, { code });
     console.error("[live:start]", err);
-    return jsonError(message, 500, { code });
+    return jsonError(
+      LIVE_START_UNAVAILABLE_MESSAGE,
+      status >= 500 ? 503 : 500,
+      { code: code || "PROVIDER_UNAVAILABLE" },
+    );
   }
 }

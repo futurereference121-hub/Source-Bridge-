@@ -97,7 +97,7 @@ export const cloudflareLiveVideoProvider: LiveVideoProvider = {
           meta: { name: opts.name, sourceBridgeSessionId: opts.sessionId },
           enabled: true,
           preferLowLatency: true,
-          deleteRecordingAfterDays: 1,
+          deleteRecordingAfterDays: 30,
           recording: {
             mode: "automatic",
             requireSignedURLs: true,

@@ -4,6 +4,7 @@ import {
   LIVE_LOCATION_MAX,
   LIVE_PREPARING_TTL_MS,
   LIVE_PROVIDER_CLOUDFLARE,
+  LIVE_START_UNAVAILABLE_MESSAGE,
   LIVE_TITLE_MAX,
   type LiveEndedReason,
 } from "./constants";
@@ -176,8 +177,9 @@ export async function prepareLiveSession(opts: {
         publish: creds,
       };
     } catch (err) {
+      console.error("[live:prepare:provider]", session.id, err);
       await failPreparing(session.id, "FAILED", now);
-      throw err;
+      httpError(LIVE_START_UNAVAILABLE_MESSAGE, 503, "PROVIDER_UNAVAILABLE");
     }
   } catch (err) {
     const code = (err as { code?: string }).code;
