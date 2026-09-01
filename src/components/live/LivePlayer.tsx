@@ -66,6 +66,8 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
   const [ended, setEnded] = useState(session.status !== "LIVE");
   const [usingWhep, setUsingWhep] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const stallTimer = useRef<number | null>(null);
 
   async function loadGrant() {
     const res = await fetch(`/api/live/sessions/${session.id}/watch`, {
@@ -99,6 +101,21 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void fetch(`/api/live/sessions/${session.id}`, { cache: "no-store" })
+        .then(async (res) => {
+          const data = (await res.json()) as { session?: LiveSessionPublic };
+          if (data.session?.status !== "LIVE") {
+            setEnded(true);
+            setReconnecting(false);
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(id);
   }, [session.id]);
 
   useEffect(() => {
@@ -152,7 +169,10 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
             hls.attachMedia(el);
             hls.on(Hls.Events.MANIFEST_PARSED, () => resolve(true));
             hls.on(Hls.Events.ERROR, (_e, data) => {
-              if (data.fatal) resolve(false);
+              if (data.fatal) {
+                setReconnecting(true);
+                resolve(false);
+              }
             });
             window.setTimeout(() => resolve(el.readyState >= 1), 5000);
             return;
@@ -164,6 +184,7 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       if (cancelled) return;
       if (ok) {
         setUsingWhep(false);
+        setReconnecting(false);
         void el.play().catch(() => {});
         return;
       }
@@ -176,7 +197,7 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
           );
           void el.play().catch(() => {});
         } catch {
-          showToast("Live video is starting…");
+          setReconnecting(true);
         }
       }
     }
@@ -221,6 +242,28 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       const start = seekable.start(0);
       setDuration(end - start);
       setBehindLive(end - v.currentTime > 3);
+    }
+    if (v.readyState >= 2 && !v.paused) {
+      setReconnecting(false);
+      if (stallTimer.current) {
+        window.clearTimeout(stallTimer.current);
+        stallTimer.current = null;
+      }
+    }
+  }
+
+  function onWaiting() {
+    if (stallTimer.current) window.clearTimeout(stallTimer.current);
+    stallTimer.current = window.setTimeout(() => {
+      if (!ended && session.status === "LIVE") setReconnecting(true);
+    }, 4000);
+  }
+
+  function onPlaying() {
+    setReconnecting(false);
+    if (stallTimer.current) {
+      window.clearTimeout(stallTimer.current);
+      stallTimer.current = null;
     }
   }
 
@@ -357,8 +400,17 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         autoPlay
         muted={isBroadcaster}
         onTimeUpdate={onTime}
+        onWaiting={onWaiting}
+        onPlaying={onPlaying}
         crossOrigin="anonymous"
       />
+      {reconnecting ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55">
+          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">
+            Broadcaster reconnecting…
+          </p>
+        </div>
+      ) : null}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between bg-gradient-to-b from-black/70 to-transparent p-4">
         <div>
           <LiveBadge />

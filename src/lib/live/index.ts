@@ -10,6 +10,8 @@ export {
   prepareLiveSession,
   goLiveSession,
   endLiveSession,
+  resumeLiveSession,
+  getBroadcasterActiveSession,
   toLiveSessionPublic,
 } from "./sessions";
 export { runLiveCleanup } from "./cleanup";

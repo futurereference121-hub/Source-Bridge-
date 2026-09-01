@@ -1,26 +1,12 @@
-import { createPrivateKey, createSign } from "crypto";
+import { createSign } from "crypto";
+import {
+  loadStreamSigningPrivateKey,
+  streamSigningKeyId,
+  StreamSigningKeyError,
+} from "./signing-key";
 
 function base64urlJson(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
-}
-
-function normalizePem(raw: string): string {
-  return raw.replace(/\\n/g, "\n").trim();
-}
-
-function loadPrivateKey() {
-  const pem = (process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM || "").trim();
-  if (pem) {
-    return createPrivateKey(normalizePem(pem));
-  }
-  const jwkRaw = (process.env.CLOUDFLARE_STREAM_SIGNING_KEY_JWK || "").trim();
-  if (jwkRaw) {
-    return createPrivateKey({
-      key: JSON.parse(jwkRaw) as import("crypto").JsonWebKey,
-      format: "jwk",
-    });
-  }
-  throw new Error("CLOUDFLARE_STREAM_SIGNING_KEY_PEM or _JWK is required");
 }
 
 /**
@@ -30,14 +16,17 @@ function loadPrivateKey() {
  */
 export function signCloudflareStreamToken(opts: {
   sub: string;
-  kid: string;
+  kid?: string;
   expUnix: number;
   nbfUnix?: number;
 }): string {
-  const header = { alg: "RS256", kid: opts.kid };
+  const kid = (opts.kid || streamSigningKeyId()).trim();
+  if (!kid) throw new StreamSigningKeyError();
+
+  const header = { alg: "RS256", kid };
   const payload: Record<string, unknown> = {
     sub: opts.sub,
-    kid: opts.kid,
+    kid,
     exp: opts.expUnix,
   };
   if (opts.nbfUnix != null) payload.nbf = opts.nbfUnix;
@@ -45,8 +34,13 @@ export function signCloudflareStreamToken(opts: {
   const sign = createSign("RSA-SHA256");
   sign.update(data);
   sign.end();
-  const sig = sign.sign(loadPrivateKey());
-  return `${data}.${sig.toString("base64url")}`;
+  try {
+    const sig = sign.sign(loadStreamSigningPrivateKey());
+    return `${data}.${sig.toString("base64url")}`;
+  } catch (err) {
+    if (err instanceof StreamSigningKeyError) throw err;
+    throw new StreamSigningKeyError();
+  }
 }
 
 export function streamCustomerHost(customerCode: string): string {

@@ -21,6 +21,7 @@ export type LiveEligibility = {
   serverNow: string;
   payoutsEnabled: boolean;
   available: boolean;
+  activeSession: import("./public-types").LiveSessionPublic | null;
 };
 
 function denial(
@@ -36,6 +37,7 @@ function denial(
     serverNow: extra.serverNow ?? new Date().toISOString(),
     payoutsEnabled: extra.payoutsEnabled ?? false,
     available: extra.available ?? isLiveStreamingAvailable(),
+    activeSession: extra.activeSession ?? null,
   };
 }
 
@@ -101,13 +103,26 @@ export async function evaluateLiveEligibility(
       broadcasterId: user.id,
       status: { in: ["PREPARING", "LIVE"] },
     },
-    select: { id: true },
+    orderBy: { createdAt: "desc" },
+    include: {
+      broadcaster: {
+        select: {
+          id: true,
+          username: true,
+          slug: true,
+          name: true,
+          photo: true,
+        },
+      },
+    },
   });
   if (active) {
+    const { toLiveSessionPublic } = await import("./sessions");
     return denial("ACTIVE_LIVE", "You already have a Live in progress.", {
       serverNow,
       available,
       payoutsEnabled,
+      activeSession: toLiveSessionPublic(active, now),
     });
   }
 
@@ -136,6 +151,7 @@ export async function evaluateLiveEligibility(
     serverNow,
     payoutsEnabled: true,
     available: true,
+    activeSession: null,
   };
 }
 

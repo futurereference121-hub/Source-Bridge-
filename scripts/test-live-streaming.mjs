@@ -60,6 +60,18 @@ console.log("=== Live contract ===");
   assert.match(provider, /deleteRecording/);
   const signed = read("src/lib/live/signed-token.ts");
   assert.match(signed, /dvrEnabled/);
+  const signingKey = read("src/lib/live/signing-key.ts");
+  assert.match(signingKey, /normalizeStreamSigningKey/);
+  assert.match(signingKey, /STREAM_SIGNING_KEY_INVALID/);
+  assert.doesNotMatch(signingKey, /console\.log.*pem/i);
+  const studio = read("src/components/live/GoLiveStudio.tsx");
+  assert.match(studio, /Resume Live/);
+  assert.doesNotMatch(studio, /pagehide/);
+  assert.doesNotMatch(studio, /beforeunload/);
+  assert.match(studio, /wakeLock/);
+  assert.match(read("src/app/api/live/sessions/[id]/resume/route.ts"), /resumeLiveSession/);
+  assert.match(read("src/app/api/live/sessions/active/route.ts"), /getBroadcasterActiveSession/);
+  assert.match(constants, /Unable to load this Live right now/);
   const cf = read("src/lib/live/cloudflare.ts");
   assert.match(cf, /webRTC/);
   assert.match(cf, /requireSignedURLs/);
@@ -79,6 +91,7 @@ console.log("=== Live contract ===");
   assert.match(player, /hls\.js/);
   assert.match(player, /Capture Item/);
   assert.match(player, /Jump to Live/);
+  assert.match(player, /Broadcaster reconnecting/);
   assert.doesNotMatch(player, /<iframe/);
   const capture = read("src/lib/live/capture.ts");
   assert.match(capture, /getOrCreateConversationPair/);
@@ -171,6 +184,50 @@ console.log("=== Live Cloudflare create body (mock fetch) ===");
   assert.notEqual(captured.body?.deleteRecordingAfterDays, 29);
   assert.equal(captured.body?.recording?.mode, "automatic");
   assert.equal(captured.body?.recording?.requireSignedURLs, true);
+}
+
+console.log("=== Live signing key normalization ===");
+
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  });
+  const pem = String(privateKey);
+  const { normalizeStreamSigningKey, StreamSigningKeyError } = await import(
+    "../src/lib/live/signing-key.ts"
+  );
+
+  assert.equal(normalizeStreamSigningKey(pem).includes("-----BEGIN"), true, "CASE 1 real PEM");
+  const escaped = pem.replace(/\n/g, "\\n");
+  assert.equal(
+    normalizeStreamSigningKey(escaped).includes("-----BEGIN PRIVATE KEY"),
+    true,
+    "CASE 2 escaped PEM",
+  );
+  const b64 = Buffer.from(pem, "utf8").toString("base64");
+  assert.equal(
+    normalizeStreamSigningKey(b64).includes("-----BEGIN PRIVATE KEY"),
+    true,
+    "CASE 3 Cloudflare base64 PEM",
+  );
+  assert.throws(() => normalizeStreamSigningKey("not-a-key"), StreamSigningKeyError, "bad key");
+  assert.throws(() => normalizeStreamSigningKey(""), StreamSigningKeyError, "empty key");
+
+  process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM = b64;
+  process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID = "kid_unit_test";
+  const { signCloudflareStreamToken } = await import("../src/lib/live/signed-token.ts");
+  const token = signCloudflareStreamToken({
+    sub: "video_test",
+    expUnix: Math.floor(Date.now() / 1000) + 60,
+  });
+  assert.match(token, /^eyJ/);
+  assert.equal(token.split(".").length, 3);
+
+  delete process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM;
+  delete process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID;
 }
 
 console.log("=== Live clock ===");
@@ -285,7 +342,7 @@ async function cleanup() {
 try {
   console.log("=== Live domain (DB, mock Cloudflare) ===");
   const { evaluateLiveEligibility } = await import("../src/lib/live/eligibility.ts");
-  const { prepareLiveSession, goLiveSession, endLiveSession } = await import(
+  const { prepareLiveSession, goLiveSession, endLiveSession, resumeLiveSession } = await import(
     "../src/lib/live/sessions.ts"
   );
   const { prepareLiveCaptureMessage } = await import("../src/lib/live/capture.ts");
@@ -346,9 +403,21 @@ try {
   });
   assert.equal(live.status, "LIVE");
   assert.ok(live.endsAt);
+  const startedAtBefore = live.startedAt;
+  const endsAtBefore = live.endsAt;
   const duration =
     Date.parse(live.endsAt) - Date.parse(live.startedAt);
   assert.equal(duration, 30 * 60 * 1000);
+
+  const resumed = await resumeLiveSession({
+    user: asSourcer,
+    sessionId: live.id,
+    takeover: true,
+  });
+  assert.equal(resumed.session.id, live.id);
+  assert.equal(resumed.session.startedAt, startedAtBefore, "startedAt unchanged on resume");
+  assert.equal(resumed.session.endsAt, endsAtBefore, "endsAt unchanged on resume");
+  assert.ok(resumed.publish.whipUrl.includes("webRTC/publish"));
 
   const usedBefore = await prisma.rateLimitEvent.count({
     where: { userId: sourcer.id, action: "status" },

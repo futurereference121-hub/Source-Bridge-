@@ -226,6 +226,74 @@ export async function goLiveSession(opts: {
   return toLiveSessionPublic(updated, now);
 }
 
+export async function getBroadcasterActiveSession(
+  broadcasterId: string,
+  now: Date = new Date(),
+) {
+  const row = await prisma.liveSession.findFirst({
+    where: {
+      broadcasterId,
+      status: { in: ["PREPARING", "LIVE"] },
+    },
+    orderBy: { createdAt: "desc" },
+    include: sessionInclude,
+  });
+  if (!row) return null;
+  const checked = await expireLiveIfNeeded(row.id, now);
+  if (!checked || (checked.status !== "PREPARING" && checked.status !== "LIVE")) {
+    return null;
+  }
+  return prisma.liveSession.findUnique({
+    where: { id: row.id },
+    include: sessionInclude,
+  });
+}
+
+/**
+ * Resume an in-progress Live on the same session. Server clock (startedAt/endsAt)
+ * is unchanged. Returns fresh WHIP publish credentials for republish.
+ */
+export async function resumeLiveSession(opts: {
+  user: SessionUser;
+  sessionId: string;
+  takeover?: boolean;
+  now?: Date;
+}) {
+  const now = opts.now ?? new Date();
+  const row = await prisma.liveSession.findUnique({
+    where: { id: opts.sessionId },
+    include: sessionInclude,
+  });
+  if (!row) httpError("Live not found", 404);
+  if (row.broadcasterId !== opts.user.id) httpError("Forbidden", 403);
+  if (row.status !== "PREPARING" && row.status !== "LIVE") {
+    httpError("This Live has ended", 409, "NOT_LIVE");
+  }
+  if (row.status === "LIVE" && isLiveExpired(row.endsAt, now)) {
+    await expireLiveIfNeeded(row.id, now);
+    httpError("This Live has ended", 409, "NOT_LIVE");
+  }
+  if (!row.providerInputId) httpError("Live ingest is not ready", 409);
+
+  const provider = getLiveVideoProvider();
+  const publish = await provider.getPublishCredentials(row.providerInputId);
+
+  const updated = await prisma.liveSession.update({
+    where: { id: row.id },
+    data: {
+      activeLock: opts.user.id,
+      version: opts.takeover ? { increment: 1 } : undefined,
+    },
+    include: sessionInclude,
+  });
+
+  return {
+    session: toLiveSessionPublic(updated, now),
+    publish,
+    resumed: true,
+  };
+}
+
 export async function getBroadcasterPublishCredentials(opts: {
   user: SessionUser;
   sessionId: string;

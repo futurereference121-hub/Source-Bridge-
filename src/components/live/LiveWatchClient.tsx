@@ -26,8 +26,17 @@ export function LiveWatchClient({ sessionId }: { sessionId: string }) {
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
       });
+    const poll = window.setInterval(() => {
+      void fetch(`/api/live/sessions/${sessionId}`, { cache: "no-store" })
+        .then(async (res) => {
+          const data = (await res.json()) as { session?: LiveSessionPublic };
+          if (!cancelled && data.session) setSession(data.session);
+        })
+        .catch(() => {});
+    }, 5000);
     return () => {
       cancelled = true;
+      window.clearInterval(poll);
     };
   }, [sessionId]);
 

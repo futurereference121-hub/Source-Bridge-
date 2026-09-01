@@ -6,6 +6,7 @@ import type {
   LiveVideoProvider,
   LiveViewerToken,
 } from "./provider";
+import { streamSigningKeyId } from "./signing-key";
 import {
   signCloudflareStreamToken,
   signedHlsUrl,
@@ -46,10 +47,6 @@ function customerCode(): string {
   return (process.env.CLOUDFLARE_STREAM_CUSTOMER_CODE || "")
     .trim()
     .replace(/^customer-/, "");
-}
-
-function signingKeyId(): string {
-  return (process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID || "").trim();
 }
 
 async function cfFetch<T>(
@@ -158,7 +155,7 @@ export const cloudflareLiveVideoProvider: LiveVideoProvider = {
   },
 
   async createViewerToken(opts) {
-    const kid = signingKeyId();
+    const kid = streamSigningKeyId();
     const sub = opts.videoId || opts.inputId;
     const token = signCloudflareStreamToken({
       sub,
