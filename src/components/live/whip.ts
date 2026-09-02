@@ -5,6 +5,11 @@ type WhipHandle = {
   resourceUrl: string;
 };
 
+export type WhepHandle = {
+  pc: RTCPeerConnection;
+  resourceUrl: string | null;
+};
+
 function waitIce(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
@@ -62,19 +67,35 @@ export async function stopWhipPublish(handle: WhipHandle | null) {
   handle.pc.close();
 }
 
+type WhepPlaybackOptions = {
+  onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
+};
+
+/** WHEP playback — Cloudflare reference: single MediaStream, recvonly transceivers. */
 export async function startWhepPlayback(
   whepUrl: string,
   video: HTMLVideoElement,
-): Promise<RTCPeerConnection> {
+  opts?: WhepPlaybackOptions,
+): Promise<WhepHandle> {
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
+    bundlePolicy: "max-bundle",
   });
   pc.addTransceiver("video", { direction: "recvonly" });
   pc.addTransceiver("audio", { direction: "recvonly" });
-  pc.ontrack = (ev) => {
-    const [stream] = ev.streams;
-    if (stream) video.srcObject = stream;
+
+  const stream = new MediaStream();
+  video.srcObject = stream;
+  pc.ontrack = (event) => {
+    stream.addTrack(event.track);
   };
+
+  if (opts?.onConnectionStateChange) {
+    pc.onconnectionstatechange = () => {
+      opts.onConnectionStateChange?.(pc.connectionState);
+    };
+  }
+
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   await waitIce(pc);
@@ -88,6 +109,22 @@ export async function startWhepPlayback(
     throw new Error("Could not start Live playback");
   }
   const answer = await res.text();
+  const location = res.headers.get("Location");
   await pc.setRemoteDescription({ type: "answer", sdp: answer });
-  return pc;
+  return {
+    pc,
+    resourceUrl: location ? new URL(location, whepUrl).toString() : null,
+  };
+}
+
+export async function stopWhepPlayback(handle: WhepHandle | null) {
+  if (!handle) return;
+  try {
+    if (handle.resourceUrl) {
+      await fetch(handle.resourceUrl, { method: "DELETE" });
+    }
+  } catch {
+    /* ignore */
+  }
+  handle.pc.close();
 }

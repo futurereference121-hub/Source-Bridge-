@@ -76,13 +76,11 @@ function host(): string {
 }
 
 /**
- * Current Cloudflare Stream Live Inputs API (WHIP publish, HLS + DVR playback).
- * Docs: start-stream-live, webrtc-beta, dvr-for-live, securing-your-stream (2026).
+ * Cloudflare Stream Live Inputs — WHIP publish, signed WHEP playback for viewers.
+ * Docs: webrtc-beta, browser-based-webrtc, securing-your-stream (2026).
  *
- * WHIP ingest + HLS DVR are documented as a beta pairing ("coming soon" to
- * officially bridge). We still request recording.mode=automatic so HLS/DVR
- * and live-frame thumbnails exist when Stream materializes a live video UID.
- * Playback descriptor always includes WHEP as the WHIP companion.
+ * WHIP and WHEP must be paired; WHIP ingest + HLS/DASH playback is not supported.
+ * recording.mode=automatic is retained for post-live assets when Stream supports them.
  */
 export const cloudflareLiveVideoProvider: LiveVideoProvider = {
   async createLiveInput(opts) {

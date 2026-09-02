@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Hls from "hls.js";
 import { useRouter } from "next/navigation";
-import { LIVE_CAPTURE_DRAFT_KEY, LIVE_REPORT_REASONS } from "@/lib/live/constants";
+import {
+  LIVE_CAPTURE_DRAFT_KEY,
+  LIVE_REPORT_REASONS,
+  LIVE_WATCH_UNAVAILABLE_MESSAGE,
+} from "@/lib/live/constants";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { LiveBadge, LiveTimer } from "@/components/live/LiveBadge";
-import { startWhepPlayback } from "@/components/live/whip";
+import {
+  startWhepPlayback,
+  stopWhepPlayback,
+  type WhepHandle,
+} from "@/components/live/whip";
 import type { LiveSessionPublic } from "@/lib/live/public-types";
 
 type WatchGrant = {
@@ -24,12 +31,6 @@ type Props = {
   session: LiveSessionPublic;
   isBroadcaster: boolean;
 };
-
-function supportsNativeHls(): boolean {
-  if (typeof document === "undefined") return false;
-  const v = document.createElement("video");
-  return v.canPlayType("application/vnd.apple.mpegurl") !== "";
-}
 
 async function canvasFrame(video: HTMLVideoElement): Promise<Blob | null> {
   try {
@@ -53,19 +54,15 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
   const router = useRouter();
   const { account, requireAuth, showToast } = useAppUi();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const whepRef = useRef<RTCPeerConnection | null>(null);
+  const whepRef = useRef<WhepHandle | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
   const [grant, setGrant] = useState<WatchGrant | null>(null);
   const [remainingMs, setRemainingMs] = useState(session.remainingMs);
-  const [behindLive, setBehindLive] = useState(false);
-  const [duration, setDuration] = useState(0);
-  const [current, setCurrent] = useState(0);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [captureUrl, setCaptureUrl] = useState<string | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [ended, setEnded] = useState(session.status !== "LIVE");
-  const [usingWhep, setUsingWhep] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const stallTimer = useRef<number | null>(null);
 
@@ -80,7 +77,7 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
       if (data.code === "NOT_LIVE") setEnded(true);
-      throw new Error(data.error || "Cannot watch");
+      throw new Error(data.error || LIVE_WATCH_UNAVAILABLE_MESSAGE);
     }
     return (await res.json()) as WatchGrant;
   }
@@ -91,10 +88,8 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       try {
         const next = await loadGrant();
         if (!cancelled && next) setGrant(next);
-      } catch (err) {
-        if (!cancelled) {
-          showToast(err instanceof Error ? err.message : "Cannot watch Live");
-        }
+      } catch {
+        if (!cancelled) showToast(LIVE_WATCH_UNAVAILABLE_MESSAGE);
       }
     })();
     return () => {
@@ -139,85 +134,70 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     const el: HTMLVideoElement = media;
     let cancelled = false;
 
-    async function attach() {
-      destroy();
-      const hlsUrl = grant!.playback.hlsUrl;
-      el.crossOrigin = "anonymous";
-      el.playsInline = true;
+    function clearReconnectTimer() {
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    }
 
-      const tryHls = () =>
-        new Promise<boolean>((resolve) => {
-          if (supportsNativeHls()) {
-            el.src = hlsUrl;
-            el.addEventListener(
-              "loadedmetadata",
-              () => resolve(true),
-              { once: true },
-            );
-            el.addEventListener("error", () => resolve(false), { once: true });
-            window.setTimeout(() => resolve(el.readyState >= 1), 4000);
-            return;
-          }
-          if (Hls.isSupported()) {
-            const hls = new Hls({
-              lowLatencyMode: true,
-              liveDurationInfinity: true,
-              backBufferLength: 1800,
-            });
-            hlsRef.current = hls;
-            hls.loadSource(hlsUrl);
-            hls.attachMedia(el);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => resolve(true));
-            hls.on(Hls.Events.ERROR, (_e, data) => {
-              if (data.fatal) {
-                setReconnecting(true);
-                resolve(false);
-              }
-            });
-            window.setTimeout(() => resolve(el.readyState >= 1), 5000);
-            return;
-          }
-          resolve(false);
-        });
+    function destroyWhep() {
+      stopWhepPlayback(whepRef.current);
+      whepRef.current = null;
+      el.srcObject = null;
+    }
 
-      const ok = await tryHls();
-      if (cancelled) return;
-      if (ok) {
-        setUsingWhep(false);
-        setReconnecting(false);
-        void el.play().catch(() => {});
+    function scheduleReconnect() {
+      if (cancelled || ended) return;
+      clearReconnectTimer();
+      reconnectTimerRef.current = window.setTimeout(() => {
+        if (!cancelled && !ended) void connect();
+      }, 2000);
+    }
+
+    async function connect() {
+      destroyWhep();
+      const whepUrl = grant!.playback.whepUrl;
+      if (!whepUrl) {
+        setReconnecting(true);
+        showToast(LIVE_WATCH_UNAVAILABLE_MESSAGE);
         return;
       }
-      if (grant!.playback.whepUrl) {
-        setUsingWhep(true);
-        try {
-          whepRef.current = await startWhepPlayback(
-            grant!.playback.whepUrl,
-            el,
-          );
-          void el.play().catch(() => {});
-        } catch {
+      el.playsInline = true;
+      try {
+        const handle = await startWhepPlayback(whepUrl, el, {
+          onConnectionStateChange: (state) => {
+            if (cancelled) return;
+            if (state === "connected") {
+              setReconnecting(false);
+            } else if (state === "failed" || state === "disconnected") {
+              setReconnecting(true);
+              scheduleReconnect();
+            }
+          },
+        });
+        if (cancelled) {
+          stopWhepPlayback(handle);
+          return;
+        }
+        whepRef.current = handle;
+        setReconnecting(false);
+        void el.play().catch(() => {});
+      } catch {
+        if (!cancelled) {
           setReconnecting(true);
+          scheduleReconnect();
         }
       }
     }
 
-    function destroy() {
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
-      whepRef.current?.close();
-      whepRef.current = null;
-      el.removeAttribute("src");
-      el.srcObject = null;
-      el.load();
-    }
-
-    void attach();
+    void connect();
     return () => {
       cancelled = true;
-      destroy();
+      clearReconnectTimer();
+      destroyWhep();
     };
-  }, [grant, ended, showToast]);
+  }, [grant, ended, session.id, showToast]);
 
   useEffect(() => {
     if (!grant) return;
@@ -232,26 +212,6 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grant?.playback.tokenExp]);
 
-  function onTime() {
-    const v = videoRef.current;
-    if (!v) return;
-    setCurrent(v.currentTime);
-    const seekable = v.seekable;
-    if (seekable.length) {
-      const end = seekable.end(seekable.length - 1);
-      const start = seekable.start(0);
-      setDuration(end - start);
-      setBehindLive(end - v.currentTime > 3);
-    }
-    if (v.readyState >= 2 && !v.paused) {
-      setReconnecting(false);
-      if (stallTimer.current) {
-        window.clearTimeout(stallTimer.current);
-        stallTimer.current = null;
-      }
-    }
-  }
-
   function onWaiting() {
     if (stallTimer.current) window.clearTimeout(stallTimer.current);
     stallTimer.current = window.setTimeout(() => {
@@ -265,20 +225,6 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       window.clearTimeout(stallTimer.current);
       stallTimer.current = null;
     }
-  }
-
-  function jumpToLive() {
-    const v = videoRef.current;
-    if (!v || !v.seekable.length) return;
-    v.currentTime = v.seekable.end(v.seekable.length - 1);
-    void v.play();
-  }
-
-  function onScrub(value: number) {
-    const v = videoRef.current;
-    if (!v || !v.seekable.length) return;
-    const start = v.seekable.start(0);
-    v.currentTime = start + value;
   }
 
   async function captureItem() {
@@ -389,8 +335,6 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     );
   }
 
-  const dvrMax = Math.max(duration, 0);
-
   return (
     <div className="relative overflow-hidden rounded-2xl bg-black">
       <video
@@ -399,10 +343,8 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         playsInline
         autoPlay
         muted={isBroadcaster}
-        onTimeUpdate={onTime}
         onWaiting={onWaiting}
         onPlaying={onPlaying}
-        crossOrigin="anonymous"
       />
       {reconnecting ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55">
@@ -421,30 +363,6 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       </div>
 
       <div className="absolute inset-x-0 bottom-0 space-y-3 bg-gradient-to-t from-black/80 to-transparent p-4">
-        {!usingWhep && dvrMax > 1 ? (
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={0}
-              max={dvrMax}
-              step={0.25}
-              value={Math.min(current, dvrMax)}
-              onChange={(e) => onScrub(Number(e.target.value))}
-              className="h-1 w-full accent-red-500"
-              aria-label="DVR timeline"
-            />
-            <button
-              type="button"
-              onClick={jumpToLive}
-              className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                behindLive ? "text-white" : "text-red-400"
-              }`}
-            >
-              Jump to Live
-            </button>
-          </div>
-        ) : null}
-
         <div className="flex flex-wrap gap-2">
           <button
             type="button"

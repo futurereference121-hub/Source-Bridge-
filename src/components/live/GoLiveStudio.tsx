@@ -104,7 +104,11 @@ export function GoLiveStudio() {
     async function boot() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
           video: {
             facingMode: facing,
             width: { ideal: 720 },
