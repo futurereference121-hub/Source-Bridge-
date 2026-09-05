@@ -8,6 +8,7 @@ type WhipHandle = {
 export type WhepHandle = {
   pc: RTCPeerConnection;
   resourceUrl: string | null;
+  stream: MediaStream;
 };
 
 function waitIce(pc: RTCPeerConnection): Promise<void> {
@@ -67,9 +68,21 @@ export async function stopWhipPublish(handle: WhipHandle | null) {
   handle.pc.close();
 }
 
-type WhepPlaybackOptions = {
+export type WhepPlaybackOptions = {
   onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
+  onIceConnectionStateChange?: (state: RTCIceConnectionState) => void;
+  onTrack?: (track: MediaStreamTrack) => void;
+  /** Abort mid-negotiation when a newer generation supersedes this attempt. */
+  signal?: AbortSignal;
 };
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    const err = new Error("WHEP aborted");
+    err.name = "AbortError";
+    throw err;
+  }
+}
 
 /** WHEP playback — Cloudflare reference: single MediaStream, recvonly transceivers. */
 export async function startWhepPlayback(
@@ -77,6 +90,7 @@ export async function startWhepPlayback(
   video: HTMLVideoElement,
   opts?: WhepPlaybackOptions,
 ): Promise<WhepHandle> {
+  throwIfAborted(opts?.signal);
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
     bundlePolicy: "max-bundle",
@@ -87,7 +101,15 @@ export async function startWhepPlayback(
   const stream = new MediaStream();
   video.srcObject = stream;
   pc.ontrack = (event) => {
-    stream.addTrack(event.track);
+    const track = event.track;
+    if (!stream.getTracks().some((t) => t.id === track.id)) {
+      stream.addTrack(track);
+    }
+    // Some engines need srcObject reassignment after the first track arrives.
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+    opts?.onTrack?.(track);
   };
 
   if (opts?.onConnectionStateChange) {
@@ -95,26 +117,44 @@ export async function startWhepPlayback(
       opts.onConnectionStateChange?.(pc.connectionState);
     };
   }
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await waitIce(pc);
-  const res = await fetch(whepUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/sdp" },
-    body: pc.localDescription?.sdp || "",
-  });
-  if (!res.ok) {
-    pc.close();
-    throw new Error("Could not start Live playback");
+  if (opts?.onIceConnectionStateChange) {
+    pc.oniceconnectionstatechange = () => {
+      opts.onIceConnectionStateChange?.(pc.iceConnectionState);
+    };
   }
-  const answer = await res.text();
-  const location = res.headers.get("Location");
-  await pc.setRemoteDescription({ type: "answer", sdp: answer });
-  return {
-    pc,
-    resourceUrl: location ? new URL(location, whepUrl).toString() : null,
-  };
+
+  try {
+    const offer = await pc.createOffer();
+    throwIfAborted(opts?.signal);
+    await pc.setLocalDescription(offer);
+    await waitIce(pc);
+    throwIfAborted(opts?.signal);
+    const res = await fetch(whepUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: pc.localDescription?.sdp || "",
+      signal: opts?.signal,
+    });
+    if (!res.ok) {
+      pc.close();
+      throw new Error("Could not start Live playback");
+    }
+    const answer = await res.text();
+    const location = res.headers.get("Location");
+    throwIfAborted(opts?.signal);
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+    return {
+      pc,
+      stream,
+      resourceUrl: location ? new URL(location, whepUrl).toString() : null,
+    };
+  } catch (err) {
+    pc.ontrack = null;
+    pc.onconnectionstatechange = null;
+    pc.oniceconnectionstatechange = null;
+    pc.close();
+    throw err;
+  }
 }
 
 export async function stopWhepPlayback(handle: WhepHandle | null) {
@@ -126,5 +166,23 @@ export async function stopWhepPlayback(handle: WhepHandle | null) {
   } catch {
     /* ignore */
   }
+  handle.pc.ontrack = null;
+  handle.pc.onconnectionstatechange = null;
+  handle.pc.oniceconnectionstatechange = null;
+  for (const track of handle.stream.getTracks()) {
+    try {
+      handle.stream.removeTrack(track);
+      track.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  handle.pc.getReceivers().forEach((r) => {
+    try {
+      r.track?.stop();
+    } catch {
+      /* ignore */
+    }
+  });
   handle.pc.close();
 }

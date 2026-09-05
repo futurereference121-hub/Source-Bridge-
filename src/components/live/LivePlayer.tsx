@@ -7,24 +7,31 @@ import {
   LIVE_REPORT_REASONS,
   LIVE_WATCH_UNAVAILABLE_MESSAGE,
 } from "@/lib/live/constants";
+import {
+  tokenRefreshDelayMs,
+  WHEP_AUTOPLAY_MESSAGE,
+  WHEP_FAILED_MESSAGE,
+  WHEP_RECONNECT_MESSAGE,
+} from "@/lib/live/whep-viewer-policy";
+import {
+  isCaptureAllowed,
+  type WhepViewerState,
+} from "@/lib/live/whep-viewer-state";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { LiveBadge, LiveTimer } from "@/components/live/LiveBadge";
 import {
-  startWhepPlayback,
-  stopWhepPlayback,
-  type WhepHandle,
-} from "@/components/live/whip";
+  WhepViewerSession,
+  type WatchGrantLike,
+} from "@/components/live/whep-viewer-session";
 import type { LiveSessionPublic } from "@/lib/live/public-types";
 
-type WatchGrant = {
+type WatchGrant = WatchGrantLike & {
   playback: {
     hlsUrl: string;
     whepUrl: string | null;
     thumbnailUrl: string;
     tokenExp: number;
   };
-  endsAt: string;
-  serverNow: string;
 };
 
 type Props = {
@@ -54,8 +61,9 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
   const router = useRouter();
   const { account, requireAuth, showToast } = useAppUi();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const whepRef = useRef<WhepHandle | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
+  const sessionRef = useRef<WhepViewerSession | null>(null);
+  const grantRef = useRef<WatchGrant | null>(null);
+  const endedRef = useRef(session.status !== "LIVE");
   const [grant, setGrant] = useState<WatchGrant | null>(null);
   const [remainingMs, setRemainingMs] = useState(session.remainingMs);
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -63,10 +71,9 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
   const [captureBusy, setCaptureBusy] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [ended, setEnded] = useState(session.status !== "LIVE");
-  const [reconnecting, setReconnecting] = useState(false);
-  const stallTimer = useRef<number | null>(null);
+  const [viewer, setViewer] = useState<WhepViewerState | null>(null);
 
-  async function loadGrant() {
+  async function loadGrant(): Promise<WatchGrant | null> {
     const res = await fetch(`/api/live/sessions/${session.id}/watch`, {
       method: "POST",
     });
@@ -75,25 +82,78 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       return null;
     }
     if (!res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
-      if (data.code === "NOT_LIVE") setEnded(true);
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
+      if (data.code === "NOT_LIVE") {
+        endedRef.current = true;
+        setEnded(true);
+        sessionRef.current?.markEnded();
+      }
       throw new Error(data.error || LIVE_WATCH_UNAVAILABLE_MESSAGE);
     }
-    return (await res.json()) as WatchGrant;
+    const next = (await res.json()) as WatchGrant;
+    grantRef.current = next;
+    return next;
   }
 
   useEffect(() => {
+    endedRef.current = ended;
+    if (ended) sessionRef.current?.markEnded();
+  }, [ended]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
     let cancelled = false;
+
+    const whep = new WhepViewerSession(el, {
+      fetchGrant: async () => {
+        if (endedRef.current) return null;
+        try {
+          const next = await loadGrant();
+          if (next) {
+            setGrant(next);
+            whep.setGrant(next);
+          }
+          return next;
+        } catch {
+          if (!endedRef.current) showToast(LIVE_WATCH_UNAVAILABLE_MESSAGE);
+          const cached = grantRef.current;
+          if (cached && cached.playback.tokenExp * 1000 > Date.now() + 2_000) {
+            return cached;
+          }
+          return null;
+        }
+      },
+      onState: (state) => {
+        if (!cancelled) setViewer({ ...state });
+      },
+      onDiag: (event, detail) => {
+        // Privacy-safe: event names + coarse numbers only. Never tokens/SDP.
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[live:whep]", event, detail || {});
+        }
+      },
+    });
+    sessionRef.current = whep;
+
     void (async () => {
       try {
         const next = await loadGrant();
-        if (!cancelled && next) setGrant(next);
+        if (cancelled || !next) return;
+        setGrant(next);
+        await whep.start(next);
       } catch {
         if (!cancelled) showToast(LIVE_WATCH_UNAVAILABLE_MESSAGE);
       }
     })();
+
     return () => {
       cancelled = true;
+      whep.dispose();
+      sessionRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
@@ -104,8 +164,9 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         .then(async (res) => {
           const data = (await res.json()) as { session?: LiveSessionPublic };
           if (data.session?.status !== "LIVE") {
+            endedRef.current = true;
             setEnded(true);
-            setReconnecting(false);
+            sessionRef.current?.markEnded();
           }
         })
         .catch(() => {});
@@ -119,7 +180,9 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       const left = Math.max(0, ends - Date.now());
       setRemainingMs(left);
       if (left <= 0 && session.status === "LIVE") {
+        endedRef.current = true;
         setEnded(true);
+        sessionRef.current?.markEnded();
         const v = videoRef.current;
         if (v) v.pause();
       }
@@ -127,105 +190,23 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     return () => window.clearInterval(id);
   }, [session.endsAt, session.status, grant?.endsAt]);
 
+  // Soft token refresh: update grant for the *next* rebuild only.
+  // Do NOT destroy a healthy WHEP PeerConnection on token rollover.
   useEffect(() => {
     if (!grant || ended) return;
-    const media = videoRef.current;
-    if (!media) return;
-    const el: HTMLVideoElement = media;
-    let cancelled = false;
-
-    function clearReconnectTimer() {
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-    }
-
-    function destroyWhep() {
-      stopWhepPlayback(whepRef.current);
-      whepRef.current = null;
-      el.srcObject = null;
-    }
-
-    function scheduleReconnect() {
-      if (cancelled || ended) return;
-      clearReconnectTimer();
-      reconnectTimerRef.current = window.setTimeout(() => {
-        if (!cancelled && !ended) void connect();
-      }, 2000);
-    }
-
-    async function connect() {
-      destroyWhep();
-      const whepUrl = grant!.playback.whepUrl;
-      if (!whepUrl) {
-        setReconnecting(true);
-        showToast(LIVE_WATCH_UNAVAILABLE_MESSAGE);
-        return;
-      }
-      el.playsInline = true;
-      try {
-        const handle = await startWhepPlayback(whepUrl, el, {
-          onConnectionStateChange: (state) => {
-            if (cancelled) return;
-            if (state === "connected") {
-              setReconnecting(false);
-            } else if (state === "failed" || state === "disconnected") {
-              setReconnecting(true);
-              scheduleReconnect();
-            }
-          },
-        });
-        if (cancelled) {
-          stopWhepPlayback(handle);
-          return;
-        }
-        whepRef.current = handle;
-        setReconnecting(false);
-        void el.play().catch(() => {});
-      } catch {
-        if (!cancelled) {
-          setReconnecting(true);
-          scheduleReconnect();
-        }
-      }
-    }
-
-    void connect();
-    return () => {
-      cancelled = true;
-      clearReconnectTimer();
-      destroyWhep();
-    };
-  }, [grant, ended, session.id, showToast]);
-
-  useEffect(() => {
-    if (!grant) return;
-    const expMs = grant.playback.tokenExp * 1000;
-    const refreshIn = Math.max(5_000, expMs - Date.now() - 10_000);
+    const delay = tokenRefreshDelayMs(grant.playback.tokenExp, Date.now());
     const t = window.setTimeout(() => {
-      void loadGrant().then((next) => {
-        if (next) setGrant(next);
-      });
-    }, refreshIn);
+      void loadGrant()
+        .then((next) => {
+          if (!next || endedRef.current) return;
+          setGrant(next);
+          sessionRef.current?.setGrant(next);
+        })
+        .catch(() => {});
+    }, delay);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grant?.playback.tokenExp]);
-
-  function onWaiting() {
-    if (stallTimer.current) window.clearTimeout(stallTimer.current);
-    stallTimer.current = window.setTimeout(() => {
-      if (!ended && session.status === "LIVE") setReconnecting(true);
-    }, 4000);
-  }
-
-  function onPlaying() {
-    setReconnecting(false);
-    if (stallTimer.current) {
-      window.clearTimeout(stallTimer.current);
-      stallTimer.current = null;
-    }
-  }
+  }, [grant?.playback.tokenExp, ended]);
 
   async function captureItem() {
     if (!account) {
@@ -234,19 +215,25 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     }
     const v = videoRef.current;
     if (!v) return;
+    if (!isCaptureAllowed(viewer || sessionRef.current?.getState() || {
+      phase: "idle",
+      generation: 0,
+      retryCount: 0,
+      hasVideoTrack: false,
+      hasAudioTrack: false,
+      lastReason: null,
+      captureAvailable: false,
+      showReconnectingUi: false,
+    })) {
+      showToast("Picture not available while reconnecting");
+      return;
+    }
     setCaptureBusy(true);
     try {
-      let blob = await canvasFrame(v);
-      if (!blob) {
-        const t = Math.floor(v.currentTime || 0);
-        const res = await fetch(
-          `/api/live/sessions/${session.id}/capture-frame?t=${t}`,
-        );
-        if (!res.ok) {
-          showToast("Could not capture this frame");
-          return;
-        }
-        blob = await res.blob();
+      const blob = await canvasFrame(v);
+      if (!blob || v.videoWidth <= 0) {
+        showToast("Picture not available");
+        return;
       }
       const file = new File([blob], "live-capture.jpg", { type: "image/jpeg" });
       const form = new FormData();
@@ -320,7 +307,9 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
       showToast("Could not end Live");
       return;
     }
+    endedRef.current = true;
     setEnded(true);
+    sessionRef.current?.markEnded();
     showToast("Live ended");
   }
 
@@ -335,6 +324,29 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
     );
   }
 
+  const phase = viewer?.phase;
+  const showReconnecting =
+    Boolean(viewer?.showReconnectingUi) &&
+    phase !== "failed" &&
+    phase !== "autoplay_blocked" &&
+    phase !== "ended";
+  const showFailed = phase === "failed";
+  const showAutoplay = phase === "autoplay_blocked";
+  const captureEnabled =
+    !captureBusy &&
+    isCaptureAllowed(
+      viewer || {
+        phase: "idle",
+        generation: 0,
+        retryCount: 0,
+        hasVideoTrack: false,
+        hasAudioTrack: false,
+        lastReason: null,
+        captureAvailable: false,
+        showReconnectingUi: false,
+      },
+    );
+
   return (
     <div className="relative overflow-hidden rounded-2xl bg-black">
       <video
@@ -343,14 +355,35 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         playsInline
         autoPlay
         muted={isBroadcaster}
-        onWaiting={onWaiting}
-        onPlaying={onPlaying}
       />
-      {reconnecting ? (
+      {showReconnecting ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55">
           <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">
-            Broadcaster reconnecting…
+            {WHEP_RECONNECT_MESSAGE}
           </p>
+        </div>
+      ) : null}
+      {showAutoplay ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/55">
+          <button
+            type="button"
+            onClick={() => void sessionRef.current?.userGesturePlay()}
+            className="rounded-lg bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy"
+          >
+            {WHEP_AUTOPLAY_MESSAGE}
+          </button>
+        </div>
+      ) : null}
+      {showFailed ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center">
+          <p className="text-sm text-white/85">{WHEP_FAILED_MESSAGE}</p>
+          <button
+            type="button"
+            onClick={() => void sessionRef.current?.manualRetry()}
+            className="rounded-lg bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy"
+          >
+            Retry
+          </button>
         </div>
       ) : null}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between bg-gradient-to-b from-black/70 to-transparent p-4">
@@ -367,8 +400,8 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
           <button
             type="button"
             onClick={() => void captureItem()}
-            disabled={captureBusy}
-            className="rounded-lg bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy"
+            disabled={!captureEnabled}
+            className="rounded-lg bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy disabled:cursor-not-allowed disabled:opacity-40"
           >
             {captureBusy ? "Capturing…" : "Capture Item"}
           </button>

@@ -88,16 +88,24 @@ console.log("=== Live contract ===");
   assert.match(watchRoute, /issueLiveWatchGrant/);
   assert.doesNotMatch(watchRoute, /cloudflarestream\.com.*fetch\(/);
   const player = read("src/components/live/LivePlayer.tsx");
-  assert.match(player, /startWhepPlayback/);
+  assert.match(player, /WhepViewerSession/);
   assert.doesNotMatch(player, /hls\.js/);
   assert.match(player, /Capture Item/);
   assert.doesNotMatch(player, /Jump to Live/);
-  assert.match(player, /Broadcaster reconnecting/);
+  assert.match(player, /Reconnecting/);
+  assert.doesNotMatch(player, /Broadcaster reconnecting/);
   assert.doesNotMatch(player, /<iframe/);
+  assert.match(player, /Do NOT destroy a healthy WHEP/);
   const whipClient = read("src/components/live/whip.ts");
   assert.match(whipClient, /addTransceiver\("video", \{ direction: "recvonly" \}/);
-  assert.match(whipClient, /stream\.addTrack\(event\.track\)/);
+  assert.match(whipClient, /stream\.addTrack/);
   assert.match(whipClient, /stopWhepPlayback/);
+  assert.match(whipClient, /AbortSignal/);
+  const whepSession = read("src/components/live/whep-viewer-session.ts");
+  assert.match(whepSession, /isCurrent\(gen\)/);
+  assert.match(whepSession, /requestVideoFrameCallback/);
+  assert.match(read("src/lib/live/whep-viewer-state.ts"), /reconnecting/);
+  assert.match(read("src/lib/live/whep-viewer-policy.ts"), /WHEP_MAX_AUTO_RETRIES/);
   const capture = read("src/lib/live/capture.ts");
   assert.match(capture, /getOrCreateConversationPair/);
   assert.match(capture, /autoSent: false/);
@@ -262,6 +270,9 @@ console.log("=== Live flags ===");
 const flags = await import("../src/lib/live/flags.ts");
 assert.equal(flags.isLiveStreamMockProvider(), true);
 assert.equal(flags.isLiveStreamingAvailable(), true);
+
+console.log("=== WHEP viewer resilience ===");
+await import("./test-whep-viewer-resilience.mjs");
 
 const dbUrl = process.env.DATABASE_URL || "";
 if (!dbUrl) {
