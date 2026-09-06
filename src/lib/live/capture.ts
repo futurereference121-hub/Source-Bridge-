@@ -14,8 +14,11 @@ function httpError(message: string, status: number, code?: string): never {
 }
 
 /**
- * Capture Item: open the existing 1:1 conversation with a preview image and
+ * Capture Item: resolve the existing 1:1 conversation with a preview image and
  * suggested text. Does NOT send a message.
+ *
+ * Post-Live prepare is allowed so the in-stream composer can finish after the
+ * session ends (frame was already captured client-side while playing).
  */
 export async function prepareLiveCaptureMessage(opts: {
   user: SessionUser;
@@ -27,7 +30,9 @@ export async function prepareLiveCaptureMessage(opts: {
   const now = opts.now ?? new Date();
   const row = await expireLiveIfNeeded(opts.sessionId, now);
   if (!row) httpError("Live not found", 404);
-  if (row.status !== "LIVE") httpError("Capture is only available while Live", 409);
+  if (row.status === "PREPARING") {
+    httpError("Live is not ready yet", 409);
+  }
   if (row.broadcasterId === opts.user.id) {
     httpError("You cannot Capture Item on your own Live", 400);
   }

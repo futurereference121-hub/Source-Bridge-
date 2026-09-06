@@ -273,6 +273,7 @@ assert.equal(flags.isLiveStreamingAvailable(), true);
 
 console.log("=== WHEP viewer resilience ===");
 await import("./test-whep-viewer-resilience.mjs");
+await import("./test-live-capture-sheet.mjs");
 
 const dbUrl = process.env.DATABASE_URL || "";
 if (!dbUrl) {

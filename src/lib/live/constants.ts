@@ -46,11 +46,15 @@ export const LIVE_REPORT_REASONS = [
 
 export type LiveReportReason = (typeof LIVE_REPORT_REASONS)[number];
 
-/** sessionStorage key: capture preview is NOT auto-sent. */
+/** sessionStorage key: capture preview is NOT auto-sent (legacy Inbox handoff). */
 export const LIVE_CAPTURE_DRAFT_KEY = "sb-live-capture-draft";
 
 export const LIVE_CAPTURE_SUGGESTED_TEXT =
   "Hi — I saw this during your Live and wanted to ask if you can source it.";
+
+/** Shown when Capture Item is pressed while WHEP is reconnecting / not frame-ready. */
+export const LIVE_CAPTURE_RECONNECTING_MESSAGE =
+  "The Live picture is reconnecting. Please try again in a moment.";
 
 /** Shown when Cloudflare/provider provisioning fails — raw API text is logged only. */
 export const LIVE_START_UNAVAILABLE_MESSAGE =

@@ -194,7 +194,7 @@ console.log("=== WHEP player contracts ===");
   assert.doesNotMatch(player, /Broadcaster reconnecting/);
   assert.doesNotMatch(player, /hls\.js/);
   assert.match(player, /Capture Item/);
-  assert.match(player, /Picture not available/);
+  assert.match(player, /LIVE_CAPTURE_RECONNECTING_MESSAGE|Picture not available|The Live picture is reconnecting/);
   assert.match(player, /setGrant\(next\)/);
   assert.match(player, /tokenRefreshDelayMs/);
   assert.doesNotMatch(player, /Jump to Live/);
