@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Ably Node bundle uses dynamic requires; keep it external for App Router route handlers.
+  serverExternalPackages: ["ably"],
   images: {
     remotePatterns: [
       {

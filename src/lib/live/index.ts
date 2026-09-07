@@ -19,3 +19,10 @@ export { listDiscoverableLive, getLivePresence } from "./discovery";
 export { issueLiveWatchGrant } from "./watch";
 export { prepareLiveCaptureMessage } from "./capture";
 export { liveFeedItems } from "./feed";
+export {
+  isAblyConfigured,
+  liveRealtimePublicStatus,
+  issueLiveRealtimeToken,
+  createLiveComment,
+  listRecentLiveComments,
+} from "./realtime";

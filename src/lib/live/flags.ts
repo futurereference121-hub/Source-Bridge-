@@ -40,13 +40,24 @@ export function liveStreamingPublicStatus(): {
   available: boolean;
   enabled: boolean;
   configured: boolean;
+  realtime: {
+    configured: boolean;
+    available: boolean;
+  };
 } {
   const enabled = isLiveStreamingEnabled();
   const configured =
     isLiveStreamMockProvider() || isCloudflareStreamConfigured();
+  // Ably is orthogonal — missing realtime must not mark Live video unavailable.
+  const ablyKey = (process.env.ABLY_API_KEY || "").trim();
+  const realtimeConfigured = Boolean(ablyKey);
   return {
     enabled,
     configured,
     available: enabled && configured,
+    realtime: {
+      configured: realtimeConfigured,
+      available: realtimeConfigured,
+    },
   };
 }

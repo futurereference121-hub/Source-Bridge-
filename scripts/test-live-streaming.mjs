@@ -120,6 +120,23 @@ console.log("=== Live contract ===");
   const envEx = read(".env.example");
   assert.match(envEx, /LIVE_STREAMING_ENABLED/);
   assert.match(envEx, /CLOUDFLARE_STREAM_SIGNING_KEY/);
+  assert.match(envEx, /ABLY_API_KEY/);
+  assert.doesNotMatch(envEx, /NEXT_PUBLIC_ABLY/);
+}
+
+{
+  // Ably engagement — dedicated boundary, Capture/WHEP preserved
+  assert.match(read("src/components/live/LivePlayer.tsx"), /LiveEngagementOverlay/);
+  assert.match(read("src/components/live/LivePlayer.tsx"), /Capture Item/);
+  assert.match(read("src/components/live/LivePlayer.tsx"), /WhepViewerSession/);
+  assert.match(read("src/components/live/GoLiveStudio.tsx"), /LiveEngagementOverlay/);
+  assert.ok(existsSync(path.join(root, "src/lib/live/realtime/ably-server.ts")));
+  assert.ok(
+    existsSync(
+      path.join(root, "src/app/api/live/sessions/[id]/realtime-token/route.ts"),
+    ),
+  );
+  assert.match(read("prisma/schema.prisma"), /model LiveComment/);
 }
 
 {

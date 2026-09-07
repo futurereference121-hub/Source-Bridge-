@@ -15,6 +15,7 @@ import {
 } from "@/lib/live/whep-viewer-policy";
 import {
   isCaptureAllowed,
+  isPlaybackHealthy,
   type WhepViewerState,
 } from "@/lib/live/whep-viewer-state";
 import { useAppUi } from "@/components/providers/AppProviders";
@@ -24,6 +25,7 @@ import {
   type WatchGrantLike,
 } from "@/components/live/whep-viewer-session";
 import type { LiveSessionPublic } from "@/lib/live/public-types";
+import { LiveEngagementOverlay } from "@/components/live/realtime/LiveEngagementOverlay";
 
 type WatchGrant = WatchGrantLike & {
   playback: {
@@ -101,9 +103,12 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
   const [ended, setEnded] = useState(session.status !== "LIVE");
   const [viewer, setViewer] = useState<WhepViewerState | null>(null);
+  /** Once true, keep Ably presence through temporary WHEP recovery. */
+  const [playbackStartedOnce, setPlaybackStartedOnce] = useState(false);
 
   const liveEnded = ended || session.status !== "LIVE";
   const hasCaptureSheet = Boolean(captureOpen && captureDraft);
+  const suppressPublicUi = hasCaptureSheet || reportOpen;
 
   async function loadGrant(): Promise<WatchGrant | null> {
     const res = await fetch(`/api/live/sessions/${session.id}/watch`, {
@@ -160,7 +165,12 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         }
       },
       onState: (state) => {
-        if (!cancelled) setViewer({ ...state });
+        if (!cancelled) {
+          setViewer({ ...state });
+          if (isPlaybackHealthy(state) || state.phase === "playing") {
+            setPlaybackStartedOnce(true);
+          }
+        }
       },
       onDiag: (event, detail) => {
         // Privacy-safe: event names + coarse numbers only. Never tokens/SDP.
@@ -500,27 +510,55 @@ export function LivePlayer({ session, isBroadcaster }: Props) {
         </div>
       ) : null}
       {!liveEnded ? (
-        <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between bg-gradient-to-b from-black/70 to-transparent p-4">
-          <div>
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[5] flex items-start justify-between bg-gradient-to-b from-black/70 to-transparent p-4">
+          <div className="min-w-0 pr-3">
             <LiveBadge />
             <p className="mt-2 text-sm font-medium text-white">{session.title}</p>
             <p className="text-xs text-white/60">{session.locationLabel}</p>
           </div>
-          <LiveTimer remainingMs={remainingMs} />
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <LiveTimer remainingMs={remainingMs} />
+          </div>
         </div>
       ) : null}
 
+      {/*
+        Ably engagement overlay — comments + viewer count. Must NOT remount
+        the WHEP <video> above. Capture sheet suppresses public UI only.
+      */}
+      {!liveEnded || hasCaptureSheet ? (
+        <LiveEngagementOverlay
+          liveSessionId={session.id}
+          active={!liveEnded}
+          allowPresence={playbackStartedOnce && !liveEnded && !isBroadcaster}
+          isBroadcaster={isBroadcaster}
+          suppressPublicUi={suppressPublicUi || liveEnded}
+          showComposer={!isBroadcaster}
+        />
+      ) : null}
+
       {!liveEnded ? (
-        <div className="absolute inset-x-0 bottom-0 space-y-3 bg-gradient-to-t from-black/80 to-transparent p-4">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void captureAndOpenSheet()}
-              disabled={!captureEnabled}
-              className="rounded-lg bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {captureBusy ? "Capturing…" : "Capture Item"}
-            </button>
+        <div
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-[8] bg-gradient-to-t from-black/80 to-transparent px-4 pt-8 ${
+            isBroadcaster ? "pb-4" : "pb-[3.25rem]"
+          }`}
+          style={
+            isBroadcaster
+              ? undefined
+              : { paddingBottom: "max(3.25rem, calc(2.75rem + env(safe-area-inset-bottom)))" }
+          }
+        >
+          <div className="pointer-events-auto flex flex-wrap justify-end gap-2">
+            {!isBroadcaster ? (
+              <button
+                type="button"
+                onClick={() => void captureAndOpenSheet()}
+                disabled={!captureEnabled}
+                className="rounded-lg bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-navy disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {captureBusy ? "Capturing…" : "Capture Item"}
+              </button>
+            ) : null}
             {isBroadcaster ? (
               <button
                 type="button"

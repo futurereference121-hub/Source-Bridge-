@@ -63,3 +63,7 @@ export const LIVE_START_UNAVAILABLE_MESSAGE =
 /** Shown when signed playback cannot be issued (bad signing key, crypto failure). */
 export const LIVE_WATCH_UNAVAILABLE_MESSAGE =
   "Unable to load this Live right now.";
+
+/** Shown when Ably engagement (comments / viewer count) is unavailable. */
+export const LIVE_ENGAGEMENT_UNAVAILABLE_MESSAGE =
+  "Live comments are temporarily unavailable.";

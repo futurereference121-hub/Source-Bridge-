@@ -98,6 +98,7 @@ model User {
   storyReports         StoryReport[]                 @relation("StoryReporter")
   liveSessions         LiveSession[]                 @relation("LiveBroadcaster")
   liveReports          LiveReport[]                  @relation("LiveReporter")
+  liveComments         LiveComment[]                 @relation("LiveCommenter")
 
   /// 0–3 trust band for procurement advances (admin-configurable).
   trustLevel                    Int     @default(0)
@@ -802,6 +803,7 @@ model LiveSession {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
   reports                  LiveReport[]
+  comments                 LiveComment[]
 
   @@index([status, startedAt])
   @@index([broadcasterId, createdAt])
@@ -810,6 +812,24 @@ model LiveSession {
   @@index([cooldownUntil])
   @@index([endsAt, status])
   @@index([recordingCleanupStatus, endedAt])
+}
+
+/// Canonical public Live comments (audit + late-join recent history). Not Inbox messages.
+model LiveComment {
+  id              String      @id @default(cuid())
+  liveSessionId   String
+  liveSession     LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  commenterId     String
+  commenter       User        @relation("LiveCommenter", fields: [commenterId], references: [id], onDelete: Cascade)
+  /// Plain text only. Server-authoritative after sanitize.
+  body            String
+  /// Client idempotency key — unique per session + commenter when provided.
+  clientMessageId String      @default("")
+  createdAt       DateTime    @default(now())
+
+  @@unique([liveSessionId, commenterId, clientMessageId])
+  @@index([liveSessionId, createdAt])
+  @@index([commenterId, createdAt])
 }
 
 model LiveReport {

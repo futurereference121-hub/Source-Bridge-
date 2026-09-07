@@ -7,6 +7,7 @@ import { startWhipPublish, stopWhipPublish } from "@/components/live/whip";
 import { emitLiveChanged } from "@/lib/live-surface-sync";
 import { LIVE_SESSION_DURATION_MS } from "@/lib/live/constants";
 import type { LiveSessionPublic } from "@/lib/live/public-types";
+import { LiveEngagementOverlay } from "@/components/live/realtime/LiveEngagementOverlay";
 
 type Eligibility = {
   allowed: boolean;
@@ -384,12 +385,21 @@ export function GoLiveStudio() {
           autoPlay
         />
         {isLive ? (
-          <div className="absolute left-4 top-4">
+          <div className="pointer-events-none absolute left-4 top-4 z-[5]">
             <LiveTimer remainingMs={remainingMs} />
           </div>
         ) : null}
+        {isLive && live ? (
+          <LiveEngagementOverlay
+            liveSessionId={live.id}
+            active={isLive && !handoffPrompt}
+            allowPresence={false}
+            isBroadcaster
+            showComposer={false}
+          />
+        ) : null}
         {publishState === "reconnecting" && isLive ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+          <div className="absolute inset-0 z-[4] flex items-center justify-center bg-black/50">
             <p className="text-sm font-semibold uppercase tracking-[0.14em] text-white">
               Reconnecting…
             </p>
