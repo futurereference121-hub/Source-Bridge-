@@ -10,6 +10,7 @@ import {
 } from "@/lib/explore-feed-activity";
 import { SearchBar } from "@/components/search/SearchBar";
 import { LiveFeedSplit } from "@/components/explore/LiveFeedSplit";
+import { ExploreGetTheApp } from "@/components/explore/ExploreGetTheApp";
 import { MemberDirectoryCard } from "@/components/members/MemberCard";
 import { Container } from "@/components/ui/Container";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
@@ -335,6 +336,7 @@ export function ExploreClient({
   return (
     <div className="bg-app-navy min-h-[100svh] pt-24 pb-24 text-white sm:pt-28 sm:pb-28">
       <Container>
+        <ExploreGetTheApp />
         <header className="mx-auto max-w-3xl text-center">
           <h1 className="font-display text-[1.65rem] leading-snug tracking-tight text-white sm:text-4xl sm:leading-tight md:text-[2.5rem]">
             What do you need—and where in the world can it be found?

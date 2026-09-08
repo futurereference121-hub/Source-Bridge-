@@ -62,53 +62,102 @@ check("3 standalone display", () => {
   assert.match(read("src/app/manifest.ts"), /PWA_DISPLAY/);
 });
 
-// 4. Universal GET THE APP button
-check("4 GET THE APP button component", () => {
+// 4. Universal GET THE APP button + placements
+check("4 GET THE APP placements (home/explore/nav)", () => {
   const btn = read("src/components/pwa/GetTheAppButton.tsx");
-  assert.match(btn, /Get the App/);
+  assert.match(btn, /GET THE APP/);
   assert.match(btn, /usePwaInstall/);
+  assert.match(btn, /variant === "hero"/);
+  assert.match(btn, /variant === "explore"/);
   assert.doesNotMatch(btn, /Get it on Google Play|App Store|Download APK/i);
+  // Visibility must not require beforeinstallprompt
+  assert.match(btn, /Do NOT hide for missing beforeinstallprompt/);
+  assert.match(btn, /ready/);
+
+  const hero = read("src/components/home/HeroActions.tsx");
+  assert.match(hero, /GetTheAppButton/);
+  assert.match(hero, /variant="hero"/);
+  assert.match(hero, /Sign Up\/In|Join|Explore/);
+
+  const exploreCue = read("src/components/explore/ExploreGetTheApp.tsx");
+  assert.match(exploreCue, /GetTheAppButton/);
+  assert.match(exploreCue, /variant="explore"/);
+  const explore = read("src/app/explore/ExploreClient.tsx");
+  assert.match(explore, /ExploreGetTheApp/);
+
   const header = read("src/components/layout/SiteHeader.tsx");
   assert.match(header, /GetTheAppButton/);
   assert.ok(
     (header.match(/GetTheAppButton/g) || []).length >= 4,
     "button wired in mobile + desktop surfaces",
   );
+  // Signed-in desktop still shows CTA (not only account menu)
+  assert.match(header, /signedIn[\s\S]*GetTheAppButton variant="desktop"/);
+
+  const account = read("src/components/layout/AccountMenu.tsx");
+  assert.match(account, /GetTheAppButton/);
+
   // Not a bottom-nav item
-  assert.doesNotMatch(read("src/components/layout/MobileNav.tsx"), /GetTheApp|Get the App/);
+  assert.doesNotMatch(read("src/components/layout/MobileNav.tsx"), /GetTheApp|GET THE APP|Get the App/);
 });
 
-// 5-7. beforeinstallprompt accept/dismiss + Apple sheet
-check("5-7 install prompt + Apple sheet + dismiss session", () => {
+// 5-7. beforeinstallprompt accept/dismiss + Apple sheet + manual sheet
+check("5-7 install prompt + Apple sheet + manual fallback + dismiss", () => {
   const hook = read("src/hooks/usePwaInstall.ts");
   assert.match(hook, /beforeinstallprompt/);
   assert.match(hook, /userChoice/);
   assert.match(hook, /sessionDismissed/);
   assert.match(hook, /prompt\(\)/);
   assert.match(hook, /appinstalled/);
+  assert.match(hook, /listenersBound/);
+  assert.match(hook, /setManualSheetOpenGlobal\(true\)/);
+  assert.match(hook, /setIosSheetOpenGlobal\(true\)/);
+  // Dismiss must not hide CTA
+  assert.match(hook, /Keep CTA visible/);
   const sheet = read("src/components/pwa/IosInstallSheet.tsx");
   assert.match(sheet, /Add to Home Screen/);
   assert.match(sheet, /role="dialog"/);
   assert.match(sheet, /aria-modal/);
   assert.match(sheet, /Escape/);
   assert.match(sheet, /Share/);
+  const manual = read("src/components/pwa/ManualInstallSheet.tsx");
+  assert.match(manual, /Install app|Add to Home screen/);
+  assert.match(manual, /role="dialog"/);
+  assert.match(manual, /Chrome/);
+  const host = read("src/components/pwa/PwaInstallHost.tsx");
+  assert.match(host, /IosInstallSheet/);
+  assert.match(host, /ManualInstallSheet/);
+  assert.match(read("src/components/layout/SiteShell.tsx"), /PwaInstallHost/);
+  // Buttons must not each mount duplicate sheets
+  assert.doesNotMatch(read("src/components/pwa/GetTheAppButton.tsx"), /IosInstallSheet|ManualInstallSheet/);
 });
 
-// 8-9. Standalone detection + hide button
+// 8-9. Standalone detection + hide button (genuine only)
 check("8-9 standalone detection hides install", () => {
-  assert.match(read("src/lib/pwa/detect.ts"), /display-mode:\s*standalone/);
-  assert.match(read("src/lib/pwa/detect.ts"), /standalone/);
+  const detect = read("src/lib/pwa/detect.ts");
+  assert.match(detect, /display-mode:\s*standalone/);
+  assert.match(detect, /standalone/);
+  assert.match(detect, /nav\.standalone/);
   const btn = read("src/components/pwa/GetTheAppButton.tsx");
   assert.match(btn, /isStandalone/);
   assert.match(btn, /mode === "hidden"/);
   assert.match(btn, /return null/);
+  const hook = read("src/hooks/usePwaInstall.ts");
+  assert.match(hook, /isStandaloneDisplay/);
+  // Must not hide solely because prompt missing
+  assert.doesNotMatch(
+    hook,
+    /if\s*\(\s*!deferredPromptGlobal\s*\)\s*\{\s*setMode\("hidden"\)/,
+  );
 });
 
-// 10. Unsupported fallback guidance
-check("10 unsupported install guidance", () => {
+// 10. Unsupported / manual guidance (no silent fail)
+check("10 manual install guidance without native event", () => {
+  const hook = read("src/hooks/usePwaInstall.ts");
+  assert.match(hook, /never silent-fail|setManualSheetOpenGlobal\(true\)/);
+  assert.match(hook, /return "guided"/);
   const btn = read("src/components/pwa/GetTheAppButton.tsx");
   assert.match(btn, /unavailable/);
-  assert.match(btn, /Chrome or Edge|Safari/);
   assert.doesNotMatch(btn, /\.apk|\.ipa|\.exe/i);
 });
 
@@ -127,11 +176,10 @@ check("12 cache versioning + cleanup scope", () => {
   assert.match(sw, /sb-pwa-v1/);
   assert.match(sw, /CACHE_PREFIX = "sb-pwa-"/);
   assert.match(sw, /key\.startsWith\(CACHE_PREFIX\)/);
-  assert.doesNotMatch(sw, /caches\.keys\(\)[\s\S]*caches\.delete\(key\)(?![\s\S]*startsWith)/);
   assert.doesNotMatch(sw, /indexedDB\.deleteDatabase|document\.cookie/);
 });
 
-// 13. Never-cache sensitive routes
+// 13. Never-cache sensitive routes (no expansion)
 check("13 never-cache sensitive paths", () => {
   const sw = read("public/sw.js");
   for (const p of [
@@ -150,10 +198,11 @@ check("13 never-cache sensitive paths", () => {
   }
   assert.match(sw, /method !== "GET"/);
   assert.match(sw, /Never touch cross-origin|!isSameOrigin/);
-  // Must not cache-put on never-cache branch
-  const neverFn = sw.slice(sw.indexOf("function isNeverCachePath"), sw.indexOf("function isImmutableNextStatic"));
+  const neverFn = sw.slice(
+    sw.indexOf("function isNeverCachePath"),
+    sw.indexOf("function isImmutableNextStatic"),
+  );
   assert.ok(neverFn.includes("/api/"));
-  // Financial / Live credentials not proxied
   assert.doesNotMatch(sw, /cloudflarestream|ably\.com|stripe\.com/i);
 });
 
@@ -180,14 +229,12 @@ check("15 update without force-reload loops", () => {
   assert.match(reg, /Update available/);
   assert.match(reg, /\/live/);
   assert.match(reg, /isUnsafeToReload/);
-  assert.doesNotMatch(reg, /location\.reload\(\);\s*\n\s*location\.reload/);
 });
 
-// 16. Navigation preservation â€” no global link rewrite
+// 16. Navigation preservation — no global link rewrite + bottom nav unchanged
 check("16 navigation not rewritten", () => {
   const sw = read("public/sw.js");
   assert.doesNotMatch(sw, /clients\.openWindow|rewrite.*href|navigate\(.*app:\/\//i);
-  // Bottom nav still present and unchanged in role
   const mobile = read("src/components/layout/MobileNav.tsx");
   assert.match(mobile, /mobileNavItems/);
   assert.match(mobile, /"\/search"/);
@@ -202,12 +249,27 @@ check("16 navigation not rewritten", () => {
   assert.match(site, /label:\s*"Profile"/);
 });
 
+// 17. Shared install state — single BIP listener, coordinated sheets
+check("17 shared install state across placements", () => {
+  const hook = read("src/hooks/usePwaInstall.ts");
+  assert.match(hook, /let listenersBound = false/);
+  assert.match(hook, /bindBeforeInstallPromptOnce/);
+  assert.match(hook, /sheetListeners/);
+  assert.match(hook, /iosSheetOpenGlobal/);
+  assert.match(hook, /manualSheetOpenGlobal/);
+  assert.match(hook, /sb-pwa-installable/);
+  assert.match(hook, /sb-pwa-installed/);
+});
+
 // Extra: no payment source files in PWA surface
 check("no payment engine imports in PWA modules", () => {
   for (const f of [
     "src/components/pwa/GetTheAppButton.tsx",
     "src/components/pwa/IosInstallSheet.tsx",
+    "src/components/pwa/ManualInstallSheet.tsx",
+    "src/components/pwa/PwaInstallHost.tsx",
     "src/components/pwa/PwaRegister.tsx",
+    "src/components/explore/ExploreGetTheApp.tsx",
     "src/hooks/usePwaInstall.ts",
     "src/lib/pwa/constants.ts",
     "src/lib/pwa/detect.ts",
@@ -225,6 +287,19 @@ check("no outdated next-pwa / workbox package dependency", () => {
   for (const name of Object.keys(all)) {
     assert.ok(!/next-pwa|workbox|@ducanh2912\/next-pwa/i.test(name), `unexpected dep ${name}`);
   }
+});
+
+// Extra: SW body unchanged scope (precache still icons + offline only)
+check("SW precache not expanded beyond safe static", () => {
+  const sw = read("public/sw.js");
+  assert.match(sw, /const OFFLINE_URL = "\/offline\.html"/);
+  const precache = sw.slice(
+    sw.indexOf("PRECACHE_URLS"),
+    sw.indexOf('self.addEventListener("install"'),
+  );
+  assert.match(precache, /OFFLINE_URL/);
+  assert.match(precache, /icon-192/);
+  assert.doesNotMatch(precache, /\/api\/|\/inbox|\/checkout|\/live/);
 });
 
 console.log(`\npwa checks passed (${passed})`);

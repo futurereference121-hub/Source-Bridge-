@@ -5,6 +5,7 @@ import { NavigationProgress } from "@/components/layout/NavigationProgress";
 import { StoryProvider } from "@/components/stories/StoryProvider";
 import { LivePresenceProvider } from "@/components/live/LivePresenceProvider";
 import { PwaRegister } from "@/components/pwa/PwaRegister";
+import { PwaInstallHost } from "@/components/pwa/PwaInstallHost";
 
 export function SiteShell({ children }: { children: ReactNode }) {
   return (
@@ -13,6 +14,7 @@ export function SiteShell({ children }: { children: ReactNode }) {
         <LivePresenceProvider>
           <NavigationProgress />
           <PwaRegister />
+          <PwaInstallHost />
           <HomeShell>{children}</HomeShell>
         </LivePresenceProvider>
       </StoryProvider>

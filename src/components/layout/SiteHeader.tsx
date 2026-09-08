@@ -53,7 +53,8 @@ export function SiteHeader() {
               </Link>
             ))}
             {signedIn ? (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
+                <GetTheAppButton variant="desktop" />
                 <NotificationBell />
                 <AccountMenu variant="home" />
               </div>
@@ -147,7 +148,8 @@ export function SiteHeader() {
             );
           })}
           {signedIn ? (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2">
+              <GetTheAppButton variant="desktop" />
               <NotificationBell />
               <AccountMenu variant="internal" />
             </div>
