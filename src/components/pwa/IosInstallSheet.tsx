@@ -9,6 +9,22 @@ type IosInstallSheetProps = {
   onClose: () => void;
 };
 
+/** Lucide `Share` = square with upward arrow (iOS Share symbol). Not emoji / Apple screenshot. */
+function IosShareIcon({ className }: { className?: string }) {
+  return (
+    <span
+      className={
+        className ??
+        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-electric/40 bg-electric/15 text-electric"
+      }
+      role="img"
+      aria-label="Share icon."
+    >
+      <Share size={20} strokeWidth={2.25} aria-hidden />
+    </span>
+  );
+}
+
 export function IosInstallSheet({ open, onClose }: IosInstallSheetProps) {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -72,8 +88,11 @@ export function IosInstallSheet({ open, onClose }: IosInstallSheetProps) {
           <div className="flex items-center gap-3">
             <SourceBridgeLogo size={36} color="white" />
             <div>
-              <h2 id={titleId} className="text-base font-semibold tracking-wide">
-                Add Source Bridge
+              <h2
+                id={titleId}
+                className="text-base font-semibold uppercase tracking-[0.14em] text-white"
+              >
+                Install Source Bridge
               </h2>
               <p className="mt-0.5 text-xs text-white/55">
                 Install to your Home Screen for a full-screen experience.
@@ -93,31 +112,41 @@ export function IosInstallSheet({ open, onClose }: IosInstallSheetProps) {
 
         <ol className="space-y-3 text-sm text-white/85">
           <li className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric">
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric"
+              aria-hidden
+            >
               1
             </span>
-            <p className="pt-1">
-              Tap{" "}
-              <span className="inline-flex items-center gap-1 font-medium text-white">
-                Share <Share size={14} className="inline" aria-hidden />
-              </span>{" "}
-              in Safari&apos;s toolbar.
-            </p>
+            <div className="flex min-w-0 flex-1 items-center gap-2.5 pt-0.5">
+              <IosShareIcon />
+              <p>
+                Tap the{" "}
+                <span className="font-medium text-white">Share</span> button
+              </p>
+            </div>
           </li>
           <li className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric">
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric"
+              aria-hidden
+            >
               2
             </span>
             <p className="pt-1">
-              Choose <span className="font-medium text-white">Add to Home Screen</span>.
+              Select{" "}
+              <span className="font-medium text-white">Add to Home Screen</span>
             </p>
           </li>
           <li className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric">
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-electric/20 text-electric"
+              aria-hidden
+            >
               3
             </span>
             <p className="pt-1">
-              Tap <span className="font-medium text-white">Add</span> to finish.
+              Tap <span className="font-medium text-white">Add</span>
             </p>
           </li>
         </ol>

@@ -115,11 +115,21 @@ check("5-7 install prompt + Apple sheet + manual fallback + dismiss", () => {
   // Dismiss must not hide CTA
   assert.match(hook, /Keep CTA visible/);
   const sheet = read("src/components/pwa/IosInstallSheet.tsx");
+  assert.match(sheet, /Install Source Bridge/);
   assert.match(sheet, /Add to Home Screen/);
+  assert.match(sheet, /Tap the/);
+  assert.match(sheet, /Share/);
+  assert.match(sheet, /Tap[\s\S]*Add/);
   assert.match(sheet, /role="dialog"/);
   assert.match(sheet, /aria-modal/);
   assert.match(sheet, /Escape/);
-  assert.match(sheet, /Share/);
+  // Visible iOS Share symbol (lucide square+up-arrow) with accessible name — not emoji
+  assert.match(sheet, /from "lucide-react"/);
+  assert.match(sheet, /\bShare\b/);
+  assert.match(sheet, /aria-label="Share icon\."/);
+  assert.match(sheet, /role="img"/);
+  assert.doesNotMatch(sheet, /📤|🔗|↗️|⬆️/);
+  assert.doesNotMatch(sheet, /Share2/); // Android-style nodes icon — not iOS Share
   const manual = read("src/components/pwa/ManualInstallSheet.tsx");
   assert.match(manual, /Install app|Add to Home screen/);
   assert.match(manual, /role="dialog"/);
@@ -130,6 +140,20 @@ check("5-7 install prompt + Apple sheet + manual fallback + dismiss", () => {
   assert.match(read("src/components/layout/SiteShell.tsx"), /PwaInstallHost/);
   // Buttons must not each mount duplicate sheets
   assert.doesNotMatch(read("src/components/pwa/GetTheAppButton.tsx"), /IosInstallSheet|ManualInstallSheet/);
+});
+
+// Apple sheet a11y + instruction clarity (focused)
+check("Apple install sheet Share icon a11y + steps", () => {
+  const sheet = read("src/components/pwa/IosInstallSheet.tsx");
+  assert.match(sheet, /aria-label="Share icon\."/);
+  assert.match(sheet, /aria-labelledby=\{titleId\}/);
+  assert.match(sheet, /aria-label="Close"/);
+  assert.match(sheet, /aria-label="Dismiss"/);
+  assert.match(sheet, /Select[\s\S]*Add to Home Screen/);
+  assert.match(sheet, /Tap the[\s\S]*Share[\s\S]*button/);
+  // Premium navy sheet surface preserved
+  assert.match(sheet, /#020B1C/);
+  assert.match(sheet, /text-electric|bg-electric/);
 });
 
 // 8-9. Standalone detection + hide button (genuine only)
@@ -300,6 +324,64 @@ check("SW precache not expanded beyond safe static", () => {
   assert.match(precache, /OFFLINE_URL/);
   assert.match(precache, /icon-192/);
   assert.doesNotMatch(precache, /\/api\/|\/inbox|\/checkout|\/live/);
+});
+
+// Payment preservation (read-only SW audit — no money ops)
+check("SW payment preservation: /api never cached; mutations not queued", () => {
+  const sw = read("public/sw.js");
+  // Non-GET (POST/PUT/PATCH/DELETE payment mutations) exit before respondWith
+  assert.match(sw, /if \(request\.method !== "GET"\) return;/);
+  assert.doesNotMatch(sw, /BackgroundSync|sync\.register|periodicSync|workbox-background-sync/i);
+  assert.doesNotMatch(sw, /offline.?queue|replay|outbox/i);
+  // Never-cache includes /api/ and checkout/profile (purchases/sales under /profile)
+  const neverFn = sw.slice(
+    sw.indexOf("function isNeverCachePath"),
+    sw.indexOf("function isImmutableNextStatic"),
+  );
+  assert.ok(neverFn.includes('pathname.startsWith("/api/")'));
+  assert.ok(neverFn.includes('pathname.startsWith("/checkout")'));
+  assert.ok(neverFn.includes('pathname.startsWith("/profile")'));
+  // Never-cache branch: network fetch only — no cache.put in that handler
+  const fetchHandler = sw.slice(sw.indexOf('self.addEventListener("fetch"'));
+  const neverBranch = fetchHandler.slice(
+    fetchHandler.indexOf("isNeverCachePath"),
+    fetchHandler.indexOf("// Navigations:"),
+  );
+  assert.doesNotMatch(neverBranch, /cache\.put/);
+  assert.match(neverBranch, /fetch\(request\)/);
+  // Offline fallback for never-cache is offline.html (navigate) or 503 — not a payment body
+  assert.match(neverBranch, /OFFLINE_URL|offline\.html/);
+  assert.match(neverBranch, /status: 503/);
+  assert.doesNotMatch(neverBranch, /PaymentIntent|sellerShare|protectedTxn|stripe/i);
+  // Cross-origin Stripe / 3DS never intercepted
+  assert.match(sw, /Never touch cross-origin|!isSameOrigin/);
+  assert.doesNotMatch(sw, /clients\.openWindow|rewrite.*href/i);
+  // Same production origin — no separate payment API host in SW
+  assert.doesNotMatch(sw, /api\.stripe\.com|js\.stripe\.com|checkout\.stripe\.com/i);
+  // Cookies / auth not rewritten by SW
+  assert.doesNotMatch(sw, /document\.cookie|Set-Cookie|cookieStore/i);
+});
+
+check("PWA uses same origin + no separate payment implementation", () => {
+  const constants = read("src/lib/pwa/constants.ts");
+  assert.match(constants, /PWA_START_URL = "\/"/);
+  assert.match(constants, /PWA_SCOPE = "\/"/);
+  assert.match(constants, /www\.sourcebridge\.app/);
+  for (const f of [
+    "src/components/pwa/GetTheAppButton.tsx",
+    "src/components/pwa/IosInstallSheet.tsx",
+    "src/components/pwa/ManualInstallSheet.tsx",
+    "src/components/pwa/PwaInstallHost.tsx",
+    "src/components/pwa/PwaRegister.tsx",
+    "src/hooks/usePwaInstall.ts",
+    "public/sw.js",
+  ]) {
+    const src = read(f);
+    assert.doesNotMatch(
+      src,
+      /createPaymentIntent|confirmCardPayment|SOURCE_BRIDGE_FEE_BPS|protectedTxnId/i,
+    );
+  }
 });
 
 console.log(`\npwa checks passed (${passed})`);
