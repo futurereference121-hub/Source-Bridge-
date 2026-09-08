@@ -37,7 +37,7 @@ export function MobileNav() {
   if (isAdmin && signedIn) {
     return (
       <nav
-        className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-navy/95 backdrop-blur-md md:hidden"
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-navy/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
         aria-label="Admin mobile navigation"
       >
         <ul className="mx-auto flex h-16 max-w-lg items-stretch justify-between px-2">
@@ -69,7 +69,7 @@ export function MobileNav() {
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-navy/95 backdrop-blur-md md:hidden"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-navy/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md md:hidden"
       aria-label="Mobile"
     >
       <ul className="mx-auto flex h-16 max-w-lg items-stretch justify-between px-2">

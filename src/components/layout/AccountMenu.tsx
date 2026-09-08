@@ -12,6 +12,7 @@ import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider";
 import { memberPhoto } from "@/lib/placeholders";
+import { GetTheAppButton } from "@/components/pwa/GetTheAppButton";
 
 /**
  * Smart destination for a logged-in account's "home".
@@ -172,6 +173,10 @@ export function AccountMenu({
           </nav>
 
           <div className="border-t border-white/10 pt-1">
+            <GetTheAppButton
+              variant="account"
+              onAfterAction={() => setOpen(false)}
+            />
             <button
               type="button"
               role="menuitem"

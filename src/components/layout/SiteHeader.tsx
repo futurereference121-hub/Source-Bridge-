@@ -12,6 +12,7 @@ import {
   AccountMenuMobileLinks,
 } from "@/components/layout/AccountMenu";
 import { NotificationBell } from "@/components/notifications/NotificationBell";
+import { GetTheAppButton } from "@/components/pwa/GetTheAppButton";
 
 export function SiteHeader() {
   const pathname = usePathname();
@@ -26,7 +27,7 @@ export function SiteHeader() {
   const isHome = pathname === "/";
 
   const desktopNav = navItems.filter((item) => {
-    // Admins see no public nav — only the account menu with admin links.
+    // Admins see no public nav â€” only the account menu with admin links.
     if (isAdmin && signedIn) return false;
     if (item.href === "/sign-in" && signedIn) return false;
     if (item.href === "/join" && signedIn) return false;
@@ -57,12 +58,15 @@ export function SiteHeader() {
                 <AccountMenu variant="home" />
               </div>
             ) : (
-              <Link
-                href="/sign-in"
-                className="inline-flex h-10 items-center rounded-lg border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
-              >
-                Sign In / Up
-              </Link>
+              <>
+                <GetTheAppButton variant="desktop" />
+                <Link
+                  href="/sign-in"
+                  className="inline-flex h-10 items-center rounded-lg border border-white/80 px-4 text-xs font-medium uppercase tracking-[0.14em] text-white transition-colors hover:bg-white/10"
+                >
+                  Sign In / Up
+                </Link>
+              </>
             )}
           </nav>
 
@@ -98,6 +102,9 @@ export function SiteHeader() {
                   Sign In / Up
                 </Link>
               )}
+              <div className="mt-2 border-t border-white/10 pt-1">
+                <GetTheAppButton variant="menu" onAfterAction={() => setOpen(false)} />
+              </div>
             </nav>
           </div>
         ) : null}
@@ -144,7 +151,9 @@ export function SiteHeader() {
               <NotificationBell />
               <AccountMenu variant="internal" />
             </div>
-          ) : null}
+          ) : (
+            <GetTheAppButton variant="desktop" />
+          )}
         </nav>
 
         <button
@@ -189,6 +198,9 @@ export function SiteHeader() {
                 <AccountMenuMobileLinks onNavigate={() => setOpen(false)} />
               </div>
             ) : null}
+            <div className="mt-2 border-t border-white/10 pt-1">
+              <GetTheAppButton variant="menu" onAfterAction={() => setOpen(false)} />
+            </div>
           </nav>
         </div>
       ) : null}

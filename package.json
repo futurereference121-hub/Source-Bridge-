@@ -55,6 +55,7 @@
     "test:live-streaming": "npx tsx --env-file=.env scripts/test-live-streaming.mjs",
     "test:live-realtime": "npx tsx --env-file=.env scripts/test-live-realtime.mjs",
     "test:live-guard": "node scripts/test-live-payments-guard.mjs",
+    "test:pwa": "node scripts/test-pwa.mjs",
     "check:live-readiness": "node scripts/check-live-payments-readiness.mjs",
     "test:stripe-dual-mode": "node scripts/test-stripe-dual-mode.mjs",
     "test:procurement": "node scripts/test-procurement-release.mjs",

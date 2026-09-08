@@ -32,7 +32,7 @@ export function HomeShell({ children }: { children: ReactNode }) {
       }`}
     >
       <SiteHeader />
-      <main className={`flex-1 ${isHome ? "" : "pb-16 md:pb-0"}`}>{children}</main>
+      <main className={`flex-1 ${isHome ? "" : "pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"}`}>{children}</main>
       {isHome ? null : (
         <>
           <Footer />
