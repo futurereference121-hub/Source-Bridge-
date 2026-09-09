@@ -419,23 +419,26 @@ function ProfileDashboardInner() {
 
         <Panel title="Opportunities" id="opportunities">
           <p className="text-sm text-white/45">{opportunityLimit ? `${opportunityLimit.remaining} of ${opportunityLimit.limit} new posts remaining today.` : "Maximum 3 new posts per day."}</p>
+          <p className="mt-2 text-xs text-white/40">
+            New posts use Buyer Request, Sourcing Offer, or Travel Opportunity
+            types. Manage fulfilment from the marketplace.
+          </p>
           <div className="mt-4 space-y-3">
             {opportunities.filter((o) => o.active).map((o) => (
               <ManageRow key={o.id} title={o.description?.slice(0, 80) || o.title} detail={`${o.city}, ${o.country}`}>
-                <MiniButton onClick={() => editOpportunity(o)}>Edit</MiniButton>
-                <MiniButton onClick={() => void closeOpportunity(o.id)}>Close</MiniButton>
+                <MiniButton onClick={() => void closeOpportunity(o.id)}>Withdraw</MiniButton>
               </ManageRow>
             ))}
             {!opportunities.some((o) => o.active) ? <Empty>No opportunity submitted.</Empty> : null}
           </div>
-          <form onSubmit={saveOpportunity} className="mt-6 grid gap-3 sm:grid-cols-2">
-            <textarea className={`${inputClass} min-h-24 py-3 sm:col-span-2`} placeholder="Opportunity description" value={oppForm.description} onChange={(e) => setOppForm({ ...oppForm, description: e.target.value })} required />
-            <input className={inputClass} placeholder="City" value={oppForm.city} onChange={(e) => setOppForm({ ...oppForm, city: e.target.value })} required />
-            <input className={inputClass} placeholder="Country" value={oppForm.country} onChange={(e) => setOppForm({ ...oppForm, country: e.target.value })} required />
-            <Field label="Start date (optional)"><input type="date" className={inputClass} value={oppForm.startsAt} onChange={(e) => setOppForm({ ...oppForm, startsAt: e.target.value })} /></Field>
-            <Field label="End date (optional)"><input type="date" className={inputClass} value={oppForm.expiresAt} onChange={(e) => setOppForm({ ...oppForm, expiresAt: e.target.value })} /></Field>
-            <div className="flex items-end gap-2 sm:col-span-2"><SubmitButton busy={busy === "opportunity"}>{editingOpp ? "Save changes" : busy === "opportunity" ? "Publishing…" : "Publish opportunity"}</SubmitButton>{editingOpp ? <MiniButton onClick={() => { setEditingOpp(null); setOppForm(blankOpportunity); }}>Cancel</MiniButton> : null}</div>
-          </form>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <a
+              href="/opportunities"
+              className="inline-flex h-11 items-center rounded-lg bg-electric px-4 text-xs font-semibold uppercase tracking-[0.14em] text-navy"
+            >
+              Post / manage opportunities
+            </a>
+          </div>
         </Panel>
 
         <Panel title="Network Reach">
@@ -457,7 +460,11 @@ function ProfileDashboardInner() {
           </form>
         </Panel>
 
-        <Panel title="Upcoming Travels" id="trips">
+        <Panel title="Travel plans (private)" id="trips">
+          <p className="mb-3 text-xs leading-relaxed text-white/45">
+            Not shown on your public profile. Used for For You matching and
+            Travel Opportunity prefill only.
+          </p>
           <div className="space-y-2">
             {trips.map((t) => (
               <ManageRow key={t.id} title={`${t.city}, ${t.country}`} detail={`${t.arrival} → ${t.departure}`}>

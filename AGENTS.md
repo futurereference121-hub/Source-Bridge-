@@ -30,3 +30,7 @@ User-facing payment work is not **Production Ready TEST** until live TEST browse
 ## Completion statuses
 
 Report separately: Implementation / Unit tests / Regression / Deployment / Live browser QA / Production Ready TEST.
+
+## Cross-platform parity
+
+One shared product across desktop web, mobile web, and PWAs (Android / iOS / desktop). See `.cursor/rules/11-cross-platform-parity.mdc`. Do not fork platform behaviour; keep `/api`/auth/payments/messaging/Live network-only in the service worker.

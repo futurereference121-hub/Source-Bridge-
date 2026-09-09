@@ -17,9 +17,12 @@ type Props = {
   listingCover?: string;
   listingPriceLabel?: string;
   opportunityTitle?: string;
+  opportunityKindLabel?: string;
+  opportunityContextSnapshot?: string;
   label?: string;
   variant?: "primary" | "outline";
   isDemo?: boolean;
+  className?: string;
 };
 
 export function ContactSellerButton({
@@ -34,9 +37,12 @@ export function ContactSellerButton({
   listingCover,
   listingPriceLabel,
   opportunityTitle,
+  opportunityKindLabel,
+  opportunityContextSnapshot,
   label = "Contact seller",
   variant = "primary",
   isDemo = false,
+  className,
 }: Props) {
   const { account, requireAuth, showToast } = useAppUi();
   const [open, setOpen] = useState(false);
@@ -68,7 +74,7 @@ export function ContactSellerButton({
         <button
           type="button"
           onClick={onClick}
-          className="inline-flex h-11 items-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 transition-colors hover:border-white/50 hover:bg-white/5"
+          className={`inline-flex h-11 items-center rounded-lg border border-white/25 px-5 text-xs font-medium uppercase tracking-[0.14em] text-white/85 transition-colors hover:border-white/50 hover:bg-white/5 ${className || ""}`}
         >
           {label}
         </button>
@@ -77,7 +83,7 @@ export function ContactSellerButton({
           type="button"
           showArrow={false}
           onClick={onClick}
-          className="rounded-lg"
+          className={`rounded-lg ${className || ""}`}
         >
           {label}
         </PrimaryButton>
@@ -105,7 +111,12 @@ export function ContactSellerButton({
         }
         opportunity={
           opportunityId && opportunityTitle
-            ? { id: opportunityId, title: opportunityTitle }
+            ? {
+                id: opportunityId,
+                title: opportunityTitle,
+                kindLabel: opportunityKindLabel,
+                contextSnapshot: opportunityContextSnapshot,
+              }
             : null
         }
         initialMessage={initialMessage}

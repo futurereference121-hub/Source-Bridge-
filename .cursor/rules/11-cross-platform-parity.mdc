@@ -1,0 +1,21 @@
+---
+description: Permanent cross-platform product parity — one shared Source Bridge across desktop web, mobile web, and installed PWAs (Android, iOS, desktop)
+alwaysApply: true
+---
+
+# Cross-platform product parity
+
+Source Bridge is **one shared product**. Desktop web, mobile web, Android PWA, iPhone/iPad PWA, and desktop PWA must share the same product behaviour, APIs, auth, messaging, payments, Live, and Opportunities — **no platform forks**.
+
+## Requirements
+
+- Implement features once in the shared Next.js app; do not create separate mobile-only or PWA-only business logic forks.
+- Consider **installed / standalone** mode (safe areas, back behaviour, no trapped external links, no force-refresh during forms).
+- Service worker: keep `/api/`, auth, payments, messaging, Live, and private personalized routes **network-only**. No offline mutation replay queues.
+- iPhone Manual QA may remain pending, but implementation must not ignore iOS installed-mode constraints.
+- Final delivery reports for user-facing work must include **cross-platform coverage** with PASS / FAIL / PENDING per surface (desktop web, mobile web, Android PWA, iOS PWA, desktop PWA).
+
+## Non-goals
+
+- This rule does **not** weaken the payment production freeze (`00-payment-production-freeze.mdc`).
+- This rule does not require shipping native App Store / Play Store packages.

@@ -334,6 +334,13 @@ export async function POST(req: NextRequest) {
       actorName,
     });
 
+    if (opportunityId) {
+      const { markOpportunityInDiscussion } = await import(
+        "@/lib/opportunities/discussion"
+      );
+      await markOpportunityInDiscussion(opportunityId);
+    }
+
     // Best-effort email — never roll back the request
     if (recipient.email) {
       void sendEmail({

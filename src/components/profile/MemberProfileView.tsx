@@ -222,36 +222,9 @@ function PublicProfilePanels({
 
   return (
     <>
-      <div className="grid gap-5 md:grid-cols-2 md:gap-6">
+      <div className="grid gap-5 md:gap-6">
         <ProfilePanel title="Current Location">
           <p className="text-lg text-white">{member.location.label}</p>
-        </ProfilePanel>
-
-        <ProfilePanel title="Upcoming Travels">
-          {member.trips.length ? (
-            <ul className="space-y-3">
-              {member.trips.map((trip) => (
-                <li key={trip.id} className="text-base text-white/90">
-                  <span>
-                    {trip.city}
-                    {trip.country && trip.country !== "—"
-                      ? `, ${trip.country}`
-                      : ""}
-                  </span>
-                  <span className="mt-0.5 block text-sm text-white/45">
-                    {trip.dateRange}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyCopy>No upcoming travel added.</EmptyCopy>
-          )}
-          {isOwner ? (
-            <OwnerLink href={`/members/${member.slug}?edit=travel`}>
-              Add / Edit
-            </OwnerLink>
-          ) : null}
         </ProfilePanel>
       </div>
 

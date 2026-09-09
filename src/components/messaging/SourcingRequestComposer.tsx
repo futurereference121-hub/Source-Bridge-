@@ -33,6 +33,8 @@ type ListingContext = {
 type OpportunityContext = {
   id: string;
   title: string;
+  kindLabel?: string;
+  contextSnapshot?: string;
 };
 
 type ImageSlot = {
@@ -328,6 +330,24 @@ export function SourcingRequestComposer({
             <div className="rounded-lg border border-electric/25 bg-electric/10 px-3 py-2 text-xs text-white/80">
               About listing: <strong>{listing.name}</strong>
               {listing.priceLabel ? ` · ${listing.priceLabel}` : ""}
+            </div>
+          ) : null}
+
+          {opportunity ? (
+            <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-white/80">
+              <p className="font-medium text-amber-100">
+                {opportunity.kindLabel || "Opportunity"}:{" "}
+                <strong>{opportunity.title}</strong>
+              </p>
+              {opportunity.contextSnapshot ? (
+                <p className="mt-1 whitespace-pre-wrap text-white/65">
+                  {opportunity.contextSnapshot}
+                </p>
+              ) : null}
+              <p className="mt-1.5 text-[11px] text-white/45">
+                Context stays in this draft until you send — nothing is
+                auto-sent.
+              </p>
             </div>
           ) : null}
 

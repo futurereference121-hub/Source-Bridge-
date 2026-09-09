@@ -91,6 +91,25 @@ export interface Opportunity {
   startsAt?: string | null;
   expiresAt?: string | null;
   closedAt?: string | null;
+  /** Structured marketplace kind; historical rows are LEGACY_GENERAL. */
+  kind?:
+    | "BUYER_REQUEST"
+    | "SOURCING_OFFER"
+    | "TRAVEL_OPPORTUNITY"
+    | "LEGACY_GENERAL";
+  kindLabel?: string;
+  lifecycle?: string;
+  photos?: string[];
+  budgetMinMinor?: number | null;
+  budgetMaxMinor?: number | null;
+  budgetCurrency?: string;
+  deliveryCity?: string;
+  deliveryCountry?: string;
+  sourceCity?: string;
+  sourceCountry?: string;
+  travelStartAt?: string | null;
+  travelEndAt?: string | null;
+  active?: boolean;
 }
 
 export interface Service {
@@ -216,6 +235,7 @@ export interface FeedItem {
 /** In-app notification centre event types. */
 export type NotificationType =
   | "OPPORTUNITY"
+  | "OPPORTUNITY_RENEW"
   | "STATUS"
   | "MESSAGE"
   | "SOURCING_REQUEST"

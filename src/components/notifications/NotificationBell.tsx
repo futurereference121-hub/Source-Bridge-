@@ -17,6 +17,7 @@ import type { NotificationItem, NotificationType } from "@/lib/types";
 function iconForType(type: NotificationType) {
   switch (type) {
     case "OPPORTUNITY":
+    case "OPPORTUNITY_RENEW":
       return { Icon: Briefcase, className: "text-amber-300" };
     case "STATUS":
       return { Icon: CircleDot, className: "text-sky-300/85" };

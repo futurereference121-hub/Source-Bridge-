@@ -67,9 +67,17 @@ export function LiveFeedSplit({ items, perColumnLimit }: Props) {
         </div>
       </article>
       <article className="flex min-h-0 flex-col rounded-2xl border border-amber-400/25 bg-gradient-to-br from-amber-400/[0.08] to-white/[0.02] p-3 shadow-[0_12px_32px_-18px_rgba(251,191,36,0.35)] sm:p-4">
-        <h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/85">
-          <Sparkles size={12} aria-hidden />
-          Opportunities
+        <h3 className="mb-2 flex items-center justify-between gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-300/85">
+          <span className="inline-flex items-center gap-1.5">
+            <Sparkles size={12} aria-hidden />
+            Opportunities
+          </span>
+          <a
+            href="/opportunities"
+            className="font-medium normal-case tracking-normal text-electric/80 hover:text-electric"
+          >
+            Marketplace
+          </a>
         </h3>
         <div className="max-h-[min(42vh,22rem)] overflow-y-auto overscroll-contain pr-0.5 md:max-h-[min(48vh,26rem)]">
           {oppItems.length ? (

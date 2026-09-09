@@ -21,6 +21,12 @@ import type {
 } from "@prisma/client";
 import { pickActiveStatus } from "@/lib/member-status";
 import { memberCover, memberPhoto, PLACEHOLDER_PRODUCT } from "@/lib/placeholders";
+import { mapOpportunityLegacyCompat } from "@/lib/opportunities/map";
+import {
+  isPubliclyListableLifecycle,
+  isOpportunityLifecycle,
+} from "@/lib/opportunities/lifecycle";
+import { isPastExpiry } from "@/lib/opportunities/expiry";
 
 export type DbUserBundle = User & {
   networkLocations?: DbNetwork[];
@@ -60,29 +66,13 @@ function activeStatus(statuses: DbStatus[] | undefined): MemberStatus | null {
 
 function isOpportunityActive(o: DbOpportunity, now = new Date()): boolean {
   if (o.closedAt) return false;
-  if (o.expiresAt && o.expiresAt.getTime() <= now.getTime()) return false;
-  return true;
+  if (isPastExpiry(o.expiresAt, now)) return false;
+  const lifecycle = isOpportunityLifecycle(o.lifecycle) ? o.lifecycle : "OPEN";
+  return isPubliclyListableLifecycle(lifecycle);
 }
 
 function mapOpportunity(o: DbOpportunity): Opportunity {
-  return {
-    id: o.id,
-    title: o.title,
-    summary: o.title,
-    description: o.description,
-    availability: undefined,
-    travel: undefined,
-    localAccess: undefined,
-    stock: undefined,
-    categories: o.category ? [o.category] : [],
-    category: o.category,
-    city: o.city,
-    country: o.country,
-    postedAt: o.postedAt.toISOString(),
-    startsAt: o.startsAt?.toISOString() ?? null,
-    expiresAt: o.expiresAt?.toISOString() ?? null,
-    closedAt: o.closedAt?.toISOString() ?? null,
-  };
+  return mapOpportunityLegacyCompat(o);
 }
 
 function mapNetwork(rows: DbNetwork[] | undefined): NetworkCity[] {

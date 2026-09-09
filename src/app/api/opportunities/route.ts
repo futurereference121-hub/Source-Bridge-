@@ -2,49 +2,17 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { assertDailyLimit, checkDailyLimit, recordDailyAction } from "@/lib/rate-limit";
-import { jsonError, opportunitySchema } from "@/lib/validation";
+import { jsonError } from "@/lib/validation";
 import { notifyFollowersOfPost } from "@/lib/notifications";
 import { revalidatePath } from "next/cache";
-
-function autoTitle(description: string, city: string, country: string): string {
-  const clipped = description.trim().replace(/\s+/g, " ").slice(0, 80);
-  if (clipped.length >= 12) {
-    return clipped.length < description.trim().length ? `${clipped}…` : clipped;
-  }
-  const place = [city, country].filter(Boolean).join(", ");
-  return place ? `Opportunity in ${place}` : "Opportunity";
-}
-
-function mapOpp(o: {
-  id: string;
-  title: string;
-  description: string;
-  city: string;
-  country: string;
-  category: string;
-  startsAt: Date | null;
-  postedAt: Date;
-  expiresAt: Date | null;
-  closedAt: Date | null;
-}) {
-  const expired = o.expiresAt ? o.expiresAt.getTime() <= Date.now() : false;
-  const active = !o.closedAt && !expired;
-  return {
-    id: o.id,
-    title: o.title,
-    summary: o.title,
-    description: o.description,
-    city: o.city,
-    country: o.country,
-    category: o.category,
-    categories: [o.category],
-    startsAt: o.startsAt?.toISOString() ?? null,
-    postedAt: o.postedAt.toISOString(),
-    expiresAt: o.expiresAt?.toISOString() ?? null,
-    closedAt: o.closedAt?.toISOString() ?? null,
-    active,
-  };
-}
+import { mapOpportunityPublic } from "@/lib/opportunities/map";
+import { structuredOpportunityCreateSchema } from "@/lib/opportunities/validation";
+import {
+  buildStructuredOpportunityData,
+  findByClientRequestId,
+  findRecentDuplicateOpportunity,
+} from "@/lib/opportunities/create";
+import { isCreatableOpportunityKind } from "@/lib/opportunities/kinds";
 
 export async function GET() {
   try {
@@ -52,10 +20,21 @@ export async function GET() {
     const rows = await prisma.opportunity.findMany({
       where: { userId: user.id },
       orderBy: { postedAt: "desc" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            slug: true,
+            photo: true,
+          },
+        },
+      },
     });
     const limit = await checkDailyLimit(user.id, "opportunity");
     return Response.json({
-      opportunities: rows.map(mapOpp),
+      opportunities: rows.map((r) => mapOpportunityPublic(r)),
       limit,
     });
   } catch (err) {
@@ -77,31 +56,64 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const parsed = opportunitySchema.safeParse(body);
-    if (!parsed.success) {
-      return jsonError(parsed.error.issues[0]?.message || "Invalid opportunity", 400);
+
+    if (!body || typeof body !== "object" || !("kind" in body)) {
+      return jsonError(
+        "Choose Buyer Request, Sourcing Offer, or Travel Opportunity",
+        400,
+      );
+    }
+    if (!isCreatableOpportunityKind(body.kind)) {
+      return jsonError(
+        "Choose Buyer Request, Sourcing Offer, or Travel Opportunity",
+        400,
+      );
     }
 
-    const title =
-      parsed.data.title?.trim() ||
-      autoTitle(parsed.data.description, parsed.data.city, parsed.data.country);
-    const category = parsed.data.category?.trim() || "General";
+    const parsed = structuredOpportunityCreateSchema.safeParse(body);
+    if (!parsed.success) {
+      return jsonError(
+        parsed.error.issues[0]?.message || "Invalid opportunity",
+        400,
+      );
+    }
+
+    if (parsed.data.clientRequestId) {
+      const existing = await findByClientRequestId(
+        user.id,
+        parsed.data.clientRequestId,
+      );
+      if (existing) {
+        const limit = await checkDailyLimit(user.id, "opportunity");
+        return Response.json({
+          ok: true,
+          opportunity: mapOpportunityPublic(existing),
+          limit,
+          idempotent: true,
+        });
+      }
+    }
+
+    const data = buildStructuredOpportunityData(user.id, parsed.data);
+    const title = String(data.title || "");
+    const city = String(data.city || "");
+    const country = String(data.country || "");
+    const dup = await findRecentDuplicateOpportunity({
+      userId: user.id,
+      kind: parsed.data.kind,
+      title,
+      city,
+      country,
+    });
+    if (dup) {
+      return jsonError(
+        "A similar opportunity was posted recently. Edit that one or wait before posting again.",
+        409,
+      );
+    }
 
     await assertDailyLimit(user.id, "opportunity");
-    const row = await prisma.opportunity.create({
-      data: {
-        userId: user.id,
-        title,
-        description: parsed.data.description,
-        city: parsed.data.city,
-        country: parsed.data.country,
-        category,
-        startsAt: parsed.data.startsAt ? new Date(parsed.data.startsAt) : null,
-        expiresAt: parsed.data.expiresAt
-          ? new Date(parsed.data.expiresAt)
-          : null,
-      },
-    });
+    const row = await prisma.opportunity.create({ data });
     const limit = await recordDailyAction(user.id, "opportunity");
 
     if (user.slug) {
@@ -110,16 +122,20 @@ export async function POST(req: NextRequest) {
         authorName: user.username ? `@${user.username}` : user.name,
         kind: "OPPORTUNITY",
         text: row.description || row.title,
-        href: `/members/${user.slug}`,
+        href: `/opportunities?id=${row.id}`,
       });
     }
 
-    // Revalidate Live Activity / Explore so the new opportunity appears immediately.
     revalidatePath("/activity");
     revalidatePath("/explore");
+    revalidatePath("/opportunities");
     revalidatePath("/api/feed");
 
-    return Response.json({ ok: true, opportunity: mapOpp(row), limit });
+    return Response.json({
+      ok: true,
+      opportunity: mapOpportunityPublic(row),
+      limit,
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message =

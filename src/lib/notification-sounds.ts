@@ -32,6 +32,7 @@ export function soundKindForNotificationType(
 ): NotificationSoundKind | null {
   switch (type) {
     case "OPPORTUNITY":
+    case "OPPORTUNITY_RENEW":
       return "opportunity";
     case "STATUS":
       return "status";

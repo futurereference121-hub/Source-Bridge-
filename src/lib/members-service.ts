@@ -346,6 +346,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
       prisma.opportunity.findMany({
         where: {
           closedAt: null,
+          lifecycle: { in: ["OPEN", "IN_DISCUSSION", "MATCHED"] },
           OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
           user: publicMemberWhere,
         },
@@ -360,6 +361,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
           postedAt: true,
           startsAt: true,
           expiresAt: true,
+          kind: true,
           user: { select: userSelect },
         },
       }),

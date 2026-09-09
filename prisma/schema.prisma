@@ -249,27 +249,84 @@ model StatusUpdate {
   @@index([userId, postedAt])
 }
 
-/// Multiple opportunities allowed. Closed/expired are not active. Max 3 new/day.
+/// Structured marketplace intents. Legacy rows keep kind=LEGACY_GENERAL.
+/// Closed/expired/withdrawn are not public-active. Max 3 new/day (separate from Status).
 model Opportunity {
   id               String            @id @default(cuid())
   userId           String
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   title            String
   description      String
+  /// Primary display location (legacy required; new types also populate).
   city             String
   country          String
   category         String
-  /// Optional window start (user-facing "Start Date").
+  /// Optional window start (user-facing "Start Date" / travel start fallback).
   startsAt         DateTime?
   expiresAt        DateTime?
   closedAt         DateTime?
   postedAt         DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+
+  /// BUYER_REQUEST | SOURCING_OFFER | TRAVEL_OPPORTUNITY | LEGACY_GENERAL
+  kind             String            @default("LEGACY_GENERAL")
+  /// OPEN | IN_DISCUSSION | MATCHED | FULFILLED | EXPIRED | WITHDRAWN
+  lifecycle        String            @default("OPEN")
+  stateChangedAt   DateTime?
+  /// Client idempotency key (unique per user when set).
+  clientRequestId  String?
+  renewCount       Int               @default(0)
+  renewedFromId    String?
+  exposureScore    Int               @default(0)
+  lastExposedAt    DateTime?
+  preExpiryNotifiedAt DateTime?
+
+  /// Desired source / sourcing location (normalized; searchable).
+  sourceCity       String            @default("")
+  sourceCountry    String            @default("")
+  /// Delivery / handover destination (Buyer Request).
+  deliveryCity     String            @default("")
+  deliveryCountry  String            @default("")
+  /// Travel origin (optional) + destination (Travel Opportunity).
+  originCity       String            @default("")
+  originCountry    String            @default("")
+  travelStartAt    DateTime?
+  travelEndAt      DateTime?
+
+  /// Informational budget only — never creates PaymentIntent/ticket/fee.
+  budgetMinMinor   Int?
+  budgetMaxMinor   Int?
+  budgetCurrency   String            @default("")
+  quantity         String            @default("")
+  /// SHIP | HAND | EITHER | ""
+  deliveryMode     String            @default("")
+  alternativesOk   Boolean?
+  internationalShipping Boolean?
+  localHandover    Boolean?
+  specialistDetails String           @default("")
+  sizeLimits       String            @default("")
+  luggageRestrictions String         @default("")
+  notes            String            @default("")
+  /// JSON string[] image URLs (upload pipeline).
+  photosJson       String            @default("[]")
+  /// JSON string[] categories / markets.
+  categoriesJson   String            @default("[]")
+  marketsJson      String            @default("[]")
+
   conversations    Conversation[]
   sourcingRequests SourcingRequest[]
   transactions     Transaction[]
 
   @@index([userId, postedAt])
+  @@index([kind, lifecycle, expiresAt])
+  @@index([lifecycle, postedAt])
+  @@index([lifecycle, expiresAt])
+  @@index([sourceCountry, sourceCity])
+  @@index([deliveryCountry, deliveryCity])
+  @@index([country, city])
+  @@index([travelEndAt])
+  @@index([userId, clientRequestId])
+  @@index([exposureScore, postedAt])
 }
 
 model StockListing {

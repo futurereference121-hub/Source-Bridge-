@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/live-cleanup",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/opportunities-reconcile",
+      "schedule": "15 * * * *"
     }
   ]
 }
