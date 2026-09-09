@@ -196,8 +196,19 @@ export function mapOpportunityLegacyCompat(row: OppRow) {
     deliveryCountry: pub.deliveryCountry,
     sourceCity: pub.sourceCity,
     sourceCountry: pub.sourceCountry,
+    originCity: pub.originCity,
+    originCountry: pub.originCountry,
     travelStartAt: pub.travelStartAt,
     travelEndAt: pub.travelEndAt,
+    quantity: pub.quantity,
+    markets: pub.markets,
+    deliveryMode: pub.deliveryMode,
+    internationalShipping: pub.internationalShipping,
+    localHandover: pub.localHandover,
+    notes: pub.notes,
+    specialistDetails: pub.specialistDetails,
+    luggageRestrictions: pub.luggageRestrictions,
+    alternativesOk: pub.alternativesOk,
     active: pub.active,
   };
 }
@@ -208,14 +219,33 @@ export function buildOpportunityMessageContext(pub: OpportunityPublic): string {
   if (pub.description) {
     lines.push(pub.description.slice(0, 280));
   }
-  const source = [pub.sourceCity || pub.city, pub.sourceCountry || pub.country]
-    .filter(Boolean)
-    .join(", ");
-  if (source) lines.push(`Location: ${source}`);
-  const delivery = [pub.deliveryCity, pub.deliveryCountry]
-    .filter(Boolean)
-    .join(", ");
-  if (delivery) lines.push(`Delivery / handover: ${delivery}`);
+  if (pub.kind === "BUYER_REQUEST") {
+    const source = [pub.sourceCity || pub.city, pub.sourceCountry || pub.country]
+      .filter(Boolean)
+      .join(", ");
+    if (source) lines.push(`Source from: ${source}`);
+    const delivery = [pub.deliveryCity, pub.deliveryCountry]
+      .filter(Boolean)
+      .join(", ");
+    if (delivery) lines.push(`Deliver to: ${delivery}`);
+    if (pub.quantity?.trim()) lines.push(`Quantity: ${pub.quantity.trim()}`);
+  } else if (pub.kind === "SOURCING_OFFER") {
+    const available = [pub.sourceCity || pub.city, pub.sourceCountry || pub.country]
+      .filter(Boolean)
+      .join(", ");
+    if (available) lines.push(`Available in: ${available}`);
+  } else if (pub.kind === "TRAVEL_OPPORTUNITY") {
+    const origin = [pub.originCity, pub.originCountry].filter(Boolean).join(", ");
+    const dest = [pub.city, pub.country].filter(Boolean).join(", ");
+    if (origin && dest) lines.push(`Travelling: ${origin} → ${dest}`);
+    else if (dest) lines.push(`Travelling to: ${dest}`);
+    if (pub.markets.length) {
+      lines.push(`Markets / areas: ${pub.markets.join(", ")}`);
+    }
+  } else {
+    const source = [pub.city, pub.country].filter(Boolean).join(", ");
+    if (source) lines.push(`Location: ${source}`);
+  }
   if (pub.travelStartAt || pub.travelEndAt) {
     const start = pub.travelStartAt
       ? new Date(pub.travelStartAt).toLocaleDateString()
@@ -223,7 +253,7 @@ export function buildOpportunityMessageContext(pub: OpportunityPublic): string {
     const end = pub.travelEndAt
       ? new Date(pub.travelEndAt).toLocaleDateString()
       : "";
-    lines.push(`Travel: ${[start, end].filter(Boolean).join(" → ")}`);
+    lines.push(`Travel dates: ${[start, end].filter(Boolean).join(" → ")}`);
   }
   if (
     pub.budgetCurrency &&

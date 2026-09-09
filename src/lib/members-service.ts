@@ -7,6 +7,8 @@ import { isStatusActive } from "@/lib/member-status";
 import { memberPhoto } from "@/lib/placeholders";
 import { publicMemberWhere } from "@/lib/discoverability";
 import { normalizeSearchHandle } from "@/lib/validation";
+import { parseStringArrayJson } from "@/lib/opportunities/normalize";
+import { resolveKind } from "@/lib/opportunities/map";
 
 /**
  * Self-service lookup only (e.g. /api/profile fetching the signed-in user's
@@ -286,6 +288,24 @@ function feedFromMembers(members: Member[], limit: number): FeedItem[] {
         postedAt: o.postedAt,
         startsAt: o.startsAt ?? undefined,
         expiresAt: o.expiresAt ?? undefined,
+        opportunityId: o.id,
+        opportunityKind: o.kind,
+        sourceCity: o.sourceCity,
+        sourceCountry: o.sourceCountry,
+        deliveryCity: o.deliveryCity,
+        deliveryCountry: o.deliveryCountry,
+        originCity: o.originCity,
+        originCountry: o.originCountry,
+        quantity: o.quantity,
+        markets: o.markets,
+        travelStartAt: o.travelStartAt ?? undefined,
+        travelEndAt: o.travelEndAt ?? undefined,
+        budgetMinMinor: o.budgetMinMinor,
+        budgetMaxMinor: o.budgetMaxMinor,
+        budgetCurrency: o.budgetCurrency,
+        deliveryMode: o.deliveryMode,
+        internationalShipping: o.internationalShipping,
+        localHandover: o.localHandover,
       });
     }
   }
@@ -362,6 +382,22 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
           startsAt: true,
           expiresAt: true,
           kind: true,
+          sourceCity: true,
+          sourceCountry: true,
+          deliveryCity: true,
+          deliveryCountry: true,
+          originCity: true,
+          originCountry: true,
+          quantity: true,
+          marketsJson: true,
+          travelStartAt: true,
+          travelEndAt: true,
+          budgetMinMinor: true,
+          budgetMaxMinor: true,
+          budgetCurrency: true,
+          deliveryMode: true,
+          internationalShipping: true,
+          localHandover: true,
           user: { select: userSelect },
         },
       }),
@@ -388,6 +424,7 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
     for (const o of opportunities) {
       const u = o.user;
       if (!u.slug || !u.username) continue;
+      const kind = resolveKind(o.kind);
       oppItems.push({
         id: `opp-${o.id}`,
         kind: "opportunity",
@@ -402,6 +439,24 @@ async function feedFromDbQueries(limit: number): Promise<FeedItem[]> {
         postedAt: o.postedAt.toISOString(),
         startsAt: o.startsAt?.toISOString() ?? undefined,
         expiresAt: o.expiresAt?.toISOString() ?? undefined,
+        opportunityId: o.id,
+        opportunityKind: kind,
+        sourceCity: o.sourceCity || undefined,
+        sourceCountry: o.sourceCountry || undefined,
+        deliveryCity: o.deliveryCity || undefined,
+        deliveryCountry: o.deliveryCountry || undefined,
+        originCity: o.originCity || undefined,
+        originCountry: o.originCountry || undefined,
+        quantity: o.quantity || undefined,
+        markets: parseStringArrayJson(o.marketsJson),
+        travelStartAt: o.travelStartAt?.toISOString() ?? undefined,
+        travelEndAt: o.travelEndAt?.toISOString() ?? undefined,
+        budgetMinMinor: o.budgetMinMinor,
+        budgetMaxMinor: o.budgetMaxMinor,
+        budgetCurrency: o.budgetCurrency || undefined,
+        deliveryMode: o.deliveryMode || undefined,
+        internationalShipping: o.internationalShipping,
+        localHandover: o.localHandover,
       });
     }
 

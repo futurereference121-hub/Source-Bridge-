@@ -6,6 +6,7 @@ import {
   stringifyStringArray,
 } from "@/lib/opportunities/normalize";
 import type { StructuredOpportunityCreate } from "@/lib/opportunities/validation";
+import { normalizeOpportunityQuantity } from "@/lib/opportunities/presentation";
 
 function autoTravelTitle(city: string, country: string): string {
   const place = [city, country].filter(Boolean).join(", ");
@@ -51,7 +52,10 @@ export function buildStructuredOpportunityData(
       sourceCountry,
       deliveryCity,
       deliveryCountry,
-      quantity: input.quantity || "",
+      quantity: (() => {
+        const q = normalizeOpportunityQuantity(input.quantity);
+        return q.ok ? q.value : "";
+      })(),
       budgetMinMinor: input.budget?.minMinor ?? null,
       budgetMaxMinor: input.budget?.maxMinor ?? null,
       budgetCurrency: (input.budget?.currency || "").toUpperCase(),

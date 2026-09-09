@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CREATABLE_OPPORTUNITY_KINDS } from "@/lib/opportunities/kinds";
+import { normalizeOpportunityQuantity } from "@/lib/opportunities/presentation";
 
 const place = z.string().trim().max(80);
 const placeRequired = place.min(1, "Required");
@@ -14,6 +15,24 @@ const categoriesSchema = z
   .max(8)
   .optional()
   .default([]);
+const marketsSchema = z
+  .array(z.string().trim().min(1).max(80))
+  .max(12)
+  .optional()
+  .default([]);
+
+const quantitySchema = z
+  .string()
+  .trim()
+  .max(20)
+  .optional()
+  .default("")
+  .superRefine((val, ctx) => {
+    const n = normalizeOpportunityQuantity(val);
+    if (!n.ok) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: n.error });
+    }
+  });
 
 const budgetSchema = z
   .object({
@@ -45,11 +64,15 @@ const buyerRequestFields = z.object({
   category: z.string().trim().max(80).optional().default(""),
   categories: categoriesSchema,
   photos: photosSchema,
-  quantity: z.string().trim().max(40).optional().default(""),
+  quantity: quantitySchema,
   budget: budgetSchema,
   deadline: optionalIso,
   alternativesOk: z.boolean().optional().nullable(),
-  deliveryMode: z.enum(["SHIP", "HAND", "EITHER", ""]).optional().default(""),
+  /** Canonical: SHIP | HAND | EITHER. Empty preserved for legacy/unset. */
+  deliveryMode: z
+    .enum(["SHIP", "HAND", "EITHER", ""])
+    .optional()
+    .default(""),
   notes: z.string().trim().max(2000).optional().default(""),
   clientRequestId: z.string().trim().min(8).max(80).optional(),
 });
@@ -81,7 +104,7 @@ const travelOpportunityFields = z.object({
   travelEndAt: z.string().datetime({ message: "Travel end required" }),
   originCity: place.optional().default(""),
   originCountry: place.optional().default(""),
-  markets: categoriesSchema,
+  markets: marketsSchema,
   categories: categoriesSchema,
   photos: photosSchema,
   canShip: z.boolean().optional().nullable(),

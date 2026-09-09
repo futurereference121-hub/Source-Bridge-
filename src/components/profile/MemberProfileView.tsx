@@ -17,7 +17,12 @@ import { getListingsForMember } from "@/data/products";
 import { isStatusActive } from "@/lib/member-status";
 import { getLocationSuggestions } from "@/data/location-suggestions";
 import { useAppUi } from "@/components/providers/AppProviders";
-import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
+import { OpportunityOverlay } from "@/components/opportunities/OpportunityOverlay";
+import {
+  buildCompactOpportunityLines,
+  opportunityKindBadgeLabel,
+} from "@/lib/opportunities/presentation";
+import type { Opportunity } from "@/lib/types";
 
 type MemberProfileViewProps = {
   member: Member;
@@ -211,6 +216,9 @@ function PublicProfilePanels({
     : member.opportunity
       ? [member.opportunity]
       : [];
+  const [openOpportunityId, setOpenOpportunityId] = useState<string | null>(
+    null,
+  );
   const suggestions = opportunities[0]
     ? getLocationSuggestions(
         opportunities[0].city,
@@ -246,81 +254,21 @@ function PublicProfilePanels({
 
         <ProfilePanel title="Submit Opportunity" accent="opportunity">
           {opportunities.length ? (
-            <div className="space-y-5">
+            <div className="space-y-3">
               {opportunities.map((opportunity) => (
-                <div key={opportunity.id}>
-                  <p className="text-base font-medium leading-snug text-white/90">
-                    {opportunity.title || opportunity.summary}
-                  </p>
-                  {opportunity.description ? (
-                    <p className="mt-1.5 text-sm leading-relaxed text-white/55">
-                      {opportunity.description}
-                    </p>
-                  ) : null}
-                  <dl className="mt-4 space-y-2 text-sm text-white/55">
-                    {opportunity.availability ? (
-                      <Detail
-                        label="Availability"
-                        value={opportunity.availability}
-                      />
-                    ) : null}
-                    {opportunity.travel ? (
-                      <Detail label="Travel" value={opportunity.travel} />
-                    ) : null}
-                    {opportunity.localAccess ? (
-                      <Detail
-                        label="Local access"
-                        value={opportunity.localAccess}
-                      />
-                    ) : null}
-                    {opportunity.stock ? (
-                      <Detail label="Stock" value={opportunity.stock} />
-                    ) : null}
-                    {opportunity.categories.length ? (
-                      <Detail
-                        label="Categories"
-                        value={opportunity.categories.join(" · ")}
-                      />
-                    ) : null}
-                  </dl>
-                  {suggestions.length ? (
-                    <p className="mt-4 text-xs text-white/35">
-                      Known for this place: {suggestions.join(" · ")}
-                    </p>
-                  ) : null}
-                  {isOwner ? (
-                    <OwnerLink
-                      href={`/members/${member.slug}?edit=opportunity&id=${opportunity.id}`}
-                    >
-                      Edit
-                    </OwnerLink>
-                  ) : !member.isPrototype &&
-                    !member.isDemo &&
-                    !member.id.startsWith("m-") ? (
-                    <div className="mt-4">
-                      <ContactSellerButton
-                        toUserId={member.id}
-                        toUsername={member.username}
-                        toName={member.fullName}
-                        toPhoto={member.photo}
-                        toLocation={member.location.label}
-                        opportunityId={opportunity.id}
-                        opportunityTitle={
-                          opportunity.title || opportunity.summary
-                        }
-                        label="Enquire about opportunity"
-                        variant="outline"
-                        isDemo={Boolean(member.isDemo)}
-                      />
-                    </div>
-                  ) : member.isDemo ? (
-                    <p className="mt-4 text-xs text-white/45">
-                      Showcase Profile — messaging is disabled on demonstration
-                      accounts.
-                    </p>
-                  ) : null}
-                </div>
+                <ProfileOpportunityCard
+                  key={opportunity.id}
+                  opportunity={opportunity}
+                  member={member}
+                  isOwner={isOwner}
+                  onOpen={() => setOpenOpportunityId(opportunity.id)}
+                />
               ))}
+              {suggestions.length ? (
+                <p className="text-xs text-white/35">
+                  Known for this place: {suggestions.join(" · ")}
+                </p>
+              ) : null}
             </div>
           ) : (
             <EmptyCopy>No opportunity submitted.</EmptyCopy>
@@ -332,6 +280,11 @@ function PublicProfilePanels({
           ) : null}
         </ProfilePanel>
       </div>
+
+      <OpportunityOverlay
+        opportunityId={openOpportunityId}
+        onClose={() => setOpenOpportunityId(null)}
+      />
 
       <ProfilePanel title="Network Reach">
         {member.network.length ? (
@@ -382,9 +335,17 @@ function ActivityTab({ member }: { member: Member }) {
     : member.opportunity
       ? [member.opportunity]
       : [];
+  const [openOpportunityId, setOpenOpportunityId] = useState<string | null>(
+    null,
+  );
 
-  const items: { id: string; kind: string; title: string; detail: string }[] =
-    [];
+  const items: {
+    id: string;
+    kind: string;
+    title: string;
+    detail: string;
+    opportunityId?: string;
+  }[] = [];
 
   if (statusActive && member.status) {
     items.push({
@@ -396,58 +357,99 @@ function ActivityTab({ member }: { member: Member }) {
   }
 
   for (const opp of opportunities) {
+    const lines = buildCompactOpportunityLines({
+      kind: opp.kind || "LEGACY_GENERAL",
+      city: opp.city,
+      country: opp.country,
+      sourceCity: opp.sourceCity,
+      sourceCountry: opp.sourceCountry,
+      deliveryCity: opp.deliveryCity,
+      deliveryCountry: opp.deliveryCountry,
+      originCity: opp.originCity,
+      originCountry: opp.originCountry,
+      startsAt: opp.startsAt,
+      expiresAt: opp.expiresAt,
+      travelStartAt: opp.travelStartAt,
+      travelEndAt: opp.travelEndAt,
+      quantity: opp.quantity,
+      budgetMinMinor: opp.budgetMinMinor,
+      budgetMaxMinor: opp.budgetMaxMinor,
+      budgetCurrency: opp.budgetCurrency,
+      markets: opp.markets,
+      internationalShipping: opp.internationalShipping,
+      localHandover: opp.localHandover,
+      deliveryMode: opp.deliveryMode,
+    });
     items.push({
       id: opp.id,
-      kind: "Opportunity",
+      kind: opportunityKindBadgeLabel(opp.kind),
       title: opp.title || opp.summary,
-      detail: [opp.city, opp.country].filter(Boolean).join(", "),
+      detail: lines.map((l) => `${l.label}: ${l.value}`).join(" · "),
+      opportunityId: opp.id,
     });
   }
 
   return (
-    <ProfilePanel title="Activity">
-      {items.length ? (
-        <ul className="space-y-3">
-          {items.map((item) => {
-            const isOpportunity = item.kind === "Opportunity";
-            const Icon = isOpportunity ? Sparkles : CircleDot;
-            return (
-              <li
-                key={item.id}
-                className={`rounded-lg border px-4 py-3 ${
-                  isOpportunity
-                    ? "border-amber-400/25 bg-amber-400/[0.04]"
-                    : "border-sky-400/15 bg-white/[0.03]"
-                }`}
-              >
-                <p
-                  className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
-                    isOpportunity ? "text-amber-300" : "text-sky-300/85"
-                  }`}
-                >
-                  <Icon size={11} strokeWidth={2} />
-                  {item.kind}
-                </p>
-                <p className="mt-1 text-sm text-white/90">{item.title}</p>
-                {item.detail ? (
-                  <p className="mt-1 text-xs text-white/40">{item.detail}</p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <EmptyCopy>No recent status or opportunities.</EmptyCopy>
-      )}
-      <div className="mt-4 flex flex-wrap gap-4">
-        <OwnerLink href={`/members/${member.slug}?edit=status`} className="">
-          Update Status
-        </OwnerLink>
-        <OwnerLink href={`/members/${member.slug}?edit=opportunity`} className="">
-          Post Opportunity
-        </OwnerLink>
-      </div>
-    </ProfilePanel>
+    <>
+      <ProfilePanel title="Activity">
+        {items.length ? (
+          <ul className="space-y-3">
+            {items.map((item) => {
+              const isOpportunity = Boolean(item.opportunityId);
+              const Icon = isOpportunity ? Sparkles : CircleDot;
+              const body = (
+                <>
+                  <p
+                    className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                      isOpportunity ? "text-amber-300" : "text-sky-300/85"
+                    }`}
+                  >
+                    <Icon size={11} strokeWidth={2} />
+                    {item.kind}
+                  </p>
+                  <p className="mt-1 text-sm text-white/90">{item.title}</p>
+                  {item.detail ? (
+                    <p className="mt-1 text-xs text-white/40">{item.detail}</p>
+                  ) : null}
+                </>
+              );
+              return (
+                <li key={item.id}>
+                  {item.opportunityId ? (
+                    <button
+                      type="button"
+                      onClick={() => setOpenOpportunityId(item.opportunityId!)}
+                      className="w-full rounded-lg border border-amber-400/25 bg-amber-400/[0.04] px-4 py-3 text-left transition-colors hover:border-amber-400/40"
+                      aria-label={`Open ${item.kind}: ${item.title}`}
+                    >
+                      {body}
+                    </button>
+                  ) : (
+                    <div className="rounded-lg border border-sky-400/15 bg-white/[0.03] px-4 py-3">
+                      {body}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <EmptyCopy>No recent status or opportunities.</EmptyCopy>
+        )}
+        <div className="mt-4 flex flex-wrap gap-4">
+          <OwnerLink href={`/members/${member.slug}?edit=status`} className="">
+            Update Status
+          </OwnerLink>
+          <OwnerLink href={`/members/${member.slug}?edit=opportunity`} className="">
+            Post Opportunity
+          </OwnerLink>
+        </div>
+      </ProfilePanel>
+      <OpportunityOverlay
+        opportunityId={openOpportunityId}
+        onClose={() => setOpenOpportunityId(null)}
+      />
+    </>
   );
 }
 
@@ -700,6 +702,81 @@ function ProfilePanel({
   );
 }
 
+
+function ProfileOpportunityCard({
+  opportunity,
+  member,
+  isOwner,
+  onOpen,
+}: {
+  opportunity: Opportunity;
+  member: Member;
+  isOwner: boolean;
+  onOpen: () => void;
+}) {
+  const badge = opportunityKindBadgeLabel(opportunity.kind);
+  const lines = buildCompactOpportunityLines({
+    kind: opportunity.kind || "LEGACY_GENERAL",
+    city: opportunity.city,
+    country: opportunity.country,
+    sourceCity: opportunity.sourceCity,
+    sourceCountry: opportunity.sourceCountry,
+    deliveryCity: opportunity.deliveryCity,
+    deliveryCountry: opportunity.deliveryCountry,
+    originCity: opportunity.originCity,
+    originCountry: opportunity.originCountry,
+    startsAt: opportunity.startsAt,
+    expiresAt: opportunity.expiresAt,
+    travelStartAt: opportunity.travelStartAt,
+    travelEndAt: opportunity.travelEndAt,
+    quantity: opportunity.quantity,
+    budgetMinMinor: opportunity.budgetMinMinor,
+    budgetMaxMinor: opportunity.budgetMaxMinor,
+    budgetCurrency: opportunity.budgetCurrency,
+    markets: opportunity.markets,
+    internationalShipping: opportunity.internationalShipping,
+    localHandover: opportunity.localHandover,
+    deliveryMode: opportunity.deliveryMode,
+  });
+
+  return (
+    <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.03] p-3">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full text-left"
+        aria-label={`Open ${badge}: ${opportunity.title || opportunity.summary}`}
+      >
+        <span className="inline-flex rounded border border-amber-400/35 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-200">
+          {badge}
+        </span>
+        <p className="mt-1.5 text-base font-medium leading-snug text-white/90">
+          {opportunity.title || opportunity.summary}
+        </p>
+        {lines.length ? (
+          <dl className="mt-2 space-y-0.5 text-[11px] text-white/45">
+            {lines.map((line) => (
+              <div key={`${line.label}:${line.value}`} className="flex gap-1.5">
+                <dt className="shrink-0 uppercase tracking-wide text-white/30">
+                  {line.label}:
+                </dt>
+                <dd className="min-w-0 truncate">{line.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </button>
+      {isOwner ? (
+        <OwnerLink
+          href={`/members/${member.slug}?edit=opportunity&id=${opportunity.id}`}
+        >
+          Edit
+        </OwnerLink>
+      ) : null}
+    </div>
+  );
+}
+
 function EmptyCopy({ children }: { children: ReactNode }) {
   return <p className="text-sm text-white/40">{children}</p>;
 }
@@ -720,17 +797,6 @@ function OwnerLink({
     >
       {children}
     </Link>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-      <dt className="shrink-0 text-xs uppercase tracking-[0.12em] text-white/35 sm:w-28">
-        {label}
-      </dt>
-      <dd className="text-white/80">{value}</dd>
-    </div>
   );
 }
 

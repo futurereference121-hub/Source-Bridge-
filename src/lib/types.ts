@@ -110,6 +110,17 @@ export interface Opportunity {
   travelStartAt?: string | null;
   travelEndAt?: string | null;
   active?: boolean;
+  quantity?: string;
+  markets?: string[];
+  deliveryMode?: string;
+  originCity?: string;
+  originCountry?: string;
+  internationalShipping?: boolean | null;
+  localHandover?: boolean | null;
+  notes?: string;
+  specialistDetails?: string;
+  luggageRestrictions?: string;
+  alternativesOk?: boolean | null;
 }
 
 export interface Service {
@@ -230,6 +241,29 @@ export interface FeedItem {
   expiresAt?: string;
   liveSessionId?: string;
   liveKind?: "live" | "was_live";
+  /** Structured Opportunity metadata (Explore / Activity compact tickets). */
+  opportunityId?: string;
+  opportunityKind?:
+    | "BUYER_REQUEST"
+    | "SOURCING_OFFER"
+    | "TRAVEL_OPPORTUNITY"
+    | "LEGACY_GENERAL";
+  sourceCity?: string;
+  sourceCountry?: string;
+  deliveryCity?: string;
+  deliveryCountry?: string;
+  originCity?: string;
+  originCountry?: string;
+  quantity?: string;
+  markets?: string[];
+  travelStartAt?: string;
+  travelEndAt?: string;
+  budgetMinMinor?: number | null;
+  budgetMaxMinor?: number | null;
+  budgetCurrency?: string;
+  deliveryMode?: string;
+  internationalShipping?: boolean | null;
+  localHandover?: boolean | null;
 }
 
 /** In-app notification centre event types. */

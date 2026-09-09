@@ -11,8 +11,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { X } from "lucide-react";
 import type { OpportunityPublic } from "@/lib/opportunities/map";
+import { buildOpportunityMessageContext } from "@/lib/opportunities/map";
 import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { ContactSellerButton } from "@/components/marketplace/ContactSellerButton";
+import {
+  deliveryModeLabel,
+  opportunityKindBadgeLabel,
+} from "@/lib/opportunities/presentation";
 
 type Props = {
   opportunity: OpportunityPublic | null;
@@ -22,6 +27,29 @@ type Props = {
   isOwner?: boolean;
   ownerActions?: ReactNode;
 };
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt className="text-[10px] uppercase tracking-wider text-white/35">
+        {label}
+      </dt>
+      <dd className="mt-0.5">{children}</dd>
+    </div>
+  );
+}
+
+function place(city?: string, country?: string) {
+  return [city, country].filter(Boolean).join(", ");
+}
+
+function fmtLong(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
 
 export function OpportunityDetailSheet({
   opportunity: o,
@@ -74,7 +102,13 @@ export function OpportunityDetailSheet({
   if (!open || !o) return null;
 
   const photo = o.photos[0];
-  const place = [o.city, o.country].filter(Boolean).join(", ");
+  const badge = opportunityKindBadgeLabel(o.kind);
+  const deliveryPref = deliveryModeLabel(o.deliveryMode);
+  const source =
+    place(o.sourceCity, o.sourceCountry) || place(o.city, o.country);
+  const delivery = place(o.deliveryCity, o.deliveryCountry);
+  const origin = place(o.originCity, o.originCountry);
+  const destination = place(o.city, o.country);
 
   return (
     <div
@@ -98,7 +132,7 @@ export function OpportunityDetailSheet({
       >
         <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/90">
-            {o.kindLabel}
+            {badge}
           </span>
           <button
             ref={closeRef}
@@ -125,116 +159,140 @@ export function OpportunityDetailSheet({
           </p>
 
           <dl className="mt-4 space-y-2 text-sm text-white/65">
-            {place ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Location
-                </dt>
-                <dd>{place}</dd>
-              </div>
+            {o.kind === "BUYER_REQUEST" ? (
+              <>
+                {source ? <Field label="Source from">{source}</Field> : null}
+                {delivery ? <Field label="Deliver to">{delivery}</Field> : null}
+                {o.quantity?.trim() ? (
+                  <Field label="Quantity">{o.quantity.trim()}</Field>
+                ) : null}
+                {o.expiresAt ? (
+                  <Field label="Needed by">{fmtLong(o.expiresAt)}</Field>
+                ) : null}
+                {(o.budgetMinMinor != null || o.budgetMaxMinor != null) &&
+                o.budgetCurrency ? (
+                  <Field label="Budget (informational)">
+                    {o.budgetMinMinor != null
+                      ? (o.budgetMinMinor / 100).toLocaleString()
+                      : "—"}
+                    {" – "}
+                    {o.budgetMaxMinor != null
+                      ? (o.budgetMaxMinor / 100).toLocaleString()
+                      : "—"}{" "}
+                    {o.budgetCurrency.toUpperCase()}
+                  </Field>
+                ) : null}
+                {deliveryPref ? (
+                  <Field label="Delivery preference">{deliveryPref}</Field>
+                ) : null}
+                {o.alternativesOk != null ? (
+                  <Field label="Alternatives">
+                    {o.alternativesOk ? "OK" : "Not preferred"}
+                  </Field>
+                ) : null}
+              </>
             ) : null}
-            {o.deliveryCity ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Delivery / handover
-                </dt>
-                <dd>
-                  {[o.deliveryCity, o.deliveryCountry].filter(Boolean).join(", ")}
-                </dd>
-              </div>
+
+            {o.kind === "SOURCING_OFFER" ? (
+              <>
+                {source ? <Field label="Available in">{source}</Field> : null}
+                {o.expiresAt ? (
+                  <Field label="Available until">{fmtLong(o.expiresAt)}</Field>
+                ) : null}
+                {o.internationalShipping != null || o.localHandover != null ? (
+                  <Field label="Fulfilment">
+                    {[
+                      o.internationalShipping ? "International shipping" : null,
+                      o.localHandover ? "Local handover / hand-delivery" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Not specified"}
+                  </Field>
+                ) : null}
+                {o.specialistDetails ? (
+                  <Field label="Specialist details">
+                    <span className="whitespace-pre-wrap">
+                      {o.specialistDetails}
+                    </span>
+                  </Field>
+                ) : null}
+                {o.sizeLimits ? (
+                  <Field label="Size limits">{o.sizeLimits}</Field>
+                ) : null}
+              </>
             ) : null}
-            {o.originCity ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Origin
-                </dt>
-                <dd>
-                  {[o.originCity, o.originCountry].filter(Boolean).join(", ")}
-                </dd>
-              </div>
+
+            {o.kind === "TRAVEL_OPPORTUNITY" ? (
+              <>
+                {origin && destination ? (
+                  <Field label="Travelling">
+                    {origin} → {destination}
+                  </Field>
+                ) : destination ? (
+                  <Field label="Travelling to">{destination}</Field>
+                ) : null}
+                {(o.travelStartAt || o.travelEndAt) && (
+                  <Field label="Travel dates">
+                    {[o.travelStartAt, o.travelEndAt]
+                      .filter(Boolean)
+                      .map((d) => fmtLong(d!))
+                      .join(" → ")}
+                  </Field>
+                )}
+                {o.markets.length ? (
+                  <Field label="Markets / areas I expect to visit">
+                    {o.markets.join(" · ")}
+                  </Field>
+                ) : null}
+                {o.internationalShipping != null || o.localHandover != null ? (
+                  <Field label="Can help with">
+                    {[
+                      o.internationalShipping ? "Shipping" : null,
+                      o.localHandover ? "Hand-delivery" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Not specified"}
+                  </Field>
+                ) : null}
+                {o.luggageRestrictions ? (
+                  <Field label="Luggage">{o.luggageRestrictions}</Field>
+                ) : null}
+              </>
             ) : null}
-            {(o.travelStartAt || o.travelEndAt) && (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Travel dates
-                </dt>
-                <dd>
-                  {[o.travelStartAt, o.travelEndAt]
-                    .filter(Boolean)
-                    .map((d) =>
-                      new Date(d!).toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      }),
-                    )
-                    .join(" → ")}
-                </dd>
-              </div>
-            )}
-            {(o.budgetMinMinor != null || o.budgetMaxMinor != null) &&
-            o.budgetCurrency ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Budget (informational)
-                </dt>
-                <dd>
-                  {o.budgetMinMinor != null
-                    ? (o.budgetMinMinor / 100).toLocaleString()
-                    : "—"}
-                  {" – "}
-                  {o.budgetMaxMinor != null
-                    ? (o.budgetMaxMinor / 100).toLocaleString()
-                    : "—"}{" "}
-                  {o.budgetCurrency.toUpperCase()}
-                </dd>
-              </div>
+
+            {o.kind === "LEGACY_GENERAL" ? (
+              <>
+                {place(o.city, o.country) ? (
+                  <Field label="Location">{place(o.city, o.country)}</Field>
+                ) : null}
+                {o.expiresAt ? (
+                  <Field label="Until">{fmtLong(o.expiresAt)}</Field>
+                ) : null}
+              </>
             ) : null}
+
             {o.categories.length ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Categories
-                </dt>
-                <dd>{o.categories.join(" · ")}</dd>
-              </div>
+              <Field label="Categories">{o.categories.join(" · ")}</Field>
             ) : null}
             {o.notes ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Notes
-                </dt>
-                <dd className="whitespace-pre-wrap">{o.notes}</dd>
-              </div>
+              <Field label="Notes">
+                <span className="whitespace-pre-wrap">{o.notes}</span>
+              </Field>
             ) : null}
-            {o.specialistDetails ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Specialist details
-                </dt>
-                <dd className="whitespace-pre-wrap">{o.specialistDetails}</dd>
-              </div>
-            ) : null}
-            {o.luggageRestrictions ? (
-              <div>
-                <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                  Luggage
-                </dt>
-                <dd>{o.luggageRestrictions}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt className="text-[10px] uppercase tracking-wider text-white/35">
-                Status
-              </dt>
-              <dd className="uppercase tracking-wide">
+            <Field label="Status">
+              <span className="uppercase tracking-wide">
                 {o.lifecycle.replaceAll("_", " ")}
-              </dd>
-            </div>
+              </span>
+            </Field>
           </dl>
 
           {o.creator ? (
             <div className="mt-5 flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-              <div className="relative h-10 w-10 overflow-hidden rounded-lg">
+              <Link
+                href={`/members/${o.creator.slug}`}
+                className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric"
+                aria-label={`View profile of ${o.creator.fullName}, @${o.creator.username}`}
+              >
                 <SafeMemberImage
                   src={o.creator.photo}
                   alt=""
@@ -242,12 +300,13 @@ export function OpportunityDetailSheet({
                   sizes="40px"
                   className="object-cover"
                 />
-              </div>
+              </Link>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm text-white">{o.creator.fullName}</p>
                 <Link
                   href={`/members/${o.creator.slug}`}
                   className="text-xs text-electric hover:underline"
+                  aria-label={`View profile @${o.creator.username}`}
                 >
                   @{o.creator.username}
                 </Link>
@@ -270,15 +329,7 @@ export function OpportunityDetailSheet({
               opportunityId={o.id}
               opportunityTitle={o.title}
               opportunityKindLabel={o.kindLabel}
-              opportunityContextSnapshot={[
-                `About: ${o.kindLabel} — ${o.title}`,
-                o.description.slice(0, 200),
-                [o.city, o.country].filter(Boolean).join(", ")
-                  ? `Location: ${[o.city, o.country].filter(Boolean).join(", ")}`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join("\n")}
+              opportunityContextSnapshot={buildOpportunityMessageContext(o)}
               label={o.responseCta}
               className="w-full justify-center"
             />

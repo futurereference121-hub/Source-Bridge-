@@ -13,6 +13,11 @@ import {
 } from "@/lib/client-image-upload";
 import { IMAGE_ACCEPT_ATTR } from "@/lib/storage-constants";
 import { useAppUi } from "@/components/providers/AppProviders";
+import {
+  DELIVERY_MODE_OPTIONS,
+  normalizeMarketsInput,
+  normalizeOpportunityQuantity,
+} from "@/lib/opportunities/presentation";
 
 type Props = {
   open: boolean;
@@ -72,10 +77,11 @@ export function OpportunityCreateWizard({
     availabilityEnds: "",
     category: "",
     quantity: "",
+    markets: "",
     budgetMin: "",
     budgetMax: "",
     budgetCurrency: "USD",
-    deliveryMode: "" as "" | "SHIP" | "HAND" | "EITHER",
+    deliveryMode: "EITHER" as "" | "SHIP" | "HAND" | "EITHER",
     alternativesOk: false,
     internationalShipping: false,
     localHandover: true,
@@ -139,6 +145,12 @@ export function OpportunityCreateWizard({
     try {
       let payload: Record<string, unknown>;
       if (kind === "BUYER_REQUEST") {
+        const qty = normalizeOpportunityQuantity(form.quantity);
+        if (!qty.ok) {
+          setError(qty.error);
+          setBusy(false);
+          return;
+        }
         payload = {
           kind,
           title: form.title.trim(),
@@ -150,7 +162,7 @@ export function OpportunityCreateWizard({
           category: form.category.trim(),
           categories: form.category.trim() ? [form.category.trim()] : [],
           photos,
-          quantity: form.quantity.trim(),
+          quantity: qty.value,
           budget: {
             minMinor: form.budgetMin
               ? Math.round(Number(form.budgetMin) * 100)
@@ -162,7 +174,7 @@ export function OpportunityCreateWizard({
           },
           deadline: toIsoDateEnd(form.deadline),
           alternativesOk: form.alternativesOk,
-          deliveryMode: form.deliveryMode,
+          deliveryMode: form.deliveryMode || "EITHER",
           notes: form.notes.trim(),
           clientRequestId,
         };
@@ -194,6 +206,7 @@ export function OpportunityCreateWizard({
           travelEndAt: toIsoDateEnd(form.travelEnd),
           originCity: form.originCity.trim(),
           originCountry: form.originCountry.trim(),
+          markets: normalizeMarketsInput(form.markets),
           categories: form.category.trim() ? [form.category.trim()] : [],
           photos,
           canShip: form.canShip,
@@ -365,7 +378,7 @@ export function OpportunityCreateWizard({
 
               {kind === "BUYER_REQUEST" || kind === "SOURCING_OFFER" ? (
                 <div className="grid grid-cols-2 gap-2">
-                  <Field label={kind === "BUYER_REQUEST" ? "Desired source city" : "Sourcing city"}>
+                  <Field label={kind === "BUYER_REQUEST" ? "Source from (city)" : "Available in (city)"}>
                     <input
                       className={input}
                       value={form.sourceCity}
@@ -375,7 +388,7 @@ export function OpportunityCreateWizard({
                       required
                     />
                   </Field>
-                  <Field label="Country">
+                  <Field label={kind === "BUYER_REQUEST" ? "Source from (country)" : "Available in (country)"}>
                     <input
                       className={input}
                       value={form.sourceCountry}
@@ -391,7 +404,7 @@ export function OpportunityCreateWizard({
               {kind === "BUYER_REQUEST" ? (
                 <>
                   <div className="grid grid-cols-2 gap-2">
-                    <Field label="Delivery city">
+                    <Field label="Deliver to (city)">
                       <input
                         className={input}
                         value={form.deliveryCity}
@@ -401,7 +414,7 @@ export function OpportunityCreateWizard({
                         required
                       />
                     </Field>
-                    <Field label="Delivery country">
+                    <Field label="Deliver to (country)">
                       <input
                         className={input}
                         value={form.deliveryCountry}
@@ -412,6 +425,22 @@ export function OpportunityCreateWizard({
                       />
                     </Field>
                   </div>
+                  <Field label="Quantity (optional)">
+                    <input
+                      className={input}
+                      inputMode="numeric"
+                      pattern="[1-9][0-9]*"
+                      value={form.quantity}
+                      onChange={(e) =>
+                        setForm({ ...form, quantity: e.target.value })
+                      }
+                      placeholder="Positive whole number"
+                      maxLength={9}
+                    />
+                  </Field>
+                  <p className="text-[11px] text-white/40">
+                    Leave blank if quantity does not apply — we never assume 1.
+                  </p>
                   <div className="grid grid-cols-3 gap-2">
                     <Field label="Budget min">
                       <input
@@ -448,7 +477,7 @@ export function OpportunityCreateWizard({
                     Budget is informational only — it does not create a payment
                     or fee.
                   </p>
-                  <Field label="Deadline (optional)">
+                  <Field label="Needed by (optional)">
                     <input
                       type="date"
                       className={input}
@@ -461,18 +490,20 @@ export function OpportunityCreateWizard({
                   <Field label="Delivery preference">
                     <select
                       className={input}
-                      value={form.deliveryMode}
+                      value={form.deliveryMode || "EITHER"}
                       onChange={(e) =>
                         setForm({
                           ...form,
                           deliveryMode: e.target.value as typeof form.deliveryMode,
                         })
                       }
+                      required
                     >
-                      <option value="">Either / not sure</option>
-                      <option value="SHIP">Shipping</option>
-                      <option value="HAND">Hand handover</option>
-                      <option value="EITHER">Either</option>
+                      {DELIVERY_MODE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
                     </select>
                   </Field>
                   <label className="flex items-center gap-2 text-sm text-white/70">
@@ -606,6 +637,20 @@ export function OpportunityCreateWizard({
                       />
                     </Field>
                   </div>
+                  <Field label="Markets / areas I expect to visit (optional)">
+                    <textarea
+                      className={`${input} min-h-16`}
+                      value={form.markets}
+                      onChange={(e) =>
+                        setForm({ ...form, markets: e.target.value })
+                      }
+                      placeholder="e.g. Chatuchak, weekend flea markets, vintage districts"
+                      maxLength={800}
+                    />
+                  </Field>
+                  <p className="text-[11px] text-white/40">
+                    Separate with commas or new lines. Separate from destination.
+                  </p>
                   <label className="flex items-center gap-2 text-sm text-white/70">
                     <input
                       type="checkbox"

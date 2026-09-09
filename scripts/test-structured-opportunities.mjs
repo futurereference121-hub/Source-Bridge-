@@ -18,7 +18,8 @@ async function load() {
     const normalize = await import("../src/lib/opportunities/normalize.ts");
     const validation = await import("../src/lib/opportunities/validation.ts");
     const map = await import("../src/lib/opportunities/map.ts");
-    return { kinds, lifecycle, expiry, normalize, validation, map };
+    const presentation = await import("../src/lib/opportunities/presentation.ts");
+    return { kinds, lifecycle, expiry, normalize, validation, map, presentation };
   } catch {
     // Fallback: register ts-node/tsx
     try {
@@ -32,7 +33,8 @@ async function load() {
     const normalize = require("../src/lib/opportunities/normalize.ts");
     const validation = require("../src/lib/opportunities/validation.ts");
     const map = require("../src/lib/opportunities/map.ts");
-    return { kinds, lifecycle, expiry, normalize, validation, map };
+    const presentation = require("../src/lib/opportunities/presentation.ts");
+    return { kinds, lifecycle, expiry, normalize, validation, map, presentation };
   }
 }
 
@@ -43,6 +45,7 @@ const {
   normalize,
   validation,
   map,
+  presentation,
 } = await load();
 
 let passed = 0;
@@ -268,4 +271,190 @@ const renewAction = validation.opportunityLifecycleActionSchema.safeParse({
 });
 ok("renew action schema", renewAction.success);
 
+// QA correction: presentation labels, quantity, delivery, markets (items 1–21 focused)
+const buyerLines = presentation.buildCompactOpportunityLines({
+  kind: "BUYER_REQUEST",
+  sourceCity: "Kyoto",
+  sourceCountry: "Japan",
+  deliveryCity: "London",
+  deliveryCountry: "UK",
+  expiresAt: "2026-09-20T00:00:00.000Z",
+  quantity: "3",
+  budgetMinMinor: 1000,
+  budgetMaxMinor: 5000,
+  budgetCurrency: "USD",
+  city: "PosterCity",
+  country: "PosterLand",
+});
+ok(
+  "buyer SOURCE FROM not poster city",
+  buyerLines.some((l) => l.label === "SOURCE FROM" && l.value.includes("Kyoto")) &&
+    !buyerLines.some((l) => l.value.includes("PosterCity")),
+);
+ok(
+  "buyer DELIVER TO",
+  buyerLines.some((l) => l.label === "DELIVER TO" && l.value.includes("London")),
+);
+ok(
+  "buyer NEEDED BY",
+  buyerLines.some((l) => l.label === "NEEDED BY"),
+);
+ok(
+  "buyer QTY",
+  buyerLines.some((l) => l.label === "QTY" && l.value === "3"),
+);
+ok(
+  "buyer BUDGET",
+  buyerLines.some((l) => l.label === "BUDGET"),
+);
+
+const offerLines = presentation.buildCompactOpportunityLines({
+  kind: "SOURCING_OFFER",
+  sourceCity: "Geneva",
+  sourceCountry: "Switzerland",
+  expiresAt: "2026-10-01T00:00:00.000Z",
+  internationalShipping: true,
+  localHandover: true,
+});
+ok(
+  "offer AVAILABLE IN",
+  offerLines.some((l) => l.label === "AVAILABLE IN" && l.value.includes("Geneva")),
+);
+ok(
+  "offer AVAILABLE UNTIL",
+  offerLines.some((l) => l.label === "AVAILABLE UNTIL"),
+);
+
+const travelLines = presentation.buildCompactOpportunityLines({
+  kind: "TRAVEL_OPPORTUNITY",
+  originCity: "Berlin",
+  originCountry: "Germany",
+  city: "Bangkok",
+  country: "Thailand",
+  travelStartAt: "2026-10-01T00:00:00.000Z",
+  travelEndAt: "2026-10-10T00:00:00.000Z",
+  markets: ["Chatuchak", "Weekend flea"],
+  internationalShipping: false,
+  localHandover: true,
+}, { includeMarkets: true });
+ok(
+  "travel TRAVELLING origin→dest",
+  travelLines.some((l) => l.label === "TRAVELLING" && l.value.includes("Berlin") && l.value.includes("Bangkok")),
+);
+ok(
+  "travel TRAVEL DATES labelled",
+  travelLines.some((l) => l.label === "TRAVEL DATES"),
+);
+ok(
+  "travel markets in expanded compact when fits",
+  travelLines.some((l) => l.label === "MARKETS"),
+);
+
+const legacyLines = presentation.buildCompactOpportunityLines({
+  kind: "LEGACY_GENERAL",
+  city: "Lisbon",
+  country: "Portugal",
+});
+ok(
+  "legacy neutral LOCATION",
+  legacyLines.some((l) => l.label === "LOCATION" && l.value.includes("Lisbon")),
+);
+ok(
+  "legacy badge OPPORTUNITY",
+  presentation.opportunityKindBadgeLabel("LEGACY_GENERAL") === "OPPORTUNITY",
+);
+
+ok(
+  "qty empty ok",
+  presentation.normalizeOpportunityQuantity("").ok &&
+    presentation.normalizeOpportunityQuantity("").value === "",
+);
+ok(
+  "qty positive ok",
+  presentation.normalizeOpportunityQuantity("4").ok &&
+    presentation.normalizeOpportunityQuantity("4").value === "4",
+);
+ok(
+  "qty does not default to 1",
+  presentation.normalizeOpportunityQuantity("").value !== "1",
+);
+ok(
+  "qty rejects zero",
+  !presentation.normalizeOpportunityQuantity("0").ok,
+);
+ok(
+  "qty rejects decimal",
+  !presentation.normalizeOpportunityQuantity("1.5").ok,
+);
+
+ok(
+  "delivery options three",
+  presentation.DELIVERY_MODE_OPTIONS.length === 3,
+);
+ok(
+  "delivery SHIP label",
+  presentation.deliveryModeLabel("SHIP") === "Shipping",
+);
+ok(
+  "delivery HAND label",
+  presentation.deliveryModeLabel("HAND") === "Hand-delivery / local handover",
+);
+ok(
+  "delivery EITHER label",
+  presentation.deliveryModeLabel("EITHER") === "Either / not sure",
+);
+
+const buyerQtyBad = validation.structuredOpportunityCreateSchema.safeParse({
+  kind: "BUYER_REQUEST",
+  title: "Need ceramics",
+  description: "Looking for handmade ceramics",
+  sourceCity: "Kyoto",
+  sourceCountry: "Japan",
+  deliveryCity: "London",
+  deliveryCountry: "UK",
+  quantity: "0",
+});
+ok("buyer rejects qty 0", !buyerQtyBad.success);
+
+const buyerQtyOk = validation.structuredOpportunityCreateSchema.safeParse({
+  kind: "BUYER_REQUEST",
+  title: "Need ceramics",
+  description: "Looking for handmade ceramics",
+  sourceCity: "Kyoto",
+  sourceCountry: "Japan",
+  deliveryCity: "London",
+  deliveryCountry: "UK",
+  quantity: "2",
+  deliveryMode: "HAND",
+});
+ok("buyer qty 2 + HAND", buyerQtyOk.success);
+
+const travelMarkets = validation.structuredOpportunityCreateSchema.safeParse({
+  kind: "TRAVEL_OPPORTUNITY",
+  destinationCity: "Bangkok",
+  destinationCountry: "Thailand",
+  travelStartAt: "2026-10-01T00:00:00.000Z",
+  travelEndAt: "2026-10-10T23:59:59.000Z",
+  markets: ["Chatuchak", "Vintage district"],
+});
+ok("travel markets persist schema", travelMarkets.success);
+
+const marketsNorm = presentation.normalizeMarketsInput("Chatuchak,  Weekend flea\nChatuchak");
+ok(
+  "markets normalize unique",
+  marketsNorm.length === 2 && marketsNorm[0] === "Chatuchak",
+);
+
+ok(
+  "feed id parse",
+  presentation.parseOpportunityIdFromFeedItemId("opp-abc123") === "abc123",
+);
+
+ok(
+  "context source from not bare location",
+  ctx.includes("Source from:") && !ctx.includes("Location: Uji"),
+);
+ok("context quantity", ctx.includes("Quantity: 2"));
+
 console.log(`\n${passed} assertions passed`);
+
