@@ -4,6 +4,8 @@ import { MemberProfileView } from "@/components/profile/MemberProfileView";
 import { getMemberBySlugAsync } from "@/lib/members-service";
 import { getSessionUser } from "@/lib/auth";
 import { getListingsForMember } from "@/data/products";
+import { resolveTrustPassportPublicSummary } from "@/lib/trust-passport";
+import type { TrustPassportTier } from "@/lib/trust-passport/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -40,9 +42,29 @@ export default async function MemberProfilePage({ params }: PageProps) {
     ? (member.listings ?? [])
     : getListingsForMember(member);
 
+  // Trust Passport summary for genuine interactive profiles only.
+  // Not attached to Explore card queries — profile page only.
+  let trustPassportTier: TrustPassportTier | null = null;
+  if (
+    member.isRealAccount &&
+    !member.isDemo &&
+    !member.isExample &&
+    !member.isPrototype &&
+    !member.id.startsWith("m-") &&
+    !member.id.startsWith("example-")
+  ) {
+    const summary = await resolveTrustPassportPublicSummary(member.id);
+    trustPassportTier = summary.available ? summary.tier : null;
+  }
+
   return (
     <div className="pt-16 sm:pt-20">
-      <MemberProfileView member={member} isOwner={isOwner} listings={listings} />
+      <MemberProfileView
+        member={member}
+        isOwner={isOwner}
+        listings={listings}
+        trustPassportTier={trustPassportTier}
+      />
     </div>
   );
 }

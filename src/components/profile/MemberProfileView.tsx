@@ -24,11 +24,13 @@ import {
 } from "@/lib/opportunities/presentation";
 import { opportunityAuthReturnPath } from "@/lib/opportunities/public-teaser";
 import type { Opportunity } from "@/lib/types";
+import type { TrustPassportTier } from "@/lib/trust-passport/types";
 
 type MemberProfileViewProps = {
   member: Member;
   isOwner: boolean;
   listings?: Listing[];
+  trustPassportTier?: TrustPassportTier | null;
 };
 
 export function MemberProfileView(props: MemberProfileViewProps) {
@@ -43,11 +45,16 @@ function MemberProfileFallback({
   member,
   isOwner,
   listings = getListingsForMember(member),
+  trustPassportTier = null,
 }: MemberProfileViewProps) {
   return (
     <div className="bg-app-navy pb-28 text-white md:pb-24">
       <Container>
-        <ProfileHeader member={member} isOwner={isOwner} />
+        <ProfileHeader
+          member={member}
+          isOwner={isOwner}
+          trustPassportTier={trustPassportTier}
+        />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active="public" />
         <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">
           <PublicProfilePanels
@@ -65,6 +72,7 @@ function MemberProfileViewInner({
   member,
   isOwner,
   listings = getListingsForMember(member),
+  trustPassportTier = null,
 }: MemberProfileViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -217,7 +225,11 @@ function MemberProfileViewInner({
             Identity verification is pending review (usually within 48 hours).
           </div>
         ) : null}
-        <ProfileHeader member={liveMember} isOwner={isOwner} />
+        <ProfileHeader
+          member={liveMember}
+          isOwner={isOwner}
+          trustPassportTier={trustPassportTier}
+        />
         <ProfileTabs slug={member.slug} isOwner={isOwner} active={activeTab} />
 
         <div className="mt-10 space-y-5 sm:mt-12 sm:space-y-6">

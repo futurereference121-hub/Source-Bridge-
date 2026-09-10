@@ -72,7 +72,8 @@
     "test:fulfilment": "node scripts/test-fulfilment.mjs",
     "test:allowlist": "node scripts/test-allowlist.mjs",
     "test:connect-onboarding": "node scripts/test-connect-onboarding.mjs",
-    "test:stripe-webhooks": "node scripts/test-stripe-webhooks.mjs"
+    "test:stripe-webhooks": "node scripts/test-stripe-webhooks.mjs",
+    "test:trust-passport": "npx tsx scripts/test-trust-passport.mjs"
   },
   "dependencies": {
     "@mux/mux-node": "^14.1.1",

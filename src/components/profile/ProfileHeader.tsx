@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Member } from "@/lib/types";
 import { VerificationBadge } from "@/components/trust/VerificationBadge";
+import { TrustPassportHost } from "@/components/trust/TrustPassportHost";
+import type { TrustPassportTier } from "@/lib/trust-passport/types";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { SafeMemberImage } from "@/components/ui/SafeMemberImage";
 import { useAppUi } from "@/components/providers/AppProviders";
@@ -18,6 +20,8 @@ import { useLivePresenceOptional } from "@/components/live/LivePresenceProvider"
 type ProfileHeaderProps = {
   member: Member;
   isOwner: boolean;
+  /** Server-resolved public Trust Passport tier — omit for non-endorsable profiles. */
+  trustPassportTier?: TrustPassportTier | null;
 };
 
 function editHref(slug: string, edit: string) {
@@ -32,7 +36,11 @@ function canReceiveMessages(member: Member): boolean {
   return true;
 }
 
-export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
+export function ProfileHeader({
+  member,
+  isOwner,
+  trustPassportTier = null,
+}: ProfileHeaderProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { follows, followMember, requireAuth, showToast, account } = useAppUi();
@@ -151,7 +159,19 @@ export function ProfileHeader({ member, isOwner }: ProfileHeaderProps) {
               <h1 className="min-w-0 truncate font-display text-3xl text-white sm:text-4xl">
                 @{member.username}
               </h1>
-              <span className="flex h-7 shrink-0 items-center justify-end">
+              <span className="flex h-11 shrink-0 items-center justify-end gap-1.5">
+                {trustPassportTier ? (
+                  <TrustPassportHost
+                    memberSlug={member.slug}
+                    memberId={member.id}
+                    username={member.username}
+                    displayName={member.fullName}
+                    photo={member.photo}
+                    isOwner={isOwner}
+                    publicTier={trustPassportTier}
+                    size="md"
+                  />
+                ) : null}
                 {member.verification.identityVerified ? (
                   <VerificationBadge verified size="md" />
                 ) : null}
