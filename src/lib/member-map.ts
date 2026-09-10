@@ -390,9 +390,7 @@ export function opportunityToFeedItem(
     markets: opp.markets,
     travelStartAt: opp.travelStartAt ?? undefined,
     travelEndAt: opp.travelEndAt ?? undefined,
-    budgetMinMinor: opp.budgetMinMinor,
-    budgetMaxMinor: opp.budgetMaxMinor,
-    budgetCurrency: opp.budgetCurrency,
+    // Budget is authenticated detail-only — never in public feed teasers.
     deliveryMode: opp.deliveryMode,
     internationalShipping: opp.internationalShipping,
     localHandover: opp.localHandover,

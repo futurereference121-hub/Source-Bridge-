@@ -123,7 +123,12 @@ function fmtDate(iso?: string | null): string | null {
   }
 }
 
-function formatBudget(fields: CompactOpportunityFields): string | null {
+/** Format budget for authenticated expanded detail only (not compact cards). */
+export function formatOpportunityBudget(fields: {
+  budgetMinMinor?: number | null;
+  budgetMaxMinor?: number | null;
+  budgetCurrency?: string | null;
+}): string | null {
   if (!fields.budgetCurrency) return null;
   if (fields.budgetMinMinor == null && fields.budgetMaxMinor == null) return null;
   const fmt = (n: number) =>
@@ -169,8 +174,7 @@ export function buildCompactOpportunityLines(
     if (fields.quantity?.trim()) {
       lines.push({ label: "QTY", value: fields.quantity.trim() });
     }
-    const budget = formatBudget(fields);
-    if (budget) lines.push({ label: "BUDGET", value: budget });
+    // Budget is authenticated full-detail only — never on compact teasers.
     return lines;
   }
 

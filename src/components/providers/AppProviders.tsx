@@ -31,6 +31,8 @@ type PromptState = {
   message: string;
   confirmLabel?: string;
   href?: string;
+  /** Auth prompt: create-account destination (preserves safe `next`). */
+  secondaryHref?: string;
 } | null;
 
 type AppUiContextValue = {
@@ -168,12 +170,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
       rawNext.startsWith("/admin/")
         ? "/explore"
         : rawNext;
+    const encoded = encodeURIComponent(next);
     setPrompt({
       kind: "auth",
       title: "Join to continue",
-      message: `Sign in or join Source Bridge to ${actionLabel}.`,
-      confirmLabel: "Sign in",
-      href: `/sign-in?next=${encodeURIComponent(next)}`,
+      message: `Sign in or create an account to ${actionLabel}.`,
+      confirmLabel: "Sign In",
+      href: `/sign-in?next=${encoded}`,
+      secondaryHref: `/join?next=${encoded}`,
     });
     return false;
   }, [account]);
@@ -382,20 +386,20 @@ export function AppProviders({ children }: { children: ReactNode }) {
                     className="inline-flex h-11 items-center rounded-lg bg-electric px-5 text-sm font-medium text-white hover:bg-electric-hover"
                     onClick={() => {
                       closePrompt();
-                      router.push(prompt.href || "/join");
+                      router.push(prompt.href || "/sign-in");
                     }}
                   >
-                    {prompt.confirmLabel || "Join"}
+                    {prompt.confirmLabel || "Sign In"}
                   </button>
                   <button
                     type="button"
                     className="inline-flex h-11 items-center rounded-lg border border-white/20 px-5 text-sm font-medium text-white hover:border-electric/50"
                     onClick={() => {
                       closePrompt();
-                      router.push("/sign-in");
+                      router.push(prompt.secondaryHref || "/join");
                     }}
                   >
-                    Sign In
+                    Create Account
                   </button>
                   <button
                     type="button"

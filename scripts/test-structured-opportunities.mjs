@@ -304,8 +304,12 @@ ok(
   buyerLines.some((l) => l.label === "QTY" && l.value === "3"),
 );
 ok(
-  "buyer BUDGET",
-  buyerLines.some((l) => l.label === "BUDGET"),
+  "buyer BUDGET absent from compact",
+  !buyerLines.some((l) => l.label === "BUDGET"),
+);
+ok(
+  "buyer compact has no currency leak",
+  !buyerLines.some((l) => /USD|budget/i.test(`${l.label} ${l.value}`)),
 );
 
 const offerLines = presentation.buildCompactOpportunityLines({
@@ -455,6 +459,177 @@ ok(
   ctx.includes("Source from:") && !ctx.includes("Location: Uji"),
 );
 ok("context quantity", ctx.includes("Quantity: 2"));
+
+// Access / privacy / return-path corrections (items 1–35 focused coverage)
+const teaser = await import("../src/lib/opportunities/public-teaser.ts").catch(
+  () => require("../src/lib/opportunities/public-teaser.ts"),
+);
+
+const fullPub = {
+  id: "cuid_secret",
+  kind: "BUYER_REQUEST",
+  kindLabel: "BUYER REQUEST",
+  lifecycle: "OPEN",
+  title: "Need camera",
+  summary: "Need camera",
+  description: "Full private description with notes-level detail",
+  city: "Kyoto",
+  country: "Japan",
+  category: "cameras",
+  categories: ["cameras"],
+  markets: [],
+  photos: ["/x.jpg"],
+  sourceCity: "Kyoto",
+  sourceCountry: "Japan",
+  deliveryCity: "London",
+  deliveryCountry: "UK",
+  originCity: "",
+  originCountry: "",
+  startsAt: null,
+  expiresAt: "2026-09-20T00:00:00.000Z",
+  closedAt: null,
+  travelStartAt: null,
+  travelEndAt: null,
+  postedAt: "2026-09-10T00:00:00.000Z",
+  budgetMinMinor: 10000,
+  budgetMaxMinor: 50000,
+  budgetCurrency: "USD",
+  quantity: "2",
+  deliveryMode: "EITHER",
+  alternativesOk: true,
+  internationalShipping: null,
+  localHandover: null,
+  specialistDetails: "secret specialist",
+  sizeLimits: "secret size",
+  luggageRestrictions: "secret luggage",
+  notes: "secret notes",
+  active: true,
+  responseCta: "I CAN HELP",
+  renewCount: 0,
+};
+
+const summary = teaser.mapOpportunitySummary(fullPub);
+ok("summary redacts budget min", summary.budgetMinMinor == null);
+ok("summary redacts budget max", summary.budgetMaxMinor == null);
+ok("summary redacts budget currency", !summary.budgetCurrency);
+ok("summary redacts notes", summary.notes === "");
+ok("summary redacts specialist", summary.specialistDetails === "");
+ok("summary keeps title", summary.title === "Need camera");
+ok("summary keeps quantity", summary.quantity === "2");
+ok("summary keeps CTA label", summary.responseCta === "I CAN HELP");
+
+const feedSan = teaser.sanitizeOpportunityFeedItem({
+  id: "opp-1",
+  kind: "opportunity",
+  memberId: "m1",
+  memberSlug: "user",
+  username: "user",
+  fullName: "User",
+  photo: "/p.jpg",
+  text: "Need camera",
+  postedAt: "2026-09-10T00:00:00.000Z",
+  budgetMinMinor: 10000,
+  budgetMaxMinor: 50000,
+  budgetCurrency: "USD",
+  quantity: "2",
+});
+ok(
+  "feed sanitize drops budget",
+  feedSan.budgetMinMinor === undefined &&
+    feedSan.budgetMaxMinor === undefined &&
+    feedSan.budgetCurrency === undefined,
+);
+ok("feed sanitize keeps quantity", feedSan.quantity === "2");
+
+ok(
+  "auth return keeps opportunity id",
+  teaser.opportunityAuthReturnPath("abc123", "/explore") ===
+    "/explore?id=abc123",
+);
+ok(
+  "auth return rejects protocol-relative",
+  teaser.safeOpportunityReturnPath("//evil.com") === "/explore",
+);
+ok(
+  "auth return rejects absolute external",
+  teaser.safeOpportunityReturnPath("https://evil.com") === "/explore",
+);
+ok(
+  "auth return rejects admin",
+  teaser.safeOpportunityReturnPath("/admin/payments") === "/explore",
+);
+ok(
+  "auth return allows opportunities deep link",
+  teaser.safeOpportunityReturnPath("/opportunities?id=x") ===
+    "/opportunities?id=x",
+);
+
+const legacy = map.mapOpportunityLegacyCompat({
+  id: "legacy1",
+  userId: "u1",
+  kind: "BUYER_REQUEST",
+  lifecycle: "OPEN",
+  title: "Legacy title",
+  description: "Full desc",
+  city: "Kyoto",
+  country: "Japan",
+  category: "x",
+  categoriesJson: "[]",
+  photosJson: "[]",
+  marketsJson: "[]",
+  sourceCity: "Kyoto",
+  sourceCountry: "Japan",
+  deliveryCity: "London",
+  deliveryCountry: "UK",
+  originCity: "",
+  originCountry: "",
+  startsAt: null,
+  expiresAt: null,
+  closedAt: null,
+  travelStartAt: null,
+  travelEndAt: null,
+  postedAt: now,
+  budgetMinMinor: 9999,
+  budgetMaxMinor: 19999,
+  budgetCurrency: "EUR",
+  quantity: "1",
+  deliveryMode: "SHIP",
+  alternativesOk: true,
+  internationalShipping: null,
+  localHandover: null,
+  specialistDetails: "nope",
+  sizeLimits: "",
+  luggageRestrictions: "",
+  notes: "private note",
+  renewCount: 0,
+  clientRequestId: null,
+  exposureScore: 0,
+  lastExposedAt: null,
+  preExpiryNotifiedAt: null,
+  stateChangedAt: now,
+});
+ok("legacy compat hides budget", legacy.budgetMinMinor == null);
+ok("legacy compat hides notes", legacy.notes === "");
+ok(
+  "detail budget formatter still works",
+  presentation.formatOpportunityBudget({
+    budgetMinMinor: 1000,
+    budgetMaxMinor: 5000,
+    budgetCurrency: "USD",
+  })?.includes("USD"),
+);
+ok(
+  "I CAN HELP CTA preserved",
+  kinds.responseCtaLabel("BUYER_REQUEST") === "I CAN HELP",
+);
+ok(
+  "MESSAGE SOURCER CTA preserved",
+  kinds.responseCtaLabel("SOURCING_OFFER") === "MESSAGE SOURCER",
+);
+ok(
+  "ASK ABOUT THIS TRIP CTA preserved",
+  kinds.responseCtaLabel("TRAVEL_OPPORTUNITY") === "ASK ABOUT THIS TRIP",
+);
 
 console.log(`\n${passed} assertions passed`);
 

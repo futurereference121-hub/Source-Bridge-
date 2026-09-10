@@ -165,14 +165,18 @@ export function mapOpportunityPublic(
   };
 }
 
-/** Compact legacy Opportunity shape used by Member / Explore feed mapping. */
+/**
+ * Compact legacy Opportunity shape for Member / Explore teaser mapping.
+ * Public SSR/hydration must not include budget or other full-detail fields —
+ * those load only via authenticated GET /api/opportunities/:id.
+ */
 export function mapOpportunityLegacyCompat(row: OppRow) {
   const pub = mapOpportunityPublic(row);
   return {
     id: pub.id,
     title: pub.title,
     summary: pub.title,
-    description: pub.description,
+    description: pub.title,
     availability: undefined as string | undefined,
     travel: undefined as string | undefined,
     localAccess: undefined as string | undefined,
@@ -189,9 +193,9 @@ export function mapOpportunityLegacyCompat(row: OppRow) {
     kindLabel: pub.kindLabel,
     lifecycle: pub.lifecycle,
     photos: pub.photos,
-    budgetMinMinor: pub.budgetMinMinor,
-    budgetMaxMinor: pub.budgetMaxMinor,
-    budgetCurrency: pub.budgetCurrency,
+    budgetMinMinor: null as number | null,
+    budgetMaxMinor: null as number | null,
+    budgetCurrency: "" as string,
     deliveryCity: pub.deliveryCity,
     deliveryCountry: pub.deliveryCountry,
     sourceCity: pub.sourceCity,
@@ -205,10 +209,10 @@ export function mapOpportunityLegacyCompat(row: OppRow) {
     deliveryMode: pub.deliveryMode,
     internationalShipping: pub.internationalShipping,
     localHandover: pub.localHandover,
-    notes: pub.notes,
-    specialistDetails: pub.specialistDetails,
-    luggageRestrictions: pub.luggageRestrictions,
-    alternativesOk: pub.alternativesOk,
+    notes: "" as string,
+    specialistDetails: "" as string,
+    luggageRestrictions: "" as string,
+    alternativesOk: null as boolean | null,
     active: pub.active,
   };
 }

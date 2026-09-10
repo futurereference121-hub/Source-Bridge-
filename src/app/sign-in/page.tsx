@@ -6,11 +6,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
+import { safeOpportunityReturnPath } from "@/lib/opportunities/public-teaser";
 
 function safeUserNext(raw: string | null): string {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/explore";
-  if (raw === "/admin" || raw.startsWith("/admin/")) return "/explore";
-  return raw;
+  return safeOpportunityReturnPath(raw);
 }
 
 function SignInForm() {

@@ -55,9 +55,7 @@ export function buildLiveFeed(
         markets: o.markets,
         travelStartAt: o.travelStartAt ?? undefined,
         travelEndAt: o.travelEndAt ?? undefined,
-        budgetMinMinor: o.budgetMinMinor,
-        budgetMaxMinor: o.budgetMaxMinor,
-        budgetCurrency: o.budgetCurrency,
+        // Budget is authenticated detail-only — never in public feed teasers.
         deliveryMode: o.deliveryMode,
         internationalShipping: o.internationalShipping,
         localHandover: o.localHandover,

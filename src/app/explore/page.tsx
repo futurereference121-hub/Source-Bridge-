@@ -6,6 +6,7 @@ import {
   listDirectoryMembersPage,
   DIRECTORY_PAGE_SIZE_MOBILE,
 } from "@/lib/members-service";
+import { sanitizeOpportunityFeedItems } from "@/lib/opportunities/public-teaser";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -17,10 +18,11 @@ export const metadata: Metadata = {
 };
 
 export default async function ExplorePage() {
-  const [page, feed] = await Promise.all([
+  const [page, rawFeed] = await Promise.all([
     listDirectoryMembersPage({ page: 1, limit: DIRECTORY_PAGE_SIZE_MOBILE }),
     buildMergedLiveFeed(8),
   ]);
+  const feed = sanitizeOpportunityFeedItems(rawFeed);
 
   return (
     <Suspense

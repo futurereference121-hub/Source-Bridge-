@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import {
   CREATABLE_OPPORTUNITY_KINDS,
   OPPORTUNITY_KIND_LABELS,
@@ -22,7 +23,7 @@ import {
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated?: () => void;
+  onCreated?: (opportunity?: Record<string, unknown>) => void;
   /** Prefill travel from private Trip data (not public UI). */
   travelPrefill?: {
     destinationCity?: string;
@@ -53,12 +54,15 @@ export function OpportunityCreateWizard({
   onCreated,
   travelPrefill,
 }: Props) {
+  const router = useRouter();
   const { showToast, requireAuth, account } = useAppUi();
   const [kind, setKind] = useState<CreatableOpportunityKind | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [photos, setPhotos] = useState<string[]>([]);
   const [clientRequestId] = useState(() => newClientRequestId());
+  /** Bumped on close so in-flight POST cannot reopen or double-apply UI. */
+  const closeGeneration = useRef(0);
 
   const [form, setForm] = useState({
     title: "",
@@ -104,6 +108,14 @@ export function OpportunityCreateWizard({
     }
   }, []);
 
+  function handleClose() {
+    closeGeneration.current += 1;
+    setBusy(false);
+    setError("");
+    setKind(null);
+    onClose();
+  }
+
   if (!open) return null;
 
   async function onUpload(files: FileList | null) {
@@ -140,6 +152,7 @@ export function OpportunityCreateWizard({
     e.preventDefault();
     if (!kind) return;
     if (!requireAuth("post an opportunity")) return;
+    const gen = closeGeneration.current;
     setBusy(true);
     setError("");
     try {
@@ -229,6 +242,7 @@ export function OpportunityCreateWizard({
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
+      if (gen !== closeGeneration.current) return;
       if (!res.ok) {
         throw new Error(data.error || "Could not create opportunity");
       }
@@ -237,18 +251,115 @@ export function OpportunityCreateWizard({
       } catch {
         /* ignore */
       }
+      const created = data.opportunity as Record<string, unknown> | undefined;
       emitOpportunityChanged({
-        opportunity: data.opportunity,
-        version: Date.parse(data.opportunity?.postedAt || "") || Date.now(),
+        memberId: account?.id,
+        memberSlug: account?.slug ?? undefined,
+        opportunity: created
+          ? {
+              id: String(created.id || ""),
+              postedAt: String(created.postedAt || new Date().toISOString()),
+              title:
+                typeof created.title === "string" ? created.title : undefined,
+              kind: typeof created.kind === "string" ? created.kind : undefined,
+              kindLabel:
+                typeof created.kindLabel === "string"
+                  ? created.kindLabel
+                  : undefined,
+              lifecycle:
+                typeof created.lifecycle === "string"
+                  ? created.lifecycle
+                  : undefined,
+              city: typeof created.city === "string" ? created.city : undefined,
+              country:
+                typeof created.country === "string"
+                  ? created.country
+                  : undefined,
+              sourceCity:
+                typeof created.sourceCity === "string"
+                  ? created.sourceCity
+                  : undefined,
+              sourceCountry:
+                typeof created.sourceCountry === "string"
+                  ? created.sourceCountry
+                  : undefined,
+              deliveryCity:
+                typeof created.deliveryCity === "string"
+                  ? created.deliveryCity
+                  : undefined,
+              deliveryCountry:
+                typeof created.deliveryCountry === "string"
+                  ? created.deliveryCountry
+                  : undefined,
+              originCity:
+                typeof created.originCity === "string"
+                  ? created.originCity
+                  : undefined,
+              originCountry:
+                typeof created.originCountry === "string"
+                  ? created.originCountry
+                  : undefined,
+              startsAt:
+                typeof created.startsAt === "string" ? created.startsAt : null,
+              expiresAt:
+                typeof created.expiresAt === "string"
+                  ? created.expiresAt
+                  : null,
+              travelStartAt:
+                typeof created.travelStartAt === "string"
+                  ? created.travelStartAt
+                  : null,
+              travelEndAt:
+                typeof created.travelEndAt === "string"
+                  ? created.travelEndAt
+                  : null,
+              quantity:
+                typeof created.quantity === "string"
+                  ? created.quantity
+                  : undefined,
+              markets: Array.isArray(created.markets)
+                ? (created.markets as string[])
+                : undefined,
+              deliveryMode:
+                typeof created.deliveryMode === "string"
+                  ? created.deliveryMode
+                  : undefined,
+              internationalShipping:
+                typeof created.internationalShipping === "boolean"
+                  ? created.internationalShipping
+                  : null,
+              localHandover:
+                typeof created.localHandover === "boolean"
+                  ? created.localHandover
+                  : null,
+              photos: Array.isArray(created.photos)
+                ? (created.photos as string[])
+                : undefined,
+              active:
+                typeof created.active === "boolean" ? created.active : true,
+            }
+          : null,
+        version: Date.parse(String(created?.postedAt || "")) || Date.now(),
       });
       showToast("Opportunity posted");
-      onCreated?.();
-      onClose();
-      setKind(null);
+      onCreated?.(created);
+      handleClose();
+      if (account?.slug) {
+        const profileUrl = `/members/${account.slug}`;
+        if (
+          window.location.pathname !== profileUrl ||
+          window.location.search
+        ) {
+          queueMicrotask(() => {
+            router.replace(profileUrl, { scroll: false });
+          });
+        }
+      }
     } catch (err) {
+      if (gen !== closeGeneration.current) return;
       setError(err instanceof Error ? err.message : "Failed");
     } finally {
-      setBusy(false);
+      if (gen === closeGeneration.current) setBusy(false);
     }
   }
 
@@ -261,7 +372,7 @@ export function OpportunityCreateWizard({
         type="button"
         className="absolute inset-0 bg-black/65"
         aria-label="Close create opportunity"
-        onClick={onClose}
+        onClick={handleClose}
       />
       <div
         role="dialog"
@@ -276,7 +387,7 @@ export function OpportunityCreateWizard({
           </h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="h-10 px-3 text-xs uppercase tracking-wider text-white/60"
           >
             Close

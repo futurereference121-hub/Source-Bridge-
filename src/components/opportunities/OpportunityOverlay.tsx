@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OpportunityPublic } from "@/lib/opportunities/map";
 import { OpportunityDetailSheet } from "@/components/opportunities/OpportunityDetailSheet";
+import { useAppUi } from "@/components/providers/AppProviders";
+import { opportunityAuthReturnPath } from "@/lib/opportunities/public-teaser";
 
 type Props = {
   opportunityId: string | null;
@@ -13,7 +15,7 @@ type Props = {
 
 /**
  * Shared overlay host: fetch by id + OpportunityDetailSheet.
- * Keeps parent feed mounted; close restores focus/scroll via sheet cleanup.
+ * Full detail requires session; parents should requireAuth before setting id.
  */
 export function OpportunityOverlay({
   opportunityId,
@@ -21,19 +23,40 @@ export function OpportunityOverlay({
   isOwner,
   ownerActions,
 }: Props) {
+  const { account, requireAuth, authReady } = useAppUi();
   const [opportunity, setOpportunity] = useState<OpportunityPublic | null>(
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const promptedRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!opportunityId) {
       setOpportunity(null);
       setError(null);
+      promptedRef.current = null;
       return;
     }
+    if (!authReady) return;
+
+    if (!account) {
+      if (promptedRef.current !== opportunityId) {
+        promptedRef.current = opportunityId;
+        const next = opportunityAuthReturnPath(
+          opportunityId,
+          `${window.location.pathname}${window.location.search}`,
+        );
+        requireAuth("view full Opportunity details", next);
+      }
+      onCloseRef.current();
+      return;
+    }
+
     let cancelled = false;
     setError(null);
+    setOpportunity(null);
     void (async () => {
       try {
         const res = await fetch(`/api/opportunities/${opportunityId}`, {
@@ -41,6 +64,15 @@ export function OpportunityOverlay({
         });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
+        if (res.status === 401) {
+          const next = opportunityAuthReturnPath(
+            opportunityId,
+            `${window.location.pathname}${window.location.search}`,
+          );
+          requireAuth("view full Opportunity details", next);
+          onCloseRef.current();
+          return;
+        }
         if (!res.ok) {
           setOpportunity(null);
           setError(data.error || "Could not load opportunity");
@@ -57,9 +89,9 @@ export function OpportunityOverlay({
     return () => {
       cancelled = true;
     };
-  }, [opportunityId]);
+  }, [opportunityId, account, authReady, requireAuth]);
 
-  if (!opportunityId) return null;
+  if (!opportunityId || !account) return null;
 
   if (!opportunity && !error) {
     return (

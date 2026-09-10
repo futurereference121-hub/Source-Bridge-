@@ -30,8 +30,13 @@ function revalidateOppSurfaces() {
   revalidatePath("/api/feed");
 }
 
+/**
+ * Authenticated full Opportunity detail.
+ * Logged-out clients receive 401 — compact teasers use marketplace/feed summaries only.
+ */
 export async function GET(_req: NextRequest, ctx: Ctx) {
   try {
+    await requireSessionUser();
     const { id } = await ctx.params;
     const row = await prisma.opportunity.findUnique({
       where: { id },
@@ -50,6 +55,8 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
     if (!row) return jsonError("Opportunity not found", 404);
     return Response.json({ opportunity: mapOpportunityPublic(row) });
   } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 401) return jsonError("Sign in required", 401);
     console.error("[opportunity:get]", err);
     return jsonError("Failed to load opportunity", 500);
   }

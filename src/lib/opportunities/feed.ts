@@ -5,6 +5,7 @@ import {
   mapOpportunityPublic,
   type OpportunityPublic,
 } from "@/lib/opportunities/map";
+import { mapOpportunitySummary } from "@/lib/opportunities/public-teaser";
 import {
   PUBLIC_ACTIVE_LIFECYCLES,
 } from "@/lib/opportunities/lifecycle";
@@ -146,7 +147,9 @@ export async function listLatestOpportunities(filters: MarketplaceFilters): Prom
   });
 
   const page = rows.slice(0, filters.limit);
-  const items = page.map((r) => mapOpportunityPublic(r, now));
+  const items = page.map((r) =>
+    mapOpportunitySummary(mapOpportunityPublic(r, now)),
+  );
   const last = page[page.length - 1];
   const nextCursor =
     rows.length > filters.limit && last
@@ -353,7 +356,9 @@ export async function listForYouOpportunities(filters: MarketplaceFilters): Prom
   }
 
   const slice = scored.slice(start, start + filters.limit);
-  const items = slice.map((s) => mapOpportunityPublic(s.row, now));
+  const items = slice.map((s) =>
+    mapOpportunitySummary(mapOpportunityPublic(s.row, now)),
+  );
   const last = slice[slice.length - 1];
   const hasMore = start + filters.limit < scored.length;
   const nextCursor =

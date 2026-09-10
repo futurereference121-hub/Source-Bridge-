@@ -120,9 +120,7 @@ function FeedRow({
           travelStartAt: item.travelStartAt,
           travelEndAt: item.travelEndAt,
           quantity: item.quantity,
-          budgetMinMinor: item.budgetMinMinor,
-          budgetMaxMinor: item.budgetMaxMinor,
-          budgetCurrency: item.budgetCurrency,
+          // Budget is authenticated detail-only — never on compact cards.
           markets: item.markets,
           internationalShipping: item.internationalShipping,
           localHandover: item.localHandover,

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getExploreFeedVersion } from "@/lib/explore-feed-activity";
 import { buildMergedLiveFeed } from "@/lib/members-service";
+import { sanitizeOpportunityFeedItems } from "@/lib/opportunities/public-teaser";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 100)
       : 8;
-    const items = await buildMergedLiveFeed(limit);
+    const items = sanitizeOpportunityFeedItems(await buildMergedLiveFeed(limit));
     return Response.json(
       { unchanged: false, feedVersion, items },
       { headers: NO_STORE },
@@ -36,10 +37,11 @@ export async function GET(req: NextRequest) {
   const limit = Number.isFinite(limitRaw)
     ? Math.min(Math.max(limitRaw, 1), 100)
     : 40;
-  const [items, feedVersion] = await Promise.all([
+  const [rawItems, feedVersion] = await Promise.all([
     buildMergedLiveFeed(limit),
     getExploreFeedVersion(),
   ]);
+  const items = sanitizeOpportunityFeedItems(rawItems);
   return Response.json(
     { items, feedVersion },
     { headers: NO_STORE },

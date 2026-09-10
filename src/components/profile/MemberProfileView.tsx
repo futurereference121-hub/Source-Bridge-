@@ -22,6 +22,7 @@ import {
   buildCompactOpportunityLines,
   opportunityKindBadgeLabel,
 } from "@/lib/opportunities/presentation";
+import { opportunityAuthReturnPath } from "@/lib/opportunities/public-teaser";
 import type { Opportunity } from "@/lib/types";
 
 type MemberProfileViewProps = {
@@ -72,10 +73,20 @@ function MemberProfileViewInner({
   const [statusOverride, setStatusOverride] = useState<
     Member["status"] | undefined
   >(undefined);
+  const [opportunitiesOverride, setOpportunitiesOverride] = useState<
+    Opportunity[] | undefined
+  >(undefined);
 
+  const liveOpportunities =
+    opportunitiesOverride ?? member.opportunities;
   const liveMember: Member = {
     ...member,
     status: statusOverride !== undefined ? statusOverride : member.status,
+    opportunities: liveOpportunities,
+    opportunity:
+      liveOpportunities?.length
+        ? liveOpportunities[0]
+        : member.opportunity,
   };
 
   useEffect(() => {
@@ -116,6 +127,58 @@ function MemberProfileViewInner({
     });
     return () => unsub();
   }, [member.id, member.slug]);
+
+  useEffect(() => {
+    let unsub: () => void = () => {};
+    void import("@/lib/opportunity-surface-sync").then(
+      ({ subscribeOpportunityChanged }) => {
+        unsub = subscribeOpportunityChanged((payload) => {
+          if (payload.memberId && payload.memberId !== member.id) return;
+          if (payload.memberSlug && payload.memberSlug !== member.slug) return;
+          const opp = payload.opportunity;
+          if (!opp?.id) return;
+          const mapped: Opportunity = {
+            id: opp.id,
+            title: opp.title,
+            summary: opp.summary || opp.title || "",
+            description: opp.description,
+            categories: [],
+            city: opp.city || "",
+            country: opp.country || "",
+            postedAt: opp.postedAt,
+            startsAt: opp.startsAt,
+            expiresAt: opp.expiresAt,
+            kind: opp.kind as Opportunity["kind"],
+            kindLabel: opp.kindLabel,
+            lifecycle: opp.lifecycle,
+            photos: opp.photos,
+            sourceCity: opp.sourceCity,
+            sourceCountry: opp.sourceCountry,
+            deliveryCity: opp.deliveryCity,
+            deliveryCountry: opp.deliveryCountry,
+            originCity: opp.originCity,
+            originCountry: opp.originCountry,
+            travelStartAt: opp.travelStartAt,
+            travelEndAt: opp.travelEndAt,
+            quantity: opp.quantity,
+            markets: opp.markets,
+            deliveryMode: opp.deliveryMode,
+            internationalShipping: opp.internationalShipping,
+            localHandover: opp.localHandover,
+            active: opp.active,
+          };
+          setOpportunitiesOverride((prev) => {
+            const base =
+              prev ??
+              member.opportunities ??
+              (member.opportunity ? [member.opportunity] : []);
+            return [mapped, ...base.filter((o) => o.id !== mapped.id)];
+          });
+        });
+      },
+    );
+    return () => unsub();
+  }, [member.id, member.slug, member.opportunities, member.opportunity]);
 
   useEffect(() => {
     if (!isOwner) return;
@@ -210,6 +273,7 @@ function PublicProfilePanels({
   isOwner: boolean;
   listings: Listing[];
 }) {
+  const { requireAuth } = useAppUi();
   const statusActive = isStatusActive(member.status);
   const opportunities = member.opportunities?.length
     ? member.opportunities
@@ -227,6 +291,21 @@ function PublicProfilePanels({
         opportunities[0].countryCode,
       )
     : [];
+
+  function openOpportunity(id: string) {
+    const next = opportunityAuthReturnPath(
+      id,
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : `/members/${member.slug}`,
+    );
+    if (
+      !requireAuth("view full Opportunity details and respond", next)
+    ) {
+      return;
+    }
+    setOpenOpportunityId(id);
+  }
 
   return (
     <>
@@ -261,7 +340,7 @@ function PublicProfilePanels({
                   opportunity={opportunity}
                   member={member}
                   isOwner={isOwner}
-                  onOpen={() => setOpenOpportunityId(opportunity.id)}
+                  onOpen={() => openOpportunity(opportunity.id)}
                 />
               ))}
               {suggestions.length ? (
@@ -329,6 +408,7 @@ function PublicProfilePanels({
 }
 
 function ActivityTab({ member }: { member: Member }) {
+  const { requireAuth } = useAppUi();
   const statusActive = isStatusActive(member.status);
   const opportunities = member.opportunities?.length
     ? member.opportunities
@@ -338,6 +418,21 @@ function ActivityTab({ member }: { member: Member }) {
   const [openOpportunityId, setOpenOpportunityId] = useState<string | null>(
     null,
   );
+
+  function openOpportunity(id: string) {
+    const next = opportunityAuthReturnPath(
+      id,
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : `/members/${member.slug}`,
+    );
+    if (
+      !requireAuth("view full Opportunity details and respond", next)
+    ) {
+      return;
+    }
+    setOpenOpportunityId(id);
+  }
 
   const items: {
     id: string;
@@ -372,9 +467,7 @@ function ActivityTab({ member }: { member: Member }) {
       travelStartAt: opp.travelStartAt,
       travelEndAt: opp.travelEndAt,
       quantity: opp.quantity,
-      budgetMinMinor: opp.budgetMinMinor,
-      budgetMaxMinor: opp.budgetMaxMinor,
-      budgetCurrency: opp.budgetCurrency,
+      // Budget is authenticated detail-only — never on compact cards.
       markets: opp.markets,
       internationalShipping: opp.internationalShipping,
       localHandover: opp.localHandover,
@@ -418,7 +511,7 @@ function ActivityTab({ member }: { member: Member }) {
                   {item.opportunityId ? (
                     <button
                       type="button"
-                      onClick={() => setOpenOpportunityId(item.opportunityId!)}
+                      onClick={() => openOpportunity(item.opportunityId!)}
                       className="w-full rounded-lg border border-amber-400/25 bg-amber-400/[0.04] px-4 py-3 text-left transition-colors hover:border-amber-400/40"
                       aria-label={`Open ${item.kind}: ${item.title}`}
                     >
@@ -730,9 +823,7 @@ function ProfileOpportunityCard({
     travelStartAt: opportunity.travelStartAt,
     travelEndAt: opportunity.travelEndAt,
     quantity: opportunity.quantity,
-    budgetMinMinor: opportunity.budgetMinMinor,
-    budgetMaxMinor: opportunity.budgetMaxMinor,
-    budgetCurrency: opportunity.budgetCurrency,
+    // Budget is authenticated detail-only — never on compact cards.
     markets: opportunity.markets,
     internationalShipping: opportunity.internationalShipping,
     localHandover: opportunity.localHandover,

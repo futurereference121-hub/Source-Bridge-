@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { StatusEditor } from "@/components/profile/editors/StatusEditor";
 import { OpportunityEditor } from "@/components/profile/editors/OpportunityEditor";
@@ -22,6 +22,15 @@ const EDIT_KEYS = new Set([
   "listing",
 ]);
 
+function cleanEditSearchParams(searchParams: URLSearchParams): string {
+  const next = new URLSearchParams(searchParams.toString());
+  next.delete("edit");
+  next.delete("id");
+  next.delete("listingId");
+  next.delete("opportunityId");
+  return next.toString();
+}
+
 export function ProfileEditHost({ member }: ProfileEditHostProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -32,17 +41,34 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
     searchParams.get("listingId") ||
     searchParams.get("opportunityId");
 
+  // Local dismiss so CLOSE is immediate (router.replace can wait on RSC).
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    // Re-open when a fresh edit= query arrives.
+    setDismissed(false);
+  }, [edit, entityId]);
+
   const close = useCallback(() => {
-    const next = new URLSearchParams(searchParams.toString());
-    next.delete("edit");
-    next.delete("id");
-    next.delete("listingId");
-    next.delete("opportunityId");
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    setDismissed(true);
+    const qs = cleanEditSearchParams(
+      new URLSearchParams(searchParams.toString()),
+    );
+    const href = qs ? `${pathname}?${qs}` : pathname;
+    // Synchronous URL clean — do not await network / RSC refresh.
+    try {
+      window.history.replaceState(null, "", href);
+    } catch {
+      /* ignore */
+    }
+    // Soft-sync Next searchParams in the background after visible close.
+    queueMicrotask(() => {
+      router.replace(href, { scroll: false });
+    });
   }, [pathname, router, searchParams]);
 
   const openCreateListing = useCallback(() => {
+    setDismissed(false);
     const next = new URLSearchParams(searchParams.toString());
     next.set("edit", "listing");
     next.delete("id");
@@ -52,7 +78,7 @@ export function ProfileEditHost({ member }: ProfileEditHostProps) {
     router.replace(`${pathname}?${qs}`, { scroll: false });
   }, [pathname, router, searchParams]);
 
-  if (!edit || !EDIT_KEYS.has(edit)) return null;
+  if (dismissed || !edit || !EDIT_KEYS.has(edit)) return null;
 
   if (edit === "status") {
     return (

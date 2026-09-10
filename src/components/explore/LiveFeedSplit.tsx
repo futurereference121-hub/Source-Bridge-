@@ -5,6 +5,8 @@ import type { FeedItem } from "@/lib/types";
 import { CircleDot, Sparkles } from "lucide-react";
 import { LiveFeed } from "@/components/explore/LiveFeed";
 import { OpportunityOverlay } from "@/components/opportunities/OpportunityOverlay";
+import { useAppUi } from "@/components/providers/AppProviders";
+import { opportunityAuthReturnPath } from "@/lib/opportunities/public-teaser";
 
 type Props = {
   items: FeedItem[];
@@ -45,6 +47,7 @@ function EmptyColumn({
  * Opportunity ticket body opens detail overlay; avatar/username open profile.
  */
 export function LiveFeedSplit({ items, perColumnLimit }: Props) {
+  const { requireAuth } = useAppUi();
   const [openOpportunityId, setOpenOpportunityId] = useState<string | null>(
     null,
   );
@@ -57,9 +60,21 @@ export function LiveFeedSplit({ items, perColumnLimit }: Props) {
     ? opportunities.slice(0, perColumnLimit)
     : opportunities;
 
-  const openOpportunity = useCallback((id: string) => {
-    setOpenOpportunityId(id);
-  }, []);
+  const openOpportunity = useCallback(
+    (id: string) => {
+      const next = opportunityAuthReturnPath(
+        id,
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : "/explore",
+      );
+      if (!requireAuth("view full Opportunity details and respond", next)) {
+        return;
+      }
+      setOpenOpportunityId(id);
+    },
+    [requireAuth],
+  );
 
   return (
     <>

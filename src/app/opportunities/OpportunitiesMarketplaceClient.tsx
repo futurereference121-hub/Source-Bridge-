@@ -10,12 +10,13 @@ import { OpportunityCreateWizard } from "@/components/opportunities/OpportunityC
 import { Container } from "@/components/ui/Container";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { CREATABLE_OPPORTUNITY_KINDS } from "@/lib/opportunities/kinds";
+import { opportunityAuthReturnPath } from "@/lib/opportunities/public-teaser";
 
 type Mode = "for_you" | "latest";
 
 export function OpportunitiesMarketplaceClient() {
   const searchParams = useSearchParams();
-  const { account, requireAuth } = useAppUi();
+  const { account, requireAuth, authReady } = useAppUi();
   const [mode, setMode] = useState<Mode>("for_you");
   const [items, setItems] = useState<OpportunityPublic[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -108,6 +109,17 @@ export function OpportunitiesMarketplaceClient() {
   useEffect(() => {
     const id = searchParams.get("id");
     if (!id) return;
+    if (!authReady) return;
+    if (!account) {
+      const next = opportunityAuthReturnPath(
+        id,
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}`
+          : "/opportunities",
+      );
+      requireAuth("view full Opportunity details and respond", next);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -125,7 +137,7 @@ export function OpportunitiesMarketplaceClient() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [searchParams, account, authReady, requireAuth]);
 
   async function loadMine() {
     if (!requireAuth("manage your opportunities")) return;
@@ -157,12 +169,18 @@ export function OpportunitiesMarketplaceClient() {
   }
 
   function openTicket(id: string) {
-    const found =
-      items.find((i) => i.id === id) || mine.find((i) => i.id === id);
-    if (found) {
-      setSelected(found);
+    const next = opportunityAuthReturnPath(
+      id,
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : "/opportunities",
+    );
+    if (
+      !requireAuth("view full Opportunity details and respond", next)
+    ) {
       return;
     }
+    // List items are public summaries (no budget). Always fetch full detail.
     void fetch(`/api/opportunities/${id}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {

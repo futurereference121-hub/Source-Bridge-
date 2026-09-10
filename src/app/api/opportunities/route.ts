@@ -115,25 +115,37 @@ export async function POST(req: NextRequest) {
     await assertDailyLimit(user.id, "opportunity");
     const row = await prisma.opportunity.create({ data });
     const limit = await recordDailyAction(user.id, "opportunity");
+    const opportunity = mapOpportunityPublic(row);
 
-    if (user.slug) {
-      await notifyFollowersOfPost({
-        authorId: user.id,
-        authorName: user.username ? `@${user.username}` : user.name,
-        kind: "OPPORTUNITY",
-        text: row.description || row.title,
-        href: `/opportunities?id=${row.id}`,
-      });
-    }
-
-    revalidatePath("/activity");
-    revalidatePath("/explore");
-    revalidatePath("/opportunities");
-    revalidatePath("/api/feed");
+    // Respond immediately — follower notify + path revalidation are not on the
+    // critical path for creator close / profile return.
+    void (async () => {
+      try {
+        if (user.slug) {
+          await notifyFollowersOfPost({
+            authorId: user.id,
+            authorName: user.username ? `@${user.username}` : user.name,
+            kind: "OPPORTUNITY",
+            text: row.description || row.title,
+            href: `/opportunities?id=${row.id}`,
+          });
+        }
+      } catch (err) {
+        console.error("[opportunity:notify]", err);
+      }
+      try {
+        revalidatePath("/activity");
+        revalidatePath("/explore");
+        revalidatePath("/opportunities");
+        revalidatePath("/api/feed");
+      } catch (err) {
+        console.error("[opportunity:revalidate]", err);
+      }
+    })();
 
     return Response.json({
       ok: true,
-      opportunity: mapOpportunityPublic(row),
+      opportunity,
       limit,
     });
   } catch (err) {

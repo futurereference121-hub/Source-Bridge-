@@ -8,6 +8,7 @@ import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { passwordStrengthLevel } from "@/lib/password-strength";
 import type { AccountIntent } from "@/lib/types";
+import { safeOpportunityReturnPath } from "@/lib/opportunities/public-teaser";
 
 const intents: { id: AccountIntent; title: string; copy: string }[] = [
   {
@@ -77,12 +78,8 @@ function JoinForm() {
       router.replace("/onboarding");
       return;
     }
-    const next = searchParams.get("next");
-    if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/admin")) {
-      router.replace(next);
-      return;
-    }
-    router.replace("/explore");
+    const next = safeOpportunityReturnPath(searchParams.get("next"));
+    router.replace(next);
   }, [authReady, signedIn, account, router, searchParams]);
 
   useEffect(() => {
