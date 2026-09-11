@@ -44,11 +44,11 @@ export default async function MemberProfilePage({ params }: PageProps) {
 
   // Trust Passport summary for genuine interactive profiles only.
   // Not attached to Explore card queries — profile page only.
+  // Gate via existing Member flags + id prefixes only (no isExample — WIP-only).
   let trustPassportTier: TrustPassportTier | null = null;
   if (
     member.isRealAccount &&
     !member.isDemo &&
-    !member.isExample &&
     !member.isPrototype &&
     !member.id.startsWith("m-") &&
     !member.id.startsWith("example-")
