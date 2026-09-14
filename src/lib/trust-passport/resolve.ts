@@ -22,6 +22,7 @@ import type {
   TrustPassportPublicSummary,
   TrustPassportResolveInput,
 } from "@/lib/trust-passport/types";
+import { isGlobalPayoutsEnabled } from "@/lib/payments/flags";
 
 const VERIFICATION_HREF = "/profile/settings/verification";
 const PAYMENTS_HREF = "/profile/settings/payments";
@@ -55,13 +56,14 @@ function parseSpecialties(raw: string | null | undefined): string[] {
   }
 }
 
-async function loadLiveConnectFlags(userId: string): Promise<{
+async function loadLivePayoutFlags(userId: string): Promise<{
   livePayoutsEnabled: boolean;
   liveConnectConnected: boolean;
   liveConnectNeedsAction: boolean;
 }> {
-  // Always read the LIVE row — TEST Connect never qualifies for Silver/Gold.
-  const row = await prisma.stripeConnectAccount.findUnique({
+  // Always read the LIVE Connect row — TEST Connect / TEST GP never qualify for Silver/Gold.
+  // GP table is only read when GLOBAL_PAYOUTS_ENABLED (flag OFF ⇒ identical to today).
+  const connectRow = await prisma.stripeConnectAccount.findUnique({
     where: {
       userId_stripeMode: { userId, stripeMode: "LIVE" },
     },
@@ -70,12 +72,41 @@ async function loadLiveConnectFlags(userId: string): Promise<{
       payoutsEnabled: true,
     },
   });
-  const liveConnectConnected = Boolean(row?.stripeAccountId);
-  const livePayoutsEnabled = Boolean(row?.payoutsEnabled);
+
+  const liveConnectConnected = Boolean(connectRow?.stripeAccountId);
+  const liveConnectPayouts = Boolean(connectRow?.payoutsEnabled);
+
+  let liveGpReady = false;
+  let gpHasRecipient = false;
+  if (isGlobalPayoutsEnabled()) {
+    const gpRow = await prisma.globalPayoutRecipient.findUnique({
+      where: {
+        userId_stripeMode: { userId, stripeMode: "LIVE" },
+      },
+      select: {
+        stripeRecipientId: true,
+        status: true,
+        payoutMethodReady: true,
+        defaultPayoutMethodId: true,
+      },
+    });
+    gpHasRecipient = Boolean(gpRow?.stripeRecipientId);
+    liveGpReady =
+      gpHasRecipient &&
+      Boolean(gpRow?.payoutMethodReady) &&
+      Boolean(gpRow?.defaultPayoutMethodId) &&
+      String(gpRow?.status || "").toUpperCase() === "ACTIVE";
+  }
+
+  // Universal payout ready: LIVE Connect payoutsEnabled OR LIVE GP recipient+method ready.
+  const livePayoutsEnabled = liveConnectPayouts || liveGpReady;
+
   return {
     livePayoutsEnabled,
-    liveConnectConnected,
-    liveConnectNeedsAction: liveConnectConnected && !livePayoutsEnabled,
+    liveConnectConnected: liveConnectConnected || liveGpReady,
+    liveConnectNeedsAction:
+      (liveConnectConnected && !liveConnectPayouts && !liveGpReady) ||
+      (gpHasRecipient && !liveGpReady && !liveConnectPayouts),
   };
 }
 
@@ -116,7 +147,7 @@ export async function loadTrustPassportFacts(userId: string): Promise<{
   });
 
   const [connect, completedProtectedSourcingCount] = await Promise.all([
-    loadLiveConnectFlags(userId),
+    loadLivePayoutFlags(userId),
     endorsementAvailable ? countQualifyingSellerCompletions(userId) : Promise.resolve(0),
   ]);
 

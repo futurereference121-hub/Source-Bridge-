@@ -106,6 +106,8 @@ model User {
   procurementAdvancesEnabled    Boolean @default(true)
   /// One Connect row per (user, stripeMode) — TEST and LIVE accounts stay isolated.
   stripeConnectAccounts         StripeConnectAccount[]
+  /// Global Payouts recipient rows (additive second rail; separate from Connect).
+  globalPayoutRecipients        GlobalPayoutRecipient[]
   protectedTxAsBuyer            ProtectedTransaction[] @relation("ProtectedTxnBuyer")
   protectedTxAsSeller           ProtectedTransaction[] @relation("ProtectedTxnSeller")
   paymentTicketsCreated         PaymentTicket[]        @relation("PaymentTicketCreator")
@@ -1076,6 +1078,12 @@ model ProtectedTransaction {
   stripeCheckoutSessionId  String    @default("")
   stripeChargeId           String    @default("")
   sellerConnectAccountId   String    @default("")
+  /// Locked payout rail at fund: STRIPE_CONNECT | STRIPE_GLOBAL_PAYOUTS (default Connect for legacy).
+  payoutRail               String    @default("STRIPE_CONNECT")
+  payoutRailLockedAt       DateTime?
+  /// GP recipient / payout-method snapshot at rail lock (never bank credentials).
+  sellerGpRecipientId      String    @default("")
+  sellerGpPayoutMethodId   String    @default("")
   fundedAt                 DateTime?
   procurementReleasedAt    DateTime?
   shippedAt                DateTime?
@@ -1100,6 +1108,7 @@ model ProtectedTransaction {
   trackingEvents           TrackingEvent[]
   disputes                 DisputeCase[]
   transferAttempts         TransferAttempt[]
+  outboundPaymentAttempts  OutboundPaymentAttempt[]
 
   @@index([buyerId, status])
   @@index([sellerId, status])
@@ -1110,6 +1119,7 @@ model ProtectedTransaction {
   @@index([listingId, status])
   @@index([inspectionEndsAt])
   @@index([sourcingRequestId, status])
+  @@index([payoutRail, status])
 }
 
 /// Immutable financial ledger — never update amounts; append only.
@@ -1233,4 +1243,84 @@ model ProcessedWebhookEvent {
 
   @@unique([provider, eventId])
   @@index([processedAt])
+}
+
+// ─── Stripe Global Payouts (additive second rail; Connect remains default) ───
+// No bank credentials. Existing Connect rows are never auto-converted.
+
+/// Mode-scoped Global Payouts recipient for a sourcer (TEST | LIVE isolated).
+model GlobalPayoutRecipient {
+  id                       String    @id @default(cuid())
+  userId                   String
+  user                     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// TEST | LIVE
+  stripeMode               String    @default("TEST")
+  /// Stripe recipient / v2 account id for Global Payouts (not Connect acct money path).
+  stripeRecipientId        String    @unique
+  /// NOT_STARTED | PENDING | ACTION_REQUIRED | ACTIVE | RESTRICTED | REJECTED | CLOSED
+  status                   String    @default("PENDING")
+  country                  String    @default("")
+  defaultCurrency          String    @default("")
+  /// Stripe payout method id when ready (never full bank numbers).
+  defaultPayoutMethodId    String    @default("")
+  payoutMethodReady        Boolean   @default(false)
+  recipientType            String    @default("individual") // individual | company
+  capabilitiesJson         String    @default("{}")
+  requirementsJson         String    @default("{}")
+  disabledReason           String    @default("")
+  lastSyncedAt             DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@unique([userId, stripeMode])
+  @@index([stripeMode, status, payoutMethodReady])
+  @@index([userId])
+  @@index([country])
+}
+
+/// Idempotent Global Payouts OutboundPayment attempts (procurement + final).
+/// Never share rows with TransferAttempt — no cross-rail fallthrough.
+model OutboundPaymentAttempt {
+  id                        String    @id @default(cuid())
+  protectedTxnId            String
+  protectedTxn              ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Cascade)
+  /// PROCUREMENT | FINAL
+  kind                      String
+  amountMinor               Int
+  /// Presentment / entitlement currency (books).
+  currency                  String
+  /// Destination currency for recipient (may differ after FX).
+  destinationCurrency       String    @default("")
+  destinationAmountMinor    Int       @default(0)
+  stripeMode                String    @default("TEST")
+  idempotencyKey            String    @unique
+  /// PENDING | AWAITING_MINIMUM | AWAITING_FA_FUNDS | PROCESSING | SUCCEEDED | FAILED | RETURNED | RECONCILED | ACTION_REQUIRED
+  status                    String    @default("PENDING")
+  stripeOutboundPaymentId   String    @default("")
+  stripeFinancialAccountId  String    @default("")
+  stripeRecipientId         String    @default("")
+  stripePayoutMethodId      String    @default("")
+  /// Provider fees absorbed by platform (standard / cross-border / FX) — not deducted from entitlement.
+  providerFeeMinor          Int       @default(0)
+  crossBorderFeeMinor       Int       @default(0)
+  fxFeeMinor                Int       @default(0)
+  fxRateSnapshot            String    @default("")
+  failureCode               String    @default("")
+  failureMessage            String    @default("")
+  /// Manual-review / reconciliation notes (no secrets).
+  reconciliationNote        String    @default("")
+  attemptCount              Int       @default(1)
+  lastAttemptAt             DateTime  @default(now())
+  initiatedAt               DateTime?
+  postedAt                  DateTime?
+  deliveredAt               DateTime?
+  returnedAt                DateTime?
+  succeededAt               DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@index([protectedTxnId, kind])
+  @@index([status, lastAttemptAt])
+  @@index([stripeOutboundPaymentId])
+  @@index([stripeMode, status])
 }

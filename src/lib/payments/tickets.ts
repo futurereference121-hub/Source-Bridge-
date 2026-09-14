@@ -603,13 +603,39 @@ async function extrasWithParties(
         },
       })
     : null;
-  const sellerConnectReady =
+  let sellerConnectReady =
     extras?.sellerConnectReady ??
     Boolean(
       connect?.stripeAccountId &&
         connect.chargesEnabled &&
         connect.payoutsEnabled,
     );
+  // Additive: GP recipient+method ready also counts as payout-ready for ticket UX.
+  if (!sellerConnectReady && extras?.sellerConnectReady == null) {
+    const { isGlobalPayoutsEnabled } = await import("@/lib/payments/flags");
+    if (isGlobalPayoutsEnabled()) {
+      const gp = await prisma.globalPayoutRecipient.findUnique({
+        where: {
+          userId_stripeMode: {
+            userId: t.sellerId,
+            stripeMode: getStripeMode(),
+          },
+        },
+        select: {
+          stripeRecipientId: true,
+          status: true,
+          payoutMethodReady: true,
+          defaultPayoutMethodId: true,
+        },
+      });
+      sellerConnectReady = Boolean(
+        gp?.stripeRecipientId &&
+          gp.payoutMethodReady &&
+          gp.defaultPayoutMethodId &&
+          String(gp.status).toUpperCase() === "ACTIVE",
+      );
+    }
+  }
   const sellerConnectHasAccount =
     extras?.sellerConnectHasAccount ?? Boolean(connect?.stripeAccountId);
   return {

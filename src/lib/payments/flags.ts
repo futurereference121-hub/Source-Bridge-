@@ -163,6 +163,32 @@ export function isTrackingAutomationEnabled(): boolean {
   return envBool("TRACKING_AUTOMATION_ENABLED", false);
 }
 
+/**
+ * Master Global Payouts kill switch (fail-closed). Default OFF.
+ * When false, payout routing behaves exactly as Connect-only today.
+ */
+export function isGlobalPayoutsEnabled(): boolean {
+  return envBool("GLOBAL_PAYOUTS_ENABLED", false);
+}
+
+/**
+ * Allow LIVE-mode Global Payouts initiation (OutboundPayment / FA funding).
+ * Default OFF. Still requires LIVE_PAYMENTS_ENABLED + GLOBAL_PAYOUTS_ENABLED.
+ * Does not create live Stripe objects until explicitly enabled in a later step.
+ */
+export function isGlobalPayoutsLiveInitiationEnabled(): boolean {
+  return (
+    isGlobalPayoutsEnabled() &&
+    isLivePaymentsEnabled() &&
+    envBool("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false)
+  );
+}
+
+/** Sandbox/TEST GP money ops allowed only when master GP is on (still no live objects). */
+export function isGlobalPayoutsSandboxEnabled(): boolean {
+  return isGlobalPayoutsEnabled() && envBool("GLOBAL_PAYOUTS_SANDBOX_ENABLED", true);
+}
+
 export function paymentFlagsSnapshot() {
   // Lazy import pattern avoided — keep flags pure env reads.
   // Allowlist configured status is safe to expose (not the entries themselves).
@@ -171,6 +197,15 @@ export function paymentFlagsSnapshot() {
     .split(/[,;\s]+/)
     .map((s) => s.trim())
     .filter(Boolean).length > 0;
+
+  const gpCountries = (process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST || "")
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  const gpUsers = (process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST || "")
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   return {
     PAYMENTS_ENABLED: isPaymentsEnabled(),
@@ -184,6 +219,13 @@ export function paymentFlagsSnapshot() {
     TRACKING_AUTOMATION_ENABLED: isTrackingAutomationEnabled(),
     /** Kill switch — default false; Live activation is a dedicated task. */
     LIVE_PAYMENTS_ENABLED: isLivePaymentsEnabled(),
+    /** Global Payouts master — default false; Connect-only when off. */
+    GLOBAL_PAYOUTS_ENABLED: isGlobalPayoutsEnabled(),
+    GLOBAL_PAYOUTS_SANDBOX_ENABLED: isGlobalPayoutsSandboxEnabled(),
+    GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED: isGlobalPayoutsLiveInitiationEnabled(),
+    /** Presence-only: country allowlist configured (empty = no GP countries). */
+    GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST_CONFIGURED: gpCountries.length > 0,
+    GLOBAL_PAYOUTS_USER_ALLOWLIST_CONFIGURED: gpUsers.length > 0,
     stripeMode: getStripeMode(),
     /**
      * Legacy: whether PAYMENTS_TEST_ALLOWLIST has entries.

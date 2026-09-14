@@ -22,6 +22,10 @@ import { nextStatus, type ProtectedStatus } from "@/lib/payments/state-machine";
 import { markListingSoldIfLinked } from "@/lib/payments/listing-lifecycle";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
+import {
+  buildPayoutRailLockSnapshot,
+  resolvePayoutRail,
+} from "@/lib/payments/payout-rail/rail-resolver";
 
 /**
  * Create a PaymentIntent for a ProtectedTransaction.
@@ -30,6 +34,8 @@ import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
  * DIRECT: Destination Charges — transfer_data.destination + application_fee_amount.
  *   Fee approach: application_fee_amount = platform service fee (protectionFeeMinor).
  *   Seller automatically receives the remainder; no transfers.create on fund.
+ * Global Payouts: PROTECTED only (no Destination Charges). Connect path unchanged
+ * when rail resolves to STRIPE_CONNECT.
  */
 export async function createPaymentIntentForTxn(opts: {
   protectedTxnId: string;
@@ -124,32 +130,124 @@ export async function createPaymentIntentForTxn(opts: {
     }
   }
 
-  const connectState = await getSellerConnectFundingState(txn.sellerId, txnMode);
-  if (!connectState.ready || !connectState.stripeAccountId) {
-    throw Object.assign(
-      new Error(
-        txnMode === "LIVE"
-          ? "Sourcer must complete Live payment onboarding before this agreement can be funded."
-          : "Sourcer must complete payment onboarding before this agreement can be funded.",
-      ),
-      {
-        status: 409,
-        code:
-          txnMode === "LIVE"
-            ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
-            : "CONNECT_NOT_READY",
-      },
-    );
-  }
-  assertMoneyOpEnvironmentMatch({
-    txnStripeMode: txnMode,
-    connectStripeMode: connectState.stripeMode,
-    clientStripeMode: txnMode,
+  const rail = await resolvePayoutRail({
+    userId: txn.sellerId,
+    mode: txnMode,
   });
-  const stripe = getStripe(txnMode);
-  const isDirect =
+
+  const wantsDirect =
     isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
-  const sellerConnectId = connectState.stripeAccountId;
+
+  // Direct Payment remains Connect-only (Destination Charges need acct_*).
+  if (wantsDirect) {
+    if (rail.rail === "STRIPE_GLOBAL_PAYOUTS" || rail.rail === "UNSUPPORTED") {
+      throw Object.assign(
+        new Error(
+          rail.rail === "UNSUPPORTED"
+            ? "Payouts are not yet available in the sourcer's location."
+            : "Direct Payment requires Connect payouts. Use Protected Payment for this sourcer.",
+        ),
+        {
+          status: 409,
+          code:
+            rail.rail === "UNSUPPORTED"
+              ? "PAYOUTS_UNAVAILABLE"
+              : "DIRECT_REQUIRES_CONNECT",
+        },
+      );
+    }
+    const connectState = await getSellerConnectFundingState(txn.sellerId, txnMode);
+    if (!connectState.ready || !connectState.stripeAccountId) {
+      throw Object.assign(
+        new Error(
+          txnMode === "LIVE"
+            ? "Sourcer must complete Live payment onboarding before this agreement can be funded."
+            : "Sourcer must complete payment onboarding before this agreement can be funded.",
+        ),
+        {
+          status: 409,
+          code:
+            txnMode === "LIVE"
+              ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
+              : "CONNECT_NOT_READY",
+        },
+      );
+    }
+    assertMoneyOpEnvironmentMatch({
+      txnStripeMode: txnMode,
+      connectStripeMode: connectState.stripeMode,
+      clientStripeMode: txnMode,
+    });
+  } else {
+    // PROTECTED: Connect ready OR GP ready; otherwise clear refusal.
+    if (!rail.payoutReady) {
+      throw Object.assign(
+        new Error(
+          rail.rail === "UNSUPPORTED"
+            ? "Payouts are not yet available in the sourcer's location."
+            : txnMode === "LIVE"
+              ? "Sourcer must complete Live payment onboarding before this agreement can be funded."
+              : "Sourcer must complete payment onboarding before this agreement can be funded.",
+        ),
+        {
+          status: 409,
+          code:
+            rail.rail === "UNSUPPORTED"
+              ? "PAYOUTS_UNAVAILABLE"
+              : rail.rail === "STRIPE_GLOBAL_PAYOUTS"
+                ? "GP_NOT_READY"
+                : txnMode === "LIVE"
+                  ? "LIVE_CONNECT_ONBOARDING_REQUIRED"
+                  : "CONNECT_NOT_READY",
+        },
+      );
+    }
+    if (rail.rail === "STRIPE_CONNECT") {
+      const connectState = await getSellerConnectFundingState(
+        txn.sellerId,
+        txnMode,
+      );
+      assertMoneyOpEnvironmentMatch({
+        txnStripeMode: txnMode,
+        connectStripeMode: connectState.stripeMode,
+        clientStripeMode: txnMode,
+      });
+    }
+  }
+
+  const stripe = getStripe(txnMode);
+  const isDirect = wantsDirect;
+  const sellerConnectId =
+    isDirect
+      ? (await getSellerConnectFundingState(txn.sellerId, txnMode)).stripeAccountId ||
+        ""
+      : rail.rail === "STRIPE_CONNECT"
+        ? (await getSellerConnectFundingState(txn.sellerId, txnMode))
+            .stripeAccountId || ""
+        : "";
+
+  // Soft-lock intended rail before PI (hard lock confirmed at fund).
+  if (!txn.payoutRailLockedAt) {
+    try {
+      const snap = await buildPayoutRailLockSnapshot({
+        sellerId: txn.sellerId,
+        mode: txnMode,
+      });
+      await prisma.protectedTransaction.update({
+        where: { id: txn.id },
+        data: {
+          payoutRail: snap.payoutRail,
+          sellerConnectAccountId:
+            snap.sellerConnectAccountId || txn.sellerConnectAccountId,
+          sellerGpRecipientId: snap.sellerGpRecipientId,
+          sellerGpPayoutMethodId: snap.sellerGpPayoutMethodId,
+        },
+      });
+    } catch (err) {
+      // buildPayoutRailLockSnapshot throws if not ready — already gated above.
+      throw err;
+    }
+  }
 
   const sellerShareMinor =
     txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
@@ -429,12 +527,50 @@ export async function markTxnFundedFromWebhook(opts: {
   }
 
   const status = txn.status as ProtectedStatus;
+  const txnMode = normalizeStripeMode(txn.stripeMode);
+
+  // Hard-lock payout rail at first successful fund (never auto-switch later).
+  let railLock: {
+    payoutRail: string;
+    payoutRailLockedAt: Date;
+    sellerConnectAccountId?: string;
+    sellerGpRecipientId?: string;
+    sellerGpPayoutMethodId?: string;
+  } | null = null;
+  if (!txn.payoutRailLockedAt) {
+    try {
+      const snap = await buildPayoutRailLockSnapshot({
+        sellerId: txn.sellerId,
+        mode: txnMode,
+      });
+      railLock = {
+        payoutRail: snap.payoutRail,
+        payoutRailLockedAt: new Date(),
+        sellerConnectAccountId: snap.sellerConnectAccountId || undefined,
+        sellerGpRecipientId: snap.sellerGpRecipientId || undefined,
+        sellerGpPayoutMethodId: snap.sellerGpPayoutMethodId || undefined,
+      };
+    } catch (err) {
+      await recordAuditEvent({
+        protectedTxnId: txn.id,
+        action: "FUNDING_REJECTED_PAYOUT_RAIL",
+        meta: {
+          eventId: opts.eventId,
+          message: err instanceof Error ? err.message : "rail_lock_failed",
+          code: (err as { code?: string }).code || null,
+        },
+      });
+      return { handled: false, reason: "payout_rail_not_ready" };
+    }
+  }
+
   let updated = await prisma.protectedTransaction.update({
     where: { id: txn.id },
     data: {
       status: nextStatus(status, "MARK_FUNDED"),
       fundedAt: new Date(),
       stripeChargeId: opts.chargeId || txn.stripeChargeId,
+      ...(railLock || {}),
     },
   });
 

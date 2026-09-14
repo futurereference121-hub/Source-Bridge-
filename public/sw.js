@@ -1,5 +1,7 @@
 /* Source Bridge PWA service worker — install + safe static assets only.
  * Never caches /api, auth, personalized pages, Live, payments, messaging, or media credentials.
+ * Payment / Connect / Global Payouts onboarding, recipient, FA, OutboundPayment, and
+ * release mutation APIs are under /api/ and remain network-only (no offline replay).
  * Cache prefix: sb-pwa- (only this implementation's caches are pruned on activate).
  */
 const CACHE_VERSION = "sb-pwa-v1";

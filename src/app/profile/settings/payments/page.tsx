@@ -12,27 +12,58 @@ import {
   shouldSyncOnConnectReturn,
 } from "@/lib/payments/stripe/connectPayoutUi";
 import type { ConnectStatus } from "@/lib/payments/stripe/connect";
+import {
+  deriveGpPayoutUi,
+  shouldSyncOnGpReturn,
+} from "@/lib/payments/payout-rail/gpPayoutUi";
+import type { GlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
+
+type RailSummary = {
+  rail: string;
+  reason: string;
+  payoutReady: boolean;
+  country: string;
+};
 
 function PaymentsSettingsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { account, signedIn, authReady, showToast } = useAppUi();
   const [connect, setConnect] = useState<ConnectStatus | null>(null);
+  const [gp, setGp] = useState<GlobalPayoutStatus | null>(null);
+  const [rail, setRail] = useState<RailSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const returnSynced = useRef(false);
+  const gpReturnSynced = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/payments/connect");
-      const json = (await res.json()) as {
+      const [connectRes, gpRes] = await Promise.all([
+        fetch("/api/payments/connect"),
+        fetch("/api/payments/global-payouts"),
+      ]);
+      const connectJson = (await connectRes.json()) as {
         ok?: boolean;
         connect?: ConnectStatus;
         error?: string;
       };
-      if (!res.ok) throw new Error(json.error || "Failed to load");
-      setConnect(json.connect || null);
+      if (!connectRes.ok) throw new Error(connectJson.error || "Failed to load");
+      setConnect(connectJson.connect || null);
+
+      if (gpRes.ok) {
+        const gpJson = (await gpRes.json()) as {
+          ok?: boolean;
+          globalPayouts?: GlobalPayoutStatus;
+          rail?: RailSummary;
+        };
+        setGp(gpJson.globalPayouts || null);
+        setRail(gpJson.rail || null);
+      } else {
+        setGp(null);
+        setRail(null);
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to load payments");
     } finally {
@@ -48,10 +79,37 @@ function PaymentsSettingsInner() {
     if (signedIn) void refresh();
   }, [signedIn, refresh]);
 
-  async function runAction(action: "onboard" | "sync" | "login") {
+  async function runConnectAction(action: "onboard" | "sync" | "login") {
     setBusy(true);
     try {
       const res = await fetch("/api/payments/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        url?: string;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(json.error || "Action failed");
+      if (json.url) {
+        window.location.href = json.url;
+        return;
+      }
+      await refresh();
+      showToast("Payments settings updated");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runGpAction(action: "onboard" | "sync") {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/payments/global-payouts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
@@ -97,6 +155,28 @@ function PaymentsSettingsInner() {
     })();
   }, [signedIn, loading, searchParams, refresh, router]);
 
+  useEffect(() => {
+    if (!signedIn || loading) return;
+    const gpParam = searchParams.get("gp");
+    if (!shouldSyncOnGpReturn(gpParam, gpReturnSynced.current)) return;
+    gpReturnSynced.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/payments/global-payouts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "sync" }),
+        });
+        if (res.ok) {
+          await refresh();
+          router.replace("/profile/settings/payments", { scroll: false });
+        }
+      } catch {
+        // Best-effort
+      }
+    })();
+  }, [signedIn, loading, searchParams, refresh, router]);
+
   if (!authReady || !account) {
     return (
       <div className="bg-app-navy min-h-[100svh] pt-28 pb-20 text-white">
@@ -108,7 +188,13 @@ function PaymentsSettingsInner() {
   }
 
   const ui = deriveConnectPayoutUi(connect);
+  const gpUi = deriveGpPayoutUi(gp);
   const disabledReason = connect?.disabledReason?.trim() || "";
+  // Server rail is authoritative — never show GP actions for Connect-routed users.
+  const showGpPanel =
+    Boolean(gp?.enabled) && rail?.rail === "STRIPE_GLOBAL_PAYOUTS";
+  const showUnsupported =
+    rail?.rail === "UNSUPPORTED" && !connect?.hasAccount && !gp?.payoutReady;
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -133,63 +219,127 @@ function PaymentsSettingsInner() {
             <Loader2 className="animate-spin" size={16} /> Loading…
           </div>
         ) : (
-          <section className="panel-navy mt-8 rounded-xl px-5 py-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
-              {ui.headline}
-              {ui.statusLine ? (
-                <span className="text-white/70"> / {ui.statusLine}</span>
-              ) : null}
-            </p>
-            <p className="mt-3 text-sm text-white/75">{ui.helpCopy}</p>
-            {disabledReason ? (
-              <p className="mt-2 text-sm text-amber-300">Attention: {disabledReason}</p>
+          <>
+            {showUnsupported ? (
+              <section className="panel-navy mt-8 rounded-xl px-5 py-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
+                  Payouts
+                </p>
+                <p className="mt-3 text-sm text-white/75">
+                  Payouts are not yet available in your location.
+                </p>
+              </section>
             ) : null}
-            <div className="mt-5 flex flex-wrap items-center gap-3">
-              {ui.showSetUpPayouts ? (
-                <PrimaryButton
-                  showArrow={false}
-                  className="rounded-lg"
-                  disabled={busy || !ui.actionsEnabled}
-                  onClick={() => void runAction("onboard")}
-                >
-                  Set up payouts
-                </PrimaryButton>
-              ) : null}
-              {ui.showContinueOnboarding ? (
-                <PrimaryButton
-                  showArrow={false}
-                  className="rounded-lg"
-                  disabled={busy || !ui.actionsEnabled}
-                  onClick={() => void runAction("onboard")}
-                >
-                  Continue onboarding
-                </PrimaryButton>
-              ) : null}
-              {ui.showRefreshStatus ? (
-                <button
-                  type="button"
-                  disabled={busy || !ui.actionsEnabled}
-                  onClick={() => void runAction("sync")}
-                  className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                >
-                  Refresh status
-                </button>
-              ) : null}
-              {ui.showOpenStripeDashboard ? (
-                <button
-                  type="button"
-                  disabled={busy || !ui.actionsEnabled}
-                  onClick={() => void runAction("login")}
-                  className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                >
-                  Open Stripe dashboard
-                </button>
-              ) : null}
-            </div>
-            {ui.footnote ? (
-              <p className="mt-4 text-xs text-white/45">{ui.footnote}</p>
+
+            {!showUnsupported &&
+            (rail?.rail === "STRIPE_CONNECT" ||
+              rail?.rail == null ||
+              connect?.hasAccount) ? (
+              <section className="panel-navy mt-8 rounded-xl px-5 py-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
+                  {ui.headline}
+                  {ui.statusLine ? (
+                    <span className="text-white/70"> / {ui.statusLine}</span>
+                  ) : null}
+                </p>
+                <p className="mt-3 text-sm text-white/75">{ui.helpCopy}</p>
+                {disabledReason ? (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Attention: {disabledReason}
+                  </p>
+                ) : null}
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  {ui.showSetUpPayouts ? (
+                    <PrimaryButton
+                      showArrow={false}
+                      className="rounded-lg"
+                      disabled={busy || !ui.actionsEnabled}
+                      onClick={() => void runConnectAction("onboard")}
+                    >
+                      Set up payouts
+                    </PrimaryButton>
+                  ) : null}
+                  {ui.showContinueOnboarding ? (
+                    <PrimaryButton
+                      showArrow={false}
+                      className="rounded-lg"
+                      disabled={busy || !ui.actionsEnabled}
+                      onClick={() => void runConnectAction("onboard")}
+                    >
+                      Continue
+                    </PrimaryButton>
+                  ) : null}
+                  {ui.showRefreshStatus ? (
+                    <button
+                      type="button"
+                      disabled={busy || !ui.actionsEnabled}
+                      onClick={() => void runConnectAction("sync")}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Refresh status
+                    </button>
+                  ) : null}
+                  {ui.showOpenStripeDashboard ? (
+                    <button
+                      type="button"
+                      disabled={busy || !ui.actionsEnabled}
+                      onClick={() => void runConnectAction("login")}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Open Stripe dashboard
+                    </button>
+                  ) : null}
+                </div>
+                {ui.footnote ? (
+                  <p className="mt-4 text-xs text-white/45">{ui.footnote}</p>
+                ) : null}
+              </section>
             ) : null}
-          </section>
+
+            {showGpPanel && !showUnsupported ? (
+              <section className="panel-navy mt-6 rounded-xl px-5 py-6">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
+                  {gpUi.headline}
+                  {gpUi.statusLine ? (
+                    <span className="text-white/70"> / {gpUi.statusLine}</span>
+                  ) : null}
+                </p>
+                <p className="mt-3 text-sm text-white/75">{gpUi.helpCopy}</p>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  {gpUi.showSetUpPayouts ? (
+                    <PrimaryButton
+                      showArrow={false}
+                      className="rounded-lg"
+                      disabled={busy || !gpUi.actionsEnabled}
+                      onClick={() => void runGpAction("onboard")}
+                    >
+                      Set up payouts
+                    </PrimaryButton>
+                  ) : null}
+                  {gpUi.showContinue ? (
+                    <PrimaryButton
+                      showArrow={false}
+                      className="rounded-lg"
+                      disabled={busy || !gpUi.actionsEnabled}
+                      onClick={() => void runGpAction("onboard")}
+                    >
+                      Continue
+                    </PrimaryButton>
+                  ) : null}
+                  {gpUi.showRefreshStatus ? (
+                    <button
+                      type="button"
+                      disabled={busy || !gpUi.actionsEnabled}
+                      onClick={() => void runGpAction("sync")}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Refresh status
+                    </button>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+          </>
         )}
       </Container>
     </div>

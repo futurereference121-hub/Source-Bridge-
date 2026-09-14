@@ -21,6 +21,11 @@ import {
   computeProtectedFinancials,
 } from "@/lib/payments/breakdown";
 import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
+import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
+import {
+  releaseFinalViaGlobalPayouts,
+  releaseProcurementViaGlobalPayouts,
+} from "@/lib/payments/payout-rail/outbound-payment";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -40,6 +45,10 @@ import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync
  * Instant Payout would only be safe with verified Instant Payouts capability,
  * eligible external method, available balance, and country/currency support;
  * Express dashboard model leaves that to the connected account.
+ *
+ * Global Payouts (additive): when ProtectedTransaction.payoutRail is locked to
+ * STRIPE_GLOBAL_PAYOUTS at fund, Stage A uses OutboundPayment instead of
+ * transfers.create. Connect body below is unchanged for STRIPE_CONNECT.
  */
 
 export async function releaseProcurement(opts: {
@@ -61,6 +70,11 @@ export async function releaseProcurement(opts: {
   }
   assertStripeModeCompatible(txn.stripeMode);
   const txnMode = normalizeStripeMode(txn.stripeMode);
+
+  // Additive GP rail — never fall through into Connect transfers.
+  if (lockedPayoutRailFromTxn(txn) === "STRIPE_GLOBAL_PAYOUTS") {
+    return releaseProcurementViaGlobalPayouts(opts);
+  }
 
   // Direct uses Destination Charges only — never platform procurement transfer.
   if (isDirectPaymentOption(txn.paymentOption)) {
@@ -364,6 +378,11 @@ export async function releaseFinal(opts: {
   }
   assertStripeModeCompatible(txn.stripeMode);
   const txnMode = normalizeStripeMode(txn.stripeMode);
+
+  // Additive GP rail — never fall through into Connect transfers.
+  if (lockedPayoutRailFromTxn(txn) === "STRIPE_GLOBAL_PAYOUTS") {
+    return releaseFinalViaGlobalPayouts(opts);
+  }
 
   const status = txn.status as ProtectedStatus;
   // Direct uses Destination Charges only — never platform transfers.create.

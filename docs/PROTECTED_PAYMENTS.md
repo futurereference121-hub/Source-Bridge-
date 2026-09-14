@@ -69,8 +69,12 @@ Do **not** assume Connect status arrives only via `account.updated`. Prefer thin
 |-----|------|
 | `https://www.sourcebridge.app/api/webhooks/stripe` | Platform payment events |
 | `https://www.sourcebridge.app/api/webhooks/stripe/connect` | Connect account status (thin + optional snapshot) |
+| `https://www.sourcebridge.app/api/webhooks/stripe/global-payouts` | Global Payouts thin events (separate destination) |
 
 Webhook signature verification, idempotent `processedWebhookEvent` storage, and Connect **status sync** run **even when `PAYMENTS_ENABLED` is false**. Funding confirmation and all money movement stay gated on payment flags. Live-mode events are acknowledged but never acted on while LIVE is disabled.
+
+### Global Payouts (additive; default OFF)
+Second sourcer payout rail for countries where Connect is unavailable. Server auto-selects Connect vs Global Payouts; clients cannot override. Flag `GLOBAL_PAYOUTS_ENABLED=false` restores Connect-only behaviour. Live OutboundPayment / FA funding stays off until `GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED=true` (still requires `LIVE_PAYMENTS_ENABLED`). Country allowlist defaults empty. Env names only: `STRIPE_GP_RESTRICTED_KEY_*`, `STRIPE_GP_FINANCIAL_ACCOUNT_ID_*`, `STRIPE_GP_WEBHOOK_SECRET_*`, `GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST`, `GLOBAL_PAYOUTS_USER_ALLOWLIST`, `CONNECT_PAYOUT_COUNTRY_DENYLIST`. Do not reuse Connect secrets for restricted GP keys.
 
 ### Environment variables (Vercel Production — TEST only)
 | Name | Purpose |

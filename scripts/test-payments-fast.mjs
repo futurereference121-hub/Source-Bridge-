@@ -51,6 +51,7 @@ runNodeTestScripts(
     "scripts/test-ticket-edit-draft-isolation.mjs",
     "scripts/test-status-rate-limits.mjs",
     "scripts/test-admin-live-queue.mjs",
+    "scripts/test-global-payouts.mjs",
   ],
   { label: "payments:fast" },
 );

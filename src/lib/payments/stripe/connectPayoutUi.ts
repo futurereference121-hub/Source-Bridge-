@@ -62,7 +62,7 @@ export function deriveConnectPayoutUi(
   if (!connect?.hasAccount) {
     return {
       state: "not_started",
-      headline: "Stripe Payouts",
+      headline: "Payouts",
       statusLine: null,
       helpCopy: actionsEnabled
         ? "Set up payouts securely through Stripe."
@@ -79,10 +79,10 @@ export function deriveConnectPayoutUi(
   if (isConnectPayoutReady(connect)) {
     return {
       state: "ready",
-      headline: "Stripe Payouts",
-      statusLine: "✓ Payout account connected",
+      headline: "Payouts",
+      statusLine: "✓ Payout ready",
       helpCopy:
-        "Your Stripe account is ready to receive Source Bridge payouts.",
+        "Your payout account is ready to receive Source Bridge payouts.",
       footnote: "Managed securely through Stripe.",
       showSetUpPayouts: false,
       showContinueOnboarding: false,
@@ -95,7 +95,7 @@ export function deriveConnectPayoutUi(
   if (connect.detailsSubmitted && connect.requirementsDueCount === 0) {
     return {
       state: "pending_review",
-      headline: "Stripe Payouts",
+      headline: "Payouts",
       statusLine: "Verification pending",
       helpCopy: "Stripe is reviewing your payout account.",
       footnote: null,
@@ -109,9 +109,9 @@ export function deriveConnectPayoutUi(
 
   return {
     state: "onboarding_incomplete",
-    headline: "Stripe Payouts",
+    headline: "Payouts",
     statusLine: "Onboarding incomplete",
-    helpCopy: "Complete your Stripe setup before you can receive payouts.",
+    helpCopy: "Complete payout setup before you can receive payouts.",
     footnote: null,
     showSetUpPayouts: false,
     showContinueOnboarding: actionsEnabled,

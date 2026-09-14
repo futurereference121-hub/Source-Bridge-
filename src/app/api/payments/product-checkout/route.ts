@@ -23,6 +23,7 @@ import { majorToMinor, normalizeCurrency, totalChargeMinor } from "@/lib/payment
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import {
   isDirectPaymentOption,
   normalizeTxnPaymentOption,
@@ -120,18 +121,47 @@ export async function POST(req: NextRequest) {
       labels: ["buyer", "seller"],
     });
 
-    const connect = await getConnectStatus(listing.userId);
-    if (!connect.canReceiveProtectedPayments) {
+    const rail = await resolvePayoutRail({
+      userId: listing.userId,
+      email: listing.user.email,
+      mode: getStripeMode(),
+    });
+    if (!rail.payoutReady) {
       if (isDirect) {
+        return jsonError(
+          rail.rail === "UNSUPPORTED"
+            ? "Payouts are not yet available in the seller's location."
+            : "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
+          409,
+        );
+      }
+      return jsonError(
+        rail.rail === "UNSUPPORTED"
+          ? "Payouts are not yet available in the seller's location."
+          : "Seller has not completed Payments & Payouts onboarding",
+        409,
+      );
+    }
+    if (isDirect && rail.rail !== "STRIPE_CONNECT") {
+      return jsonError(
+        "Direct Payment requires Connect payouts. Use Protected Payment for this seller.",
+        409,
+      );
+    }
+    // Keep Connect status fetch for Direct destination validation below when needed.
+    let sellerConnectAccountId = "";
+    if (isDirect) {
+      const connect = await getConnectStatus(listing.userId);
+      if (!connect.canReceiveProtectedPayments) {
         return jsonError(
           "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
           409,
         );
       }
-      return jsonError(
-        "Seller has not completed Payments & Payouts onboarding",
-        409,
-      );
+      sellerConnectAccountId = connect.stripeAccountId || "";
+    } else if (rail.rail === "STRIPE_CONNECT") {
+      const connect = await getConnectStatus(listing.userId);
+      sellerConnectAccountId = connect.stripeAccountId || "";
     }
 
     const config = await getPlatformPaymentConfig();
@@ -200,7 +230,7 @@ export async function POST(req: NextRequest) {
         protectionFeeMinor: fees.protectionFeeMinor,
         totalChargeMinor: total,
         selectedSize: parsed.data.selectedSize || "",
-        sellerConnectAccountId: connect.stripeAccountId || "",
+        sellerConnectAccountId,
       },
     });
 

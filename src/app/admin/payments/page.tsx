@@ -9,7 +9,9 @@ import {
   adminLiveQueueProtectedTxnWhere,
   adminLiveSourcingProtectedTxnWhere,
 } from "@/lib/payments/admin-live-queue";
+import { adminLiveFailedOutboundWhere } from "@/lib/payments/payout-rail/admin";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
+import { isGlobalPayoutsEnabled } from "@/lib/payments/flags";
 import { CHARGE_MODEL, isStripeConfigured } from "@/lib/payments/stripe/client";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
@@ -49,6 +51,7 @@ export default async function AdminPaymentsPage() {
     disputed,
     released,
     failedTransfers,
+    failedOutbounds,
     openDisputes,
     openIssues,
     recent,
@@ -79,6 +82,12 @@ export default async function AdminPaymentsPage() {
       where: { status: "RELEASED", ...liveTxnWhere },
     }),
     prisma.transferAttempt.count({ where: adminLiveFailedTransferWhere() }),
+    // Flag OFF: skip GP table (safe before migration / identical to today).
+    isGlobalPayoutsEnabled()
+      ? prisma.outboundPaymentAttempt.count({
+          where: adminLiveFailedOutboundWhere(),
+        })
+      : Promise.resolve(0),
     prisma.disputeCase.count({
       where: adminLiveQueueDisputeWhere({ in: ["OPEN", "UNDER_REVIEW"] }),
     }),
@@ -171,6 +180,10 @@ export default async function AdminPaymentsPage() {
     ["Disputed", disputed],
     ["Released", released],
     ["Failed transfers", failedTransfers],
+    // Flag OFF: omit GP card so admin UI matches Connect-only today.
+    ...(isGlobalPayoutsEnabled()
+      ? ([["GP payout issues", failedOutbounds]] as const)
+      : []),
     ["Open payment issues", openDisputes],
   ] as const;
 

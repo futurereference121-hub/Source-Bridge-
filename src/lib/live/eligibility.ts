@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { getStripeMode } from "@/lib/payments/flags";
+import { isUniversalPayoutReady } from "@/lib/payments/payout-rail/rail-resolver";
 import type { SessionUser } from "@/lib/auth";
 import { isLiveStreamingAvailable } from "./flags";
 import { isCooldownActive } from "./clock";
@@ -42,8 +43,9 @@ function denial(
 }
 
 /**
- * Go Live eligibility. Reads existing Stripe Connect `payoutsEnabled` only.
- * Does not sync Stripe, create Connect accounts, or change payment logic.
+ * Go Live eligibility. Universal payout readiness:
+ * active-mode Connect payoutsEnabled OR Global Payouts recipient+method ready.
+ * Does not sync Stripe, create accounts, or change payment money logic.
  */
 export async function evaluateLiveEligibility(
   user: SessionUser | null,
@@ -83,13 +85,10 @@ export async function evaluateLiveEligibility(
   }
 
   const stripeMode = getStripeMode();
-  const connect = await prisma.stripeConnectAccount.findUnique({
-    where: {
-      userId_stripeMode: { userId: user.id, stripeMode },
-    },
-    select: { payoutsEnabled: true },
+  const payoutsEnabled = await isUniversalPayoutReady({
+    userId: user.id,
+    mode: stripeMode,
   });
-  const payoutsEnabled = Boolean(connect?.payoutsEnabled);
   if (!payoutsEnabled) {
     return denial(
       "PAYOUTS_REQUIRED",
