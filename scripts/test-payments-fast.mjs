@@ -52,6 +52,7 @@ runNodeTestScripts(
     "scripts/test-status-rate-limits.mjs",
     "scripts/test-admin-live-queue.mjs",
     "scripts/test-global-payouts.mjs",
+    "scripts/test-global-payouts-webhook.mjs",
   ],
   { label: "payments:fast" },
 );

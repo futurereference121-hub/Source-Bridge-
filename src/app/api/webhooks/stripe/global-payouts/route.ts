@@ -5,17 +5,17 @@
  * Env: STRIPE_GP_WEBHOOK_SECRET_TEST / STRIPE_GP_WEBHOOK_SECRET_LIVE
  */
 
-import Stripe from "stripe";
 import {
   getStripeMode,
-  isLivePaymentsEnabled,
   normalizeStripeMode,
   type StripeMode,
 } from "@/lib/payments/flags";
+import { handleGlobalPayoutsThinEvent } from "@/lib/payments/payout-rail/events";
 import {
-  getGlobalPayoutsWebhookSecret,
-  handleGlobalPayoutsThinEvent,
-} from "@/lib/payments/payout-rail/events";
+  GpWebhookVerifyError,
+  isGlobalPayoutsEventDestinationPing,
+  verifyGlobalPayoutsThinEvent,
+} from "@/lib/payments/payout-rail/webhook-verify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,82 +28,60 @@ function detectModeFromLivemode(livemode: boolean | undefined): StripeMode {
 }
 
 export async function POST(req: Request) {
+  // Exact raw body — do not JSON.parse / re-serialize before verification.
   const rawBody = await req.text();
   const sig = req.headers.get("stripe-signature") || "";
 
-  // Try TEST then LIVE secrets (rotation-safe). Never log secrets.
-  const modes: StripeMode[] = isLivePaymentsEnabled()
-    ? ["TEST", "LIVE"]
-    : ["TEST"];
-
-  let event: Stripe.Event | null = null;
+  let thinEvent;
   let verifiedMode: StripeMode = "TEST";
-
-  // Minimal Stripe instance for constructEvent only (no money client required).
-  const stripe = new Stripe("sk_test_webhook_verify_only", {
-    // Type-only pin — constructEvent does not call the API.
-    apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
-  });
-
-  for (const mode of modes) {
-    const secret = getGlobalPayoutsWebhookSecret(mode);
-    if (!secret) continue;
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, sig, secret);
-      verifiedMode = mode;
-      break;
-    } catch {
-      // try next
+  try {
+    const verified = verifyGlobalPayoutsThinEvent(rawBody, sig);
+    thinEvent = verified.thinEvent;
+    verifiedMode = verified.verifiedMode;
+  } catch (err) {
+    if (err instanceof GpWebhookVerifyError) {
+      return Response.json(
+        { error: err.message, code: err.code },
+        { status: err.status },
+      );
     }
-  }
-
-  if (!event) {
     return Response.json({ error: "Invalid signature" }, { status: 400 });
   }
 
+  // Stripe destination health check — 2xx, zero mutations.
+  if (isGlobalPayoutsEventDestinationPing(thinEvent.type)) {
+    return Response.json(
+      { ok: true, action: "ping_ack", eventId: thinEvent.id },
+      { status: 200 },
+    );
+  }
+
   const livemode =
-    typeof (event as { livemode?: boolean }).livemode === "boolean"
-      ? (event as { livemode: boolean }).livemode
+    typeof thinEvent.livemode === "boolean"
+      ? thinEvent.livemode
       : verifiedMode === "LIVE";
   const mode = normalizeStripeMode(detectModeFromLivemode(livemode));
 
-  const related =
-    (event as { related_object?: { id?: string; type?: string } }).related_object ||
-    (event.data && typeof event.data === "object"
-      ? (event.data as { object?: { id?: string; object?: string } }).object
-      : null);
-
+  const related = thinEvent.related_object;
   const relatedObjectId =
-    related && typeof related === "object"
-      ? String(
-          (related as { id?: string }).id ||
-            (event as { related_object?: { id?: string } }).related_object?.id ||
-            "",
-        )
-      : "";
+    related && typeof related === "object" ? String(related.id || "") : "";
   const relatedObjectType =
-    related && typeof related === "object"
-      ? String(
-          (related as { type?: string; object?: string }).type ||
-            (related as { object?: string }).object ||
-            "",
-        )
-      : "";
+    related && typeof related === "object" ? String(related.type || "") : "";
 
   try {
     const result = await handleGlobalPayoutsThinEvent({
-      eventId: event.id,
-      eventType: event.type,
+      eventId: thinEvent.id,
+      eventType: thinEvent.type,
       stripeMode: mode,
       relatedObjectId,
       relatedObjectType,
-      raw: event,
+      raw: thinEvent,
     });
     return Response.json({ ok: true, ...result });
   } catch (err) {
     console.error("[webhooks:global-payouts]", {
-      eventId: event.id,
-      type: event.type,
+      eventId: thinEvent.id,
+      type: thinEvent.type,
       message: err instanceof Error ? err.message : "error",
     });
     return Response.json({ error: "handler_failed" }, { status: 500 });

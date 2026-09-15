@@ -17,25 +17,17 @@ import {
 } from "@/lib/payments/payout-rail/status-mapper";
 import { finalizeOutboundSuccess } from "@/lib/payments/payout-rail/outbound-payment";
 import type { ProtectedStatus } from "@/lib/payments/state-machine";
+import { isGlobalPayoutsEventDestinationPing } from "@/lib/payments/payout-rail/webhook-verify";
 
 export const GP_WEBHOOK_PROVIDER = "stripe_gp";
 
-function trimEnv(name: string): string {
-  return (process.env[name] || "").trim();
-}
-
-export function getGlobalPayoutsWebhookSecret(mode: StripeMode): string {
-  if (mode === "LIVE") {
-    return (
-      trimEnv("STRIPE_GP_WEBHOOK_SECRET_LIVE") ||
-      trimEnv("STRIPE_GP_WEBHOOK_SECRET")
-    );
-  }
-  return (
-    trimEnv("STRIPE_GP_WEBHOOK_SECRET_TEST") ||
-    trimEnv("STRIPE_GP_WEBHOOK_SECRET")
-  );
-}
+export {
+  getGlobalPayoutsWebhookSecret,
+  getGlobalPayoutsWebhookSecrets,
+  isGlobalPayoutsEventDestinationPing,
+  verifyGlobalPayoutsThinEvent,
+  GP_EVENT_DESTINATION_PING,
+} from "@/lib/payments/payout-rail/webhook-verify";
 
 function redactForLog(payload: unknown): string {
   try {
@@ -58,8 +50,13 @@ export async function handleGlobalPayoutsThinEvent(opts: {
   relatedObjectType?: string | null;
   raw?: unknown;
 }): Promise<{ action: string }> {
+  // Destination ping: ack only — no dedupe row, sync, or outbound mutation.
+  if (isGlobalPayoutsEventDestinationPing(opts.eventType)) {
+    return { action: "ping_ack" };
+  }
+
   if (!isGlobalPayoutsEnabled()) {
-    // Ack + store so Stripe does not retry forever; no mutation.
+    // Ack + store so Stripe does not retry forever; no business mutation.
     await prisma.processedWebhookEvent
       .create({
         data: {
