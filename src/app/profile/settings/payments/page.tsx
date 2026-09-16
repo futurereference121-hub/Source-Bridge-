@@ -17,6 +17,7 @@ import {
   shouldSyncOnGpReturn,
 } from "@/lib/payments/payout-rail/gpPayoutUi";
 import type { GlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
+import { PAYOUT_COUNTRY_OPTIONS } from "@/lib/payments/payout-rail/payout-country";
 
 type RailSummary = {
   rail: string;
@@ -32,6 +33,8 @@ function PaymentsSettingsInner() {
   const [connect, setConnect] = useState<ConnectStatus | null>(null);
   const [gp, setGp] = useState<GlobalPayoutStatus | null>(null);
   const [rail, setRail] = useState<RailSummary | null>(null);
+  const [needsPayoutCountry, setNeedsPayoutCountry] = useState(false);
+  const [selectedCountry, setSelectedCountry] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const returnSynced = useRef(false);
@@ -48,6 +51,8 @@ function PaymentsSettingsInner() {
         ok?: boolean;
         connect?: ConnectStatus;
         error?: string;
+        needsPayoutCountry?: boolean;
+        country?: string;
       };
       if (!connectRes.ok) throw new Error(connectJson.error || "Failed to load");
       setConnect(connectJson.connect || null);
@@ -57,12 +62,18 @@ function PaymentsSettingsInner() {
           ok?: boolean;
           globalPayouts?: GlobalPayoutStatus;
           rail?: RailSummary;
+          needsPayoutCountry?: boolean;
+          country?: string;
         };
         setGp(gpJson.globalPayouts || null);
         setRail(gpJson.rail || null);
+        setNeedsPayoutCountry(Boolean(gpJson.needsPayoutCountry));
+        if (gpJson.country) setSelectedCountry(gpJson.country);
       } else {
         setGp(null);
         setRail(null);
+        setNeedsPayoutCountry(Boolean(connectJson.needsPayoutCountry));
+        if (connectJson.country) setSelectedCountry(connectJson.country);
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to load payments");
@@ -79,6 +90,34 @@ function PaymentsSettingsInner() {
     if (signedIn) void refresh();
   }, [signedIn, refresh]);
 
+  async function savePayoutCountry() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/payments/payout-country", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: selectedCountry }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        country?: string;
+        needsPayoutCountry?: boolean;
+        rail?: RailSummary;
+      };
+      if (!res.ok) throw new Error(json.error || "Could not save country");
+      setNeedsPayoutCountry(Boolean(json.needsPayoutCountry));
+      if (json.country) setSelectedCountry(json.country);
+      if (json.rail) setRail(json.rail);
+      await refresh();
+      showToast("Payout country saved");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not save country");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runConnectAction(action: "onboard" | "sync" | "login") {
     setBusy(true);
     try {
@@ -91,8 +130,14 @@ function PaymentsSettingsInner() {
         ok?: boolean;
         url?: string;
         error?: string;
+        code?: string;
       };
-      if (!res.ok) throw new Error(json.error || "Action failed");
+      if (!res.ok) {
+        if (json.code === "PAYOUT_COUNTRY_REQUIRED") {
+          setNeedsPayoutCountry(true);
+        }
+        throw new Error(json.error || "Action failed");
+      }
       if (json.url) {
         window.location.href = json.url;
         return;
@@ -118,8 +163,14 @@ function PaymentsSettingsInner() {
         ok?: boolean;
         url?: string;
         error?: string;
+        code?: string;
       };
-      if (!res.ok) throw new Error(json.error || "Action failed");
+      if (!res.ok) {
+        if (json.code === "PAYOUT_COUNTRY_REQUIRED") {
+          setNeedsPayoutCountry(true);
+        }
+        throw new Error(json.error || "Action failed");
+      }
       if (json.url) {
         window.location.href = json.url;
         return;
@@ -192,9 +243,20 @@ function PaymentsSettingsInner() {
   const disabledReason = connect?.disabledReason?.trim() || "";
   // Server rail is authoritative — never show GP actions for Connect-routed users.
   const showGpPanel =
-    Boolean(gp?.enabled) && rail?.rail === "STRIPE_GLOBAL_PAYOUTS";
+    Boolean(gp?.enabled) &&
+    rail?.rail === "STRIPE_GLOBAL_PAYOUTS" &&
+    !needsPayoutCountry;
   const showUnsupported =
-    rail?.rail === "UNSUPPORTED" && !connect?.hasAccount && !gp?.payoutReady;
+    !needsPayoutCountry &&
+    rail?.rail === "UNSUPPORTED" &&
+    !connect?.hasAccount &&
+    !gp?.payoutReady;
+  const showConnectPanel =
+    !needsPayoutCountry &&
+    !showUnsupported &&
+    (rail?.rail === "STRIPE_CONNECT" ||
+      rail?.rail == null ||
+      Boolean(connect?.hasAccount));
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -220,6 +282,44 @@ function PaymentsSettingsInner() {
           </div>
         ) : (
           <>
+            {needsPayoutCountry ? (
+              <section className="panel-navy mt-8 rounded-xl px-5 py-6">
+                <h2 className="text-xl font-semibold text-white">
+                  Where will you receive payouts?
+                </h2>
+                <p className="mt-3 text-sm text-white/75">
+                  We use this to provide the payout setup available in your
+                  country.
+                </p>
+                <label className="mt-5 block text-xs uppercase tracking-[0.14em] text-white/45">
+                  Country
+                  <select
+                    value={selectedCountry}
+                    onChange={(e) => setSelectedCountry(e.target.value)}
+                    className="input-navy mt-1.5 h-11 w-full rounded-lg px-4 text-sm"
+                    disabled={busy}
+                  >
+                    <option value="">Select a country</option>
+                    {PAYOUT_COUNTRY_OPTIONS.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="mt-5">
+                  <PrimaryButton
+                    showArrow={false}
+                    className="rounded-lg"
+                    disabled={busy || !selectedCountry}
+                    onClick={() => void savePayoutCountry()}
+                  >
+                    Continue
+                  </PrimaryButton>
+                </div>
+              </section>
+            ) : null}
+
             {showUnsupported ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
@@ -231,10 +331,7 @@ function PaymentsSettingsInner() {
               </section>
             ) : null}
 
-            {!showUnsupported &&
-            (rail?.rail === "STRIPE_CONNECT" ||
-              rail?.rail == null ||
-              connect?.hasAccount) ? (
+            {showConnectPanel ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
                   {ui.headline}

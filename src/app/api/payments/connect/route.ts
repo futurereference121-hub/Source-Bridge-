@@ -12,6 +12,12 @@ import {
 import { assertEligiblePaymentParty } from "@/lib/payments/eligibility";
 import { prisma } from "@/lib/db";
 import { getAppUrlFromRequest } from "@/lib/app-url";
+import {
+  needsPayoutCountrySelection,
+  normalizePayoutCountryCode,
+} from "@/lib/payments/payout-rail/payout-country";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import { getGlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
 
 export const runtime = "nodejs";
 
@@ -25,16 +31,24 @@ export async function GET() {
     const status = await getConnectStatus(user.id);
     const full = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { id: true, email: true },
+      select: { id: true, email: true, country: true },
     });
+    const gp = await getGlobalPayoutStatus(user.id);
     const allowlist = paymentsAllowlistGateSnapshot(
       full || { id: user.id, email: user.email },
     );
+    const country = normalizePayoutCountryCode(full?.country) || "";
     return Response.json({
       ok: true,
       flags: paymentFlagsSnapshot(),
       paymentsAccess: allowlist,
       connect: status,
+      country,
+      needsPayoutCountry: needsPayoutCountrySelection({
+        country: full?.country,
+        connectHasAccount: status.hasAccount,
+        gpHasRecipient: gp.hasRecipient,
+      }),
     }, {
       headers: {
         "Cache-Control": "private, no-store, no-cache, must-revalidate",
@@ -61,6 +75,7 @@ export async function POST(req: NextRequest) {
       select: {
         id: true,
         email: true,
+        country: true,
         isDemo: true,
         isTestAccount: true,
         isAdmin: true,
@@ -94,7 +109,59 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, url: link.url });
     }
 
-    // onboard (default)
+    // onboard (default) — preserve in-progress Connect; gate only new creates.
+    const existing = await getConnectStatus(user.id);
+    if (!existing.hasAccount) {
+      const country = normalizePayoutCountryCode(full.country);
+      if (!country) {
+        return Response.json(
+          {
+            ok: false,
+            error: "Select where you will receive payouts before continuing.",
+            code: "PAYOUT_COUNTRY_REQUIRED",
+          },
+          { status: 400 },
+        );
+      }
+      const rail = await resolvePayoutRail({
+        userId: user.id,
+        email: full.email,
+        country,
+      });
+      if (rail.rail === "UNSUPPORTED") {
+        return Response.json(
+          {
+            ok: false,
+            error: "Payouts are not yet available in your location.",
+            code: "PAYOUTS_UNAVAILABLE",
+          },
+          { status: 409 },
+        );
+      }
+      if (rail.rail !== "STRIPE_CONNECT") {
+        return Response.json(
+          {
+            ok: false,
+            error: "Payout setup for your location uses a different path. Refresh and try again.",
+            code: "PAYOUT_RAIL_MISMATCH",
+          },
+          { status: 409 },
+        );
+      }
+      const link = await createConnectOnboardingLink({
+        userId: user.id,
+        email: full.email,
+        country,
+        returnUrl: `${base}/profile/settings/payments?connect=return`,
+        refreshUrl: `${base}/profile/settings/payments?connect=refresh`,
+      });
+      return Response.json({
+        ok: true,
+        url: link.url,
+        stripeAccountId: link.stripeAccountId,
+      });
+    }
+
     const link = await createConnectOnboardingLink({
       userId: user.id,
       email: full.email,

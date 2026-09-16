@@ -345,4 +345,133 @@ ok(
   );
 }
 
+// --- PAYOUT_ROUTING_UI_GAP: country selection before onboarding ---
+
+function normalizePayoutCountryCode(raw, known) {
+  const code = String(raw || "")
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  if (known && !known.has(code)) return null;
+  return code;
+}
+
+function needsPayoutCountrySelection({
+  country,
+  connectHasAccount,
+  gpHasRecipient,
+  known,
+}) {
+  if (connectHasAccount || gpHasRecipient) return false;
+  return normalizePayoutCountryCode(country, known) == null;
+}
+
+{
+  const known = new Set(["TH", "US", "GB"]);
+  ok(
+    "21 missing country requires selection",
+    needsPayoutCountrySelection({
+      country: "",
+      connectHasAccount: false,
+      gpHasRecipient: false,
+      known,
+    }),
+  );
+  ok(
+    "21 free-text Thailand rejected",
+    needsPayoutCountrySelection({
+      country: "Thailand",
+      connectHasAccount: false,
+      gpHasRecipient: false,
+      known,
+    }),
+  );
+  ok(
+    "21 normalize th → TH",
+    normalizePayoutCountryCode(" th ", known) === "TH",
+  );
+  ok(
+    "21 invalid ZZ rejected",
+    normalizePayoutCountryCode("ZZ", known) == null,
+  );
+  ok(
+    "21 unsupported TH without allowlist ⇒ UNSUPPORTED",
+    resolveRail({
+      gpEnabled: "true",
+      allowlist: "",
+      country: "TH",
+      connectReady: false,
+      connectHasAccount: false,
+      gpReady: false,
+    }) === "UNSUPPORTED",
+  );
+  ok(
+    "21 eligible TH new user ⇒ GP",
+    resolveRail({
+      gpEnabled: "true",
+      allowlist: "TH",
+      country: "TH",
+      connectReady: false,
+      connectHasAccount: false,
+      gpReady: false,
+    }) === "STRIPE_GLOBAL_PAYOUTS",
+  );
+  ok(
+    "21 existing Connect sticks despite TH",
+    resolveRail({
+      gpEnabled: "true",
+      allowlist: "TH",
+      country: "TH",
+      connectReady: false,
+      connectHasAccount: true,
+      gpReady: false,
+    }) === "STRIPE_CONNECT" &&
+      !needsPayoutCountrySelection({
+        country: "",
+        connectHasAccount: true,
+        gpHasRecipient: false,
+        known,
+      }),
+  );
+}
+
+{
+  const countryApi = read("src/app/api/payments/payout-country/route.ts");
+  const paymentsPage = read("src/app/profile/settings/payments/page.tsx");
+  const connectRoute = read("src/app/api/payments/connect/route.ts");
+  const gpRoute = read("src/app/api/payments/global-payouts/route.ts");
+  ok(
+    "22 payout-country API never creates Stripe objects",
+    countryApi.includes("stripeAccountCreated: false") &&
+      countryApi.includes("recipientCreated: false") &&
+      countryApi.includes("outboundPaymentCreated: false"),
+  );
+  ok(
+    "22 payments UI country step copy",
+    paymentsPage.includes("Where will you receive payouts?") &&
+      paymentsPage.includes("We use this to provide the payout setup available in your") &&
+      paymentsPage.includes("country."),
+  );
+  ok(
+    "22 UI hides technical rail product names",
+    !paymentsPage.includes("Stripe Connect") &&
+      !paymentsPage.includes("Global Payouts"),
+  );
+  ok(
+    "22 Connect onboard gates on PAYOUT_COUNTRY_REQUIRED",
+    connectRoute.includes("PAYOUT_COUNTRY_REQUIRED") &&
+      connectRoute.includes("normalizePayoutCountryCode"),
+  );
+  ok(
+    "22 GP onboard gates on country + rail",
+    gpRoute.includes("PAYOUT_COUNTRY_REQUIRED") &&
+      gpRoute.includes("needsPayoutCountry"),
+  );
+  ok(
+    "22 no OutboundPayment in country save path",
+    !countryApi.includes("OutboundPayment") &&
+      !countryApi.includes("createOutbound"),
+  );
+}
+
 console.log(`\nOK ${passed} global-payouts checks passed`);

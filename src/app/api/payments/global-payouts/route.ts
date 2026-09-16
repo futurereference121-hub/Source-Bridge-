@@ -12,6 +12,11 @@ import {
 } from "@/lib/payments/payout-rail/recipient";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import { getAppUrlFromRequest } from "@/lib/app-url";
+import {
+  needsPayoutCountrySelection,
+  normalizePayoutCountryCode,
+} from "@/lib/payments/payout-rail/payout-country";
+import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
 
 export const runtime = "nodejs";
 
@@ -22,9 +27,10 @@ function appBaseUrl(req: NextRequest): string {
 export async function GET() {
   try {
     const user = await requireSessionUser();
-    const [status, rail] = await Promise.all([
+    const [status, rail, connect] = await Promise.all([
       getGlobalPayoutStatus(user.id),
       resolvePayoutRail({ userId: user.id, email: user.email }),
+      getSellerConnectFundingState(user.id),
     ]);
     const full = await prisma.user.findUnique({
       where: { id: user.id },
@@ -33,17 +39,25 @@ export async function GET() {
     const allowlist = paymentsAllowlistGateSnapshot(
       full || { id: user.id, email: user.email },
     );
+    const country = normalizePayoutCountryCode(full?.country) || "";
+    const needsCountry = needsPayoutCountrySelection({
+      country: full?.country,
+      connectHasAccount: connect.hasAccount,
+      gpHasRecipient: status.hasRecipient,
+    });
     return Response.json(
       {
         ok: true,
         flags: paymentFlagsSnapshot(),
         paymentsAccess: allowlist,
         globalPayouts: status,
+        needsPayoutCountry: needsCountry,
+        country,
         rail: {
           rail: rail.rail,
           reason: rail.reason,
           payoutReady: rail.payoutReady,
-          country: rail.country || full?.country || "",
+          country: rail.country || country,
         },
       },
       {
@@ -103,10 +117,51 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const status = await getGlobalPayoutStatus(user.id);
+    const country = normalizePayoutCountryCode(full.country);
+    if (!status.hasRecipient) {
+      if (!country) {
+        return Response.json(
+          {
+            ok: false,
+            error: "Select where you will receive payouts before continuing.",
+            code: "PAYOUT_COUNTRY_REQUIRED",
+          },
+          { status: 400 },
+        );
+      }
+      const rail = await resolvePayoutRail({
+        userId: user.id,
+        email: full.email,
+        country,
+      });
+      if (rail.rail === "UNSUPPORTED") {
+        return Response.json(
+          {
+            ok: false,
+            error: "Payouts are not yet available in your location.",
+            code: "PAYOUTS_UNAVAILABLE",
+          },
+          { status: 409 },
+        );
+      }
+      if (rail.rail !== "STRIPE_GLOBAL_PAYOUTS") {
+        return Response.json(
+          {
+            ok: false,
+            error:
+              "Payout setup for your location uses a different path. Refresh and try again.",
+            code: "PAYOUT_RAIL_MISMATCH",
+          },
+          { status: 409 },
+        );
+      }
+    }
+
     const link = await createGlobalPayoutOnboardingLink({
       userId: user.id,
       email: full.email,
-      country: full.country,
+      country: country || full.country || "",
       recipientType: body.recipientType === "company" ? "company" : "individual",
       returnUrl: `${base}/profile/settings/payments?gp=return`,
       refreshUrl: `${base}/profile/settings/payments?gp=refresh`,
