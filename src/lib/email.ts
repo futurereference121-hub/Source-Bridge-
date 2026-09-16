@@ -1,6 +1,8 @@
 /**
  * Email provider abstraction.
  */
+import { getAppUrl } from "@/lib/app-url";
+
 export type SendEmailInput = {
   to: string;
   subject: string;
@@ -19,10 +21,6 @@ export type SendEmailResult = {
 
 function getProvider(): string {
   return (process.env.EMAIL_PROVIDER || "console").toLowerCase();
-}
-
-function getAppUrl(): string {
-  return (process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
 }
 
 export function buildVerifyUrl(token: string): string {

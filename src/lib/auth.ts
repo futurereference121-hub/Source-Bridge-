@@ -122,8 +122,10 @@ function toSessionUser(raw: RawSelectedUser): SessionUser {
 }
 
 function cookieSecure(): boolean {
+  // Host-only cookies (no Domain attribute) — Preview and Production never share sessions.
   const appUrl = process.env.APP_URL || "";
   if (appUrl.startsWith("https://")) return true;
+  if (process.env.VERCEL_ENV === "preview" || process.env.VERCEL_URL) return true;
   if (appUrl.includes("localhost") || appUrl.includes("127.0.0.1")) return false;
   return process.env.NODE_ENV === "production";
 }

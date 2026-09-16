@@ -73,7 +73,8 @@
     "test:allowlist": "node scripts/test-allowlist.mjs",
     "test:connect-onboarding": "node scripts/test-connect-onboarding.mjs",
     "test:stripe-webhooks": "node scripts/test-stripe-webhooks.mjs",
-    "test:trust-passport": "npx tsx scripts/test-trust-passport.mjs"
+    "test:trust-passport": "npx tsx scripts/test-trust-passport.mjs",
+    "test:preview-auth-url": "node scripts/test-preview-auth-url.mjs"
   },
   "dependencies": {
     "@mux/mux-node": "^14.1.1",

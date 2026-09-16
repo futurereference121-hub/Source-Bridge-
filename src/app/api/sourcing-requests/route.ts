@@ -12,12 +12,13 @@ import {
   conversationPairKey,
 } from "@/lib/messaging";
 import { sendEmail } from "@/lib/email";
+import { getAppUrl } from "@/lib/app-url";
 import { jsonError, sourcingRequestSchema } from "@/lib/validation";
 import { assertUserCanReceiveMessages } from "@/lib/discoverability";
 import { createNotification } from "@/lib/notifications";
 
 function appUrl() {
-  return (process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
+  return getAppUrl();
 }
 
 function mapSourcingRequest(row: {

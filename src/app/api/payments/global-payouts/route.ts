@@ -11,15 +11,12 @@ import {
   syncGlobalPayoutRecipient,
 } from "@/lib/payments/payout-rail/recipient";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import { getAppUrlFromRequest } from "@/lib/app-url";
 
 export const runtime = "nodejs";
 
 function appBaseUrl(req: NextRequest): string {
-  const env = (process.env.APP_URL || "").replace(/\/$/, "");
-  if (env) return env;
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  return host ? `${proto}://${host}` : "http://localhost:3000";
+  return getAppUrlFromRequest(req);
 }
 
 export async function GET() {
