@@ -474,4 +474,60 @@ function needsPayoutCountrySelection({
   );
 }
 
+// 23 GP preview Stripe-Version isolation (official Global Payouts docs)
+{
+  const REQUIRED_GP_PREVIEW_VERSION = "2026-08-26.preview";
+  const CONNECT_ACCOUNTS_V2_VERSION = "2026-07-29.dahlia";
+  const client = read("src/lib/payments/payout-rail/gp-client.ts");
+  const connect = read("src/lib/payments/stripe/connect.ts");
+  const gpVersionMatch = client.match(
+    /export const STRIPE_GP_API_VERSION\s*=\s*"([^"]+)"/,
+  );
+  const connectVersionMatch = connect.match(
+    /const STRIPE_ACCOUNTS_V2_VERSION\s*=\s*"([^"]+)"/,
+  );
+  const gpVersion = gpVersionMatch?.[1] || "";
+  const connectVersion = connectVersionMatch?.[1] || "";
+
+  ok(
+    "23 GP API version matches official Global Payouts .preview",
+    gpVersion === REQUIRED_GP_PREVIEW_VERSION &&
+      gpVersion.endsWith(".preview"),
+  );
+  ok(
+    "23 gpFetch sends Stripe-Version from STRIPE_GP_API_VERSION",
+    client.includes('"Stripe-Version": STRIPE_GP_API_VERSION') &&
+      client.includes("Authorization: `Bearer ${key}`"),
+  );
+  ok(
+    "23 Connect Accounts v2 version unchanged",
+    connectVersion === CONNECT_ACCOUNTS_V2_VERSION,
+  );
+  ok(
+    "23 GP preview version isolated from Connect",
+    gpVersion !== connectVersion &&
+      !connect.includes(REQUIRED_GP_PREVIEW_VERSION) &&
+      !client.includes(CONNECT_ACCOUNTS_V2_VERSION),
+  );
+
+  // Runtime header shape: mirror gpFetch header construction without Stripe network.
+  const gpHeaders = {
+    Authorization: "Bearer rk_test_unit_only",
+    "Stripe-Version": gpVersion,
+    Accept: "application/json",
+  };
+  ok(
+    "23 GP request headers include required preview Stripe-Version",
+    gpHeaders["Stripe-Version"] === REQUIRED_GP_PREVIEW_VERSION,
+  );
+  const connectHeaders = {
+    "Stripe-Version": connectVersion,
+  };
+  ok(
+    "23 Connect request headers keep non-preview Accounts v2 version",
+    connectHeaders["Stripe-Version"] === CONNECT_ACCOUNTS_V2_VERSION &&
+      !String(connectHeaders["Stripe-Version"]).endsWith(".preview"),
+  );
+}
+
 console.log(`\nOK ${passed} global-payouts checks passed`);

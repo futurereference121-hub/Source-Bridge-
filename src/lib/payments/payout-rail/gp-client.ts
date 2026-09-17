@@ -11,8 +11,13 @@ import {
 } from "@/lib/payments/flags";
 import { assertGlobalPayoutsMoneyAllowed } from "@/lib/payments/payout-rail/eligibility";
 
-/** Pinned Stripe API version for Global Payouts v2 money management. */
-export const STRIPE_GP_API_VERSION = "2025-09-30.clover";
+/**
+ * Pinned Stripe API version for Global Payouts (Accounts v2 / account_links).
+ * Official Global Payouts docs require an explicit `.preview` Stripe-Version
+ * (https://docs.stripe.com/global-payouts/stripe-hosted-recipient-creation).
+ * Do not reuse Connect (`dahlia`) or Payments API versions here.
+ */
+export const STRIPE_GP_API_VERSION = "2026-08-26.preview";
 
 function trimEnv(name: string): string {
   return (process.env[name] || "").trim();
