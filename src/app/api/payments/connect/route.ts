@@ -91,6 +91,8 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json().catch(() => ({}))) as {
       action?: string;
+      country?: string;
+      expectedRail?: string;
     };
     const action = body.action || "onboard";
     const base = appBaseUrl(req);
@@ -109,45 +111,77 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, url: link.url });
     }
 
-    // onboard (default) — preserve in-progress Connect; gate only new creates.
+    // onboard (default) — always revalidate country + rail before Stripe redirect.
     const existing = await getConnectStatus(user.id);
+    const country =
+      normalizePayoutCountryCode(body.country) ||
+      normalizePayoutCountryCode(full.country);
+    if (!country) {
+      return Response.json(
+        {
+          ok: false,
+          error: "Select where you will receive payouts before continuing.",
+          code: "PAYOUT_COUNTRY_REQUIRED",
+        },
+        { status: 400 },
+      );
+    }
+    // Reject client-tampered country that differs from the stored value once set.
+    const storedCountry = normalizePayoutCountryCode(full.country);
+    if (storedCountry && storedCountry !== country) {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout country does not match your saved country. Refresh and try again.",
+          code: "PAYOUT_COUNTRY_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+
+    const rail = await resolvePayoutRail({
+      userId: user.id,
+      email: full.email,
+      country,
+    });
+    if (rail.rail === "UNSUPPORTED") {
+      return Response.json(
+        {
+          ok: false,
+          error: "Payouts are not yet available in your location.",
+          code: "PAYOUTS_UNAVAILABLE",
+        },
+        { status: 409 },
+      );
+    }
+    if (rail.rail !== "STRIPE_CONNECT") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout setup for your location uses a different path. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+    const expectedRail = String(body.expectedRail || "")
+      .trim()
+      .toUpperCase();
+    if (expectedRail && expectedRail !== "STRIPE_CONNECT") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout route confirmation is out of date. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+
     if (!existing.hasAccount) {
-      const country = normalizePayoutCountryCode(full.country);
-      if (!country) {
-        return Response.json(
-          {
-            ok: false,
-            error: "Select where you will receive payouts before continuing.",
-            code: "PAYOUT_COUNTRY_REQUIRED",
-          },
-          { status: 400 },
-        );
-      }
-      const rail = await resolvePayoutRail({
-        userId: user.id,
-        email: full.email,
-        country,
-      });
-      if (rail.rail === "UNSUPPORTED") {
-        return Response.json(
-          {
-            ok: false,
-            error: "Payouts are not yet available in your location.",
-            code: "PAYOUTS_UNAVAILABLE",
-          },
-          { status: 409 },
-        );
-      }
-      if (rail.rail !== "STRIPE_CONNECT") {
-        return Response.json(
-          {
-            ok: false,
-            error: "Payout setup for your location uses a different path. Refresh and try again.",
-            code: "PAYOUT_RAIL_MISMATCH",
-          },
-          { status: 409 },
-        );
-      }
       const link = await createConnectOnboardingLink({
         userId: user.id,
         email: full.email,
@@ -159,6 +193,8 @@ export async function POST(req: NextRequest) {
         ok: true,
         url: link.url,
         stripeAccountId: link.stripeAccountId,
+        rail: rail.rail,
+        country,
       });
     }
 
@@ -168,7 +204,13 @@ export async function POST(req: NextRequest) {
       returnUrl: `${base}/profile/settings/payments?connect=return`,
       refreshUrl: `${base}/profile/settings/payments?connect=refresh`,
     });
-    return Response.json({ ok: true, url: link.url, stripeAccountId: link.stripeAccountId });
+    return Response.json({
+      ok: true,
+      url: link.url,
+      stripeAccountId: link.stripeAccountId,
+      rail: rail.rail,
+      country,
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message =

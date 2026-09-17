@@ -17,7 +17,6 @@ import {
   shouldSyncOnGpReturn,
 } from "@/lib/payments/payout-rail/gpPayoutUi";
 import type { GlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
-import { PAYOUT_COUNTRY_OPTIONS } from "@/lib/payments/payout-rail/payout-country";
 
 type RailSummary = {
   rail: string;
@@ -25,6 +24,23 @@ type RailSummary = {
   payoutReady: boolean;
   country: string;
 };
+
+type CountryOption = { code: string; name: string };
+
+type RouteConfirmation = {
+  countryCode: string;
+  countryName: string;
+  rail: string;
+  reason: string;
+  railLabel: string;
+  explanation: string;
+  currency: string | null;
+  payoutMethod: string | null;
+  continueLabel: "Continue to Stripe" | "Continue setup";
+  canProceed: boolean;
+};
+
+type SetupStep = "main" | "confirm";
 
 function PaymentsSettingsInner() {
   const router = useRouter();
@@ -35,6 +51,12 @@ function PaymentsSettingsInner() {
   const [rail, setRail] = useState<RailSummary | null>(null);
   const [needsPayoutCountry, setNeedsPayoutCountry] = useState(false);
   const [selectedCountry, setSelectedCountry] = useState("");
+  const [countryOptions, setCountryOptions] = useState<CountryOption[]>([]);
+  const [countryLocked, setCountryLocked] = useState(false);
+  const [confirmation, setConfirmation] = useState<RouteConfirmation | null>(
+    null,
+  );
+  const [setupStep, setSetupStep] = useState<SetupStep>("main");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const returnSynced = useRef(false);
@@ -43,9 +65,10 @@ function PaymentsSettingsInner() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [connectRes, gpRes] = await Promise.all([
+      const [connectRes, gpRes, countryRes] = await Promise.all([
         fetch("/api/payments/connect"),
         fetch("/api/payments/global-payouts"),
+        fetch("/api/payments/payout-country"),
       ]);
       const connectJson = (await connectRes.json()) as {
         ok?: boolean;
@@ -75,6 +98,31 @@ function PaymentsSettingsInner() {
         setNeedsPayoutCountry(Boolean(connectJson.needsPayoutCountry));
         if (connectJson.country) setSelectedCountry(connectJson.country);
       }
+
+      if (countryRes.ok) {
+        const countryJson = (await countryRes.json()) as {
+          countries?: CountryOption[];
+          country?: string;
+          needsPayoutCountry?: boolean;
+          countryLocked?: boolean;
+          rail?: RailSummary;
+          confirmation?: RouteConfirmation | null;
+        };
+        if (Array.isArray(countryJson.countries)) {
+          setCountryOptions(countryJson.countries);
+        }
+        setCountryLocked(Boolean(countryJson.countryLocked));
+        if (countryJson.country) setSelectedCountry(countryJson.country);
+        if (typeof countryJson.needsPayoutCountry === "boolean") {
+          setNeedsPayoutCountry(countryJson.needsPayoutCountry);
+        }
+        if (countryJson.rail) setRail(countryJson.rail);
+        if (countryJson.confirmation) {
+          setConfirmation(countryJson.confirmation);
+        }
+      }
+      // Never auto-open confirmation or redirect to Stripe on load.
+      setSetupStep("main");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to load payments");
     } finally {
@@ -104,13 +152,32 @@ function PaymentsSettingsInner() {
         country?: string;
         needsPayoutCountry?: boolean;
         rail?: RailSummary;
+        confirmation?: RouteConfirmation | null;
+        stripeAccountCreated?: boolean;
+        recipientCreated?: boolean;
       };
       if (!res.ok) throw new Error(json.error || "Could not save country");
+      // Country save must never create Stripe objects.
+      if (json.stripeAccountCreated || json.recipientCreated) {
+        throw new Error("Unexpected payout setup side effect");
+      }
       setNeedsPayoutCountry(Boolean(json.needsPayoutCountry));
       if (json.country) setSelectedCountry(json.country);
       if (json.rail) setRail(json.rail);
-      await refresh();
-      showToast("Payout country saved");
+      if (json.confirmation?.canProceed) {
+        setConfirmation(json.confirmation);
+        setSetupStep("confirm");
+        showToast("Payout country saved");
+      } else if (json.confirmation) {
+        setConfirmation(json.confirmation);
+        setSetupStep("main");
+        showToast(
+          json.confirmation.explanation ||
+            "Payouts are not yet available in your location.",
+        );
+      } else {
+        showToast("Payout country saved");
+      }
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Could not save country");
     } finally {
@@ -118,13 +185,57 @@ function PaymentsSettingsInner() {
     }
   }
 
-  async function runConnectAction(action: "onboard" | "sync" | "login") {
+  async function openRouteConfirmation() {
     setBusy(true);
     try {
-      const res = await fetch("/api/payments/connect", {
+      const qs = selectedCountry
+        ? `?country=${encodeURIComponent(selectedCountry)}`
+        : "";
+      const res = await fetch(`/api/payments/payout-country${qs}`);
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        confirmation?: RouteConfirmation | null;
+        rail?: RailSummary;
+        country?: string;
+      };
+      if (!res.ok) throw new Error(json.error || "Could not load payout route");
+      if (!json.confirmation?.canProceed) {
+        throw new Error(
+          json.confirmation?.explanation ||
+            "Payouts are not yet available in your location.",
+        );
+      }
+      setConfirmation(json.confirmation);
+      if (json.rail) setRail(json.rail);
+      if (json.country) setSelectedCountry(json.country);
+      setSetupStep("confirm");
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : "Could not load payout route",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function continueToStripe() {
+    if (!confirmation?.canProceed) return;
+    setBusy(true);
+    try {
+      const railName = confirmation.rail;
+      const endpoint =
+        railName === "STRIPE_GLOBAL_PAYOUTS"
+          ? "/api/payments/global-payouts"
+          : "/api/payments/connect";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({
+          action: "onboard",
+          country: confirmation.countryCode,
+          expectedRail: confirmation.rail,
+        }),
       });
       const json = (await res.json()) as {
         ok?: boolean;
@@ -135,6 +246,7 @@ function PaymentsSettingsInner() {
       if (!res.ok) {
         if (json.code === "PAYOUT_COUNTRY_REQUIRED") {
           setNeedsPayoutCountry(true);
+          setSetupStep("main");
         }
         throw new Error(json.error || "Action failed");
       }
@@ -151,10 +263,10 @@ function PaymentsSettingsInner() {
     }
   }
 
-  async function runGpAction(action: "onboard" | "sync") {
+  async function runConnectAction(action: "sync" | "login") {
     setBusy(true);
     try {
-      const res = await fetch("/api/payments/global-payouts", {
+      const res = await fetch("/api/payments/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
@@ -163,18 +275,31 @@ function PaymentsSettingsInner() {
         ok?: boolean;
         url?: string;
         error?: string;
-        code?: string;
       };
-      if (!res.ok) {
-        if (json.code === "PAYOUT_COUNTRY_REQUIRED") {
-          setNeedsPayoutCountry(true);
-        }
-        throw new Error(json.error || "Action failed");
-      }
+      if (!res.ok) throw new Error(json.error || "Action failed");
       if (json.url) {
         window.location.href = json.url;
         return;
       }
+      await refresh();
+      showToast("Payments settings updated");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runGpSync() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/payments/global-payouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sync" }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok) throw new Error(json.error || "Action failed");
       await refresh();
       showToast("Payments settings updated");
     } catch (err) {
@@ -258,6 +383,15 @@ function PaymentsSettingsInner() {
       rail?.rail == null ||
       Boolean(connect?.hasAccount));
 
+  const showPrimarySetup =
+    (showConnectPanel && (ui.showSetUpPayouts || ui.showContinueOnboarding)) ||
+    (showGpPanel && (gpUi.showSetUpPayouts || gpUi.showContinue));
+  const primarySetupLabel =
+    (showConnectPanel && ui.showContinueOnboarding) ||
+    (showGpPanel && gpUi.showContinue)
+      ? "Continue setup"
+      : "Set up payouts";
+
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
       <Container className="max-w-xl">
@@ -282,7 +416,7 @@ function PaymentsSettingsInner() {
           </div>
         ) : (
           <>
-            {needsPayoutCountry ? (
+            {needsPayoutCountry && setupStep !== "confirm" ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <h2 className="text-xl font-semibold text-white">
                   Where will you receive payouts?
@@ -297,21 +431,27 @@ function PaymentsSettingsInner() {
                     value={selectedCountry}
                     onChange={(e) => setSelectedCountry(e.target.value)}
                     className="input-navy mt-1.5 h-11 w-full rounded-lg px-4 text-sm"
-                    disabled={busy}
+                    disabled={busy || countryLocked}
                   >
                     <option value="">Select a country</option>
-                    {PAYOUT_COUNTRY_OPTIONS.map((c) => (
+                    {countryOptions.map((c) => (
                       <option key={c.code} value={c.code}>
                         {c.name}
                       </option>
                     ))}
                   </select>
                 </label>
+                {countryLocked ? (
+                  <p className="mt-3 text-sm text-amber-300">
+                    Your payout country cannot be changed after payout setup has
+                    started. Contact support for help.
+                  </p>
+                ) : null}
                 <div className="mt-5">
                   <PrimaryButton
                     showArrow={false}
                     className="rounded-lg"
-                    disabled={busy || !selectedCountry}
+                    disabled={busy || !selectedCountry || countryLocked}
                     onClick={() => void savePayoutCountry()}
                   >
                     Continue
@@ -320,7 +460,81 @@ function PaymentsSettingsInner() {
               </section>
             ) : null}
 
-            {showUnsupported ? (
+            {setupStep === "confirm" && confirmation ? (
+              <section className="panel-navy mt-8 rounded-xl px-5 py-6">
+                <h2 className="text-xl font-semibold text-white">
+                  Confirm payout setup
+                </h2>
+                <p className="mt-3 text-sm text-white/75">
+                  Review where you will receive payouts before continuing to
+                  Stripe.
+                </p>
+                <dl className="mt-5 space-y-3 text-sm">
+                  <div>
+                    <dt className="text-xs uppercase tracking-[0.14em] text-white/45">
+                      Selected country
+                    </dt>
+                    <dd className="mt-1 text-white">
+                      {confirmation.countryName} ({confirmation.countryCode})
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-[0.14em] text-white/45">
+                      Payout route
+                    </dt>
+                    <dd className="mt-1 text-white">
+                      Payout route: {confirmation.railLabel}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-[0.14em] text-white/45">
+                      Why this route
+                    </dt>
+                    <dd className="mt-1 text-white/80">
+                      {confirmation.explanation}
+                    </dd>
+                  </div>
+                  {confirmation.currency ? (
+                    <div>
+                      <dt className="text-xs uppercase tracking-[0.14em] text-white/45">
+                        Currency
+                      </dt>
+                      <dd className="mt-1 text-white">{confirmation.currency}</dd>
+                    </div>
+                  ) : null}
+                  {confirmation.payoutMethod ? (
+                    <div>
+                      <dt className="text-xs uppercase tracking-[0.14em] text-white/45">
+                        Payout method
+                      </dt>
+                      <dd className="mt-1 text-white">
+                        {confirmation.payoutMethod}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <PrimaryButton
+                    showArrow={false}
+                    className="rounded-lg"
+                    disabled={busy || !confirmation.canProceed}
+                    onClick={() => void continueToStripe()}
+                  >
+                    {confirmation.continueLabel}
+                  </PrimaryButton>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setSetupStep("main")}
+                    className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                  >
+                    Back
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
+            {setupStep === "main" && showUnsupported ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
                   Payouts
@@ -331,7 +545,7 @@ function PaymentsSettingsInner() {
               </section>
             ) : null}
 
-            {showConnectPanel ? (
+            {setupStep === "main" && showConnectPanel ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
                   {ui.headline}
@@ -346,24 +560,14 @@ function PaymentsSettingsInner() {
                   </p>
                 ) : null}
                 <div className="mt-5 flex flex-wrap items-center gap-3">
-                  {ui.showSetUpPayouts ? (
+                  {showPrimarySetup && showConnectPanel ? (
                     <PrimaryButton
                       showArrow={false}
                       className="rounded-lg"
                       disabled={busy || !ui.actionsEnabled}
-                      onClick={() => void runConnectAction("onboard")}
+                      onClick={() => void openRouteConfirmation()}
                     >
-                      Set up payouts
-                    </PrimaryButton>
-                  ) : null}
-                  {ui.showContinueOnboarding ? (
-                    <PrimaryButton
-                      showArrow={false}
-                      className="rounded-lg"
-                      disabled={busy || !ui.actionsEnabled}
-                      onClick={() => void runConnectAction("onboard")}
-                    >
-                      Continue
+                      {primarySetupLabel}
                     </PrimaryButton>
                   ) : null}
                   {ui.showRefreshStatus ? (
@@ -393,7 +597,7 @@ function PaymentsSettingsInner() {
               </section>
             ) : null}
 
-            {showGpPanel && !showUnsupported ? (
+            {setupStep === "main" && showGpPanel && !showUnsupported ? (
               <section className="panel-navy mt-6 rounded-xl px-5 py-6">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/45">
                   {gpUi.headline}
@@ -403,31 +607,21 @@ function PaymentsSettingsInner() {
                 </p>
                 <p className="mt-3 text-sm text-white/75">{gpUi.helpCopy}</p>
                 <div className="mt-5 flex flex-wrap items-center gap-3">
-                  {gpUi.showSetUpPayouts ? (
+                  {showPrimarySetup && showGpPanel ? (
                     <PrimaryButton
                       showArrow={false}
                       className="rounded-lg"
                       disabled={busy || !gpUi.actionsEnabled}
-                      onClick={() => void runGpAction("onboard")}
+                      onClick={() => void openRouteConfirmation()}
                     >
-                      Set up payouts
-                    </PrimaryButton>
-                  ) : null}
-                  {gpUi.showContinue ? (
-                    <PrimaryButton
-                      showArrow={false}
-                      className="rounded-lg"
-                      disabled={busy || !gpUi.actionsEnabled}
-                      onClick={() => void runGpAction("onboard")}
-                    >
-                      Continue
+                      {primarySetupLabel}
                     </PrimaryButton>
                   ) : null}
                   {gpUi.showRefreshStatus ? (
                     <button
                       type="button"
                       disabled={busy || !gpUi.actionsEnabled}
-                      onClick={() => void runGpAction("sync")}
+                      onClick={() => void runGpSync()}
                       className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
                     >
                       Refresh status

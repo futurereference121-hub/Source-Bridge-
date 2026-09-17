@@ -440,6 +440,8 @@ function needsPayoutCountrySelection({
   const paymentsPage = read("src/app/profile/settings/payments/page.tsx");
   const connectRoute = read("src/app/api/payments/connect/route.ts");
   const gpRoute = read("src/app/api/payments/global-payouts/route.ts");
+  const confirmHelper = read("src/lib/payments/payout-rail/payout-route-confirm.ts");
+  const countryHelper = read("src/lib/payments/payout-rail/payout-country.ts");
   ok(
     "22 payout-country API never creates Stripe objects",
     countryApi.includes("stripeAccountCreated: false") &&
@@ -453,24 +455,159 @@ function needsPayoutCountrySelection({
       paymentsPage.includes("country."),
   );
   ok(
-    "22 UI hides technical rail product names",
-    !paymentsPage.includes("Stripe Connect") &&
-      !paymentsPage.includes("Global Payouts"),
+    "22 confirmation screen shows explicit route labels",
+    paymentsPage.includes("Payout route: {confirmation.railLabel}") &&
+      paymentsPage.includes("Confirm payout setup") &&
+      paymentsPage.includes("Continue to Stripe") &&
+      confirmHelper.includes("Stripe Connect") &&
+      confirmHelper.includes("Stripe Global Payouts"),
   );
   ok(
-    "22 Connect onboard gates on PAYOUT_COUNTRY_REQUIRED",
+    "22 ordinary setup CTA stays non-chooser",
+    paymentsPage.includes("Set up payouts") &&
+      paymentsPage.includes("openRouteConfirmation") &&
+      !paymentsPage.includes("Choose Stripe Connect") &&
+      !paymentsPage.includes("Choose Global Payouts"),
+  );
+  ok(
+    "22 no auto-redirect on load",
+    paymentsPage.includes('setSetupStep("main")') &&
+      paymentsPage.includes("Never auto-open confirmation"),
+  );
+  ok(
+    "22 Connect onboard revalidates country + expectedRail",
     connectRoute.includes("PAYOUT_COUNTRY_REQUIRED") &&
-      connectRoute.includes("normalizePayoutCountryCode"),
+      connectRoute.includes("expectedRail") &&
+      connectRoute.includes("PAYOUT_RAIL_MISMATCH") &&
+      connectRoute.includes("PAYOUT_COUNTRY_MISMATCH"),
   );
   ok(
-    "22 GP onboard gates on country + rail",
+    "22 GP onboard revalidates country + expectedRail",
     gpRoute.includes("PAYOUT_COUNTRY_REQUIRED") &&
-      gpRoute.includes("needsPayoutCountry"),
+      gpRoute.includes("expectedRail") &&
+      gpRoute.includes("PAYOUT_RAIL_MISMATCH") &&
+      gpRoute.includes("PAYOUT_COUNTRY_MISMATCH"),
   );
   ok(
     "22 no OutboundPayment in country save path",
-    !countryApi.includes("OutboundPayment") &&
-      !countryApi.includes("createOutbound"),
+    countryApi.includes("outboundPaymentCreated: false") &&
+      !countryApi.includes("createOutbound") &&
+      !countryApi.includes("initiateOutbound"),
+  );
+  ok(
+    "22 country lock + supported selector from eligibility",
+    countryHelper.includes("payoutCountryChangeBlocked") &&
+      countryHelper.includes("getSupportedPayoutCountryOptions") &&
+      countryHelper.includes("isConnectPayoutCountryUnsupported") &&
+      countryHelper.includes("isGlobalPayoutsCountryAllowed") &&
+      countryApi.includes("PAYOUT_COUNTRY_LOCKED") &&
+      countryApi.includes("preview"),
+  );
+  ok(
+    "22 TH confirmation metadata includes THB/wire",
+    confirmHelper.includes('TH: "THB"') &&
+      confirmHelper.includes('return method === "wire" ? "Wire"'),
+  );
+}
+
+// --- Payout route confirmation display mirrors ---
+function buildConfirmMirror(rail, country, incomplete = false) {
+  const railLabel =
+    rail === "STRIPE_GLOBAL_PAYOUTS"
+      ? "Stripe Global Payouts"
+      : rail === "STRIPE_CONNECT"
+        ? "Stripe Connect"
+        : "Unavailable";
+  const currency =
+    rail === "STRIPE_GLOBAL_PAYOUTS" && country === "TH"
+      ? "THB"
+      : rail === "STRIPE_CONNECT" && country === "US"
+        ? "USD"
+        : null;
+  const payoutMethod =
+    rail === "STRIPE_GLOBAL_PAYOUTS" && country === "TH"
+      ? "Wire"
+      : rail === "STRIPE_CONNECT"
+        ? "Stripe payouts"
+        : null;
+  return {
+    railLabel,
+    currency,
+    payoutMethod,
+    continueLabel: incomplete ? "Continue setup" : "Continue to Stripe",
+    canProceed: rail === "STRIPE_CONNECT" || rail === "STRIPE_GLOBAL_PAYOUTS",
+  };
+}
+
+{
+  const th = buildConfirmMirror("STRIPE_GLOBAL_PAYOUTS", "TH");
+  ok(
+    "24 Thailand confirmation ⇒ Global Payouts + THB/Wire",
+    th.railLabel === "Stripe Global Payouts" &&
+      th.currency === "THB" &&
+      th.payoutMethod === "Wire" &&
+      th.continueLabel === "Continue to Stripe",
+  );
+  const us = buildConfirmMirror("STRIPE_CONNECT", "US");
+  ok(
+    "24 Connect-supported confirmation ⇒ Stripe Connect",
+    us.railLabel === "Stripe Connect" &&
+      us.currency === "USD" &&
+      us.continueLabel === "Continue to Stripe",
+  );
+  const pre = buildConfirmMirror("STRIPE_GLOBAL_PAYOUTS", "TH", true);
+  ok(
+    "24 incomplete onboarding uses Continue setup label",
+    pre.continueLabel === "Continue setup",
+  );
+  ok(
+    "24 preassigned country still requires confirmation UX path",
+    read("src/app/profile/settings/payments/page.tsx").includes(
+      "openRouteConfirmation",
+    ) &&
+      !read("src/app/profile/settings/payments/page.tsx").includes(
+        'runConnectAction("onboard")',
+      ) &&
+      !read("src/app/profile/settings/payments/page.tsx").includes(
+        'runGpAction("onboard")',
+      ),
+  );
+  // Supported-country filter mirror: denylisted without GP ⇒ excluded
+  function isSupportedMirror({ gpEnabled, allowlist, denylist, code }) {
+    if (!/^[A-Z]{2}$/.test(code)) return false;
+    const gpOn = envBool(gpEnabled, false);
+    const allow = parseCountries(allowlist);
+    const deny = parseCountries(denylist);
+    if (gpOn && allow.includes(code)) return true;
+    if (gpOn && deny.includes(code)) return false;
+    return true;
+  }
+  ok(
+    "24 unsupported denylist country excluded from selector",
+    !isSupportedMirror({
+      gpEnabled: "true",
+      allowlist: "",
+      denylist: "TH",
+      code: "TH",
+    }),
+  );
+  ok(
+    "24 GP allowlisted TH included in selector",
+    isSupportedMirror({
+      gpEnabled: "true",
+      allowlist: "TH",
+      denylist: "TH",
+      code: "TH",
+    }),
+  );
+  ok(
+    "24 Connect US remains selectable",
+    isSupportedMirror({
+      gpEnabled: "true",
+      allowlist: "TH",
+      denylist: "TH",
+      code: "US",
+    }),
   );
 }
 

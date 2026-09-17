@@ -104,6 +104,8 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       action?: string;
       recipientType?: "individual" | "company";
+      country?: string;
+      expectedRail?: string;
     };
     const action = body.action || "onboard";
     const base = appBaseUrl(req);
@@ -118,56 +120,90 @@ export async function POST(req: NextRequest) {
     }
 
     const status = await getGlobalPayoutStatus(user.id);
-    const country = normalizePayoutCountryCode(full.country);
-    if (!status.hasRecipient) {
-      if (!country) {
-        return Response.json(
-          {
-            ok: false,
-            error: "Select where you will receive payouts before continuing.",
-            code: "PAYOUT_COUNTRY_REQUIRED",
-          },
-          { status: 400 },
-        );
-      }
-      const rail = await resolvePayoutRail({
-        userId: user.id,
-        email: full.email,
-        country,
-      });
-      if (rail.rail === "UNSUPPORTED") {
-        return Response.json(
-          {
-            ok: false,
-            error: "Payouts are not yet available in your location.",
-            code: "PAYOUTS_UNAVAILABLE",
-          },
-          { status: 409 },
-        );
-      }
-      if (rail.rail !== "STRIPE_GLOBAL_PAYOUTS") {
-        return Response.json(
-          {
-            ok: false,
-            error:
-              "Payout setup for your location uses a different path. Refresh and try again.",
-            code: "PAYOUT_RAIL_MISMATCH",
-          },
-          { status: 409 },
-        );
-      }
+    const country =
+      normalizePayoutCountryCode(body.country) ||
+      normalizePayoutCountryCode(full.country);
+    if (!country) {
+      return Response.json(
+        {
+          ok: false,
+          error: "Select where you will receive payouts before continuing.",
+          code: "PAYOUT_COUNTRY_REQUIRED",
+        },
+        { status: 400 },
+      );
+    }
+    const storedCountry = normalizePayoutCountryCode(full.country);
+    if (storedCountry && storedCountry !== country) {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout country does not match your saved country. Refresh and try again.",
+          code: "PAYOUT_COUNTRY_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+
+    // Always revalidate country + rail before creating/continuing Stripe objects.
+    const rail = await resolvePayoutRail({
+      userId: user.id,
+      email: full.email,
+      country,
+    });
+    if (rail.rail === "UNSUPPORTED") {
+      return Response.json(
+        {
+          ok: false,
+          error: "Payouts are not yet available in your location.",
+          code: "PAYOUTS_UNAVAILABLE",
+        },
+        { status: 409 },
+      );
+    }
+    if (rail.rail !== "STRIPE_GLOBAL_PAYOUTS") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout setup for your location uses a different path. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+    const expectedRail = String(body.expectedRail || "")
+      .trim()
+      .toUpperCase();
+    if (expectedRail && expectedRail !== "STRIPE_GLOBAL_PAYOUTS") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout route confirmation is out of date. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
     }
 
     const link = await createGlobalPayoutOnboardingLink({
       userId: user.id,
       email: full.email,
-      country: country || full.country || "",
+      country,
       recipientType: body.recipientType === "company" ? "company" : "individual",
       returnUrl: `${base}/profile/settings/payments?gp=return`,
       refreshUrl: `${base}/profile/settings/payments?gp=refresh`,
     });
 
-    return Response.json({ ok: true, url: link.url, recipientId: link.recipientId });
+    return Response.json({
+      ok: true,
+      url: link.url,
+      recipientId: link.recipientId,
+      rail: rail.rail,
+      country,
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const code = (err as { code?: string }).code;

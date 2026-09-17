@@ -3,6 +3,13 @@
  * ISO 3166-1 alpha-2 only — never trust free-text client country strings.
  */
 
+import {
+  getGlobalPayoutsCountryAllowlist,
+  isConnectPayoutCountryUnsupported,
+  isGlobalPayoutsCountryAllowed,
+} from "@/lib/payments/payout-rail/eligibility";
+import { isGlobalPayoutsEnabled } from "@/lib/payments/flags";
+
 /** Compact ISO 3166-1 alpha-2 catalog for payout country selection. */
 export const PAYOUT_COUNTRY_OPTIONS: ReadonlyArray<{
   code: string;
@@ -244,3 +251,75 @@ export function needsPayoutCountrySelection(opts: {
   if (opts.connectHasAccount || opts.gpHasRecipient) return false;
   return !isValidPayoutCountryCode(opts.country);
 }
+
+export function getPayoutCountryName(code: string | null | undefined): string {
+  const normalized = normalizePayoutCountryCode(code);
+  if (!normalized) return "";
+  return PAYOUT_COUNTRY_OPTIONS.find((c) => c.code === normalized)?.name || normalized;
+}
+
+/**
+ * Countries offered in the payout selector.
+ * Includes Connect-routable countries plus GP allowlisted countries.
+ * Excludes Connect-denylisted countries that are not GP-eligible (would be UNSUPPORTED).
+ */
+export function isSupportedPayoutCountry(raw: string | null | undefined): boolean {
+  const code = normalizePayoutCountryCode(raw);
+  if (!code) return false;
+  if (isGlobalPayoutsCountryAllowed(code)) return true;
+  if (isConnectPayoutCountryUnsupported(code)) return false;
+  return true;
+}
+
+export function getSupportedPayoutCountryOptions(): ReadonlyArray<{
+  code: string;
+  name: string;
+}> {
+  // When GP is on, surface GP allowlist even if catalog somehow missed a code.
+  const fromCatalog = PAYOUT_COUNTRY_OPTIONS.filter((c) =>
+    isSupportedPayoutCountry(c.code),
+  );
+  if (!isGlobalPayoutsEnabled()) return fromCatalog;
+
+  const seen = new Set(fromCatalog.map((c) => c.code));
+  const extras: { code: string; name: string }[] = [];
+  for (const code of getGlobalPayoutsCountryAllowlist()) {
+    if (seen.has(code)) continue;
+    if (!/^[A-Z]{2}$/.test(code)) continue;
+    extras.push({ code, name: getPayoutCountryName(code) || code });
+  }
+  return extras.length === 0
+    ? fromCatalog
+    : [...fromCatalog, ...extras].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Established Connect / GP recipients must not change country via self-serve.
+ */
+export function payoutCountryChangeBlocked(opts: {
+  existingCountry?: string | null;
+  nextCountry: string;
+  connectHasAccount?: boolean;
+  gpHasRecipient?: boolean;
+}): { blocked: boolean; message?: string } {
+  if (!opts.connectHasAccount && !opts.gpHasRecipient) {
+    return { blocked: false };
+  }
+  const existing = normalizePayoutCountryCode(opts.existingCountry);
+  const next = normalizePayoutCountryCode(opts.nextCountry);
+  if (!next) {
+    return {
+      blocked: true,
+      message: "Select a valid country.",
+    };
+  }
+  if (existing && existing !== next) {
+    return {
+      blocked: true,
+      message:
+        "Your payout country cannot be changed after payout setup has started. Contact support for help.",
+    };
+  }
+  return { blocked: false };
+}
+
