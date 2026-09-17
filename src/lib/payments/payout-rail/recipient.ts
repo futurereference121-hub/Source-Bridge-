@@ -17,6 +17,34 @@ import {
 import { gpErrorMessage, gpFetch, hasGlobalPayoutsRestrictedKey } from "@/lib/payments/payout-rail/gp-client";
 import { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/rail-resolver";
 
+/**
+ * Stripe Global Payouts payout-method capability for a recipient country.
+ * Thailand (THB) is Wire-only per Stripe GP country tables — requesting
+ * `bank_accounts.local` yields hosted onboarding dead-end:
+ * "features that aren't available for your account."
+ * Expand this map as more GP pilot countries are enabled.
+ */
+export function recipientBankCapabilityForCountry(
+  country: string,
+): "local" | "wire" {
+  const code = String(country || "").trim().toUpperCase();
+  // Wire-only pilot / documented wire-only countries for cross-border GP.
+  if (code === "TH") return "wire";
+  return "local";
+}
+
+function recipientCapabilitiesBody(country: string) {
+  const method = recipientBankCapabilityForCountry(country);
+  if (method === "wire") {
+    return {
+      bank_accounts: { wire: { requested: true } },
+    };
+  }
+  return {
+    bank_accounts: { local: { requested: true } },
+  };
+}
+
 export type GlobalPayoutStatus = {
   enabled: boolean;
   configured: boolean;
@@ -140,6 +168,8 @@ export async function createGlobalPayoutOnboardingLink(opts: {
   if (!row) {
     // Create recipient via Stripe API v2 Accounts with recipient configuration.
     // Money mutations not required for recipient create + hosted link.
+    // Capability must match country payout method (TH → wire, not local).
+    const bankMethod = recipientBankCapabilityForCountry(country);
     const created = await gpFetch({
       mode: stripeMode,
       method: "POST",
@@ -154,18 +184,24 @@ export async function createGlobalPayoutOnboardingLink(opts: {
         },
         configuration: {
           recipient: {
-            capabilities: {
-              bank_accounts: { local: { requested: true } },
-            },
+            capabilities: recipientCapabilitiesBody(country),
           },
         },
+        include: [
+          "requirements",
+          "configuration.recipient",
+          "identity",
+        ],
         metadata: {
           sourceBridgeUserId: opts.userId,
           stripeMode,
           rail: "STRIPE_GLOBAL_PAYOUTS",
+          gpBankMethod: bankMethod,
         },
       },
-      idempotencyKey: `gp_recipient_${opts.userId}_${stripeMode}_${country}`,
+      // Include bank method so correcting local→wire does not replay a stale
+      // idempotent create that requested an unavailable capability.
+      idempotencyKey: `gp_recipient_${opts.userId}_${stripeMode}_${country}_${bankMethod}`,
     });
 
     if (!created.ok || typeof created.body.id !== "string") {
@@ -256,7 +292,7 @@ export async function syncGlobalPayoutRecipient(
   const retrieved = await gpFetch({
     mode: stripeMode,
     method: "GET",
-    path: `/v2/core/accounts/${encodeURIComponent(row.stripeRecipientId)}`,
+    path: `/v2/core/accounts/${encodeURIComponent(row.stripeRecipientId)}?include=requirements&include=configuration.recipient&include=identity`,
   });
   if (!retrieved.ok) {
     return row;

@@ -530,4 +530,29 @@ function needsPayoutCountrySelection({
   );
 }
 
+// 24 TH recipients request wire (not local) bank capability
+{
+  const recipient = read("src/lib/payments/payout-rail/recipient.ts");
+  ok(
+    "24 TH maps to wire bank capability helper",
+    recipient.includes('if (code === "TH") return "wire"') &&
+      recipient.includes("recipientBankCapabilityForCountry"),
+  );
+  ok(
+    "24 create uses recipientCapabilitiesBody (not hardcoded local-only)",
+    recipient.includes("capabilities: recipientCapabilitiesBody(country)") &&
+      recipient.includes("bank_accounts: { wire: { requested: true } }"),
+  );
+  ok(
+    "24 idempotency key includes bank method (avoids stale local shell)",
+    recipient.includes("`gp_recipient_${opts.userId}_${stripeMode}_${country}_${bankMethod}`"),
+  );
+  ok(
+    "24 sync retrieve includes configuration.recipient",
+    recipient.includes(
+      "include=requirements&include=configuration.recipient&include=identity",
+    ),
+  );
+}
+
 console.log(`\nOK ${passed} global-payouts checks passed`);
