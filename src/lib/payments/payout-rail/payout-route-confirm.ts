@@ -61,28 +61,35 @@ function railLabelFor(rail: PayoutRail): string {
 }
 
 function explanationFor(resolution: PayoutRailResolution): string {
+  const countryName =
+    getPayoutCountryName(resolution.country) ||
+    String(resolution.country || "")
+      .trim()
+      .toUpperCase() ||
+    "your country";
+
   switch (resolution.reason) {
     case "gp_onboarding_required":
     case "gp_ready":
-      return "Stripe Connect is not available for payouts in your country, so Source Bridge uses Stripe Global Payouts.";
+      return `Source Bridge currently uses Stripe Global Payouts for recipients in ${countryName}.`;
     case "connect_in_progress":
       return "You already started Stripe Connect setup. Continue with the same payout route.";
     case "connect_ready":
       return "Your Stripe Connect payout account is already linked for this country.";
     case "connect_default":
-      return "Stripe Connect is available for payouts in your country.";
+      return `Source Bridge currently uses Stripe Connect for recipients in ${countryName}.`;
     case "global_payouts_disabled":
-      return "Payout setup uses Stripe Connect.";
+      return `Source Bridge currently uses Stripe Connect for recipients in ${countryName}.`;
     case "connect_unsupported_country_not_allowlisted":
       return "Payouts are not yet available for this country.";
     case "user_not_allowlisted":
       return "Payouts are not yet available for this account in your country.";
     default:
       if (resolution.rail === "STRIPE_GLOBAL_PAYOUTS") {
-        return "Source Bridge selected Stripe Global Payouts for your country.";
+        return `Source Bridge currently uses Stripe Global Payouts for recipients in ${countryName}.`;
       }
       if (resolution.rail === "STRIPE_CONNECT") {
-        return "Source Bridge selected Stripe Connect for your country.";
+        return `Source Bridge currently uses Stripe Connect for recipients in ${countryName}.`;
       }
       return "Payouts are not yet available in your location.";
   }

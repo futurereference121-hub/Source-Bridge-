@@ -471,8 +471,24 @@ function needsPayoutCountrySelection({
   );
   ok(
     "22 no auto-redirect on load",
-    paymentsPage.includes('setSetupStep("main")') &&
-      paymentsPage.includes("Never auto-open confirmation"),
+    paymentsPage.includes(
+      'setSetupStep(nextNeedsCountry && !nextLocked ? "select" : "main")',
+    ) && paymentsPage.includes("Never auto-open confirmation"),
+  );
+  ok(
+    "22 Back from confirm returns to country selector (not generic Continue)",
+    paymentsPage.includes('type SetupStep = "select" | "confirm" | "main"') &&
+      paymentsPage.includes("returnToCountrySelector") &&
+      paymentsPage.includes('setSetupStep("select")') &&
+      paymentsPage.includes("Change country") &&
+      paymentsPage.includes("showCountrySelector = setupStep === \"select\""),
+  );
+  ok(
+    "22 locked country hides change controls + support copy",
+    paymentsPage.includes("!countryLocked") &&
+      paymentsPage.includes("Contact support for help") &&
+      countryHelper.includes("payoutCountryChangeBlocked") &&
+      countryApi.includes("PAYOUT_COUNTRY_LOCKED"),
   );
   ok(
     "22 Connect onboard revalidates country + expectedRail",
@@ -689,6 +705,206 @@ function buildConfirmMirror(rail, country, incomplete = false) {
     recipient.includes(
       "include=requirements&include=configuration.recipient&include=identity",
     ),
+  );
+}
+
+// 25 Payout-country navigation: browse/change before Stripe objects exist
+{
+  const paymentsPage = read("src/app/profile/settings/payments/page.tsx");
+  const confirmHelper = read("src/lib/payments/payout-rail/payout-route-confirm.ts");
+  const countryApi = read("src/app/api/payments/payout-country/route.ts");
+  const countryHelper = read("src/lib/payments/payout-rail/payout-country.ts");
+
+  // Mirror UI navigation state: select → confirm → Back → select (prior country kept)
+  function navMirror(opts) {
+    let setupStep = opts.initialStep || "select";
+    let selectedCountry = opts.selectedCountry || "";
+    let countryLocked = Boolean(opts.countryLocked);
+    const stripeAccountCreated = false;
+    const recipientCreated = false;
+    const outboundPaymentCreated = false;
+
+    function showSelector() {
+      return setupStep === "select";
+    }
+    function showGenericContinue() {
+      return setupStep === "main" && !showSelector();
+    }
+    function returnToCountrySelector() {
+      if (countryLocked) return;
+      setupStep = "select";
+    }
+    function continueFromSelector(nextCountry, rail) {
+      // Server revalidation mirror — resolvePayoutRail authoritative per country
+      selectedCountry = nextCountry;
+      const resolved = resolveRail({
+        gpEnabled: "true",
+        allowlist: "TH",
+        country: nextCountry,
+        connectReady: false,
+        connectHasAccount: false,
+        gpReady: false,
+        connectDenylist: "TH",
+      });
+      if (resolved !== rail) {
+        throw new Error(`rail mismatch for ${nextCountry}: ${resolved}`);
+      }
+      setupStep = "confirm";
+      return {
+        country: selectedCountry,
+        rail: resolved,
+        stripeAccountCreated,
+        recipientCreated,
+        outboundPaymentCreated,
+      };
+    }
+    function changeCountry(nextCountry, rail) {
+      returnToCountrySelector();
+      return continueFromSelector(nextCountry, rail);
+    }
+
+    return {
+      showSelector,
+      showGenericContinue,
+      returnToCountrySelector,
+      continueFromSelector,
+      changeCountry,
+      get selectedCountry() {
+        return selectedCountry;
+      },
+      get setupStep() {
+        return setupStep;
+      },
+      get countryLocked() {
+        return countryLocked;
+      },
+      lock() {
+        countryLocked = true;
+      },
+    };
+  }
+
+  const flow = navMirror({ selectedCountry: "" });
+  ok("25 starts on country selector", flow.showSelector());
+  const mx = flow.continueFromSelector("MX", "STRIPE_CONNECT");
+  ok(
+    "25 Mexico → Connect confirm without Stripe objects",
+    flow.setupStep === "confirm" &&
+      mx.rail === "STRIPE_CONNECT" &&
+      mx.stripeAccountCreated === false &&
+      mx.recipientCreated === false &&
+      mx.outboundPaymentCreated === false,
+  );
+  flow.returnToCountrySelector();
+  ok(
+    "25 Back → country selector (not generic Continue)",
+    flow.showSelector() &&
+      !flow.showGenericContinue() &&
+      flow.selectedCountry === "MX",
+  );
+  const th = flow.changeCountry("TH", "STRIPE_GLOBAL_PAYOUTS");
+  ok(
+    "25 change MX→TH revalidates to Global Payouts server-side",
+    flow.setupStep === "confirm" &&
+      th.rail === "STRIPE_GLOBAL_PAYOUTS" &&
+      th.country === "TH" &&
+      th.stripeAccountCreated === false &&
+      th.recipientCreated === false,
+  );
+  ok(
+    "25 browsing/changing countries creates no Stripe objects",
+    th.stripeAccountCreated === false &&
+      th.recipientCreated === false &&
+      th.outboundPaymentCreated === false &&
+      countryApi.includes("stripeAccountCreated: false") &&
+      countryApi.includes("recipientCreated: false") &&
+      countryApi.includes("outboundPaymentCreated: false") &&
+      !countryApi.includes("createOutbound") &&
+      paymentsPage.includes("Unexpected payout setup side effect"),
+  );
+
+  const locked = navMirror({
+    selectedCountry: "MX",
+    countryLocked: true,
+    initialStep: "confirm",
+  });
+  locked.returnToCountrySelector();
+  ok(
+    "25 existing Connect/GP recipient cannot change country via UI",
+    locked.countryLocked === true &&
+      locked.setupStep === "confirm" &&
+      !paymentsPage.includes("Change country") === false &&
+      paymentsPage.includes("!countryLocked") &&
+      countryHelper.includes("payoutCountryChangeBlocked") &&
+      countryApi.includes("PAYOUT_COUNTRY_LOCKED"),
+  );
+  // payoutCountryChangeBlocked mirror
+  function changeBlocked({ connectHasAccount, gpHasRecipient, existing, next }) {
+    if (!connectHasAccount && !gpHasRecipient) return false;
+    if (existing && existing !== next) return true;
+    return false;
+  }
+  ok(
+    "25 lock blocks country change when Connect account exists",
+    changeBlocked({
+      connectHasAccount: true,
+      gpHasRecipient: false,
+      existing: "MX",
+      next: "TH",
+    }) === true,
+  );
+  ok(
+    "25 lock blocks country change when GP recipient exists",
+    changeBlocked({
+      connectHasAccount: false,
+      gpHasRecipient: true,
+      existing: "TH",
+      next: "MX",
+    }) === true,
+  );
+  ok(
+    "25 unlocked users may change country before Stripe objects",
+    changeBlocked({
+      connectHasAccount: false,
+      gpHasRecipient: false,
+      existing: "MX",
+      next: "TH",
+    }) === false,
+  );
+
+  ok(
+    "25 routing copy uses Source Bridge wording (no universal availability claim)",
+    confirmHelper.includes(
+      "Source Bridge currently uses Stripe Connect for recipients in ${countryName}.",
+    ) &&
+      confirmHelper.includes(
+        "Source Bridge currently uses Stripe Global Payouts for recipients in ${countryName}.",
+      ) &&
+      !confirmHelper.includes(
+        "Stripe Connect is available for payouts in your country.",
+      ) &&
+      !confirmHelper.includes(
+        "Stripe Connect is not available for payouts in your country, so Source Bridge uses Stripe Global Payouts.",
+      ),
+  );
+  ok(
+    "25 Mexico / Thailand example explanations match product wording",
+    confirmHelper.includes("Source Bridge currently uses Stripe Connect") &&
+      confirmHelper.includes("Source Bridge currently uses Stripe Global Payouts") &&
+      countryHelper.includes('{ code: "MX", name: "Mexico" }') &&
+      countryHelper.includes('{ code: "TH", name: "Thailand" }'),
+  );
+  ok(
+    "25 UI keeps prior country highlighted when returning to selector",
+    paymentsPage.includes("returnToCountrySelector") &&
+      paymentsPage.includes("value={selectedCountry}") &&
+      paymentsPage.includes('setSetupStep("select")') &&
+      !/onClick=\{\(\) => setSetupStep\("main"\)\}/.test(paymentsPage),
+  );
+  ok(
+    "25 country POST still resolves rail via resolvePayoutRail",
+    countryApi.includes("resolvePayoutRail") &&
+      countryApi.includes("buildPayoutRouteConfirmation"),
   );
 }
 

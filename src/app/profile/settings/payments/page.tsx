@@ -40,7 +40,8 @@ type RouteConfirmation = {
   canProceed: boolean;
 };
 
-type SetupStep = "main" | "confirm";
+/** select = country picker; confirm = route review; main = post-setup / ordinary CTAs */
+type SetupStep = "select" | "confirm" | "main";
 
 function PaymentsSettingsInner() {
   const router = useRouter();
@@ -62,6 +63,12 @@ function PaymentsSettingsInner() {
   const returnSynced = useRef(false);
   const gpReturnSynced = useRef(false);
 
+  const returnToCountrySelector = useCallback(() => {
+    // Until Connect / GP recipient exists, Back must reopen the selector
+    // with the prior country still highlighted — never the generic Continue panel.
+    setSetupStep("select");
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -80,6 +87,9 @@ function PaymentsSettingsInner() {
       if (!connectRes.ok) throw new Error(connectJson.error || "Failed to load");
       setConnect(connectJson.connect || null);
 
+      let nextNeedsCountry = Boolean(connectJson.needsPayoutCountry);
+      if (connectJson.country) setSelectedCountry(connectJson.country);
+
       if (gpRes.ok) {
         const gpJson = (await gpRes.json()) as {
           ok?: boolean;
@@ -90,15 +100,15 @@ function PaymentsSettingsInner() {
         };
         setGp(gpJson.globalPayouts || null);
         setRail(gpJson.rail || null);
-        setNeedsPayoutCountry(Boolean(gpJson.needsPayoutCountry));
+        nextNeedsCountry = Boolean(gpJson.needsPayoutCountry);
         if (gpJson.country) setSelectedCountry(gpJson.country);
       } else {
         setGp(null);
         setRail(null);
-        setNeedsPayoutCountry(Boolean(connectJson.needsPayoutCountry));
-        if (connectJson.country) setSelectedCountry(connectJson.country);
       }
+      setNeedsPayoutCountry(nextNeedsCountry);
 
+      let nextLocked = false;
       if (countryRes.ok) {
         const countryJson = (await countryRes.json()) as {
           countries?: CountryOption[];
@@ -111,10 +121,12 @@ function PaymentsSettingsInner() {
         if (Array.isArray(countryJson.countries)) {
           setCountryOptions(countryJson.countries);
         }
-        setCountryLocked(Boolean(countryJson.countryLocked));
+        nextLocked = Boolean(countryJson.countryLocked);
+        setCountryLocked(nextLocked);
         if (countryJson.country) setSelectedCountry(countryJson.country);
         if (typeof countryJson.needsPayoutCountry === "boolean") {
-          setNeedsPayoutCountry(countryJson.needsPayoutCountry);
+          nextNeedsCountry = countryJson.needsPayoutCountry;
+          setNeedsPayoutCountry(nextNeedsCountry);
         }
         if (countryJson.rail) setRail(countryJson.rail);
         if (countryJson.confirmation) {
@@ -122,7 +134,8 @@ function PaymentsSettingsInner() {
         }
       }
       // Never auto-open confirmation or redirect to Stripe on load.
-      setSetupStep("main");
+      // Missing country → selector; otherwise ordinary main CTAs.
+      setSetupStep(nextNeedsCountry && !nextLocked ? "select" : "main");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to load payments");
     } finally {
@@ -151,6 +164,7 @@ function PaymentsSettingsInner() {
         error?: string;
         country?: string;
         needsPayoutCountry?: boolean;
+        countryLocked?: boolean;
         rail?: RailSummary;
         confirmation?: RouteConfirmation | null;
         stripeAccountCreated?: boolean;
@@ -162,6 +176,7 @@ function PaymentsSettingsInner() {
         throw new Error("Unexpected payout setup side effect");
       }
       setNeedsPayoutCountry(Boolean(json.needsPayoutCountry));
+      setCountryLocked(Boolean(json.countryLocked));
       if (json.country) setSelectedCountry(json.country);
       if (json.rail) setRail(json.rail);
       if (json.confirmation?.canProceed) {
@@ -170,7 +185,7 @@ function PaymentsSettingsInner() {
         showToast("Payout country saved");
       } else if (json.confirmation) {
         setConfirmation(json.confirmation);
-        setSetupStep("main");
+        setSetupStep("select");
         showToast(
           json.confirmation.explanation ||
             "Payouts are not yet available in your location.",
@@ -198,8 +213,12 @@ function PaymentsSettingsInner() {
         confirmation?: RouteConfirmation | null;
         rail?: RailSummary;
         country?: string;
+        countryLocked?: boolean;
       };
       if (!res.ok) throw new Error(json.error || "Could not load payout route");
+      if (typeof json.countryLocked === "boolean") {
+        setCountryLocked(json.countryLocked);
+      }
       if (!json.confirmation?.canProceed) {
         throw new Error(
           json.confirmation?.explanation ||
@@ -246,7 +265,7 @@ function PaymentsSettingsInner() {
       if (!res.ok) {
         if (json.code === "PAYOUT_COUNTRY_REQUIRED") {
           setNeedsPayoutCountry(true);
-          setSetupStep("main");
+          setSetupStep("select");
         }
         throw new Error(json.error || "Action failed");
       }
@@ -366,17 +385,24 @@ function PaymentsSettingsInner() {
   const ui = deriveConnectPayoutUi(connect);
   const gpUi = deriveGpPayoutUi(gp);
   const disabledReason = connect?.disabledReason?.trim() || "";
+  const showCountrySelector = setupStep === "select";
   // Server rail is authoritative — never show GP actions for Connect-routed users.
   const showGpPanel =
+    !showCountrySelector &&
+    setupStep === "main" &&
     Boolean(gp?.enabled) &&
     rail?.rail === "STRIPE_GLOBAL_PAYOUTS" &&
     !needsPayoutCountry;
   const showUnsupported =
+    !showCountrySelector &&
+    setupStep === "main" &&
     !needsPayoutCountry &&
     rail?.rail === "UNSUPPORTED" &&
     !connect?.hasAccount &&
     !gp?.payoutReady;
   const showConnectPanel =
+    !showCountrySelector &&
+    setupStep === "main" &&
     !needsPayoutCountry &&
     !showUnsupported &&
     (rail?.rail === "STRIPE_CONNECT" ||
@@ -416,7 +442,7 @@ function PaymentsSettingsInner() {
           </div>
         ) : (
           <>
-            {needsPayoutCountry && setupStep !== "confirm" ? (
+            {showCountrySelector ? (
               <section className="panel-navy mt-8 rounded-xl px-5 py-6">
                 <h2 className="text-xl font-semibold text-white">
                   Where will you receive payouts?
@@ -513,6 +539,12 @@ function PaymentsSettingsInner() {
                     </div>
                   ) : null}
                 </dl>
+                {countryLocked ? (
+                  <p className="mt-4 text-sm text-amber-300">
+                    Your payout country cannot be changed after payout setup has
+                    started. Contact support for help.
+                  </p>
+                ) : null}
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                   <PrimaryButton
                     showArrow={false}
@@ -522,14 +554,26 @@ function PaymentsSettingsInner() {
                   >
                     {confirmation.continueLabel}
                   </PrimaryButton>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setSetupStep("main")}
-                    className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                  >
-                    Back
-                  </button>
+                  {!countryLocked ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={returnToCountrySelector}
+                        className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={returnToCountrySelector}
+                        className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                      >
+                        Change country
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -559,6 +603,12 @@ function PaymentsSettingsInner() {
                     Attention: {disabledReason}
                   </p>
                 ) : null}
+                {countryLocked ? (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Your payout country cannot be changed after payout setup has
+                    started. Contact support for help.
+                  </p>
+                ) : null}
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                   {showPrimarySetup && showConnectPanel ? (
                     <PrimaryButton
@@ -569,6 +619,16 @@ function PaymentsSettingsInner() {
                     >
                       {primarySetupLabel}
                     </PrimaryButton>
+                  ) : null}
+                  {!countryLocked ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={returnToCountrySelector}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Change country
+                    </button>
                   ) : null}
                   {ui.showRefreshStatus ? (
                     <button
@@ -606,6 +666,12 @@ function PaymentsSettingsInner() {
                   ) : null}
                 </p>
                 <p className="mt-3 text-sm text-white/75">{gpUi.helpCopy}</p>
+                {countryLocked ? (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Your payout country cannot be changed after payout setup has
+                    started. Contact support for help.
+                  </p>
+                ) : null}
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                   {showPrimarySetup && showGpPanel ? (
                     <PrimaryButton
@@ -616,6 +682,16 @@ function PaymentsSettingsInner() {
                     >
                       {primarySetupLabel}
                     </PrimaryButton>
+                  ) : null}
+                  {!countryLocked ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={returnToCountrySelector}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Change country
+                    </button>
                   ) : null}
                   {gpUi.showRefreshStatus ? (
                     <button
