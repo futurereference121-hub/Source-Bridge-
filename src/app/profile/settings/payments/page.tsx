@@ -64,7 +64,7 @@ function PaymentsSettingsInner() {
   const gpReturnSynced = useRef(false);
 
   const returnToCountrySelector = useCallback(() => {
-    // Until Connect / GP recipient exists, Back must reopen the selector
+    // Until Connect / GP recipient exists, Change country must reopen the selector
     // with the prior country still highlighted — never the generic Continue panel.
     setSetupStep("select");
   }, []);
@@ -555,24 +555,14 @@ function PaymentsSettingsInner() {
                     {confirmation.continueLabel}
                   </PrimaryButton>
                   {!countryLocked ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={returnToCountrySelector}
-                        className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                      >
-                        Back
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={returnToCountrySelector}
-                        className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
-                      >
-                        Change country
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={returnToCountrySelector}
+                      className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:border-electric/40 disabled:opacity-50"
+                    >
+                      Change country
+                    </button>
                   ) : null}
                 </div>
               </section>

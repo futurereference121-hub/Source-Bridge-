@@ -476,11 +476,12 @@ function needsPayoutCountrySelection({
     ) && paymentsPage.includes("Never auto-open confirmation"),
   );
   ok(
-    "22 Back from confirm returns to country selector (not generic Continue)",
+    "22 Change country from confirm returns to country selector (not generic Continue)",
     paymentsPage.includes('type SetupStep = "select" | "confirm" | "main"') &&
       paymentsPage.includes("returnToCountrySelector") &&
       paymentsPage.includes('setSetupStep("select")') &&
       paymentsPage.includes("Change country") &&
+      !/>\s*Back\s*</.test(paymentsPage) &&
       paymentsPage.includes("showCountrySelector = setupStep === \"select\""),
   );
   ok(
@@ -715,7 +716,7 @@ function buildConfirmMirror(rail, country, incomplete = false) {
   const countryApi = read("src/app/api/payments/payout-country/route.ts");
   const countryHelper = read("src/lib/payments/payout-rail/payout-country.ts");
 
-  // Mirror UI navigation state: select → confirm → Back → select (prior country kept)
+  // Mirror UI navigation state: select → confirm → Change country → select (prior country kept)
   function navMirror(opts) {
     let setupStep = opts.initialStep || "select";
     let selectedCountry = opts.selectedCountry || "";
@@ -797,10 +798,12 @@ function buildConfirmMirror(rail, country, incomplete = false) {
   );
   flow.returnToCountrySelector();
   ok(
-    "25 Back → country selector (not generic Continue)",
+    "25 Change country → country selector (not generic Continue)",
     flow.showSelector() &&
       !flow.showGenericContinue() &&
-      flow.selectedCountry === "MX",
+      flow.selectedCountry === "MX" &&
+      paymentsPage.includes("Change country") &&
+      !/>\s*Back\s*</.test(paymentsPage),
   );
   const th = flow.changeCountry("TH", "STRIPE_GLOBAL_PAYOUTS");
   ok(
