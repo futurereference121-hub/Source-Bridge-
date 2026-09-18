@@ -26,6 +26,7 @@ import {
   releaseFinalViaGlobalPayouts,
   releaseProcurementViaGlobalPayouts,
 } from "@/lib/payments/payout-rail/outbound-payment";
+import { assertNoGpBlockingAttempt } from "@/lib/payments/payout-rail/dual-rail";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -107,6 +108,9 @@ export async function releaseProcurement(opts: {
       { status: 409, code: "INVALID_TRANSITION" },
     );
   }
+
+  // G4/G10: refuse Connect transfer if GP already succeeded or in-flight for this stage.
+  await assertNoGpBlockingAttempt(txn.id, "PROCUREMENT");
 
   const connect = await prisma.stripeConnectAccount.findUnique({
     where: {
@@ -416,6 +420,9 @@ export async function releaseFinal(opts: {
       { status: 409, code: "INSPECTION_REQUIRED" },
     );
   }
+
+  // G4/G10: refuse Connect transfer if GP already succeeded or in-flight for this stage.
+  await assertNoGpBlockingAttempt(txn.id, "FINAL");
 
   const connect = await prisma.stripeConnectAccount.findUnique({
     where: {

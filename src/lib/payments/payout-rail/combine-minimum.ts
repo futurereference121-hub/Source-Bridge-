@@ -28,6 +28,21 @@ export function groupCompatibleAwaitingMinimum(
   return [...map.values()].filter((g) => g.length > 0);
 }
 
+/** Alias used by release executor / admin queue. */
+export const planCombineMinimumGroups = groupCompatibleAwaitingMinimum;
+
 export function combinedAmountMinor(group: CombinableGpEntitlement[]): number {
   return group.reduce((sum, r) => sum + Math.max(0, r.amountMinor), 0);
+}
+
+/**
+ * Whether a single AWAITING_MINIMUM row may auto-retry without multi-row combine.
+ * Multi-row groups need admin-assisted combine (residual product decision).
+ */
+export function canAutoRetryAwaitingMinimumAlone(
+  group: CombinableGpEntitlement[],
+  attemptId: string,
+): boolean {
+  if (group.length !== 1) return false;
+  return group[0]?.attemptId === attemptId;
 }

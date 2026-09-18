@@ -930,11 +930,17 @@ async function releaseNowAfterReceipt(opts: {
     actorUserId: opts.buyerId,
   });
 
+  const pendingProvider = Boolean(
+    "pendingProvider" in result && result.pendingProvider,
+  );
+
   return {
     alreadyConfirmed: Boolean(result.alreadyReleased),
     decision: "RELEASE_NOW" as const,
-    transferTriggered: !result.alreadyReleased,
+    // pendingProvider means release was submitted but not domain-paid yet
+    transferTriggered: !result.alreadyReleased && !pendingProvider,
     alreadyReleased: Boolean(result.alreadyReleased),
+    pendingProvider,
     transferId: result.transferId ?? null,
     transaction: result.txn,
     activityVersion:

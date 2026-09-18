@@ -737,6 +737,7 @@ export function PaymentTicketCard({
         error?: string;
         message?: string;
         alreadyReleased?: boolean;
+        pendingProvider?: boolean;
         activityVersion?: number;
         ticket?: PaymentTicketView;
         transaction?: {
@@ -752,8 +753,11 @@ export function PaymentTicketCard({
         );
       } else {
         setPayNotice(
-          json.message ||
-            "Item funds released. Shipping and remaining amount stay protected.",
+          json.pendingProvider
+            ? json.message ||
+                "Item-fund release submitted. Payout is confirming — not yet marked paid."
+            : json.message ||
+                "Item funds released. Shipping and remaining amount stay protected.",
         );
         setConfirmRelease(false);
         let nextLocal: PaymentTicketView | null = null;
@@ -960,8 +964,10 @@ export function PaymentTicketCard({
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
+        message?: string;
         alreadyConfirmed?: boolean;
         transferTriggered?: boolean;
+        pendingProvider?: boolean;
         decision?: string;
         activityVersion?: number;
         ticket?: PaymentTicketView;
@@ -977,9 +983,12 @@ export function PaymentTicketCard({
       } else {
         if (decision === "RELEASE_NOW") {
           setPayNotice(
-            json.alreadyConfirmed || !json.transferTriggered
-              ? "Funds release already processed (or zero residual)."
-              : "Residual seller funds released to the sourcer.",
+            json.pendingProvider
+              ? json.message ||
+                  "Release submitted. Payout is confirming — not yet marked paid."
+              : json.alreadyConfirmed || !json.transferTriggered
+                ? "Funds release already processed (or zero residual)."
+                : "Residual seller funds released to the sourcer.",
           );
         } else if (decision === "START_INSPECTION") {
           setPayNotice(
@@ -1024,8 +1033,9 @@ export function PaymentTicketCard({
                   ? "DISPUTED"
                   : json.transaction?.status || prev.protectedTxnStatus;
             const released =
-              txnStatus === "RELEASED" ||
-              Boolean(json.transaction?.releasedAt);
+              !json.pendingProvider &&
+              (txnStatus === "RELEASED" ||
+                Boolean(json.transaction?.releasedAt));
             nextLocal = {
               ...prev,
               inspectionEndsAt:

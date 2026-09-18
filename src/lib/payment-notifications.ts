@@ -238,6 +238,48 @@ export async function notifyFinalReleased(opts: {
   });
 }
 
+/**
+ * Seller (+ light buyer) notice when a Global Payouts outbound is returned.
+ * No bank/PAN details — actionable admin review required before any repay.
+ */
+export async function notifyOutboundPayoutReturned(opts: {
+  protectedTxnId: string;
+  sellerId: string;
+  buyerId: string;
+  conversationId: string;
+  title: string;
+  kind: string;
+  amountMinor: number;
+}): Promise<void> {
+  const href = opts.conversationId
+    ? inboxHref(opts.conversationId)
+    : "/profile/sales";
+  const stage =
+    opts.kind === "PROCUREMENT" ? "item-fund payout" : "final payout";
+  await createNotifications([
+    {
+      userId: opts.sellerId,
+      type: "PAYMENT_STATUS",
+      title: `Payout returned — review needed`,
+      body: `Your ${stage} was returned by the payout provider. Source Bridge is reviewing before any repay. Funds remain protected for the buyer.`,
+      href,
+      actorName: "Source Bridge",
+      dedupeKey: `gp-returned:${opts.protectedTxnId}:${opts.kind}`,
+    },
+    {
+      userId: opts.buyerId,
+      type: "PAYMENT_STATUS",
+      title: "Payout update — under review",
+      body: `A sourcer payout related to "${opts.title.slice(0, 80)}" was returned. Your protected payment is under review — no action needed yet.`,
+      href: opts.conversationId
+        ? inboxHref(opts.conversationId)
+        : productPurchaseHref(opts.protectedTxnId),
+      actorName: "Source Bridge",
+      dedupeKey: `gp-returned-buyer:${opts.protectedTxnId}:${opts.kind}`,
+    },
+  ]);
+}
+
 export async function notifyShipmentUpdate(opts: {
   protectedTxnId: string;
   conversationId: string;

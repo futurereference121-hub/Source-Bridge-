@@ -18,6 +18,7 @@ import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { AdminShipmentPhoto } from "@/components/admin/AdminShipmentPhoto";
 import PaymentIssueActions from "./issue-actions";
 import InactivityReleasePanel from "./inactivity-release-panel";
+import GpReconcilePanel from "./gp-reconcile-panel";
 import AdminListedPurchasesSection from "./listed-purchases-section";
 import AdminCaseAccordion from "../reviews/admin-case-accordion";
 
@@ -370,6 +371,7 @@ export default async function AdminPaymentsPage() {
       </div>
 
       <InactivityReleasePanel />
+      <GpReconcilePanel />
 
       <section className="mt-10">
         <AdminListedPurchasesSection />

@@ -161,12 +161,19 @@ export async function POST(req: NextRequest) {
     return Response.json({
       ok: true,
       alreadyReleased: result.alreadyReleased,
+      pendingProvider: Boolean(
+        "pendingProvider" in result && result.pendingProvider,
+      ),
       transferId: "transferId" in result ? result.transferId : undefined,
+      outboundPaymentId:
+        "outboundPaymentId" in result ? result.outboundPaymentId : undefined,
       activityVersion,
       ticket,
       message: result.alreadyReleased
         ? "Item funds were already released"
-        : `Item funds released (${formatMinor(txn.procurementAdvanceMinor, txn.currency)}). Shipping and remaining amounts stay protected until delivery.`,
+        : "pendingProvider" in result && result.pendingProvider
+          ? "Item-fund release submitted. Payout is confirming with the provider — not yet marked paid."
+          : `Item funds released (${formatMinor(txn.procurementAdvanceMinor, txn.currency)}). Shipping and remaining amounts stay protected until delivery.`,
       transaction: {
         id: fresh.id,
         status: fresh.status,

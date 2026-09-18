@@ -35,39 +35,12 @@ import {
 } from "@/lib/payments/payout-rail/gp-client";
 import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
 import { mapOutboundPaymentProviderStatus } from "@/lib/payments/payout-rail/status-mapper";
-
-async function assertNoConnectTransferSucceeded(
-  protectedTxnId: string,
-  kind: string,
-): Promise<void> {
-  const existing = await prisma.transferAttempt.findFirst({
-    where: {
-      protectedTxnId,
-      kind,
-      status: "SUCCEEDED",
-    },
-  });
-  if (existing) {
-    throw Object.assign(
-      new Error("Connect transfer already succeeded for this stage — refusing Global Payouts"),
-      { status: 409, code: "DUAL_RAIL_BLOCKED" },
-    );
-  }
-}
-
-async function assertNoGpSucceeded(
-  protectedTxnId: string,
-  kind: string,
-): Promise<boolean> {
-  const existing = await prisma.outboundPaymentAttempt.findFirst({
-    where: {
-      protectedTxnId,
-      kind,
-      status: { in: ["SUCCEEDED", "PROCESSING", "RECONCILED"] },
-    },
-  });
-  return Boolean(existing && existing.status === "SUCCEEDED");
-}
+import {
+  assertNoConnectTransferSucceeded,
+  hasGpSucceeded,
+} from "@/lib/payments/payout-rail/dual-rail";
+import { sanitizeProviderFailureText } from "@/lib/payments/payout-rail/outbound-display";
+import { planCombineMinimumGroups } from "@/lib/payments/payout-rail/combine-minimum";
 
 function countryMinimumBlocks(errMsg: string): boolean {
   const m = errMsg.toLowerCase();
@@ -138,7 +111,7 @@ export async function releaseProcurementViaGlobalPayouts(opts: {
   }
 
   await assertNoConnectTransferSucceeded(txn.id, "PROCUREMENT");
-  if (await assertNoGpSucceeded(txn.id, "PROCUREMENT")) {
+  if (await hasGpSucceeded(txn.id, "PROCUREMENT")) {
     return { alreadyReleased: true, txn, transferId: "" };
   }
 
@@ -225,6 +198,18 @@ export async function releaseFinalViaGlobalPayouts(opts: {
   }
 
   await assertNoConnectTransferSucceeded(txn.id, "FINAL");
+
+  if (await hasGpSucceeded(txn.id, "FINAL")) {
+    const full = await prisma.protectedTransaction.findUniqueOrThrow({
+      where: { id: txn.id },
+    });
+    return {
+      alreadyReleased: true,
+      txn: full,
+      amountMinor: 0,
+      transferId: "",
+    };
+  }
 
   if (!txn.sellerGpRecipientId || !txn.sellerGpPayoutMethodId) {
     throw Object.assign(new Error("Global Payouts destination not locked on transaction"), {
@@ -318,7 +303,10 @@ async function executeOutboundRelease(opts: {
   const existingAttempt = await prisma.outboundPaymentAttempt.findUnique({
     where: { idempotencyKey },
   });
-  if (existingAttempt?.status === "SUCCEEDED") {
+  if (
+    existingAttempt?.status === "SUCCEEDED" ||
+    existingAttempt?.status === "RECONCILED"
+  ) {
     const full = await prisma.protectedTransaction.findUniqueOrThrow({
       where: { id: txn.id },
     });
@@ -330,6 +318,20 @@ async function executeOutboundRelease(opts: {
       outboundPaymentId: existingAttempt.stripeOutboundPaymentId || "",
     };
   }
+  // RETURNED: never auto-repay — admin must clear / re-key after review.
+  if (existingAttempt?.status === "RETURNED") {
+    throw Object.assign(
+      new Error(
+        "Prior outbound payment was returned. Automatic repayment is blocked — contact support / admin review.",
+      ),
+      {
+        status: 409,
+        code: "GP_RETURNED_MANUAL_REVIEW",
+        needsAdminReview: true,
+        attemptId: existingAttempt.id,
+      },
+    );
+  }
   if (
     existingAttempt?.status === "PROCESSING" &&
     existingAttempt.stripeOutboundPaymentId
@@ -337,7 +339,12 @@ async function executeOutboundRelease(opts: {
     // Unknown result — do not create a second payment; reconcile later via events.
     throw Object.assign(
       new Error("Outbound payment already in progress — awaiting provider confirmation"),
-      { status: 409, code: "GP_PAYMENT_IN_FLIGHT" },
+      {
+        status: 409,
+        code: "GP_PAYMENT_IN_FLIGHT",
+        pendingProvider: true,
+        outboundPaymentId: existingAttempt.stripeOutboundPaymentId,
+      },
     );
   }
 
@@ -357,10 +364,66 @@ async function executeOutboundRelease(opts: {
       },
     }));
 
-  if (existingAttempt && ["FAILED", "AWAITING_MINIMUM", "AWAITING_FA_FUNDS"].includes(existingAttempt.status)) {
+  if (
+    existingAttempt &&
+    ["FAILED", "AWAITING_MINIMUM", "AWAITING_FA_FUNDS", "ACTION_REQUIRED"].includes(
+      existingAttempt.status,
+    )
+  ) {
+    // AWAITING_MINIMUM: only auto-retry when combine plan says group is still
+    // single-row (true multi-row combine remains admin-assisted — see combine-minimum).
+    if (existingAttempt.status === "AWAITING_MINIMUM") {
+      const siblings = await prisma.outboundPaymentAttempt.findMany({
+        where: {
+          status: "AWAITING_MINIMUM",
+          currency: existingAttempt.currency,
+          stripeMode: existingAttempt.stripeMode,
+          stripeRecipientId: existingAttempt.stripeRecipientId,
+        },
+        select: {
+          id: true,
+          amountMinor: true,
+          currency: true,
+          stripeMode: true,
+          status: true,
+          protectedTxnId: true,
+        },
+      });
+      const groups = planCombineMinimumGroups(
+        siblings.map((s) => ({
+          attemptId: s.id,
+          sellerId: txn.sellerId,
+          currency: s.currency,
+          amountMinor: s.amountMinor,
+          stripeMode: s.stripeMode,
+          status: s.status,
+        })),
+      );
+      const ownGroup = groups.find((g) =>
+        g.some((r) => r.attemptId === existingAttempt.id),
+      );
+      if (ownGroup && ownGroup.length > 1) {
+        throw Object.assign(
+          new Error(
+            "Payout is below local minimum and grouped with other entitlements. Admin combine/retry required.",
+          ),
+          {
+            status: 409,
+            code: "GP_AWAITING_MINIMUM_COMBINE",
+            needsAdminReview: true,
+            combineGroupSize: ownGroup.length,
+          },
+        );
+      }
+    }
     attempt = await prisma.outboundPaymentAttempt.update({
       where: { id: existingAttempt.id },
-      data: { status: "PENDING", lastAttemptAt: new Date() },
+      data: {
+        status: "PENDING",
+        lastAttemptAt: new Date(),
+        failureCode: "",
+        failureMessage: "",
+      },
     });
   }
 
@@ -434,6 +497,8 @@ async function executeOutboundRelease(opts: {
       ? `${idempotencyKey}_a${attempt.attemptCount}`
       : idempotencyKey;
 
+  let capturedOutboundId = "";
+
   try {
     const created = await gpFetch({
       mode: txnMode,
@@ -461,7 +526,7 @@ async function executeOutboundRelease(opts: {
     });
 
     if (!created.ok) {
-      const message = gpErrorMessage(created);
+      const message = sanitizeProviderFailureText(gpErrorMessage(created));
       if (countryMinimumBlocks(message)) {
         await prisma.outboundPaymentAttempt.update({
           where: { id: attempt.id },
@@ -489,6 +554,7 @@ async function executeOutboundRelease(opts: {
 
     const outboundId =
       typeof created.body.id === "string" ? created.body.id : "";
+    capturedOutboundId = outboundId;
     const providerStatus = mapOutboundPaymentProviderStatus(created.body);
     // Never mark paid on submit alone — PROCESSING until posted/succeeded event.
     const localStatus =
@@ -497,14 +563,13 @@ async function executeOutboundRelease(opts: {
     await prisma.outboundPaymentAttempt.update({
       where: { id: attempt.id },
       data: {
-        status: localStatus,
+        status: localStatus === "SUCCEEDED" ? "PROCESSING" : "PROCESSING",
+        // Always park on PROCESSING first; CAS finalize owns SUCCEEDED transition.
         stripeOutboundPaymentId: outboundId,
         stripeFinancialAccountId: faId,
         initiatedAt: new Date(),
         lastAttemptAt: new Date(),
-        ...(localStatus === "SUCCEEDED"
-          ? { succeededAt: new Date(), postedAt: new Date() }
-          : {}),
+        attemptCount: { increment: 1 },
       },
     });
 
@@ -554,13 +619,52 @@ async function executeOutboundRelease(opts: {
       err &&
       typeof err === "object" &&
       "code" in err &&
-      ["GP_AWAITING_MINIMUM", "GP_AWAITING_FA_FUNDS"].includes(
-        String((err as { code?: string }).code),
-      )
+      [
+        "GP_AWAITING_MINIMUM",
+        "GP_AWAITING_FA_FUNDS",
+        "GP_AWAITING_MINIMUM_COMBINE",
+        "GP_RETURNED_MANUAL_REVIEW",
+        "GP_PAYMENT_IN_FLIGHT",
+      ].includes(String((err as { code?: string }).code))
     ) {
       throw err;
     }
-    const message = err instanceof Error ? err.message : "Outbound payment failed";
+    // Stripe created the outbound but local DB / finalize failed — keep PROCESSING
+    // with provider id so reconcile / webhook can finish (never mark FAILED + retry new OP).
+    if (capturedOutboundId) {
+      await prisma.outboundPaymentAttempt
+        .update({
+          where: { id: attempt.id },
+          data: {
+            status: "PROCESSING",
+            stripeOutboundPaymentId: capturedOutboundId,
+            stripeFinancialAccountId: faId,
+            initiatedAt: new Date(),
+            lastAttemptAt: new Date(),
+            failureCode: "LOCAL_FINALIZE_PENDING",
+            failureMessage: sanitizeProviderFailureText(
+              err instanceof Error
+                ? err.message
+                : "Outbound created; local confirmation pending reconcile",
+            ),
+          },
+        })
+        .catch(() => null);
+      throw Object.assign(
+        new Error(
+          "Outbound payment created at provider; local confirmation pending reconcile",
+        ),
+        {
+          status: 409,
+          code: "GP_PAYMENT_IN_FLIGHT",
+          pendingProvider: true,
+          outboundPaymentId: capturedOutboundId,
+        },
+      );
+    }
+    const message = sanitizeProviderFailureText(
+      err instanceof Error ? err.message : "Outbound payment failed",
+    );
     await prisma.outboundPaymentAttempt.update({
       where: { id: attempt.id },
       data: {
@@ -583,6 +687,11 @@ export async function finalizeOutboundSuccess(opts: {
     procurementTransferredMinor: number;
     finalTransferredMinor: number;
     currency: string;
+    conversationId?: string | null;
+    buyerId?: string;
+    sellerId?: string;
+    title?: string | null;
+    origin?: string | null;
   };
   status: ProtectedStatus;
   domainAction: DomainAction;
@@ -593,20 +702,29 @@ export async function finalizeOutboundSuccess(opts: {
   isFullResidual: boolean;
   providerBody?: Record<string, unknown>;
 }) {
-  const { txn, kind, amount, idempotencyKey } = opts;
+  const { kind, amount, idempotencyKey } = opts;
   const next = nextStatus(opts.status, opts.domainAction);
-
   const feeMeta = extractProviderFees(opts.providerBody);
 
-  const updated = await prisma.$transaction(async (tx) => {
-    await tx.outboundPaymentAttempt.update({
-      where: { id: opts.attemptId },
+  type TxnRow = Awaited<
+    ReturnType<typeof prisma.protectedTransaction.findUniqueOrThrow>
+  >;
+
+  const casResult = await prisma.$transaction(async (tx) => {
+    // Compare-and-swap: only one winner may advance PROCESSING/PENDING → SUCCEEDED.
+    const cas = await tx.outboundPaymentAttempt.updateMany({
+      where: {
+        id: opts.attemptId,
+        status: { in: ["PROCESSING", "PENDING", "ACTION_REQUIRED"] },
+      },
       data: {
         status: "SUCCEEDED",
         stripeOutboundPaymentId: opts.outboundId,
         succeededAt: new Date(),
         postedAt: new Date(),
         lastAttemptAt: new Date(),
+        failureCode: "",
+        failureMessage: "",
         providerFeeMinor: feeMeta.providerFeeMinor,
         crossBorderFeeMinor: feeMeta.crossBorderFeeMinor,
         fxFeeMinor: feeMeta.fxFeeMinor,
@@ -616,40 +734,86 @@ export async function finalizeOutboundSuccess(opts: {
       },
     });
 
+    if (cas.count !== 1) {
+      const current = await tx.outboundPaymentAttempt.findUnique({
+        where: { id: opts.attemptId },
+      });
+      if (
+        current?.status === "SUCCEEDED" ||
+        current?.status === "RECONCILED"
+      ) {
+        const existingTxn = await tx.protectedTransaction.findUniqueOrThrow({
+          where: { id: opts.txn.id },
+        });
+        return {
+          alreadyFinalized: true as const,
+          updated: existingTxn,
+        };
+      }
+      throw Object.assign(
+        new Error(
+          `Outbound finalize CAS conflict (status=${current?.status || "missing"})`,
+        ),
+        { status: 409, code: "GP_FINALIZE_CAS_CONFLICT" },
+      );
+    }
+
+    // Re-read txn inside the transaction for counter integrity under concurrency.
+    const freshTxn = await tx.protectedTransaction.findUniqueOrThrow({
+      where: { id: opts.txn.id },
+    });
+
+    let updated: TxnRow;
     if (kind === "PROCUREMENT") {
-      return tx.protectedTransaction.update({
-        where: { id: txn.id },
+      updated = await tx.protectedTransaction.update({
+        where: { id: freshTxn.id },
         data: {
           status: next,
-          procurementTransferredMinor: txn.procurementTransferredMinor + amount,
+          procurementTransferredMinor:
+            freshTxn.procurementTransferredMinor + amount,
           procurementReleasedAt: new Date(),
+        },
+      });
+    } else {
+      const finalStatus = opts.isFullResidual
+        ? next
+        : opts.status === "READY_TO_RELEASE"
+          ? "PARTIALLY_REFUNDED"
+          : opts.status;
+      updated = await tx.protectedTransaction.update({
+        where: { id: freshTxn.id },
+        data: {
+          status: finalStatus,
+          finalTransferredMinor: freshTxn.finalTransferredMinor + amount,
+          releasedAt: opts.isFullResidual ? new Date() : undefined,
         },
       });
     }
 
-    // Partial admin finals: mirror Connect — PARTIALLY_REFUNDED when leaving READY_TO_RELEASE.
-    const finalStatus = opts.isFullResidual
-      ? next
-      : opts.status === "READY_TO_RELEASE"
-        ? "PARTIALLY_REFUNDED"
-        : opts.status;
-    return tx.protectedTransaction.update({
-      where: { id: txn.id },
-      data: {
-        status: finalStatus,
-        finalTransferredMinor: txn.finalTransferredMinor + amount,
-        releasedAt: opts.isFullResidual ? new Date() : undefined,
-      },
-    });
+    return { alreadyFinalized: false as const, updated };
   });
 
+  if (casResult.alreadyFinalized) {
+    return {
+      alreadyReleased: true,
+      txn: casResult.updated,
+      outboundPaymentId: opts.outboundId,
+      transferId: opts.outboundId,
+      amountMinor: amount,
+      activityVersion: 0,
+      linkedTicketId: null as string | null,
+    };
+  }
+
+  const updated = casResult.updated;
+
   await appendLedgerEntry({
-    protectedTxnId: txn.id,
+    protectedTxnId: updated.id,
     entryType:
       kind === "PROCUREMENT" ? "PROCUREMENT_TRANSFER" : "FINAL_TRANSFER",
     direction: "DEBIT",
     amountMinor: amount,
-    currency: txn.currency,
+    currency: updated.currency,
     idempotencyKey: `ledger_${idempotencyKey}`,
     stripeObjectId: opts.outboundId,
     stripeObjectType: "outbound_payment",
@@ -661,7 +825,7 @@ export async function finalizeOutboundSuccess(opts: {
   });
 
   await recordAuditEvent({
-    protectedTxnId: txn.id,
+    protectedTxnId: updated.id,
     actorUserId: opts.actorUserId,
     action: kind === "PROCUREMENT" ? "RELEASE_PROCUREMENT" : "RELEASE_FINAL",
     meta: {
@@ -673,7 +837,7 @@ export async function finalizeOutboundSuccess(opts: {
   });
 
   if (kind === "FINAL" && opts.isFullResidual) {
-    await markListingSoldIfLinked(txn.listingId);
+    await markListingSoldIfLinked(updated.listingId);
   }
 
   const participantSync = await afterProtectedTxnMoneyEvent({
@@ -693,7 +857,7 @@ export async function finalizeOutboundSuccess(opts: {
   };
 }
 
-function extractProviderFees(body?: Record<string, unknown>): {
+export function extractProviderFees(body?: Record<string, unknown>): {
   providerFeeMinor: number;
   crossBorderFeeMinor: number;
   fxFeeMinor: number;

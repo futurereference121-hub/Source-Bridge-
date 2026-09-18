@@ -118,10 +118,16 @@ export async function POST(req: NextRequest) {
       alreadyReleased: Boolean(
         (result as { alreadyReleased?: boolean }).alreadyReleased,
       ),
+      pendingProvider: Boolean(
+        (result as { pendingProvider?: boolean }).pendingProvider,
+      ),
       transferId: (result as { transferId?: string | null }).transferId ?? null,
       activityVersion,
       ticket,
       dispute: (result as { dispute?: unknown }).dispute ?? null,
+      message: (result as { pendingProvider?: boolean }).pendingProvider
+        ? "Release submitted. Payout is confirming with the provider — not yet marked paid."
+        : undefined,
       transaction: {
         id: t.id,
         status: t.status,

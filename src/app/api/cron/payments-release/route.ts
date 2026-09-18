@@ -1,5 +1,7 @@
 import { processInspectionReleases } from "@/lib/payments/release";
 import { expireStaleUnfundedTickets } from "@/lib/payments/tickets";
+import { reconcileStuckOutboundPayments } from "@/lib/payments/payout-rail/reconcile";
+import { isGlobalPayoutsEnabled } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -8,6 +10,7 @@ export const maxDuration = 60;
 
 /**
  * Cron: complete expired inspection windows and release final transfers.
+ * Also reconciles stuck Global Payouts PROCESSING attempts (retrieve-only).
  * Protect with CRON_SECRET (required — never open anonymously):
  *   Authorization: Bearer $CRON_SECRET
  * Vercel Cron injects this header when CRON_SECRET is set on the project.
@@ -31,7 +34,10 @@ export async function POST(req: Request) {
 
     const results = await processInspectionReleases(50);
     const expiry = await expireStaleUnfundedTickets({ limit: 50 });
-    return Response.json({ ok: true, results, expiry });
+    const gpReconcile = isGlobalPayoutsEnabled()
+      ? await reconcileStuckOutboundPayments({ limit: 25 })
+      : { scanned: 0, results: [] };
+    return Response.json({ ok: true, results, expiry, gpReconcile });
   } catch (err) {
     console.error("[payments-release]", err);
     return jsonError("Payments release failed", 500);
