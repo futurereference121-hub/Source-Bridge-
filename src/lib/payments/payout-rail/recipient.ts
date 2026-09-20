@@ -33,6 +33,71 @@ export function recipientBankCapabilityForCountry(
   return "local";
 }
 
+/**
+ * Pure readiness + selection for Stripe v2 PayoutMethod list items.
+ * GP PayoutMethods expose `usage_status.transfers`, not a top-level `status`.
+ * Prefer non-archived bank accounts; for wire-only countries prefer wire delivery.
+ */
+export function pickReadyPayoutMethodId(
+  methods: unknown[],
+  opts?: { preferWire?: boolean },
+): { id: string; ready: boolean } | null {
+  const preferWire = Boolean(opts?.preferWire);
+  type Cand = {
+    id: string;
+    ready: boolean;
+    archived: boolean;
+    hasWire: boolean;
+    hasBank: boolean;
+  };
+  const cands: Cand[] = [];
+  for (const raw of methods) {
+    if (!raw || typeof raw !== "object") continue;
+    const m = raw as Record<string, unknown>;
+    const id = typeof m.id === "string" ? m.id.trim() : "";
+    if (!id) continue;
+    const bank =
+      m.bank_account && typeof m.bank_account === "object"
+        ? (m.bank_account as Record<string, unknown>)
+        : null;
+    const archived = Boolean(bank?.archived);
+    const delivery = Array.isArray(bank?.enabled_delivery_options)
+      ? (bank!.enabled_delivery_options as unknown[]).map((d) =>
+          String(d || "").toLowerCase(),
+        )
+      : [];
+    const hasWire = delivery.includes("wire");
+    const usage =
+      m.usage_status && typeof m.usage_status === "object"
+        ? (m.usage_status as Record<string, unknown>)
+        : null;
+    const transfers = String(usage?.transfers || "").toLowerCase();
+    const topStatus = String(m.status || "").toLowerCase();
+    // Docs: usage_status.transfers === "eligible". Legacy/tolerant: top-level
+    // status active|validated|ready, or empty status when usage absent.
+    const ready =
+      transfers === "eligible" ||
+      topStatus === "active" ||
+      topStatus === "validated" ||
+      topStatus === "ready" ||
+      (!transfers && !topStatus);
+    cands.push({
+      id,
+      ready,
+      archived,
+      hasWire,
+      hasBank: Boolean(bank),
+    });
+  }
+  const usable = cands.filter((c) => c.ready && !c.archived);
+  if (usable.length === 0) return null;
+  if (preferWire) {
+    const wire = usable.find((c) => c.hasWire) || usable.find((c) => c.hasBank);
+    if (wire) return { id: wire.id, ready: true };
+  }
+  return { id: usable[0].id, ready: true };
+}
+
 function recipientCapabilitiesBody(country: string) {
   const method = recipientBankCapabilityForCountry(country);
   if (method === "wire") {
@@ -292,7 +357,7 @@ export async function syncGlobalPayoutRecipient(
   const retrieved = await gpFetch({
     mode: stripeMode,
     method: "GET",
-    path: `/v2/core/accounts/${encodeURIComponent(row.stripeRecipientId)}?include=requirements&include=configuration.recipient&include=identity`,
+    path: `/v2/core/accounts/${encodeURIComponent(row.stripeRecipientId)}?include=requirements&include=configuration.recipient&include=identity&include=defaults`,
   });
   if (!retrieved.ok) {
     return row;
@@ -309,24 +374,42 @@ export async function syncGlobalPayoutRecipient(
       : {};
   const caps = recipient.capabilities ?? body.capabilities ?? {};
   const requirements = recipient.requirements ?? body.requirements ?? {};
+  const defaults =
+    body.defaults && typeof body.defaults === "object"
+      ? (body.defaults as Record<string, unknown>)
+      : {};
+  const defaultPmMap =
+    defaults.payout_methods && typeof defaults.payout_methods === "object"
+      ? (defaults.payout_methods as Record<string, unknown>)
+      : {};
 
-  // Payout methods: retrieve list when available.
+  // Payout methods: list under Stripe-Context = recipient Account id
+  // (official GP scoping). Do not rely on `?account=` query alone.
   let payoutMethodId = row.defaultPayoutMethodId;
   let payoutMethodReady = row.payoutMethodReady;
+  const preferWire =
+    recipientBankCapabilityForCountry(row.country || "") === "wire";
   const methods = await gpFetch({
     mode: stripeMode,
     method: "GET",
-    path: `/v2/money_management/payout_methods?limit=10&account=${encodeURIComponent(row.stripeRecipientId)}`,
+    path: `/v2/money_management/payout_methods?limit=10`,
+    stripeContext: row.stripeRecipientId,
   });
   if (methods.ok && Array.isArray(methods.body.data)) {
-    const first = methods.body.data.find(
-      (m) => m && typeof m === "object" && (m as { id?: string }).id,
-    ) as { id?: string; status?: string } | undefined;
-    if (first?.id) {
-      payoutMethodId = first.id;
-      const st = String(first.status || "").toLowerCase();
-      payoutMethodReady =
-        st === "active" || st === "validated" || st === "ready" || !st;
+    const picked = pickReadyPayoutMethodId(methods.body.data, { preferWire });
+    if (picked) {
+      payoutMethodId = picked.id;
+      payoutMethodReady = picked.ready;
+    }
+  }
+  // Fallback: account defaults.payout_methods map (currency → pm id).
+  if (!payoutMethodReady) {
+    const defaultIds = Object.values(defaultPmMap).filter(
+      (v): v is string => typeof v === "string" && v.trim().length > 0,
+    );
+    if (defaultIds.length > 0) {
+      payoutMethodId = defaultIds[0];
+      payoutMethodReady = true;
     }
   }
 

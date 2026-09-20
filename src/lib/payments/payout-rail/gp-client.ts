@@ -74,6 +74,13 @@ export async function gpFetch(opts: {
   path: string;
   body?: Record<string, unknown>;
   idempotencyKey?: string;
+  /**
+   * Stripe Accounts v2 / Money Management context (recipient Account id).
+   * Required to list payout methods owned by a recipient — query `account=`
+   * is not the documented scoping mechanism for GP PayoutMethods.
+   * @see https://docs.stripe.com/global-payouts/api-recipient-creation
+   */
+  stripeContext?: string;
   /** When true, refuses LIVE unless live initiation enabled. */
   moneyMutation?: boolean;
 }): Promise<GpHttpResult> {
@@ -90,6 +97,10 @@ export async function gpFetch(opts: {
   };
   if (opts.idempotencyKey) {
     headers["Idempotency-Key"] = opts.idempotencyKey;
+  }
+  const ctx = String(opts.stripeContext || "").trim();
+  if (ctx) {
+    headers["Stripe-Context"] = ctx;
   }
 
   let body: string | undefined;

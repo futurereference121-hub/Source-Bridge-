@@ -911,4 +911,136 @@ function buildConfirmMirror(rail, country, incomplete = false) {
   );
 }
 
+// 26 Payout-method sync scopes list via Stripe-Context (not account= query alone)
+{
+  const client = read("src/lib/payments/payout-rail/gp-client.ts");
+  const recipient = read("src/lib/payments/payout-rail/recipient.ts");
+  ok(
+    "26 gpFetch accepts stripeContext option",
+    client.includes("stripeContext?: string") &&
+      client.includes('headers["Stripe-Context"]'),
+  );
+  ok(
+    "26 sync lists payout_methods with Stripe-Context recipient id",
+    recipient.includes('path: `/v2/money_management/payout_methods?limit=10`') &&
+      recipient.includes("stripeContext: row.stripeRecipientId") &&
+      !recipient.includes(
+        "payout_methods?limit=10&account=${encodeURIComponent(row.stripeRecipientId)}",
+      ),
+  );
+  ok(
+    "26 sync uses pickReadyPayoutMethodId + usage_status.transfers",
+    recipient.includes("pickReadyPayoutMethodId") &&
+      recipient.includes('transfers === "eligible"'),
+  );
+  ok(
+    "26 sync falls back to defaults.payout_methods",
+    recipient.includes("include=defaults") &&
+      recipient.includes("defaults.payout_methods"),
+  );
+
+  // Behavioral mirror of pickReadyPayoutMethodId (keep in sync with recipient.ts)
+  function pickReadyPayoutMethodId(methods, opts) {
+    const preferWire = Boolean(opts?.preferWire);
+    const cands = [];
+    for (const raw of methods) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = typeof raw.id === "string" ? raw.id.trim() : "";
+      if (!id) continue;
+      const bank =
+        raw.bank_account && typeof raw.bank_account === "object"
+          ? raw.bank_account
+          : null;
+      const archived = Boolean(bank?.archived);
+      const delivery = Array.isArray(bank?.enabled_delivery_options)
+        ? bank.enabled_delivery_options.map((d) => String(d || "").toLowerCase())
+        : [];
+      const hasWire = delivery.includes("wire");
+      const usage =
+        raw.usage_status && typeof raw.usage_status === "object"
+          ? raw.usage_status
+          : null;
+      const transfers = String(usage?.transfers || "").toLowerCase();
+      const topStatus = String(raw.status || "").toLowerCase();
+      const ready =
+        transfers === "eligible" ||
+        topStatus === "active" ||
+        topStatus === "validated" ||
+        topStatus === "ready" ||
+        (!transfers && !topStatus);
+      cands.push({
+        id,
+        ready,
+        archived,
+        hasWire,
+        hasBank: Boolean(bank),
+      });
+    }
+    const usable = cands.filter((c) => c.ready && !c.archived);
+    if (usable.length === 0) return null;
+    if (preferWire) {
+      const wire = usable.find((c) => c.hasWire) || usable.find((c) => c.hasBank);
+      if (wire) return { id: wire.id, ready: true };
+    }
+    return { id: usable[0].id, ready: true };
+  }
+
+  const thWire = pickReadyPayoutMethodId(
+    [
+      {
+        id: "card_skip",
+        type: "card",
+        usage_status: { transfers: "eligible" },
+      },
+      {
+        id: "thba_wire_6789",
+        type: "bank_account",
+        usage_status: { transfers: "eligible", payments: "eligible" },
+        bank_account: {
+          archived: false,
+          last4: "6789",
+          country: "TH",
+          enabled_delivery_options: ["wire"],
+        },
+      },
+    ],
+    { preferWire: true },
+  );
+  ok(
+    "26 prefers wire bank PM for TH (usage_status.transfers eligible)",
+    thWire?.id === "thba_wire_6789" && thWire.ready === true,
+  );
+
+  const emptyStatusEligible = pickReadyPayoutMethodId([
+    {
+      id: "gbba_no_top_status",
+      type: "bank_account",
+      usage_status: { transfers: "eligible" },
+      bank_account: { archived: false, last4: "2345" },
+    },
+  ]);
+  ok(
+    "26 marks ready from usage_status without top-level status",
+    emptyStatusEligible?.id === "gbba_no_top_status",
+  );
+
+  const archivedOnly = pickReadyPayoutMethodId([
+    {
+      id: "gbba_archived",
+      usage_status: { transfers: "eligible" },
+      bank_account: { archived: true, last4: "9999" },
+    },
+  ]);
+  ok("26 skips archived bank accounts", archivedOnly === null);
+
+  const ineligible = pickReadyPayoutMethodId([
+    {
+      id: "gbba_blocked",
+      usage_status: { transfers: "requires_action" },
+      bank_account: { archived: false },
+    },
+  ]);
+  ok("26 rejects non-eligible transfers usage_status", ineligible === null);
+}
+
 console.log(`\nOK ${passed} global-payouts checks passed`);
