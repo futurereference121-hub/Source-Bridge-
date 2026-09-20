@@ -507,7 +507,10 @@ async function executeOutboundRelease(opts: {
       moneyMutation: true,
       idempotencyKey: stripeIdempotencyKey,
       body: {
-        from: { financial_account: faId },
+        from: {
+          financial_account: faId,
+          currency: txn.currency.toLowerCase(),
+        },
         to: {
           payout_method: txn.sellerGpPayoutMethodId,
           recipient: txn.sellerGpRecipientId,
