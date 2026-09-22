@@ -59,3 +59,8 @@ next-env.d.ts
 /data/wallapop-export/
 /data/wallapop-edge-profile/
 /data/wallapop-edge-debug-profile/
+
+.cursor/_gp_preview_runtime_diag_auth.local
+.cursor/_gp_preview_runtime_diag_auth.sha256
+.cursor/_gp_preview_runtime_diag_result.json
+
