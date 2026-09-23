@@ -168,7 +168,6 @@ export async function runGpPreviewRuntimeDiag(): Promise<GpPreviewRuntimeDiagRes
       skLivemodeFalse = bal.livemode === false;
       const acct = await stripe.accounts.retrieve();
       accountIdPrefix = idPrefix(String(acct.id || ""), 12);
-      if (acct.livemode === true) skLivemodeFalse = false;
     } catch {
       skAuthOk = false;
     }
