@@ -63,6 +63,8 @@ export type GpHttpResult = {
   ok: boolean;
   status: number;
   body: Record<string, unknown>;
+  /** Stripe `request-id` header, when the response includes one. */
+  requestId: string | null;
 };
 
 /**
@@ -135,7 +137,12 @@ export async function gpFetch(opts: {
     parsed = {};
   }
 
-  return { ok: res.ok, status: res.status, body: parsed };
+  return {
+    ok: res.ok,
+    status: res.status,
+    body: parsed,
+    requestId: res.headers.get("request-id"),
+  };
 }
 
 export function gpErrorMessage(result: GpHttpResult): string {

@@ -30,9 +30,18 @@ import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolve
 import { ensureFinancialAccountFunding } from "@/lib/payments/payout-rail/fa-funding";
 import {
   getGlobalPayoutsFinancialAccountId,
-  gpErrorMessage,
   gpFetch,
 } from "@/lib/payments/payout-rail/gp-client";
+import {
+  assessAttemptPreservation,
+  executeQuotedPayout,
+  mergeStoredQuoteSnapshot,
+  parseGpProviderError,
+  payoutMethodCurrencies,
+  providerErrorRecord,
+  resolveDestinationCurrency,
+  type QuoteSnapshot,
+} from "@/lib/payments/payout-rail/outbound-quote";
 import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
 import { mapOutboundPaymentProviderStatus } from "@/lib/payments/payout-rail/status-mapper";
 import {
@@ -41,6 +50,27 @@ import {
 } from "@/lib/payments/payout-rail/dual-rail";
 import { sanitizeProviderFailureText } from "@/lib/payments/payout-rail/outbound-display";
 import { planCombineMinimumGroups } from "@/lib/payments/payout-rail/combine-minimum";
+
+const RELEASE_ERROR_CODES = new Set([
+  "GP_AWAITING_MINIMUM",
+  "GP_AWAITING_FA_FUNDS",
+  "GP_AWAITING_MINIMUM_COMBINE",
+  "GP_RETURNED_MANUAL_REVIEW",
+  "GP_PAYMENT_IN_FLIGHT",
+  "GP_PAYMENT_OUTCOME_UNCERTAIN",
+  "GP_QUOTE_EXPIRED",
+  "GP_QUOTE_MISMATCH",
+  "GP_QUOTE_FAILED",
+  "GP_DESTINATION_CURRENCY_UNRESOLVED",
+  "GP_FAILED_ATTEMPT_PRESERVED",
+  "GP_PAYOUT_METHOD_UNREADABLE",
+  "GP_OUTBOUND_CREATE_FAILED",
+]);
+
+/** Stripe codes stay on the attempt row. The thrown code must not fall through to a second write. */
+function stableReleaseErrorCode(code: string): string {
+  return RELEASE_ERROR_CODES.has(code) ? code : "GP_OUTBOUND_CREATE_FAILED";
+}
 
 function countryMinimumBlocks(errMsg: string): boolean {
   const m = errMsg.toLowerCase();
@@ -332,6 +362,29 @@ async function executeOutboundRelease(opts: {
       },
     );
   }
+  if (existingAttempt) {
+    const preserved = assessAttemptPreservation({
+      status: existingAttempt.status,
+      failureCode: existingAttempt.failureCode,
+      failureMessage: existingAttempt.failureMessage,
+      fxRateSnapshot: existingAttempt.fxRateSnapshot,
+      stripeOutboundPaymentId: existingAttempt.stripeOutboundPaymentId,
+      initiatedAt: existingAttempt.initiatedAt,
+      baseIdempotencyKey: idempotencyKey,
+      nowMs: Date.now(),
+    });
+    if (preserved.preserve && existingAttempt.status !== "SUCCEEDED" && existingAttempt.status !== "RECONCILED") {
+      throw Object.assign(
+        new Error("Prior Global Payouts attempt is preserved. It was not retried."),
+        {
+          status: 409,
+          code: preserved.code,
+          nextIdempotencyKey: preserved.nextIdempotencyKey,
+          attemptId: existingAttempt.id,
+        },
+      );
+    }
+  }
   if (
     existingAttempt?.status === "PROCESSING" &&
     existingAttempt.stripeOutboundPaymentId
@@ -423,6 +476,7 @@ async function executeOutboundRelease(opts: {
         lastAttemptAt: new Date(),
         failureCode: "",
         failureMessage: "",
+        initiatedAt: null,
       },
     });
   }
@@ -500,43 +554,114 @@ async function executeOutboundRelease(opts: {
   let capturedOutboundId = "";
 
   try {
-    const created = await gpFetch({
+    const methodRes = await gpFetch({
       mode: txnMode,
-      method: "POST",
-      path: "/v2/money_management/outbound_payments",
-      moneyMutation: true,
-      idempotencyKey: stripeIdempotencyKey,
-      body: {
-        from: {
-          financial_account: faId,
-          currency: txn.currency.toLowerCase(),
+      method: "GET",
+      path: `/v2/money_management/payout_methods/${encodeURIComponent(txn.sellerGpPayoutMethodId)}`,
+      stripeContext: txn.sellerGpRecipientId,
+    });
+    if (!methodRes.ok) {
+      const parsed = parseGpProviderError(methodRes);
+      await prisma.outboundPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "FAILED",
+          failureCode: (parsed.code || "GP_PAYOUT_METHOD_UNREADABLE").slice(0, 80),
+          failureMessage: parsed.message.slice(0, 500),
+          reconciliationNote: providerErrorRecord(parsed),
+          lastAttemptAt: new Date(),
+          attemptCount: { increment: 1 },
         },
-        to: {
-          payout_method: txn.sellerGpPayoutMethodId,
-          recipient: txn.sellerGpRecipientId,
+      });
+      // A payout-method read does not create money. Keep it retryable.
+      throw Object.assign(new Error(parsed.message), {
+        status: methodRes.status >= 500 ? 503 : 502,
+        code: "GP_PAYOUT_METHOD_UNREADABLE",
+      });
+    }
+    const mapped = await prisma.globalPayoutRecipient.findFirst({
+      where: { stripeRecipientId: txn.sellerGpRecipientId, stripeMode: txnMode },
+      select: { defaultCurrency: true },
+    });
+    const destination = resolveDestinationCurrency({
+      supportedCurrencies: payoutMethodCurrencies(methodRes.body),
+      mappedCurrency: mapped?.defaultCurrency,
+    });
+    if (!destination.ok) {
+      await prisma.outboundPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "FAILED",
+          failureCode: destination.code,
+          failureMessage: "Payout method destination currency is not available.",
+          lastAttemptAt: new Date(),
+          attemptCount: { increment: 1 },
         },
-        amount: {
-          value: amount,
-          currency: txn.currency.toLowerCase(),
-        },
-        metadata: {
-          protectedTxnId: txn.id,
-          kind,
-          rail: "STRIPE_GLOBAL_PAYOUTS",
-          termsHash: txn.termsHash,
-        },
+      });
+      throw Object.assign(new Error("Payout method destination currency is not available."), {
+        status: 409,
+        code: destination.code,
+      });
+    }
+
+    const payout = await executeQuotedPayout({
+      sourceAmountMinor: amount,
+      sourceCurrency: txn.currency,
+      destinationCurrency: destination.currency,
+      financialAccountId: faId,
+      recipientId: txn.sellerGpRecipientId,
+      payoutMethodId: txn.sellerGpPayoutMethodId,
+      paymentIdempotencyKey: stripeIdempotencyKey,
+      metadata: {
+        protectedTxnId: txn.id,
+        kind,
+        rail: "STRIPE_GLOBAL_PAYOUTS",
+        termsHash: txn.termsHash,
+      },
+      mode: txnMode,
+      nowMs: Date.now(),
+      storedSnapshot: attempt.fxRateSnapshot,
+      post: async (req) =>
+        gpFetch({
+          mode: txnMode,
+          method: "POST",
+          path: req.path,
+          moneyMutation: true,
+          idempotencyKey: req.idempotencyKey,
+          body: req.body,
+        }),
+      persistQuote: async (snapshot: QuoteSnapshot) => {
+        await prisma.outboundPaymentAttempt.update({
+          where: { id: attempt.id },
+          data: {
+            stripeFinancialAccountId: faId,
+            destinationCurrency: snapshot.destinationCurrency.toUpperCase(),
+            destinationAmountMinor: snapshot.destinationAmountMinor,
+            providerFeeMinor: snapshot.providerFeeMinor,
+            crossBorderFeeMinor: snapshot.crossBorderFeeMinor,
+            fxFeeMinor: snapshot.fxFeeMinor,
+            fxRateSnapshot: JSON.stringify(snapshot),
+          },
+        });
+      },
+      markPaymentSubmission: async () => {
+        await prisma.outboundPaymentAttempt.update({
+          where: { id: attempt.id },
+          data: { initiatedAt: new Date(), stripeFinancialAccountId: faId },
+        });
       },
     });
 
-    if (!created.ok) {
-      const message = sanitizeProviderFailureText(gpErrorMessage(created));
-      if (countryMinimumBlocks(message)) {
+    if (!payout.ok) {
+      const message = sanitizeProviderFailureText(payout.parsed?.message || payout.code);
+      if (!payout.uncertain && countryMinimumBlocks(message)) {
         await prisma.outboundPaymentAttempt.update({
           where: { id: attempt.id },
           data: {
             status: "AWAITING_MINIMUM",
             failureCode: "BELOW_MINIMUM",
             failureMessage: message.slice(0, 500),
+            reconciliationNote: payout.parsed ? providerErrorRecord(payout.parsed) : "",
             stripeFinancialAccountId: faId,
             attemptCount: { increment: 1 },
             lastAttemptAt: new Date(),
@@ -549,16 +674,26 @@ async function executeOutboundRelease(opts: {
           { status: 409, code: "GP_AWAITING_MINIMUM" },
         );
       }
+      await prisma.outboundPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "FAILED",
+          failureCode: payout.code.slice(0, 80),
+          failureMessage: message.slice(0, 500),
+          reconciliationNote: payout.parsed ? providerErrorRecord(payout.parsed) : attempt.reconciliationNote,
+          lastAttemptAt: new Date(),
+          attemptCount: { increment: 1 },
+        },
+      });
       throw Object.assign(new Error(message), {
-        status: 502,
-        code: "GP_OUTBOUND_CREATE_FAILED",
+        status: payout.uncertain ? 409 : 502,
+        code: stableReleaseErrorCode(payout.code),
       });
     }
 
-    const outboundId =
-      typeof created.body.id === "string" ? created.body.id : "";
+    const outboundId = typeof payout.body.id === "string" ? payout.body.id : "";
     capturedOutboundId = outboundId;
-    const providerStatus = mapOutboundPaymentProviderStatus(created.body);
+    const providerStatus = mapOutboundPaymentProviderStatus(payout.body);
     // Never mark paid on submit alone — PROCESSING until posted/succeeded event.
     const localStatus =
       providerStatus === "SUCCEEDED" ? "SUCCEEDED" : "PROCESSING";
@@ -615,20 +750,14 @@ async function executeOutboundRelease(opts: {
       idempotencyKey,
       actorUserId: opts.actorUserId,
       isFullResidual: opts.isFullResidual,
-      providerBody: created.body,
+      providerBody: payout.body,
     });
   } catch (err) {
     if (
       err &&
       typeof err === "object" &&
       "code" in err &&
-      [
-        "GP_AWAITING_MINIMUM",
-        "GP_AWAITING_FA_FUNDS",
-        "GP_AWAITING_MINIMUM_COMBINE",
-        "GP_RETURNED_MANUAL_REVIEW",
-        "GP_PAYMENT_IN_FLIGHT",
-      ].includes(String((err as { code?: string }).code))
+      RELEASE_ERROR_CODES.has(String((err as { code?: string }).code))
     ) {
       throw err;
     }
@@ -713,7 +842,18 @@ export async function finalizeOutboundSuccess(opts: {
     ReturnType<typeof prisma.protectedTransaction.findUniqueOrThrow>
   >;
 
-  const casResult = await prisma.$transaction(async (tx) => {
+    const casResult = await prisma.$transaction(async (tx) => {
+    const prior = await tx.outboundPaymentAttempt.findUnique({
+      where: { id: opts.attemptId },
+      select: {
+        fxRateSnapshot: true,
+        destinationCurrency: true,
+        destinationAmountMinor: true,
+        providerFeeMinor: true,
+        crossBorderFeeMinor: true,
+        fxFeeMinor: true,
+      },
+    });
     // Compare-and-swap: only one winner may advance PROCESSING/PENDING → SUCCEEDED.
     const cas = await tx.outboundPaymentAttempt.updateMany({
       where: {
@@ -728,12 +868,21 @@ export async function finalizeOutboundSuccess(opts: {
         lastAttemptAt: new Date(),
         failureCode: "",
         failureMessage: "",
-        providerFeeMinor: feeMeta.providerFeeMinor,
-        crossBorderFeeMinor: feeMeta.crossBorderFeeMinor,
-        fxFeeMinor: feeMeta.fxFeeMinor,
-        destinationCurrency: feeMeta.destinationCurrency,
-        destinationAmountMinor: feeMeta.destinationAmountMinor,
-        fxRateSnapshot: feeMeta.fxRateSnapshot,
+        providerFeeMinor: feeMeta.feesPresent
+          ? feeMeta.providerFeeMinor
+          : prior?.providerFeeMinor ?? 0,
+        crossBorderFeeMinor: feeMeta.feesPresent
+          ? feeMeta.crossBorderFeeMinor
+          : prior?.crossBorderFeeMinor ?? 0,
+        fxFeeMinor: feeMeta.feesPresent ? feeMeta.fxFeeMinor : prior?.fxFeeMinor ?? 0,
+        destinationCurrency:
+          feeMeta.destinationCurrency || prior?.destinationCurrency || "",
+        destinationAmountMinor:
+          feeMeta.destinationAmountMinor || prior?.destinationAmountMinor || 0,
+        fxRateSnapshot: mergeStoredQuoteSnapshot(
+          prior?.fxRateSnapshot || "",
+          feeMeta.fxRateSnapshot,
+        ),
       },
     });
 
@@ -810,6 +959,8 @@ export async function finalizeOutboundSuccess(opts: {
 
   const updated = casResult.updated;
 
+  const { feesPresent: _feesPresent, ...feeRecord } = feeMeta;
+
   await appendLedgerEntry({
     protectedTxnId: updated.id,
     entryType:
@@ -823,7 +974,7 @@ export async function finalizeOutboundSuccess(opts: {
     meta: {
       rail: "STRIPE_GLOBAL_PAYOUTS",
       providerFeesAbsorbedByPlatform: true,
-      ...feeMeta,
+      ...feeRecord,
     },
   });
 
@@ -867,6 +1018,7 @@ export function extractProviderFees(body?: Record<string, unknown>): {
   destinationCurrency: string;
   destinationAmountMinor: number;
   fxRateSnapshot: string;
+  feesPresent: boolean;
 } {
   const empty = {
     providerFeeMinor: 0,
@@ -875,29 +1027,41 @@ export function extractProviderFees(body?: Record<string, unknown>): {
     destinationCurrency: "",
     destinationAmountMinor: 0,
     fxRateSnapshot: "",
+    feesPresent: false,
   };
   if (!body) return empty;
-  const fees = body.fees;
+  const fees = Array.isArray(body.fees)
+    ? body.fees
+    : Array.isArray(body.estimated_fees)
+      ? body.estimated_fees
+      : null;
   let providerFeeMinor = 0;
   let crossBorderFeeMinor = 0;
   let fxFeeMinor = 0;
-  if (Array.isArray(fees)) {
+  if (fees) {
     for (const f of fees) {
       if (!f || typeof f !== "object") continue;
       const fee = f as { type?: string; amount?: { value?: number } };
       const val = typeof fee.amount?.value === "number" ? fee.amount.value : 0;
+      if (!Number.isInteger(val) || val < 0) continue;
       const t = String(fee.type || "").toLowerCase();
       if (t.includes("cross")) crossBorderFeeMinor += val;
       else if (t.includes("fx") || t.includes("exchange")) fxFeeMinor += val;
       else providerFeeMinor += val;
     }
   }
-  const toAmount =
+  const toRecord =
     body.to && typeof body.to === "object"
-      ? (body.to as { amount?: { value?: number; currency?: string } }).amount
+      ? (body.to as {
+          amount?: { value?: number; currency?: string };
+          credited?: { value?: number; currency?: string };
+        })
       : undefined;
+  const toAmount = toRecord?.credited ?? toRecord?.amount;
   const destinationAmountMinor =
-    typeof toAmount?.value === "number" ? toAmount.value : 0;
+    typeof toAmount?.value === "number" && Number.isInteger(toAmount.value)
+      ? toAmount.value
+      : 0;
   const destinationCurrency =
     typeof toAmount?.currency === "string" ? toAmount.currency : "";
   const fx =
@@ -913,5 +1077,6 @@ export function extractProviderFees(body?: Record<string, unknown>): {
     destinationCurrency,
     destinationAmountMinor,
     fxRateSnapshot: fx.slice(0, 64),
+    feesPresent: fees != null,
   };
 }
