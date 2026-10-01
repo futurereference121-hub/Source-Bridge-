@@ -1,5 +1,5 @@
 /**
- * Offline checks for the Preview Sandbox E2E route.
+ * The Sandbox diagnostic release entry point is permanently disabled.
  * Run: node scripts/test-gp-sandbox-e2e.mjs
  */
 import assert from "node:assert/strict";
@@ -24,20 +24,9 @@ function ok(name, cond) {
   console.log(`PASS ${name}`);
 }
 
-ok("route is POST only", /export async function POST/.test(route) && !/export async function GET/.test(route));
-ok("route reuses diagnostic gate and auth", route.includes("isGpPreviewRuntimeDiagGateOpen") && route.includes("verifyGpPreviewRuntimeDiagAuth"));
-ok("route does not parse a caller body", !route.includes("req.json") && !route.includes("searchParams"));
-ok("route disables cache", route.includes("no-store"));
-ok("helper locks preview host", helper.includes('const PREVIEW_HOST_H8 = "bf232aa9"'));
-ok("helper uses the labelled fixture", helper.includes("GP_SANDBOX_E2E_FIXTURE_v1"));
-ok("helper uses a synthetic buyer", helper.includes("GP Sandbox Synthetic Buyer") && helper.includes("gp-sandbox-buyer@example.invalid") && helper.includes("passwordHash: null"));
-ok("helper releases a new fixture through releaseFinal", helper.includes("releaseFinal({ protectedTxnId: txn.id })"));
-ok("exact failed fixture selects corrected retry", helper.includes("retryDefinitiveQuoteRejection({ protectedTxnId: txn.id })"));
-ok("corrected retry is not given a caller key", !helper.includes("retryDefinitiveQuoteRejection({") || !/retryDefinitiveQuoteRejection\(\{[^}]*idempotencyKey/.test(helper));
-ok("corrected retry comment does not fall through to releaseFinal", helper.includes("Do not call releaseFinal."));
-ok("helper does not post to Stripe itself", !helper.includes('method: "POST"'));
-ok("helper does not change live initiation", !helper.includes("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED="));
-ok("helper keeps the global payouts rail", helper.includes('payoutRail: "STRIPE_GLOBAL_PAYOUTS"'));
-ok("helper does not invent a charge id", helper.includes('stripeChargeId: ""') && helper.includes('stripePaymentIntentId: ""'));
+ok("route refuses instead of releasing", route.includes("status: 410") && route.includes("disabledDiagnosticMutation"));
+ok("route does not call release or corrected retry", !route.includes("releaseFinal") && !route.includes("retryDefinitiveQuoteRejection") && !route.includes("runSandboxE2eRelease"));
+ok("helper does not create users, transactions, or payouts", !helper.includes("user.create") && !helper.includes("protectedTransaction.create") && !helper.includes("releaseFinal") && !helper.includes("prisma"));
+ok("helper does not post to Stripe", !helper.includes('method: "POST"') && !helper.includes("gpFetch"));
 
 console.log(`\n${passed} passed`);

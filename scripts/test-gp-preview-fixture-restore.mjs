@@ -1,5 +1,5 @@
 /**
- * Offline checks for the Preview fixture restore route.
+ * The diagnostic fixture restore entry point is permanently disabled.
  * Run: node scripts/test-gp-preview-fixture-restore.mjs
  */
 import assert from "node:assert/strict";
@@ -28,16 +28,9 @@ function ok(name, cond) {
   console.log(`PASS ${name}`);
 }
 
-ok("restore route is POST only", /export async function POST/.test(route) && !/export async function GET/.test(route));
-ok("restore reuses diagnostic gate and auth", route.includes("isGpPreviewRuntimeDiagGateOpen") && route.includes("verifyGpPreviewRuntimeDiagAuth"));
-ok("restore does not parse a caller body", !route.includes("req.json") && !route.includes("searchParams"));
-ok("restore disables cache", route.includes("no-store"));
-ok("helper locks preview host hash", helper.includes('const PREVIEW_HOST_H8 = "bf232aa9"'));
-ok("helper uses the synthetic identity", helper.includes('normalizeUsername("testingtesting")') && helper.includes("GP Sandbox Test User") && helper.includes("gp-testingtesting@example.invalid"));
-ok("helper leaves password unset", helper.includes("passwordHash: null"));
-ok("helper re-queries stripe before write", helper.includes("discoverSandboxFixture"));
-ok("helper uses one transaction", helper.includes("prisma.$transaction"));
-ok("helper does not call stripe writes", !helper.includes('method: "POST"') && helper.includes("stripe_writes: 0"));
-ok("public discovery strips fixture ids", discovery.includes("const { fixtureIds: _ids, ...redacted } = full"));
+ok("restore route refuses instead of writing", route.includes("status: 410") && route.includes("disabledDiagnosticMutation"));
+ok("restore route does not call the old helper", !route.includes("restorePreviewSandboxFixture"));
+ok("helper does not create users or mappings", !helper.includes("user.create") && !helper.includes("prisma") && !helper.includes("gpFetch"));
+ok("public discovery still strips fixture ids", discovery.includes("const { fixtureIds: _ids, ...redacted } = full"));
 
 console.log(`\n${passed} passed`);
