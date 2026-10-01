@@ -54,6 +54,11 @@ const THB_DESTINATION_MINIMUM_MINOR = 60000;
  * 5000 minor units is 50.00 USD, which clears 600 THB at 12 THB per USD.
  */
 const USD_SOURCE_MINOR = 5000;
+/**
+ * 4000 minor units is 40.00 GBP. That still converts to 600 THB at 15 THB per GBP.
+ * The confirmed Sandbox balance is GBP, and the release sends that one currency.
+ */
+const GBP_SOURCE_MINOR = 4000;
 const FEE_CONFIG = {
   protectionFeeBps: SOURCE_BRIDGE_FEE_BPS,
   protectionFeeFloorMinor: SOURCE_BRIDGE_FEE_FLOOR_MINOR,
@@ -186,17 +191,21 @@ function quote(itemCostMinor: number) {
 }
 
 function choosePayout(balances: CashBalance[]): {
-  currency: "USD" | "THB";
+  currency: "USD" | "THB" | "GBP";
   itemCostMinor: number;
   availableMinor: number;
 } | null {
   const thb = balances.find((row) => row.currency === "thb");
   const usd = balances.find((row) => row.currency === "usd");
+  const gbp = balances.find((row) => row.currency === "gbp");
   if (thb && thb.value >= THB_DESTINATION_MINIMUM_MINOR) {
     return { currency: "THB", itemCostMinor: THB_DESTINATION_MINIMUM_MINOR, availableMinor: thb.value };
   }
   if (usd && usd.value >= USD_SOURCE_MINOR) {
     return { currency: "USD", itemCostMinor: USD_SOURCE_MINOR, availableMinor: usd.value };
+  }
+  if (gbp && gbp.value >= GBP_SOURCE_MINOR) {
+    return { currency: "GBP", itemCostMinor: GBP_SOURCE_MINOR, availableMinor: gbp.value };
   }
   return null;
 }
