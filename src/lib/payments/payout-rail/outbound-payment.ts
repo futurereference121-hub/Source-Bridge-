@@ -34,13 +34,22 @@ import {
 } from "@/lib/payments/payout-rail/gp-client";
 import {
   assessAttemptPreservation,
+  correctedQuoteRetryKey,
+  evaluateQuoteRoute,
   executeQuotedPayout,
+  financialAccountCountry,
+  mergeAttemptNote,
   mergeStoredQuoteSnapshot,
   parseGpProviderError,
+  payoutMethodCountry,
   payoutMethodCurrencies,
+  proveNoExistingOutboundPayment,
   providerErrorRecord,
   resolveDestinationCurrency,
+  runCorrectedQuoteRetry,
+  type ListedOutboundPayment,
   type QuoteSnapshot,
+  type RetryAttemptRecord,
 } from "@/lib/payments/payout-rail/outbound-quote";
 import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
 import { mapOutboundPaymentProviderStatus } from "@/lib/payments/payout-rail/status-mapper";
@@ -64,7 +73,14 @@ const RELEASE_ERROR_CODES = new Set([
   "GP_DESTINATION_CURRENCY_UNRESOLVED",
   "GP_FAILED_ATTEMPT_PRESERVED",
   "GP_PAYOUT_METHOD_UNREADABLE",
+  "GP_FINANCIAL_ACCOUNT_UNREADABLE",
+  "GP_QUOTE_COUNTRY_UNRESOLVED",
+  "GP_QUOTE_POLICY_UNSUPPORTED",
   "GP_OUTBOUND_CREATE_FAILED",
+  "GP_RECONCILIATION_INCOMPLETE",
+  "GP_PAYMENT_ALREADY_EXISTS",
+  "GP_RETRY_IN_PROGRESS",
+  "GP_RETRY_NOT_AVAILABLE",
 ]);
 
 /** Stripe codes stay on the attempt row. The thrown code must not fall through to a second write. */
@@ -568,7 +584,7 @@ async function executeOutboundRelease(opts: {
           status: "FAILED",
           failureCode: (parsed.code || "GP_PAYOUT_METHOD_UNREADABLE").slice(0, 80),
           failureMessage: parsed.message.slice(0, 500),
-          reconciliationNote: providerErrorRecord(parsed),
+          reconciliationNote: mergeAttemptNote(attempt.reconciliationNote, providerErrorRecord(parsed)),
           lastAttemptAt: new Date(),
           attemptCount: { increment: 1 },
         },
@@ -604,6 +620,40 @@ async function executeOutboundRelease(opts: {
       });
     }
 
+    const faRes = faId
+      ? await gpFetch({
+          mode: txnMode,
+          method: "GET",
+          path: `/v2/money_management/financial_accounts/${encodeURIComponent(faId)}`,
+        })
+      : { ok: false as const, status: 0, body: {}, requestId: null };
+    const route = evaluateQuoteRoute({
+      methodReadOk: true,
+      financialAccountReadOk: Boolean(faRes.ok),
+      financialAccountCountry: faRes.ok ? financialAccountCountry(faRes.body) : "",
+      payoutMethodCountry: payoutMethodCountry(methodRes.body),
+    });
+    if (!route.ok) {
+      const parsed = faRes.ok ? null : parseGpProviderError(faRes);
+      await prisma.outboundPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "FAILED",
+          failureCode: route.code,
+          failureMessage: (parsed?.message || "Quote route could not be verified.").slice(0, 500),
+          reconciliationNote: parsed
+            ? mergeAttemptNote(attempt.reconciliationNote, providerErrorRecord(parsed))
+            : attempt.reconciliationNote,
+          lastAttemptAt: new Date(),
+          attemptCount: { increment: 1 },
+        },
+      });
+      throw Object.assign(new Error("Quote route could not be verified."), {
+        status: 409,
+        code: route.code,
+      });
+    }
+
     const payout = await executeQuotedPayout({
       sourceAmountMinor: amount,
       sourceCurrency: txn.currency,
@@ -620,6 +670,7 @@ async function executeOutboundRelease(opts: {
       },
       mode: txnMode,
       nowMs: Date.now(),
+      requiresQuote: route.requiresQuote,
       storedSnapshot: attempt.fxRateSnapshot,
       post: async (req) =>
         gpFetch({
@@ -661,7 +712,9 @@ async function executeOutboundRelease(opts: {
             status: "AWAITING_MINIMUM",
             failureCode: "BELOW_MINIMUM",
             failureMessage: message.slice(0, 500),
-            reconciliationNote: payout.parsed ? providerErrorRecord(payout.parsed) : "",
+            reconciliationNote: payout.parsed
+              ? mergeAttemptNote(attempt.reconciliationNote, providerErrorRecord(payout.parsed))
+              : attempt.reconciliationNote,
             stripeFinancialAccountId: faId,
             attemptCount: { increment: 1 },
             lastAttemptAt: new Date(),
@@ -680,7 +733,9 @@ async function executeOutboundRelease(opts: {
           status: "FAILED",
           failureCode: payout.code.slice(0, 80),
           failureMessage: message.slice(0, 500),
-          reconciliationNote: payout.parsed ? providerErrorRecord(payout.parsed) : attempt.reconciliationNote,
+          reconciliationNote: payout.parsed
+            ? mergeAttemptNote(attempt.reconciliationNote, providerErrorRecord(payout.parsed))
+            : attempt.reconciliationNote,
           lastAttemptAt: new Date(),
           attemptCount: { increment: 1 },
         },
@@ -808,6 +863,243 @@ async function executeOutboundRelease(opts: {
     });
     throw err;
   }
+}
+
+function toRetryAttempt(row: {
+  id: string;
+  protectedTxnId: string;
+  kind: string;
+  idempotencyKey: string;
+  status: string;
+  failureCode: string;
+  failureMessage: string;
+  fxRateSnapshot: string;
+  stripeOutboundPaymentId: string;
+  initiatedAt: Date | null;
+  reconciliationNote: string;
+  updatedAt: Date;
+  amountMinor: number;
+  currency: string;
+  stripeMode: string;
+  stripeRecipientId: string;
+  stripePayoutMethodId: string;
+}): RetryAttemptRecord {
+  return { ...row, updatedAt: row.updatedAt.toISOString() };
+}
+
+function readListedPayments(body: Record<string, unknown>): ListedOutboundPayment[] | null {
+  if (!Array.isArray(body.data)) return null;
+  const payments: ListedOutboundPayment[] = [];
+  for (const raw of body.data) {
+    if (!raw || typeof raw !== "object") return null;
+    const row = raw as Record<string, unknown>;
+    const amount =
+      row.amount && typeof row.amount === "object"
+        ? (row.amount as { value?: unknown; currency?: unknown })
+        : {};
+    const from =
+      row.from && typeof row.from === "object"
+        ? (row.from as { financial_account?: unknown })
+        : {};
+    const to =
+      row.to && typeof row.to === "object"
+        ? (row.to as { recipient?: unknown; payout_method?: unknown })
+        : {};
+    const metadata =
+      row.metadata && typeof row.metadata === "object"
+        ? (row.metadata as { protectedTxnId?: unknown })
+        : {};
+    payments.push({
+      id: typeof row.id === "string" ? row.id : "",
+      recipient: typeof to.recipient === "string" ? to.recipient : "",
+      payoutMethod: typeof to.payout_method === "string" ? to.payout_method : "",
+      financialAccount: typeof from.financial_account === "string" ? from.financial_account : "",
+      amountMinor: typeof amount.value === "number" && Number.isInteger(amount.value) ? amount.value : null,
+      currency: typeof amount.currency === "string" ? amount.currency : "",
+      metadataTxnId: typeof metadata.protectedTxnId === "string" ? metadata.protectedTxnId : "",
+    });
+  }
+  return payments;
+}
+
+async function reconcileNoMatchingOutbound(opts: {
+  mode: "TEST" | "LIVE";
+  protectedTxnId: string;
+  recipientId: string;
+  payoutMethodId: string;
+  financialAccountId: string;
+  amountMinor: number;
+  currency: string;
+}) {
+  if (!opts.recipientId || !opts.payoutMethodId || !opts.financialAccountId || opts.amountMinor <= 0) {
+    return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+  }
+  let path = `/v2/money_management/outbound_payments?recipient=${encodeURIComponent(opts.recipientId)}&limit=100`;
+  const payments: ListedOutboundPayment[] = [];
+  for (let page = 0; page < 20; page += 1) {
+    const listed = await gpFetch({ mode: opts.mode, method: "GET", path });
+    if (!listed.ok) return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+    const batch = readListedPayments(listed.body);
+    if (!batch) return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+    payments.push(...batch);
+    const next = listed.body.next_page_url;
+    if (!next) {
+      return proveNoExistingOutboundPayment({ complete: true, payments, ...opts });
+    }
+    if (typeof next !== "string" || !next.startsWith("https://api.stripe.com/v2/money_management/outbound_payments")) {
+      return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+    }
+    path = next.slice("https://api.stripe.com".length);
+  }
+  return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+}
+
+/**
+ * Explicit corrected retry for a definitively rejected quote-required attempt.
+ * Does not accept an idempotency key or a retry version from the caller.
+ * Does not modify the original failed attempt.
+ */
+export async function retryDefinitiveQuoteRejection(opts: {
+  protectedTxnId: string;
+  actorUserId?: string | null;
+}) {
+  if (!isPaymentsEnabled() || !isStripeConfigured()) {
+    throw Object.assign(new Error("Payments not configured"), {
+      status: 503,
+      code: "STRIPE_NOT_CONFIGURED",
+    });
+  }
+  const txn = await prisma.protectedTransaction.findUnique({ where: { id: opts.protectedTxnId } });
+  if (!txn) throw Object.assign(new Error("Transaction not found"), { status: 404 });
+  assertStripeModeCompatible(txn.stripeMode);
+  const txnMode = normalizeStripeMode(txn.stripeMode);
+  if (lockedPayoutRailFromTxn(txn) !== "STRIPE_GLOBAL_PAYOUTS") {
+    throw Object.assign(new Error("Transaction is not locked to Global Payouts"), {
+      status: 409,
+      code: "PAYOUT_RAIL_MISMATCH",
+    });
+  }
+  if (isDirectPaymentOption(txn.paymentOption)) {
+    throw Object.assign(new Error("Final release transfer is not used for Direct Payment"), {
+      status: 409,
+      code: "DIRECT_NO_PLATFORM_TRANSFER",
+    });
+  }
+  if (!txn.sellerGpRecipientId || !txn.sellerGpPayoutMethodId) {
+    throw Object.assign(new Error("Global Payouts destination not locked on transaction"), {
+      status: 409,
+      code: "GP_NOT_READY",
+    });
+  }
+
+  const loadAttempts = async () => {
+    const rows = await prisma.outboundPaymentAttempt.findMany({ where: { protectedTxnId: txn.id } });
+    return rows.map(toRetryAttempt);
+  };
+
+  return runCorrectedQuoteRetry({
+    protectedTxnId: txn.id,
+    nowMs: Date.now(),
+    loadAttempts,
+    createAttempt: async (row) => {
+      try {
+        const created = await prisma.outboundPaymentAttempt.create({
+          data: {
+            ...row,
+            status: "PENDING",
+            failureCode: "",
+            failureMessage: "",
+            fxRateSnapshot: "",
+            stripeOutboundPaymentId: "",
+          },
+        });
+        return { ok: true, attempt: toRetryAttempt(created) };
+      } catch (err) {
+        if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2002") {
+          return { ok: false, code: "UNIQUE" };
+        }
+        throw err;
+      }
+    },
+    claimAttempt: async (id, updatedAt) => {
+      const claimed = await prisma.outboundPaymentAttempt.updateMany({
+        where: {
+          id,
+          updatedAt: new Date(updatedAt),
+          status: "PENDING",
+          failureCode: "",
+          initiatedAt: null,
+          stripeOutboundPaymentId: "",
+        },
+        data: { failureCode: "GP_RETRY_CLAIMED", lastAttemptAt: new Date() },
+      });
+      return claimed.count === 1;
+    },
+    reconcile: async () => {
+      const rows = await loadAttempts();
+      const original = rows.find((row) => {
+        const preserved = assessAttemptPreservation({
+          status: row.status,
+          failureCode: row.failureCode,
+          failureMessage: row.failureMessage,
+          fxRateSnapshot: row.fxRateSnapshot,
+          stripeOutboundPaymentId: row.stripeOutboundPaymentId,
+          initiatedAt: row.initiatedAt,
+          baseIdempotencyKey: row.idempotencyKey,
+          nowMs: Date.now(),
+        });
+        return preserved.preserve && preserved.code === "GP_FAILED_ATTEMPT_PRESERVED";
+      });
+      return reconcileNoMatchingOutbound({
+        mode: txnMode,
+        protectedTxnId: txn.id,
+        recipientId: txn.sellerGpRecipientId,
+        payoutMethodId: txn.sellerGpPayoutMethodId,
+        financialAccountId: getGlobalPayoutsFinancialAccountId(txnMode),
+        amountMinor: original?.amountMinor ?? 0,
+        currency: original?.currency || txn.currency,
+      });
+    },
+    execute: async (attempt) => {
+      const kind = attempt.kind === "PROCUREMENT" ? "PROCUREMENT" : "FINAL";
+      const action = kind === "PROCUREMENT" ? "RELEASE_PROCUREMENT" : "RELEASE_FINAL";
+      const status = txn.status as ProtectedStatus;
+      if (!canTransition(status, action)) {
+        throw Object.assign(new Error(`Cannot release from status ${status}`), {
+          status: 409,
+          code: "INVALID_TRANSITION",
+        });
+      }
+      await assertNoConnectTransferSucceeded(txn.id, kind);
+      if (await hasGpSucceeded(txn.id, kind)) {
+        throw Object.assign(new Error("Global Payouts release already succeeded"), {
+          status: 409,
+          code: "GP_PAYMENT_IN_FLIGHT",
+        });
+      }
+      const books = computeProtectedFinancials(txn);
+      if (kind === "FINAL" && attempt.amountMinor > books.finalResidualMinor) {
+        throw Object.assign(new Error("Sourcer release cannot exceed remaining entitlement"), {
+          status: 409,
+          code: "RELEASE_EXCEEDS_RESIDUAL",
+        });
+      }
+      const baseKey = kind === "PROCUREMENT"
+        ? `proc_gp_${txn.id}_${txn.termsHash}`
+        : `final_gp_${txn.id}_${txn.termsHash}`;
+      await executeOutboundRelease({
+        txn,
+        txnMode,
+        status,
+        kind,
+        domainAction: action,
+        amount: attempt.amountMinor,
+        idempotencyKey: attempt.idempotencyKey,
+        actorUserId: opts.actorUserId,
+        isFullResidual: attempt.idempotencyKey === correctedQuoteRetryKey(baseKey),
+      });
+    },
+  });
 }
 
 export async function finalizeOutboundSuccess(opts: {

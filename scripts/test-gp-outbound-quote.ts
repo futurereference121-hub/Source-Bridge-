@@ -5,14 +5,21 @@
 import assert from "node:assert/strict";
 import {
   assessAttemptPreservation,
+  correctedAttemptLink,
   correctedQuoteRetryKey,
+  evaluateQuoteRoute,
   executeQuotedPayout,
+  parseCorrectedAttemptLink,
   parseGpProviderError,
   payoutMethodCurrencies,
+  proveNoExistingOutboundPayment,
   quoteIdempotencyKey,
+  quoteRequiredForRoute,
   resolveDestinationCurrency,
+  runCorrectedQuoteRetry,
   type QuoteHttpResult,
   type QuoteSnapshot,
+  type RetryAttemptRecord,
 } from "../src/lib/payments/payout-rail/outbound-quote.ts";
 
 let passed = 0;
@@ -77,6 +84,7 @@ function base(overrides: Record<string, unknown> = {}) {
         metadata: { protectedTxnId: "txn", kind: "FINAL", rail: "STRIPE_GLOBAL_PAYOUTS", termsHash: "abc" },
         mode: "TEST",
         nowMs: now,
+        requiresQuote: true,
         storedSnapshot: "",
         post: async (req) => {
           calls.push(req);
@@ -128,13 +136,63 @@ ok(
 }
 
 {
-  const harness = base({ destinationCurrency: "gbp", sourceCurrency: "GBP" });
+  const harness = base({ destinationCurrency: "gbp", sourceCurrency: "GBP", requiresQuote: false });
   const result = await harness.run(async (req) => {
-    ok("same-currency payment omits the quote", req.path.endsWith("outbound_payments") && !("outbound_payment_quote" in req.body));
-    ok("same-currency amount stays source currency", (req.body.amount as { currency: string }).currency === "gbp");
+    ok("domestic same-currency payment omits the quote", req.path.endsWith("outbound_payments") && !("outbound_payment_quote" in req.body));
+    ok("domestic same-currency amount stays source currency", (req.body.amount as { currency: string }).currency === "gbp");
     return { ok: true, status: 200, body: { id: "obp_test_same", status: "processing" }, requestId: null };
   });
-  ok("same-currency path does not create a quote", result.ok && harness.calls.length === 1 && harness.persisted.length === 0);
+  ok("domestic same-currency path does not create a quote", result.ok && harness.calls.length === 1 && harness.persisted.length === 0);
+}
+
+{
+  const policy = quoteRequiredForRoute({ financialAccountCountry: "GB", payoutMethodCountry: "TH" });
+  ok("GB to Thailand requires a quote when currencies match", policy.ok === true && policy.ok && policy.required === true);
+  const domestic = quoteRequiredForRoute({ financialAccountCountry: "gb", payoutMethodCountry: "GB" });
+  ok("same-country route does not require a quote", domestic.ok === true && domestic.ok && domestic.required === false);
+  ok(
+    "currency difference alone is not the quote rule",
+    quoteRequiredForRoute({ financialAccountCountry: "US", payoutMethodCountry: "US" }).ok === true,
+  );
+  const missing = quoteRequiredForRoute({ financialAccountCountry: "GB", payoutMethodCountry: "" });
+  ok("missing country does not skip the quote", missing.ok === false);
+  const unread = evaluateQuoteRoute({
+    methodReadOk: false,
+    financialAccountReadOk: true,
+    financialAccountCountry: "GB",
+    payoutMethodCountry: "TH",
+  });
+  ok("payout method read failure prevents payment creation", unread.ok === false && !unread.ok && unread.code === "GP_PAYOUT_METHOD_UNREADABLE");
+  const faUnread = evaluateQuoteRoute({
+    methodReadOk: true,
+    financialAccountReadOk: false,
+    financialAccountCountry: "",
+    payoutMethodCountry: "TH",
+  });
+  ok("financial account read failure prevents payment creation", faUnread.ok === false && !faUnread.ok && faUnread.code === "GP_FINANCIAL_ACCOUNT_UNREADABLE");
+}
+
+{
+  const harness = base({ destinationCurrency: "gbp", sourceCurrency: "GBP", requiresQuote: true });
+  const result = await harness.run(async (req) => {
+    if (req.path.endsWith("outbound_payment_quotes")) {
+      ok("same-currency cross-border quote keeps the source amount", (req.body.amount as { value: number; currency: string }).value === 4000 && (req.body.amount as { currency: string }).currency === "gbp");
+      ok("same-currency cross-border quote names the destination currency", (req.body.to as { currency: string }).currency === "gbp");
+      return {
+        ok: true,
+        status: 200,
+        requestId: "req_samequote",
+        body: quoteBody({
+          to: { recipient, payout_method: method, credited: { value: 4000, currency: "gbp" } },
+          fx_quote: undefined,
+        }),
+      };
+    }
+    ok("same-currency cross-border payment attaches the quote", req.body.outbound_payment_quote === "obpq_test_example");
+    ok("same-currency cross-border payment keeps 4000 GBP", (req.body.amount as { value: number; currency: string }).value === 4000 && (req.body.to as { currency: string }).currency === "gbp");
+    return { ok: true, status: 200, body: { id: "obp_test_same_border", status: "processing" }, requestId: null };
+  });
+  ok("same-currency cross-border quote is created before payment", result.ok === true && harness.calls.length === 2);
 }
 
 {
@@ -247,6 +305,187 @@ ok(
       preserved.nextIdempotencyKey === correctedQuoteRetryKey("final_gp_txn_hash") &&
       preserved.nextIdempotencyKey !== "final_gp_txn_hash",
   );
+}
+
+{
+  const first = base();
+  let paymentBody: Record<string, unknown> | null = null;
+  await first.run(async (req) => {
+    if (req.path.endsWith("outbound_payment_quotes")) {
+      return { ok: true, status: 200, body: quoteBody(), requestId: null };
+    }
+    paymentBody = structuredClone(req.body);
+    return { ok: true, status: 200, body: { id: "obp_test_example", status: "processing" }, requestId: null };
+  });
+  const second = base({ storedSnapshot: JSON.stringify(first.persisted[0]) });
+  const again = await second.run(async (req) => {
+    ok("persisted quote does not create another quote", req.path.endsWith("outbound_payments"));
+    ok("persisted quote keeps the payment payload stable", JSON.stringify(req.body) === JSON.stringify(paymentBody));
+    return { ok: true, status: 200, body: { id: "obp_test_example", status: "processing" }, requestId: null };
+  });
+  ok("stable replay used the stored quote", again.ok === true && second.calls.length === 1);
+}
+
+function originalAttempt(overrides: Partial<RetryAttemptRecord> = {}): RetryAttemptRecord {
+  return {
+    id: "attempt_original",
+    protectedTxnId: "txn_fixture",
+    kind: "FINAL",
+    idempotencyKey: "final_gp_txn_hash",
+    status: "FAILED",
+    failureCode: "",
+    failureMessage: "Outbound payment quote is required for a COUNTRY_GB cross-border outbound payment.",
+    fxRateSnapshot: "",
+    stripeOutboundPaymentId: "",
+    initiatedAt: null,
+    reconciliationNote: "",
+    updatedAt: "2026-10-01T08:00:00.000Z",
+    amountMinor: 4000,
+    currency: "GBP",
+    stripeMode: "TEST",
+    stripeRecipientId: recipient,
+    stripePayoutMethodId: method,
+    ...overrides,
+  };
+}
+
+function retryHarness(seed: RetryAttemptRecord[], proof: { ok: true } | { ok: false; code: "GP_RECONCILIATION_INCOMPLETE" | "GP_PAYMENT_ALREADY_EXISTS" } = { ok: true }) {
+  const rows = seed.map((row) => ({ ...row }));
+  let posts = 0;
+  let sequence = 0;
+  return {
+    rows,
+    posts: () => posts,
+    run() {
+      return runCorrectedQuoteRetry({
+        protectedTxnId: "txn_fixture",
+        nowMs: now,
+        loadAttempts: async () => rows.map((row) => ({ ...row })),
+        createAttempt: async (row) => {
+          if (rows.some((existing) => existing.idempotencyKey === row.idempotencyKey)) {
+            return { ok: false, code: "UNIQUE" };
+          }
+          sequence += 1;
+          const created: RetryAttemptRecord = {
+            ...row,
+            id: `attempt_corrected_${sequence}`,
+            status: "PENDING",
+            failureCode: "",
+            failureMessage: "",
+            fxRateSnapshot: "",
+            stripeOutboundPaymentId: "",
+            initiatedAt: null,
+            updatedAt: "2026-10-01T08:01:00.000Z",
+          };
+          rows.push(created);
+          return { ok: true, attempt: { ...created } };
+        },
+        claimAttempt: async (id, updatedAt) => {
+          const row = rows.find((item) => item.id === id);
+          if (!row || row.updatedAt !== updatedAt || row.failureCode || row.status !== "PENDING" || row.initiatedAt || row.stripeOutboundPaymentId) {
+            return false;
+          }
+          row.failureCode = "GP_RETRY_CLAIMED";
+          row.updatedAt = "2026-10-01T08:02:00.000Z";
+          return true;
+        },
+        reconcile: async () => proof,
+        execute: async (attempt) => {
+          const result = await executeQuotedPayout({
+            sourceAmountMinor: attempt.amountMinor,
+            sourceCurrency: attempt.currency,
+            destinationCurrency: "thb",
+            financialAccountId: fa,
+            recipientId: attempt.stripeRecipientId,
+            payoutMethodId: attempt.stripePayoutMethodId,
+            paymentIdempotencyKey: attempt.idempotencyKey,
+            metadata: { protectedTxnId: attempt.protectedTxnId, kind: "FINAL", rail: "STRIPE_GLOBAL_PAYOUTS", termsHash: "abc" },
+            mode: "TEST",
+            nowMs: now,
+            requiresQuote: true,
+            storedSnapshot: attempt.fxRateSnapshot,
+            post: async (req) => {
+              posts += 1;
+              if (req.path.endsWith("outbound_payment_quotes")) {
+                ok("corrected retry quote key is versioned", req.idempotencyKey === quoteIdempotencyKey(correctedQuoteRetryKey("final_gp_txn_hash")));
+                return { ok: true, status: 200, body: quoteBody(), requestId: null };
+              }
+              ok("corrected retry payment key is not the original key", req.idempotencyKey === correctedQuoteRetryKey("final_gp_txn_hash"));
+              ok("corrected retry payment attaches the quote", req.body.outbound_payment_quote === "obpq_test_example");
+              return { ok: true, status: 200, body: { id: "obp_test_retry", status: "processing" }, requestId: null };
+            },
+            persistQuote: async (snapshot) => {
+              const row = rows.find((item) => item.id === attempt.id);
+              if (row) row.fxRateSnapshot = JSON.stringify(snapshot);
+            },
+            markPaymentSubmission: async () => {
+              const row = rows.find((item) => item.id === attempt.id);
+              if (row) row.initiatedAt = new Date(now);
+            },
+          });
+          if (!result.ok) throw Object.assign(new Error(result.code), { code: result.code });
+          const row = rows.find((item) => item.id === attempt.id);
+          if (row) {
+            row.status = "PROCESSING";
+            row.stripeOutboundPaymentId = "obp_test_retry";
+          }
+        },
+      });
+    },
+  };
+}
+
+{
+  const harness = retryHarness([originalAttempt()]);
+  const before = JSON.stringify(harness.rows[0]);
+  const first = await harness.run();
+  ok("corrected retry creates one versioned attempt", first.ok === true && first.ok && first.executed === true && first.created === true);
+  ok("corrected retry key is server-derived", harness.rows[1]?.idempotencyKey === correctedQuoteRetryKey("final_gp_txn_hash"));
+  ok("corrected retry links to the original attempt", parseCorrectedAttemptLink(harness.rows[1]?.reconciliationNote || "")?.priorAttemptId === "attempt_original");
+  ok("corrected retry link matches the helper", harness.rows[1]?.reconciliationNote === correctedAttemptLink("attempt_original"));
+  ok("original failed attempt is unchanged", JSON.stringify(harness.rows[0]) === before);
+  const second = await harness.run();
+  ok("repeated corrected retry finds the same attempt", second.ok === false && !second.ok && second.attemptId === (first.ok ? first.attemptId : "") && second.code === "GP_PAYMENT_IN_FLIGHT");
+  ok("repeated corrected retry does not create another payment", harness.posts() === 2 && harness.rows.length === 2);
+}
+
+{
+  const harness = retryHarness([originalAttempt()]);
+  const [left, right] = await Promise.all([harness.run(), harness.run()]);
+  const executed = [left, right].filter((result) => result.ok && result.executed);
+  const rejected = [left, right].filter((result) => !result.ok && result.code === "GP_RETRY_IN_PROGRESS");
+  ok("concurrent corrected retries execute once", executed.length === 1 && rejected.length === 1);
+  ok("concurrent corrected retries share one attempt", harness.rows.length === 2 && harness.posts() === 2);
+}
+
+{
+  const harness = retryHarness([originalAttempt({ failureCode: "GP_PAYMENT_OUTCOME_UNCERTAIN", initiatedAt: new Date(now) })]);
+  const result = await harness.run();
+  ok("uncertain original outcome prevents another creation", result.ok === false && !result.ok && result.code === "GP_PAYMENT_OUTCOME_UNCERTAIN" && harness.rows.length === 1 && harness.posts() === 0);
+}
+
+{
+  const existing = proveNoExistingOutboundPayment({
+    complete: true,
+    payments: [{
+      id: "obp_test_existing",
+      recipient,
+      payoutMethod: method,
+      financialAccount: fa,
+      amountMinor: 4000,
+      currency: "gbp",
+      metadataTxnId: "",
+    }],
+    protectedTxnId: "txn_fixture",
+    recipientId: recipient,
+    payoutMethodId: method,
+    financialAccountId: fa,
+    amountMinor: 4000,
+    currency: "GBP",
+  });
+  const harness = retryHarness([originalAttempt()], existing.ok ? { ok: true } : existing);
+  const result = await harness.run();
+  ok("reconciliation finding a payment prevents the retry", result.ok === false && !result.ok && result.code === "GP_PAYMENT_ALREADY_EXISTS" && harness.rows.length === 1 && harness.posts() === 0);
 }
 
 console.log(`\n${passed} passed`);

@@ -99,9 +99,51 @@ export function quoteIdempotencyKey(paymentIdempotencyKey: string): string {
   return `${paymentIdempotencyKey}_quote`;
 }
 
+/** The only corrected-retry version. Callers cannot choose another. */
+export const CORRECTED_QUOTE_RETRY_VERSION = "quote_v1";
+
 /** Future corrected retry. Does not reuse a key whose body would change. */
 export function correctedQuoteRetryKey(baseIdempotencyKey: string): string {
-  return `${baseIdempotencyKey}_quote_v1`;
+  return `${baseIdempotencyKey}_${CORRECTED_QUOTE_RETRY_VERSION}`;
+}
+
+export function correctedAttemptLink(priorAttemptId: string): string {
+  return JSON.stringify({
+    v: 1,
+    priorAttemptId,
+    retry: CORRECTED_QUOTE_RETRY_VERSION,
+  });
+}
+
+export function parseCorrectedAttemptLink(
+  raw: string | null | undefined,
+): { priorAttemptId: string } | null {
+  if (!raw || !raw.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(raw) as { v?: number; priorAttemptId?: string; retry?: string };
+    if (parsed.v !== 1 || parsed.retry !== CORRECTED_QUOTE_RETRY_VERSION) return null;
+    if (!parsed.priorAttemptId) return null;
+    return { priorAttemptId: parsed.priorAttemptId };
+  } catch {
+    return null;
+  }
+}
+
+export function mergeAttemptNote(existingNote: string, providerRecord: string): string {
+  const link = parseCorrectedAttemptLink(existingNote);
+  if (!link) return providerRecord.slice(0, 500);
+  let provider: unknown = {};
+  try {
+    provider = JSON.parse(providerRecord);
+  } catch {
+    provider = {};
+  }
+  return JSON.stringify({
+    v: 1,
+    priorAttemptId: link.priorAttemptId,
+    retry: CORRECTED_QUOTE_RETRY_VERSION,
+    provider,
+  }).slice(0, 500);
 }
 
 export function payoutMethodCurrencies(method: Record<string, unknown> | null | undefined): string[] {
@@ -134,8 +176,59 @@ export function resolveDestinationCurrency(opts: {
   return { ok: false, code: "GP_DESTINATION_CURRENCY_UNRESOLVED" };
 }
 
-export function quoteRequired(sourceCurrency: string, destinationCurrency: string): boolean {
-  return sourceCurrency.trim().toLowerCase() !== destinationCurrency.trim().toLowerCase();
+export function payoutMethodCountry(method: Record<string, unknown> | null | undefined): string {
+  if (!method) return "";
+  for (const key of ["bank_account", "card"] as const) {
+    const container = method[key];
+    if (!container || typeof container !== "object") continue;
+    const country = (container as { country?: unknown }).country;
+    if (typeof country === "string" && /^[a-z]{2}$/i.test(country.trim())) {
+      return country.trim().toUpperCase();
+    }
+  }
+  return "";
+}
+
+export function financialAccountCountry(body: Record<string, unknown> | null | undefined): string {
+  const country = body?.country;
+  if (typeof country !== "string" || !/^[a-z]{2}$/i.test(country.trim())) return "";
+  return country.trim().toUpperCase();
+}
+
+/**
+ * Quote when the financial-account country and the payout-method country differ.
+ * Cross-border is that country difference. Currency conversion is not the test.
+ * Same-country payments stay on the historical no-quote request.
+ * A missing country fails closed; it does not skip the quote or send a payment.
+ */
+export function quoteRequiredForRoute(opts: {
+  financialAccountCountry: string;
+  payoutMethodCountry: string;
+}): { ok: true; required: boolean } | { ok: false; code: "GP_QUOTE_COUNTRY_UNRESOLVED" } {
+  const origin = opts.financialAccountCountry.trim().toUpperCase();
+  const destination = opts.payoutMethodCountry.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(origin) || !/^[A-Z]{2}$/.test(destination)) {
+    return { ok: false, code: "GP_QUOTE_COUNTRY_UNRESOLVED" };
+  }
+  return { ok: true, required: origin !== destination };
+}
+
+export function evaluateQuoteRoute(opts: {
+  methodReadOk: boolean;
+  financialAccountReadOk: boolean;
+  financialAccountCountry: string;
+  payoutMethodCountry: string;
+}):
+  | { ok: true; requiresQuote: boolean }
+  | {
+      ok: false;
+      code: "GP_PAYOUT_METHOD_UNREADABLE" | "GP_FINANCIAL_ACCOUNT_UNREADABLE" | "GP_QUOTE_COUNTRY_UNRESOLVED";
+    } {
+  if (!opts.methodReadOk) return { ok: false, code: "GP_PAYOUT_METHOD_UNREADABLE" };
+  if (!opts.financialAccountReadOk) return { ok: false, code: "GP_FINANCIAL_ACCOUNT_UNREADABLE" };
+  const route = quoteRequiredForRoute(opts);
+  if (!route.ok) return route;
+  return { ok: true, requiresQuote: route.required };
 }
 
 export function buildQuoteBody(opts: {
@@ -278,7 +371,14 @@ export function validateOutboundQuote(opts: {
     return { ok: false, code: "GP_QUOTE_MISMATCH" };
   }
   const expiresMs = Date.parse(expiresAt);
-  if (!expiresAt || Number.isNaN(expiresMs) || expiresMs <= opts.nowMs || (lockStatus && lockStatus !== "active")) {
+  const sameCurrency = source === destination;
+  const lockMissing = !expiresAt || Number.isNaN(expiresMs);
+  const lockExpired = !lockMissing && expiresMs <= opts.nowMs;
+  const lockInactive = Boolean(lockStatus) && lockStatus !== "active";
+  if (!sameCurrency && (lockMissing || lockExpired || lockInactive)) {
+    return { ok: false, code: "GP_QUOTE_EXPIRED" };
+  }
+  if (sameCurrency && !lockMissing && (lockExpired || lockInactive)) {
     return { ok: false, code: "GP_QUOTE_EXPIRED" };
   }
   const toCurrency = typeof fx?.to_currency === "string" ? fx.to_currency.toLowerCase() : "";
@@ -388,6 +488,8 @@ export async function executeQuotedPayout(opts: {
   metadata: Record<string, string>;
   mode: "TEST" | "LIVE";
   nowMs: number;
+  /** True when the financial-account country differs from the payout-method country. */
+  requiresQuote: boolean;
   storedSnapshot: string;
   post: (req: {
     path: string;
@@ -402,7 +504,10 @@ export async function executeQuotedPayout(opts: {
 > {
   const source = opts.sourceCurrency.toLowerCase();
   const destination = opts.destinationCurrency.toLowerCase();
-  const needsQuote = quoteRequired(source, destination);
+  const needsQuote = opts.requiresQuote;
+  if (!needsQuote && source !== destination) {
+    return { ok: false, code: "GP_QUOTE_POLICY_UNSUPPORTED", parsed: null, uncertain: false };
+  }
   let quoteId = "";
 
   if (needsQuote) {
@@ -513,4 +618,168 @@ export async function executeQuotedPayout(opts: {
     return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: parseGpProviderError(created), uncertain: true };
   }
   return { ok: true, body: created.body, quoteUsed: needsQuote };
+}
+
+export type ListedOutboundPayment = {
+  id: string;
+  recipient: string;
+  payoutMethod: string;
+  financialAccount: string;
+  amountMinor: number | null;
+  currency: string;
+  metadataTxnId: string;
+};
+
+export function proveNoExistingOutboundPayment(opts: {
+  complete: boolean;
+  payments: ListedOutboundPayment[];
+  protectedTxnId: string;
+  recipientId: string;
+  payoutMethodId: string;
+  financialAccountId: string;
+  amountMinor: number;
+  currency: string;
+}): { ok: true } | { ok: false; code: "GP_RECONCILIATION_INCOMPLETE" | "GP_PAYMENT_ALREADY_EXISTS" } {
+  if (!opts.complete) return { ok: false, code: "GP_RECONCILIATION_INCOMPLETE" };
+  const source = opts.currency.toLowerCase();
+  for (const payment of opts.payments) {
+    if (!payment.id) return { ok: false, code: "GP_RECONCILIATION_INCOMPLETE" };
+    if (payment.metadataTxnId === opts.protectedTxnId) {
+      return { ok: false, code: "GP_PAYMENT_ALREADY_EXISTS" };
+    }
+    if (
+      !payment.recipient ||
+      !payment.payoutMethod ||
+      !payment.financialAccount ||
+      payment.amountMinor == null ||
+      !payment.currency
+    ) {
+      return { ok: false, code: "GP_RECONCILIATION_INCOMPLETE" };
+    }
+    const sameRoute =
+      payment.recipient === opts.recipientId &&
+      payment.payoutMethod === opts.payoutMethodId &&
+      payment.financialAccount === opts.financialAccountId &&
+      payment.amountMinor === opts.amountMinor &&
+      payment.currency.toLowerCase() === source;
+    if (sameRoute) return { ok: false, code: "GP_PAYMENT_ALREADY_EXISTS" };
+  }
+  return { ok: true };
+}
+
+export type RetryAttemptRecord = {
+  id: string;
+  protectedTxnId: string;
+  kind: string;
+  idempotencyKey: string;
+  status: string;
+  failureCode: string;
+  failureMessage: string;
+  fxRateSnapshot: string;
+  stripeOutboundPaymentId: string;
+  initiatedAt: Date | null;
+  reconciliationNote: string;
+  updatedAt: string;
+  amountMinor: number;
+  currency: string;
+  stripeMode: string;
+  stripeRecipientId: string;
+  stripePayoutMethodId: string;
+};
+
+function attemptBlocksRetry(attempt: RetryAttemptRecord): string | null {
+  if (attempt.stripeOutboundPaymentId || attempt.status === "PROCESSING") return "GP_PAYMENT_IN_FLIGHT";
+  if (attempt.failureCode === "GP_PAYMENT_OUTCOME_UNCERTAIN") return "GP_PAYMENT_OUTCOME_UNCERTAIN";
+  if (attempt.initiatedAt && attempt.status === "PENDING") return "GP_PAYMENT_OUTCOME_UNCERTAIN";
+  if (attempt.failureCode === "GP_RETRY_CLAIMED" && attempt.status === "PENDING") return "GP_RETRY_IN_PROGRESS";
+  return null;
+}
+
+/**
+ * Explicit corrected retry for one definitively rejected quote-required attempt.
+ * The versioned key is derived here. Callers cannot supply a key or a version.
+ * The original row is never updated.
+ */
+export async function runCorrectedQuoteRetry(opts: {
+  protectedTxnId: string;
+  nowMs: number;
+  loadAttempts: () => Promise<RetryAttemptRecord[]>;
+  createAttempt: (row: {
+    protectedTxnId: string;
+    kind: string;
+    idempotencyKey: string;
+    amountMinor: number;
+    currency: string;
+    stripeMode: string;
+    stripeRecipientId: string;
+    stripePayoutMethodId: string;
+    reconciliationNote: string;
+  }) => Promise<{ ok: true; attempt: RetryAttemptRecord } | { ok: false; code: "UNIQUE" }>;
+  claimAttempt: (id: string, updatedAt: string) => Promise<boolean>;
+  reconcile: () => Promise<{ ok: true } | { ok: false; code: "GP_RECONCILIATION_INCOMPLETE" | "GP_PAYMENT_ALREADY_EXISTS" }>;
+  execute: (attempt: RetryAttemptRecord) => Promise<void>;
+}): Promise<
+  | { ok: true; attemptId: string; created: boolean; executed: boolean }
+  | { ok: false; code: string; attemptId?: string }
+> {
+  const loaded = await opts.loadAttempts();
+  const forTxn = loaded.filter((row) => row.protectedTxnId === opts.protectedTxnId);
+  for (const row of forTxn) {
+    const blocked = attemptBlocksRetry(row);
+    if (blocked) return { ok: false, code: blocked, attemptId: row.id };
+  }
+  const originals = forTxn.filter((row) => {
+    const preserved = assessAttemptPreservation({
+      status: row.status,
+      failureCode: row.failureCode,
+      failureMessage: row.failureMessage,
+      fxRateSnapshot: row.fxRateSnapshot,
+      stripeOutboundPaymentId: row.stripeOutboundPaymentId,
+      initiatedAt: row.initiatedAt,
+      baseIdempotencyKey: row.idempotencyKey,
+      nowMs: opts.nowMs,
+    });
+    return preserved.preserve && preserved.code === "GP_FAILED_ATTEMPT_PRESERVED";
+  });
+  if (originals.length !== 1) return { ok: false, code: "GP_RETRY_NOT_AVAILABLE" };
+  const original = originals[0];
+  const correctedKey = correctedQuoteRetryKey(original.idempotencyKey);
+  let corrected = forTxn.find((row) => row.idempotencyKey === correctedKey) || null;
+  let created = false;
+
+  const proof = await opts.reconcile();
+  if (!proof.ok) return { ok: false, code: proof.code, attemptId: corrected?.id || original.id };
+
+  if (!corrected) {
+    const inserted = await opts.createAttempt({
+      protectedTxnId: original.protectedTxnId,
+      kind: original.kind,
+      idempotencyKey: correctedKey,
+      amountMinor: original.amountMinor,
+      currency: original.currency,
+      stripeMode: original.stripeMode,
+      stripeRecipientId: original.stripeRecipientId,
+      stripePayoutMethodId: original.stripePayoutMethodId,
+      reconciliationNote: correctedAttemptLink(original.id),
+    });
+    if (!inserted.ok) {
+      const again = await opts.loadAttempts();
+      corrected = again.find((row) => row.idempotencyKey === correctedKey) || null;
+      if (!corrected) return { ok: false, code: "GP_RETRY_IN_PROGRESS" };
+    } else {
+      corrected = inserted.attempt;
+      created = true;
+    }
+  }
+
+  if (corrected.idempotencyKey !== correctedKey) return { ok: false, code: "GP_RETRY_NOT_AVAILABLE" };
+  const blocked = attemptBlocksRetry(corrected);
+  if (blocked) return { ok: false, code: blocked, attemptId: corrected.id };
+  if (corrected.status !== "PENDING" || corrected.failureCode) {
+    return { ok: true, attemptId: corrected.id, created, executed: false };
+  }
+  const claimed = await opts.claimAttempt(corrected.id, corrected.updatedAt);
+  if (!claimed) return { ok: false, code: "GP_RETRY_IN_PROGRESS", attemptId: corrected.id };
+  await opts.execute(corrected);
+  return { ok: true, attemptId: corrected.id, created, executed: true };
 }
