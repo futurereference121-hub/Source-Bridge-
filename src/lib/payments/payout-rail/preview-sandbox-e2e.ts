@@ -24,6 +24,8 @@ import {
   gpFetch,
 } from "@/lib/payments/payout-rail/gp-client";
 import { releaseFinal } from "@/lib/payments/release";
+import { retryDefinitiveQuoteRejection } from "@/lib/payments/payout-rail/outbound-payment";
+import { isExactCorrectedRetryFixture } from "@/lib/payments/payout-rail/preview-sandbox-retry-gate";
 import { reconcileOutboundAttempt } from "@/lib/payments/payout-rail/reconcile";
 import { mapOutboundPaymentProviderStatus } from "@/lib/payments/payout-rail/status-mapper";
 import {
@@ -547,6 +549,52 @@ export async function runSandboxE2eRelease(): Promise<SandboxE2eReport> {
           stripe_status: listed.statuses[0] || null,
           stripe_creation: "uncertain",
           duplicate_reconciliation: listed.count === 1 ? "provider_found_unpersisted" : "duplicate",
+        });
+      }
+      if (
+        isExactCorrectedRetryFixture({
+          hostH8: host_h8,
+          txnH8: discoveryHash8(txn.id),
+          txnStatus: txn.status,
+          stripeMode: txn.stripeMode,
+          attemptCount: 1,
+          attemptH8: discoveryHash8(attempts[0].id),
+          attemptStatus: attempts[0].status,
+          hasOutboundPaymentId: false,
+          listedOutboundCount: 0,
+        })
+      ) {
+        // This fixture already failed without a provider id. Do not call releaseFinal.
+        try {
+          await retryDefinitiveQuoteRejection({ protectedTxnId: txn.id });
+        } catch (err) {
+          const code =
+            err && typeof err === "object" && "code" in err
+              ? String((err as { code?: string }).code)
+              : "corrected_retry_failed";
+          const after = await prisma.outboundPaymentAttempt.findMany({
+            where: { protectedTxnId: txn.id },
+          });
+          const uncertain = code === "GP_PAYMENT_OUTCOME_UNCERTAIN" || code === "GP_PAYMENT_IN_FLIGHT";
+          const providerId = after.find((row) => row.stripeOutboundPaymentId)?.stripeOutboundPaymentId || "";
+          return blocked(code.toLowerCase(), {
+            host_h8,
+            fixture_txn_h8: discoveryHash8(txn.id),
+            attempt_count: after.length,
+            attempt_h8: discoveryHash8(attempts[0].id),
+            attempt_status: attempts[0].status,
+            outbound_h8: providerId ? discoveryHash8(providerId) : null,
+            outbound_prefix: outboundPrefix(providerId),
+            stripe_creation: providerId ? "submitted" : uncertain ? "uncertain" : "not_attempted",
+            duplicate_reconciliation: "corrected_retry",
+            db_rows_written: Math.max(0, after.length - attempts.length),
+          });
+        }
+        return reportPersisted({
+          txnId: txn.id,
+          stripeWrites: 1,
+          dbRowsWritten: 0,
+          stripeCreation: "submitted",
         });
       }
       return blocked("prior_attempt_without_provider", {
