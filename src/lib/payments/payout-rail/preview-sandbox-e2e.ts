@@ -553,10 +553,7 @@ export async function runSandboxE2eRelease(): Promise<SandboxE2eReport> {
   }
 
   if (!payout) {
-    const summary = fa.balances
-      .filter((row) => row.currency === "usd" || row.currency === "thb")
-      .map((row) => `${row.currency}:${row.value}`)
-      .join(",");
+    const summary = fa.balances.map((row) => `${row.currency}:${row.value}`).join(",");
     return blocked(
       summary
         ? `financial_account_cannot_cover_minimum:${summary}`
