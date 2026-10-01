@@ -137,25 +137,30 @@ function asRecord(raw: unknown): Record<string, unknown> | null {
   return raw as Record<string, unknown>;
 }
 
-function cashBalances(body: Record<string, unknown>): CashBalance[] {
-  const balance = asRecord(body.balance) || {};
-  const cash = asRecord(balance.cash);
-  if (!cash) return [];
+function minorValue(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.trunc(raw);
+  if (typeof raw === "string" && /^-?\d+$/.test(raw)) return Number(raw);
+  return null;
+}
+
+function availableBalances(body: Record<string, unknown>): CashBalance[] {
+  const balance = asRecord(body.balance);
+  const available = asRecord(balance?.available);
+  if (!available) return [];
   const found: CashBalance[] = [];
-  const available = asRecord(cash.available);
-  if (available && typeof available.value === "number" && typeof available.currency === "string") {
-    found.push({ currency: available.currency.toLowerCase(), value: available.value });
+  const direct = minorValue(available.value);
+  if (direct != null && typeof available.currency === "string") {
+    found.push({ currency: available.currency.toLowerCase(), value: direct });
   }
-  for (const [key, value] of Object.entries(cash)) {
-    if (key === "available") continue;
+  for (const [key, value] of Object.entries(available)) {
+    if (key === "value" || key === "currency") continue;
     const row = asRecord(value);
-    if (!row) continue;
-    const nested = asRecord(row.available);
-    const source = nested && typeof nested.value === "number" ? nested : row;
-    if (typeof source.value !== "number") continue;
+    const amount = minorValue(row?.value);
+    if (!row || amount == null) continue;
     const currency =
-      typeof source.currency === "string" ? source.currency.toLowerCase() : key.toLowerCase();
-    found.push({ currency, value: source.value });
+      typeof row.currency === "string" ? row.currency.toLowerCase() : key.toLowerCase();
+    if (!/^[a-z]{3}$/.test(currency)) continue;
+    found.push({ currency, value: amount });
   }
   return found;
 }
@@ -283,7 +288,8 @@ async function readFinancialAccount(): Promise<
   });
   if (!res.ok) return { ok: false, blocker: "financial_account_unreadable" };
   if (res.body.livemode !== false) return { ok: false, blocker: "financial_account_livemode" };
-  const balances = cashBalances(res.body);
+  if (res.body.status !== "open") return { ok: false, blocker: "financial_account_not_open" };
+  const balances = availableBalances(res.body);
   if (balances.length === 0) return { ok: false, blocker: "financial_account_balance_unconfirmed" };
   return { ok: true, livemodeFalse: true, balances };
 }
@@ -446,7 +452,15 @@ export async function runSandboxE2eRelease(): Promise<SandboxE2eReport> {
   }
 
   const fa = await readFinancialAccount();
-  if (!fa.ok) return blocked(fa.blocker, { host_h8, user_id_h8: SELLER_USER_H8, livemode_is_false: false });
+  if (!fa.ok) {
+    return blocked(fa.blocker, {
+      host_h8,
+      user_id_h8: SELLER_USER_H8,
+      recipient_h8: RECIPIENT_H8,
+      payout_method_h8: PAYOUT_METHOD_H8,
+      livemode_is_false: fa.blocker !== "financial_account_livemode",
+    });
+  }
   const payout = choosePayout(fa.balances);
 
   const fixtures = await prisma.protectedTransaction.findMany({ where: { title: FIXTURE_TITLE } });
@@ -539,11 +553,22 @@ export async function runSandboxE2eRelease(): Promise<SandboxE2eReport> {
   }
 
   if (!payout) {
-    return blocked("financial_account_cannot_cover_minimum", {
-      host_h8,
-      user_id_h8: SELLER_USER_H8,
-      livemode_is_false: true,
-    });
+    const summary = fa.balances
+      .filter((row) => row.currency === "usd" || row.currency === "thb")
+      .map((row) => `${row.currency}:${row.value}`)
+      .join(",");
+    return blocked(
+      summary
+        ? `financial_account_cannot_cover_minimum:${summary}`
+        : "financial_account_cannot_cover_minimum",
+      {
+        host_h8,
+        user_id_h8: SELLER_USER_H8,
+        recipient_h8: RECIPIENT_H8,
+        payout_method_h8: PAYOUT_METHOD_H8,
+        livemode_is_false: true,
+      },
+    );
   }
   const priced = quote(payout.itemCostMinor);
   if (priced.residual !== payout.itemCostMinor) {
