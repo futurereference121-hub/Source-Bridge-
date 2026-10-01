@@ -106,11 +106,12 @@ function blocked(error: string, extra: Record<string, unknown> = {}) {
     ok: false as const,
     error,
     ...extra,
+    fixtureIds: null as { recipientId: string; payoutMethodId: string } | null,
     mutations: { stripe_writes: 0, db_writes: 0 },
   };
 }
 
-export async function runGpSandboxObjectDiscovery() {
+export async function discoverSandboxFixture() {
   const keyKind = testKeyKind();
   if (!keyKind) return blocked("test_key_unavailable");
   if (!initiationIsFalse()) return blocked("initiation_not_false");
@@ -176,6 +177,7 @@ export async function runGpSandboxObjectDiscovery() {
         prefix_match_count: prefixCount,
         prefix_and_hash_match_count: accountIds.length,
       },
+      fixtureIds: null,
       mutations: { stripe_writes: 0, db_writes: 0 },
     };
   }
@@ -273,6 +275,8 @@ export async function runGpSandboxObjectDiscovery() {
     typeof bank?.country === "string" && /^[A-Z]{2}$/.test(bank.country) ? bank.country : null;
   const usage = asRecord(matchedMethod?.usage_status);
   const transfers = typeof usage?.transfers === "string" ? usage.transfers : null;
+  const payoutMethodId =
+    matchedMethod && typeof matchedMethod.id === "string" ? matchedMethod.id : "";
   const livemodeExplicitlyLive =
     accountLivemodeFalse === false || methodLivemodeFalse === false;
   const ok = methodHashCount === 1 && !livemodeExplicitlyLive;
@@ -313,6 +317,17 @@ export async function runGpSandboxObjectDiscovery() {
       archived: Boolean(bank?.archived),
       scoped_by_stripe_context: true,
     },
+    fixtureIds:
+      ok && payoutMethodId
+        ? { recipientId, payoutMethodId }
+        : null,
     mutations: { stripe_writes: 0, db_writes: 0 },
   };
+}
+
+export async function runGpSandboxObjectDiscovery() {
+  const full = await discoverSandboxFixture();
+  const { fixtureIds: _ids, ...redacted } = full;
+  void _ids;
+  return redacted;
 }
