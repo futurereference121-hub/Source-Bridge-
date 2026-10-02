@@ -2,14 +2,14 @@
  * Restricted Global Payouts LIVE pilot decisions.
  * Pure functions only — no Stripe calls and no database access.
  *
- * The quote's from.debited amount equals the payout principal. Itemized provider
- * fees are not added again. The cap and the financial-account check both use
- * that principal once. Fees must still carry a resolvable source currency.
- * Provider fees stay with Source Bridge and are not deducted from sourcer entitlement.
+ * An accepted quote debits the payout principal. Itemized estimated fees are
+ * outside that debit, in the source currency. The cap and the financial-account
+ * check cover the principal plus those fees once. They are not added to the
+ * buyer total and are not deducted from sourcer entitlement.
  */
 
-/** Cap and funding use the quoted source debit, which equals principal. Fees are not added again. */
-export const PILOT_CAP_COVERS = "quoted_source_debit" as const;
+/** Cap and funding cover the quoted principal debit plus separate same-currency fees. */
+export const PILOT_CAP_COVERS = "quoted_debit_plus_separate_source_fees" as const;
 
 /** One transaction-scoped lock key for the single LIVE pilot payment. */
 export const LIVE_PILOT_LOCK_KEY = 87264011;
@@ -97,6 +97,36 @@ export function parseDestinationMinimums(
     minimums[currency] = amount;
   }
   return { ok: true, minimums };
+}
+
+export function quotedPayoutCover(opts: {
+  principalMinor: number;
+  sourceCurrency: string;
+  providerFeeMinor: number;
+  crossBorderFeeMinor: number;
+  fxFeeMinor: number;
+  providerFeeCurrency: string;
+  crossBorderFeeCurrency: string;
+  fxFeeCurrency: string;
+}):
+  | { ok: true; separateFeeMinor: number; requiredCoverMinor: number }
+  | { ok: false; code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" } {
+  const sourceCurrency = parsePilotSourceCurrency(opts.sourceCurrency);
+  if (!sourceCurrency || !Number.isInteger(opts.principalMinor) || opts.principalMinor <= 0) {
+    return { ok: false, code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" };
+  }
+  const provider = feeDebit(opts.providerFeeMinor, opts.providerFeeCurrency, sourceCurrency);
+  const crossBorder = feeDebit(opts.crossBorderFeeMinor, opts.crossBorderFeeCurrency, sourceCurrency);
+  const fx = feeDebit(opts.fxFeeMinor, opts.fxFeeCurrency, sourceCurrency);
+  if (!provider.ok || !crossBorder.ok || !fx.ok) {
+    return { ok: false, code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" };
+  }
+  const separateFeeMinor = provider.amount + crossBorder.amount + fx.amount;
+  const requiredCoverMinor = opts.principalMinor + separateFeeMinor;
+  if (!Number.isSafeInteger(requiredCoverMinor)) {
+    return { ok: false, code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" };
+  }
+  return { ok: true, separateFeeMinor, requiredCoverMinor };
 }
 
 function feeDebit(
@@ -193,15 +223,20 @@ export function evaluateLivePilotInitiation(opts: {
   }
   if (opts.principalMinor > capMinor) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
 
-  const provider = feeDebit(opts.providerFeeMinor, opts.providerFeeCurrency, sourceCurrency);
-  const crossBorder = feeDebit(opts.crossBorderFeeMinor, opts.crossBorderFeeCurrency, sourceCurrency);
-  const fx = feeDebit(opts.fxFeeMinor, opts.fxFeeCurrency, sourceCurrency);
-  if (!provider.ok || !crossBorder.ok || !fx.ok) {
-    return { ok: false, code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" };
-  }
-  const providerFeeTotalMinor = provider.amount + crossBorder.amount + fx.amount;
-  // from.debited is the principal. Adding the itemized fees again would double-count.
-  const totalSourceDebitMinor = opts.principalMinor;
+  const cover = quotedPayoutCover({
+    principalMinor: opts.principalMinor,
+    sourceCurrency,
+    providerFeeMinor: opts.providerFeeMinor,
+    crossBorderFeeMinor: opts.crossBorderFeeMinor,
+    fxFeeMinor: opts.fxFeeMinor,
+    providerFeeCurrency: opts.providerFeeCurrency,
+    crossBorderFeeCurrency: opts.crossBorderFeeCurrency,
+    fxFeeCurrency: opts.fxFeeCurrency,
+  });
+  if (!cover.ok) return cover;
+  const providerFeeTotalMinor = cover.separateFeeMinor;
+  // Fees are outside the quoted debit. Cover them once; do not add another currency.
+  const totalSourceDebitMinor = cover.requiredCoverMinor;
   if (totalSourceDebitMinor > capMinor) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
 
   if (opts.availableBalanceMinor == null || !Number.isInteger(opts.availableBalanceMinor)) {

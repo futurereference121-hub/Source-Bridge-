@@ -317,11 +317,21 @@ function minorAmount(raw: unknown): { value: number; currency: string } | null {
   return { value: rec.value, currency: rec.currency.toLowerCase() };
 }
 
-function integerFee(raw: unknown): number | null {
+function representableFee(raw: unknown):
+  | { ok: true; value: number; currency: string }
+  | { ok: false; code: "GP_QUOTE_FEE_UNREPRESENTABLE" } {
   const rec = asRecord(raw);
-  const value = rec && typeof rec.value === "number" ? rec.value : null;
-  if (value == null || !Number.isInteger(value) || value < 0) return null;
-  return value;
+  const value = rec && "value" in rec ? rec.value : undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    return { ok: false, code: "GP_QUOTE_FEE_UNREPRESENTABLE" };
+  }
+  if (value === 0 && (rec?.currency == null || rec.currency === "")) {
+    return { ok: true, value: 0, currency: "" };
+  }
+  if (typeof rec?.currency !== "string" || !/^[a-z]{3}$/i.test(rec.currency)) {
+    return { ok: false, code: "GP_QUOTE_FEE_UNREPRESENTABLE" };
+  }
+  return { ok: true, value, currency: rec.currency.toLowerCase() };
 }
 
 export function parseQuoteSnapshot(raw: string | null | undefined): QuoteSnapshot | null {
@@ -348,7 +358,7 @@ export function validateOutboundQuote(opts: {
   destinationCurrency: string;
   mode: "TEST" | "LIVE";
   nowMs: number;
-}): { ok: true; snapshot: QuoteSnapshot } | { ok: false; code: "GP_QUOTE_MISMATCH" | "GP_QUOTE_EXPIRED" } {
+}): { ok: true; snapshot: QuoteSnapshot } | { ok: false; code: "GP_QUOTE_MISMATCH" | "GP_QUOTE_EXPIRED" | "GP_QUOTE_FEE_UNREPRESENTABLE" } {
   const source = opts.sourceCurrency.toLowerCase();
   const destination = opts.destinationCurrency.toLowerCase();
   const amount = minorAmount(opts.body.amount);
@@ -407,24 +417,23 @@ export function validateOutboundQuote(opts: {
     if (current !== next) return "mixed";
     return current;
   };
-  if (Array.isArray(opts.body.estimated_fees)) {
-    for (const raw of opts.body.estimated_fees) {
-      const fee = asRecord(raw);
-      const amount = asRecord(fee?.amount);
-      const val = integerFee(amount);
-      if (val == null) continue;
-      const feeCurrency = typeof amount?.currency === "string" ? amount.currency.toLowerCase() : "";
-      const type = String(fee?.type || "").toLowerCase();
-      if (type.includes("cross")) {
-        crossBorderFeeMinor += val;
-        crossBorderFeeCurrency = rememberFee(crossBorderFeeCurrency, feeCurrency);
-      } else if (type.includes("fx") || type.includes("exchange")) {
-        fxFeeMinor += val;
-        fxFeeCurrency = rememberFee(fxFeeCurrency, feeCurrency);
-      } else {
-        providerFeeMinor += val;
-        providerFeeCurrency = rememberFee(providerFeeCurrency, feeCurrency);
-      }
+  if (!Array.isArray(opts.body.estimated_fees)) {
+    return { ok: false, code: "GP_QUOTE_FEE_UNREPRESENTABLE" };
+  }
+  for (const raw of opts.body.estimated_fees) {
+    const fee = asRecord(raw);
+    const parsed = representableFee(fee?.amount);
+    if (!parsed.ok) return parsed;
+    const type = String(fee?.type || "").toLowerCase();
+    if (type.includes("cross")) {
+      crossBorderFeeMinor += parsed.value;
+      crossBorderFeeCurrency = rememberFee(crossBorderFeeCurrency, parsed.currency);
+    } else if (type.includes("fx") || type.includes("exchange")) {
+      fxFeeMinor += parsed.value;
+      fxFeeCurrency = rememberFee(fxFeeCurrency, parsed.currency);
+    } else {
+      providerFeeMinor += parsed.value;
+      providerFeeCurrency = rememberFee(providerFeeCurrency, parsed.currency);
     }
   }
   const rates = asRecord(fx?.rates);
@@ -623,7 +632,7 @@ export async function executeQuotedPayout(opts: {
   }) => Promise<QuoteHttpResult>;
   persistQuote: (snapshot: QuoteSnapshot) => Promise<void>;
   markPaymentSubmission: () => Promise<void>;
-  assertBeforeProviderWrite?: () => Promise<void>;
+  assertBeforeProviderWrite?: (snapshot: QuoteSnapshot | null) => Promise<void>;
 }): Promise<
   | { ok: true; body: Record<string, unknown>; quoteUsed: boolean }
   | { ok: false; code: string; parsed: GpProviderError | null; uncertain: boolean }
@@ -636,6 +645,7 @@ export async function executeQuotedPayout(opts: {
   }
   let quoteId = "";
   const stored = parseQuoteSnapshot(opts.storedSnapshot);
+  let activeSnapshot: QuoteSnapshot | null = stored;
 
   if (opts.mode === "LIVE") {
     const confirmed = evaluateQuoteConfirmation({
@@ -716,12 +726,13 @@ export async function executeQuotedPayout(opts: {
         return { ok: false, code: validated.code, parsed: null, uncertain: false };
       }
       await opts.persistQuote(validated.snapshot);
+      activeSnapshot = validated.snapshot;
       quoteId = validated.snapshot.quoteId;
     }
   }
 
   try {
-    if (opts.assertBeforeProviderWrite) await opts.assertBeforeProviderWrite();
+    if (opts.assertBeforeProviderWrite) await opts.assertBeforeProviderWrite(activeSnapshot);
   } catch (err) {
     const gated = localGateResult(err);
     if (gated) return gated;

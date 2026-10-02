@@ -66,6 +66,7 @@ import {
   evaluateQuoteConfirmation,
   LIVE_PILOT_LOCK_KEY,
   pilotFailureIsSticky,
+  quotedPayoutCover,
 } from "@/lib/payments/payout-rail/live-pilot";
 import {
   mapOutboundPaymentProviderStatus,
@@ -365,6 +366,19 @@ function livePilotEnv() {
     authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
     destinationMinimumsRaw: process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
   };
+}
+
+function coverForRelease(amount: number, currency: string, snapshot: QuoteSnapshot | null) {
+  return quotedPayoutCover({
+    principalMinor: amount,
+    sourceCurrency: currency,
+    providerFeeMinor: snapshot?.providerFeeMinor ?? 0,
+    crossBorderFeeMinor: snapshot?.crossBorderFeeMinor ?? 0,
+    fxFeeMinor: snapshot?.fxFeeMinor ?? 0,
+    providerFeeCurrency: snapshot?.providerFeeCurrency || "",
+    crossBorderFeeCurrency: snapshot?.crossBorderFeeCurrency || "",
+    fxFeeCurrency: snapshot?.fxFeeCurrency || "",
+  });
 }
 
 async function assertLivePilotReleaseReady(opts: {
@@ -692,9 +706,29 @@ async function executeOutboundRelease(opts: {
     });
   }
 
+  const releaseCover = coverForRelease(
+    amount,
+    txn.currency,
+    parseQuoteSnapshot(attempt.fxRateSnapshot),
+  );
+  if (!releaseCover.ok) {
+    await prisma.outboundPaymentAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: "FAILED",
+        failureCode: releaseCover.code,
+        failureMessage: "Payout fees cannot be reserved in the source currency.",
+        lastAttemptAt: new Date(),
+      },
+    });
+    throw Object.assign(new Error("Payout fees cannot be reserved in the source currency."), {
+      status: 409,
+      code: releaseCover.code,
+    });
+  }
   const funding = await ensureFinancialAccountFunding({
     mode: txnMode,
-    amountMinor: amount,
+    amountMinor: releaseCover.requiredCoverMinor,
     currency: txn.currency,
     idempotencyKey: `fa_fund_${attempt.id}`,
     protectedTxnId: txn.id,
@@ -884,22 +918,34 @@ async function executeOutboundRelease(opts: {
       requiresQuote: route.requiresQuote,
       storedSnapshot: attempt.fxRateSnapshot,
       actorUserId: opts.actorUserId,
-      assertBeforeProviderWrite:
-        txnMode === "LIVE"
-          ? async () => {
-              await assertLivePilotReleaseReady({
-                txn,
-                txnMode,
-                actorUserId: opts.actorUserId,
-                amount,
-                snapshotRaw: attempt.fxRateSnapshot,
-                nowMs: Date.now(),
-                recipientId: txn.sellerGpRecipientId,
-                payoutMethodId: txn.sellerGpPayoutMethodId,
-                termsHash: txn.termsHash,
-              });
-            }
-          : undefined,
+      assertBeforeProviderWrite: async (snapshot) => {
+        const cover = coverForRelease(amount, txn.currency, snapshot);
+        if (!cover.ok) {
+          throw Object.assign(new Error("Payout fees cannot be reserved in the source currency."), {
+            status: 409,
+            code: cover.code,
+          });
+        }
+        const balance = await readFinancialAccountBalance(txnMode);
+        if (balance.availableMinor != null && balance.availableMinor < cover.requiredCoverMinor) {
+          throw Object.assign(
+            new Error("Financial account balance does not cover the payout and its separate provider fees."),
+            { status: 409, code: "GP_PILOT_FUNDING_SHORT" },
+          );
+        }
+        if (txnMode !== "LIVE") return;
+        await assertLivePilotReleaseReady({
+          txn,
+          txnMode,
+          actorUserId: opts.actorUserId,
+          amount,
+          snapshotRaw: snapshot ? JSON.stringify(snapshot) : attempt.fxRateSnapshot,
+          nowMs: Date.now(),
+          recipientId: txn.sellerGpRecipientId,
+          payoutMethodId: txn.sellerGpPayoutMethodId,
+          termsHash: txn.termsHash,
+        });
+      },
       post: async (req) =>
         gpFetch({
           mode: txnMode,

@@ -136,6 +136,74 @@ ok(
 }
 
 {
+  const harness = base();
+  let payments = 0;
+  const result = await harness.run(async (req) => {
+    if (req.path.endsWith("outbound_payment_quotes")) {
+      return {
+        ok: true,
+        status: 200,
+        body: quoteBody({
+          estimated_fees: [{ type: "foreign_exchange_fee", amount: { value: 1.5, currency: "gbp" } }],
+        }),
+        requestId: null,
+      };
+    }
+    payments += 1;
+    return { ok: true, status: 200, body: { id: "obp_test_should_not" }, requestId: null };
+  });
+  ok(
+    "fractional fee blocks release",
+    !result.ok && result.code === "GP_QUOTE_FEE_UNREPRESENTABLE" && payments === 0,
+  );
+}
+
+{
+  let reserved = 0;
+  const harness = base({
+    assertBeforeProviderWrite: async (snapshot) => {
+      reserved =
+        (snapshot?.providerFeeMinor || 0) +
+        (snapshot?.crossBorderFeeMinor || 0) +
+        (snapshot?.fxFeeMinor || 0);
+    },
+  });
+  const result = await harness.run(async (req) => {
+    if (req.path.endsWith("outbound_payment_quotes")) {
+      return {
+        ok: true,
+        status: 200,
+        body: quoteBody({
+          estimated_fees: [
+            { type: "standard_payout_fee", amount: { value: 50, currency: "gbp" } },
+            { type: "cross_border_payout_fee", amount: { value: 20, currency: "gbp" } },
+            { type: "foreign_exchange_fee", amount: { value: 80, currency: "gbp" } },
+          ],
+          to: {
+            recipient,
+            payout_method: method,
+            credited: { value: 177948, currency: "thb" },
+          },
+        }),
+        requestId: null,
+      };
+    }
+    ok(
+      "seller payout stays the 4000 principal",
+      (req.body.amount as { value: number }).value === 4000,
+    );
+    return { ok: true, status: 200, body: { id: "obp_test_sandboxshape", status: "processing" }, requestId: null };
+  });
+  ok(
+    "separate fees are visible without reducing the destination credit",
+    result.ok === true &&
+      reserved === 150 &&
+      harness.persisted[0].destinationAmountMinor === 177948 &&
+      harness.persisted[0].sourceAmountMinor === 4000,
+  );
+}
+
+{
   const harness = base({ destinationCurrency: "gbp", sourceCurrency: "GBP", requiresQuote: false });
   const result = await harness.run(async (req) => {
     ok("domestic same-currency payment omits the quote", req.path.endsWith("outbound_payments") && !("outbound_payment_quote" in req.body));

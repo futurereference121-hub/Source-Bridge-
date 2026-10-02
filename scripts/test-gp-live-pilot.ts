@@ -134,16 +134,31 @@ for (const [name, overrides, code] of deniedCases) {
 
 const allowed = live();
 ok(
-  "quoted debit equals principal and fees are not added again",
+  "cap and balance cover principal plus separate source fees once",
   allowed.ok &&
     allowed.capCovers === PILOT_CAP_COVERS &&
-    allowed.totalSourceDebitMinor === 2000 &&
     allowed.providerFeeTotalMinor === 150 &&
-    allowed.totalSourceDebitMinor !== 2000 + 150,
+    allowed.totalSourceDebitMinor === 2000 + 150,
 );
 ok(
-  "itemized fees do not push a principal inside the cap over it",
-  live({ principalMinor: 2400, availableBalanceMinor: 2400 }).ok === true,
+  "balance that covers only the principal is short",
+  live({ availableBalanceMinor: 2000 }).ok === false &&
+    live({ availableBalanceMinor: 2000 }).code === "GP_PILOT_FUNDING_SHORT",
+);
+ok(
+  "separate fees push the cover over the cap",
+  live({ principalMinor: 2400, availableBalanceMinor: 3000 }).ok === false &&
+    live({ principalMinor: 2400, availableBalanceMinor: 3000 }).code === "GP_PILOT_AMOUNT_CAP_EXCEEDED",
+);
+ok(
+  "zero separate fees leave the cover equal to principal",
+  live({
+    principalMinor: 2400,
+    availableBalanceMinor: 2400,
+    providerFeeMinor: 0,
+    crossBorderFeeMinor: 0,
+    fxFeeMinor: 0,
+  }).ok === true,
 );
 ok("TEST initiation does not apply the live cap", evaluateLivePilotInitiation({
   ...live(),
