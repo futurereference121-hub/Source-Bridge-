@@ -358,11 +358,13 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
   let entryPages = 0;
   let entryHttpOk = true;
   let entryComplete = listed.complete;
+  const ledgerGet = credential === "platform_test_secret_proven" ? platformTestGet : restrictedGet;
   if (listed.httpOk) {
     for (const transactionId of linkedIds) {
       const entries = await listGet(
         `/v2/money_management/transaction_entries?transaction=${encodeURIComponent(transactionId)}&limit=${PAGE_LIMIT}`,
         "/v2/money_management/transaction_entries",
+        ledgerGet,
       );
       entryPages += entries.pages;
       groups.push({ transactionId, rows: entries.rows });

@@ -224,6 +224,7 @@ ok(
   }) === false,
 );
 ok("retrieval names one proven platform key", retrieval.includes("STRIPE_SECRET_KEY_TEST") && retrieval.includes("platformTestKeyMayListLedger"));
+ok("entry reads use the same proven key", retrieval.includes('credential === "platform_test_secret_proven" ? platformTestGet'));
 ok("retrieval does not scan live keys", !retrieval.includes("sk_live_") && !retrieval.includes("rk_live_"));
 
 console.log(`\n${passed} passed`);
