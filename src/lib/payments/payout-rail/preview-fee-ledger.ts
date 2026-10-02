@@ -344,6 +344,33 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
         if (result.error) rejected.push({ filter: `platform_${filter}`, ...result.error });
         if (result.error?.http_status !== 400 || result.error.code !== "invalid_filters") break;
       }
+      if (listed.httpOk && filterUsed !== "financial_account") {
+        const accountList = await listGet(
+          transactionQuery("financial_account", financialAccountId, paymentId),
+          "/v2/money_management/transactions",
+          platformTestGet,
+        );
+        if (!accountList.httpOk) {
+          listed = { ...listed, complete: false, error: accountList.error };
+          if (accountList.error) rejected.push({ filter: "platform_financial_account", ...accountList.error });
+        } else {
+          const seen = new Set(
+            listed.rows.map((row) => {
+              const id = asRecord(row)?.id;
+              return typeof id === "string" ? id : "";
+            }),
+          );
+          for (const row of accountList.rows) {
+            const id = asRecord(row)?.id;
+            const key = typeof id === "string" ? id : "";
+            if (key && seen.has(key)) continue;
+            listed.rows.push(row);
+          }
+          listed.complete = accountList.complete && listed.complete;
+          listed.pages += accountList.pages;
+          filterUsed = `${filterUsed}+financial_account`;
+        }
+      }
     }
   }
   const linkedIds = listed.rows
