@@ -65,6 +65,7 @@ import {
   evaluatePilotOccupancy,
   evaluateQuoteConfirmation,
   LIVE_PILOT_LOCK_KEY,
+  pilotFailureIsSticky,
 } from "@/lib/payments/payout-rail/live-pilot";
 import {
   mapOutboundPaymentProviderStatus,
@@ -444,8 +445,10 @@ async function claimLivePilotSlot(opts: {
   attemptId: string;
 }) {
   const authorized = (process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "").trim();
+  // The lock, the occupancy read, and the durable claim share this interactive
+  // transaction, so they use one connection. The lock ends at commit; the claim remains.
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LIVE_PILOT_LOCK_KEY})`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${BigInt(LIVE_PILOT_LOCK_KEY)})`;
     const rows = await tx.outboundPaymentAttempt.findMany({
       where: { stripeMode: "LIVE" },
       select: {
@@ -454,6 +457,7 @@ async function claimLivePilotSlot(opts: {
         stripeOutboundPaymentId: true,
         status: true,
         failureCode: true,
+        initiatedAt: true,
       },
     });
     const decision = evaluatePilotOccupancy({
@@ -466,6 +470,7 @@ async function claimLivePilotSlot(opts: {
         outboundPaymentId: row.stripeOutboundPaymentId,
         status: row.status,
         failureCode: row.failureCode,
+        initiatedAt: row.initiatedAt ? row.initiatedAt.toISOString() : null,
       })),
     });
     if (!decision.ok) {
@@ -474,10 +479,23 @@ async function claimLivePilotSlot(opts: {
         code: decision.code,
       });
     }
-    await tx.outboundPaymentAttempt.update({
-      where: { id: opts.attemptId },
+    const claimed = await tx.outboundPaymentAttempt.updateMany({
+      where: {
+        id: opts.attemptId,
+        stripeMode: "LIVE",
+        stripeOutboundPaymentId: "",
+        initiatedAt: null,
+        failureCode: "",
+        status: "PENDING",
+      },
       data: { failureCode: "GP_PILOT_SLOT" },
     });
+    if (claimed.count !== 1) {
+      throw Object.assign(new Error("Another live pilot payout is already in progress."), {
+        status: 409,
+        code: "GP_PILOT_PAYMENT_ALREADY_STARTED",
+      });
+    }
   });
 }
 
@@ -592,6 +610,23 @@ async function executeOutboundRelease(opts: {
         stripePayoutMethodId: txn.sellerGpPayoutMethodId,
       },
     }));
+
+  if (
+    existingAttempt &&
+    (existingAttempt.stripeOutboundPaymentId ||
+      existingAttempt.initiatedAt ||
+      pilotFailureIsSticky(existingAttempt.failureCode))
+  ) {
+    throw Object.assign(
+      new Error("Outbound payment outcome is still uncertain. Automatic retry is blocked."),
+      {
+        status: 409,
+        code: "GP_PAYMENT_IN_FLIGHT",
+        pendingProvider: true,
+        outboundPaymentId: existingAttempt.stripeOutboundPaymentId || "",
+      },
+    );
+  }
 
   if (
     existingAttempt &&
@@ -743,6 +778,7 @@ async function executeOutboundRelease(opts: {
       : idempotencyKey;
 
   let capturedOutboundId = "";
+  let submissionMarked = false;
 
   try {
     const methodRes = await gpFetch({
@@ -888,6 +924,7 @@ async function executeOutboundRelease(opts: {
         });
       },
       markPaymentSubmission: async () => {
+        submissionMarked = true;
         await prisma.outboundPaymentAttempt.update({
           where: { id: attempt.id },
           data: { initiatedAt: new Date(), stripeFinancialAccountId: faId },
@@ -897,7 +934,8 @@ async function executeOutboundRelease(opts: {
 
     if (!payout.ok) {
       const message = sanitizeProviderFailureText(payout.parsed?.message || payout.code);
-      if (!payout.uncertain && countryMinimumBlocks(message)) {
+      const holdUncertainSlot = payout.uncertain || submissionMarked;
+      if (!payout.uncertain && !submissionMarked && countryMinimumBlocks(message)) {
         await prisma.outboundPaymentAttempt.update({
           where: { id: attempt.id },
           data: {
@@ -923,7 +961,9 @@ async function executeOutboundRelease(opts: {
         where: { id: attempt.id },
         data: {
           status: "FAILED",
-          failureCode: payout.code.slice(0, 80),
+          failureCode: holdUncertainSlot
+            ? "GP_PAYMENT_OUTCOME_UNCERTAIN"
+            : payout.code.slice(0, 80),
           failureMessage: message.slice(0, 500),
           reconciliationNote: payout.parsed
             ? mergeAttemptNote(attempt.reconciliationNote, providerErrorRecord(payout.parsed))
@@ -1053,6 +1093,9 @@ async function executeOutboundRelease(opts: {
       where: { id: attempt.id },
       data: {
         status: "FAILED",
+        ...(submissionMarked
+          ? { failureCode: "GP_PAYMENT_OUTCOME_UNCERTAIN" }
+          : {}),
         failureMessage: message.slice(0, 500),
         attemptCount: { increment: 1 },
         lastAttemptAt: new Date(),

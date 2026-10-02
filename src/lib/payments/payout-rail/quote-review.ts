@@ -23,9 +23,11 @@ import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-fundi
 import {
   evaluateLivePilotInitiation,
   evaluateQuoteConfirmation,
+  pilotFailureIsSticky,
   planQuotePreparation,
   PROVIDER_FEE_PAYER,
 } from "@/lib/payments/payout-rail/live-pilot";
+import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
 import {
   evaluateQuoteRoute,
   financialAccountCountry,
@@ -55,9 +57,19 @@ export type QuoteReviewView = {
   fxFeeCurrency: string;
   feePayer: string;
   expiresAt: string;
+  payoutLabel: string;
 };
 
-function viewFromSnapshot(raw: string): QuoteReviewView | null {
+function payoutLabelFor(status: string, failureCode: string): string {
+  if (!status) return "";
+  const state = deriveOutboundDisplayState(status, failureCode);
+  if (state.phase === "manual_review" || state.phase === "processing" || state.phase === "completed") {
+    return state.buyerLabel;
+  }
+  return "";
+}
+
+function viewFromSnapshot(raw: string, status = "", failureCode = ""): QuoteReviewView | null {
   const snap = parseQuoteSnapshot(raw);
   if (!snap) return null;
   return {
@@ -75,6 +87,7 @@ function viewFromSnapshot(raw: string): QuoteReviewView | null {
     fxFeeCurrency: snap.fxFeeCurrency || "",
     feePayer: snap.feePayer || PROVIDER_FEE_PAYER,
     expiresAt: snap.expiresAt,
+    payoutLabel: payoutLabelFor(status, failureCode),
   };
 }
 
@@ -145,27 +158,26 @@ export async function reviewGlobalPayoutQuote(opts: {
     where: { idempotencyKey },
   });
   if (opts.action === "status") {
-    return { ok: true, review: viewFromSnapshot(existing?.fxRateSnapshot || "") };
+    return { ok: true, review: viewFromSnapshot(existing?.fxRateSnapshot || "", existing?.status || "", existing?.failureCode || "") };
   }
 
-  if (existing?.stripeOutboundPaymentId || existing?.status === "PROCESSING" || existing?.failureCode === "GP_UNDER_REVIEW") {
-    return { ok: false, code: "GP_PAYMENT_IN_FLIGHT", review: viewFromSnapshot(existing.fxRateSnapshot) };
+  if (
+    existing?.stripeOutboundPaymentId ||
+    existing?.initiatedAt ||
+    existing?.status === "PROCESSING" ||
+    pilotFailureIsSticky(existing?.failureCode)
+  ) {
+    return { ok: false, code: "GP_PAYMENT_IN_FLIGHT", review: viewFromSnapshot(existing?.fxRateSnapshot || "", existing?.status || "", existing?.failureCode || "") };
   }
 
   if (opts.action === "confirm") {
     const snap = parseQuoteSnapshot(existing?.fxRateSnapshot || "");
     if (!snap || !opts.quoteId || opts.quoteId !== snap.quoteId) {
-      return { ok: false, code: "GP_QUOTE_MISMATCH", review: viewFromSnapshot(existing?.fxRateSnapshot || "") };
+      return { ok: false, code: "GP_QUOTE_MISMATCH", review: viewFromSnapshot(existing?.fxRateSnapshot || "", existing?.status || "", existing?.failureCode || "") };
     }
     const stamped: QuoteSnapshot = {
       ...snap,
       confirmedByUserId: opts.actorUserId,
-      transactionId: txn.id,
-      recipientId: txn.sellerGpRecipientId,
-      payoutMethodId: txn.sellerGpPayoutMethodId,
-      mode: txnMode,
-      termsHash: txn.termsHash,
-      feePayer: PROVIDER_FEE_PAYER,
     };
     const decision = evaluateQuoteConfirmation({
       stored: stamped,
@@ -180,7 +192,7 @@ export async function reviewGlobalPayoutQuote(opts: {
       termsHash: txn.termsHash,
       nowMs: Date.now(),
     });
-    if (!decision.ok) return { ok: false, code: decision.code, review: viewFromSnapshot(existing?.fxRateSnapshot || "") };
+    if (!decision.ok) return { ok: false, code: decision.code, review: viewFromSnapshot(existing?.fxRateSnapshot || "", existing?.status || "", existing?.failureCode || "") };
     if (txnMode === "LIVE") {
       const blocked = await liveLimitDecision(txn, opts.actorUserId, amount, stamped);
       if (!blocked.ok) return { ok: false, code: blocked.code, review: viewFromSnapshot(JSON.stringify(stamped)) };

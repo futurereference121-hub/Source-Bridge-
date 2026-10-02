@@ -24,6 +24,7 @@ import {
   GP_POSTED_WORDING,
 } from "../src/lib/payments/payout-rail/outbound-display.ts";
 import {
+  decideOutboundEventTransition,
   isUnderReviewOutboundEvent,
   mapOutboundPaymentProviderStatus,
   mapThinOutboundEventType,
@@ -117,8 +118,7 @@ const deniedCases: Array<[string, Record<string, unknown>, string]> = [
   ["missing currency", { configuredSourceCurrencyRaw: "" }, "GP_PILOT_SOURCE_CURRENCY_INVALID"],
   ["currency mismatch", { sourceCurrency: "USD" }, "GP_PILOT_SOURCE_CURRENCY_INVALID"],
   ["principal over cap", { principalMinor: 3000, providerFeeMinor: 0, crossBorderFeeMinor: 0, fxFeeMinor: 0 }, "GP_PILOT_AMOUNT_CAP_EXCEEDED"],
-  ["fees push debit over cap", { principalMinor: 2400 }, "GP_PILOT_AMOUNT_CAP_EXCEEDED"],
-  ["balance misses fees", { availableBalanceMinor: 2000 }, "GP_PILOT_FUNDING_SHORT"],
+  ["balance below principal", { availableBalanceMinor: 1999 }, "GP_PILOT_FUNDING_SHORT"],
   ["unreadable balance", { availableBalanceMinor: null }, "GP_PILOT_FUNDING_UNVERIFIED"],
   ["other transaction", { transactionId: otherTxn }, "GP_PILOT_TRANSACTION_NOT_AUTHORIZED"],
   ["unauthorized actor", { actorUserId: seller }, "GP_PILOT_ACTOR_UNAUTHORIZED"],
@@ -134,8 +134,16 @@ for (const [name, overrides, code] of deniedCases) {
 
 const allowed = live();
 ok(
-  "valid live pilot allows total source debit",
-  allowed.ok && allowed.capCovers === PILOT_CAP_COVERS && allowed.totalSourceDebitMinor === 2150,
+  "quoted debit equals principal and fees are not added again",
+  allowed.ok &&
+    allowed.capCovers === PILOT_CAP_COVERS &&
+    allowed.totalSourceDebitMinor === 2000 &&
+    allowed.providerFeeTotalMinor === 150 &&
+    allowed.totalSourceDebitMinor !== 2000 + 150,
+);
+ok(
+  "itemized fees do not push a principal inside the cap over it",
+  live({ principalMinor: 2400, availableBalanceMinor: 2400 }).ok === true,
 );
 ok("TEST initiation does not apply the live cap", evaluateLivePilotInitiation({
   ...live(),
@@ -186,6 +194,33 @@ const reviewBlock = evaluatePilotOccupancy({
   }],
 });
 ok("under review blocks another payout", !reviewBlock.ok && reviewBlock.code === "GP_PILOT_PAYMENT_ALREADY_STARTED");
+const sameAfterClaim = evaluatePilotOccupancy({
+  authorizedTransactionId: txn,
+  requestedTransactionId: txn,
+  claimingAttemptId: "attempt_a",
+  attempts: [{
+    id: "attempt_a",
+    transactionId: txn,
+    outboundPaymentId: "",
+    status: "PENDING",
+    failureCode: "GP_PILOT_SLOT",
+  }],
+});
+ok("durable claim blocks the same attempt after the lock ends", !sameAfterClaim.ok && sameAfterClaim.code === "GP_PILOT_PAYMENT_ALREADY_STARTED");
+const uncertainSlot = evaluatePilotOccupancy({
+  authorizedTransactionId: txn,
+  requestedTransactionId: txn,
+  claimingAttemptId: "attempt_new",
+  attempts: [{
+    id: "attempt_old",
+    transactionId: txn,
+    outboundPaymentId: "",
+    status: "FAILED",
+    failureCode: "GP_PAYMENT_OUTCOME_UNCERTAIN",
+    initiatedAt: "2026-10-02T00:00:00.000Z",
+  }],
+});
+ok("uncertain outcome keeps the payment slot", !uncertainSlot.ok && uncertainSlot.code === "GP_PILOT_PAYMENT_ALREADY_STARTED");
 
 ok("quote preparation never selects a payment path", planQuotePreparation({
   mode: "LIVE",
@@ -335,6 +370,58 @@ ok("under_review is recognized on the object and event", outboundPaymentIsUnderR
 ok("under_review blocks finalization", underReviewBlocksFinalization({ providerUnderReview: true }));
 ok("posted after review can still map to success", mapThinOutboundEventType("v2.money_management.outbound_payment.posted") === "SUCCEEDED");
 ok("review failure reasons stay failed outcomes", mapThinOutboundEventType("v2.money_management.outbound_payment.failed") === "FAILED");
+const reviewEvent = "v2.money_management.outbound_payment.under_review";
+const postedEvent = "v2.money_management.outbound_payment.posted";
+const returnedEvent = "v2.money_management.outbound_payment.returned";
+const processingEvent = "v2.money_management.outbound_payment.created";
+const heldDecision = decideOutboundEventTransition({
+  currentStatus: "PENDING",
+  failureCode: "",
+  eventType: reviewEvent,
+});
+ok("under_review event holds processing and does not finalize", heldDecision.status === "PROCESSING" && heldDecision.failureCode === "GP_UNDER_REVIEW" && heldDecision.finalize === false);
+const duplicateReview = decideOutboundEventTransition({
+  currentStatus: "PROCESSING",
+  failureCode: "GP_UNDER_REVIEW",
+  eventType: reviewEvent,
+});
+ok("duplicate under_review does not finalize", duplicateReview.finalize === false && duplicateReview.failureCode === "GP_UNDER_REVIEW");
+const postedAfterReview = decideOutboundEventTransition({
+  currentStatus: "PROCESSING",
+  failureCode: "GP_UNDER_REVIEW",
+  eventType: postedEvent,
+  providerUnderReview: false,
+});
+ok("posted after review can finalize", postedAfterReview.finalize === true && postedAfterReview.status === "SUCCEEDED");
+const reviewAfterPosted = decideOutboundEventTransition({
+  currentStatus: "SUCCEEDED",
+  failureCode: "",
+  eventType: reviewEvent,
+});
+ok("late under_review does not regress posted", reviewAfterPosted.changed === false && reviewAfterPosted.finalize === false && reviewAfterPosted.status === "SUCCEEDED");
+const returnedAfterPosted = decideOutboundEventTransition({
+  currentStatus: "SUCCEEDED",
+  failureCode: "",
+  eventType: returnedEvent,
+});
+ok("returned after posted is recorded", returnedAfterPosted.status === "RETURNED" && returnedAfterPosted.finalize === false);
+const postedAfterReturned = decideOutboundEventTransition({
+  currentStatus: "RETURNED",
+  failureCode: "RETURNED",
+  eventType: postedEvent,
+});
+ok("late posted does not regress returned", postedAfterReturned.changed === false && postedAfterReturned.finalize === false && postedAfterReturned.status === "RETURNED");
+const processingDuringReview = decideOutboundEventTransition({
+  currentStatus: "PROCESSING",
+  failureCode: "GP_UNDER_REVIEW",
+  eventType: processingEvent,
+});
+ok("ordinary processing event keeps the review hold", processingDuringReview.failureCode === "GP_UNDER_REVIEW" && processingDuringReview.finalize === false);
+const retrievedShape = {
+  status: "processing",
+  status_details: { processing: { reason: "under_review" } },
+};
+ok("retrieved 2026-08-26 processing object stays under review", outboundPaymentIsUnderReview(retrievedShape) && mapOutboundPaymentProviderStatus(retrievedShape) === "PROCESSING");
 const reviewDisplay = deriveOutboundDisplayState("PROCESSING", "GP_UNDER_REVIEW");
 ok("under_review display is pending", reviewDisplay.pendingProvider === true && reviewDisplay.phase === "manual_review");
 const postedDisplay = deriveOutboundDisplayState("SUCCEEDED");
@@ -346,6 +433,17 @@ const pilotSource = read("src/lib/payments/payout-rail/live-pilot.ts");
 ok("cap is not hardcoded", !/\b1000\b/.test(pilotSource));
 const quoteReview = read("src/lib/payments/payout-rail/quote-review.ts");
 ok("quote review does not post an outbound payment", !quoteReview.includes("OUTBOUND_PAYMENT_PATH"));
+ok("confirmation does not rewrite stored terms before checking them", quoteReview.includes("confirmedByUserId: opts.actorUserId") && !quoteReview.includes("termsHash: txn.termsHash,\n      feePayer"));
+const claimSource = read("src/lib/payments/payout-rail/outbound-payment.ts");
+const claimStart = claimSource.indexOf("async function claimLivePilotSlot");
+const claimEnd = claimSource.indexOf("async function executeOutboundRelease");
+const claimBody = claimSource.slice(claimStart, claimEnd);
+ok("pilot lock and claim share one transaction client", claimBody.includes("tx.$executeRaw") && claimBody.includes("tx.outboundPaymentAttempt.updateMany") && !claimBody.includes("prisma.outboundPaymentAttempt"));
+ok(
+  "uncertain retry does not clear the claim",
+  claimSource.includes("pilotFailureIsSticky(existingAttempt.failureCode)") &&
+    claimSource.includes("Automatic retry is blocked"),
+);
 const events = read("src/lib/payments/payout-rail/events.ts");
 ok("reconciliation does not depend on live initiation being on", events.includes("globalPayoutsReconciliationAllowed("));
 ok("under_review uses the existing reconciliation handler", events.includes("isUnderReviewOutboundEvent(") && events.includes("finalizeOutboundSuccess("));

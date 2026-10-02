@@ -2,14 +2,14 @@
  * Restricted Global Payouts LIVE pilot decisions.
  * Pure functions only — no Stripe calls and no database access.
  *
- * The amount cap is the maximum total source debit: payout principal plus
- * provider, cross-border, and FX fees charged in the source currency.
- * Principal is also checked on its own. Both principal and total source debit
- * must be covered by the readable financial-account balance.
+ * The quote's from.debited amount equals the payout principal. Itemized provider
+ * fees are not added again. The cap and the financial-account check both use
+ * that principal once. Fees must still carry a resolvable source currency.
  * Provider fees stay with Source Bridge and are not deducted from sourcer entitlement.
  */
 
-export const PILOT_CAP_COVERS = "total_source_debit" as const;
+/** Cap and funding use the quoted source debit, which equals principal. Fees are not added again. */
+export const PILOT_CAP_COVERS = "quoted_source_debit" as const;
 
 /** One transaction-scoped lock key for the single LIVE pilot payment. */
 export const LIVE_PILOT_LOCK_KEY = 87264011;
@@ -145,6 +145,7 @@ export function evaluateLivePilotInitiation(opts: {
       ok: true;
       capCovers: typeof PILOT_CAP_COVERS;
       principalMinor: number;
+      providerFeeTotalMinor: number;
       totalSourceDebitMinor: number;
       capMinor: number;
     }
@@ -154,6 +155,7 @@ export function evaluateLivePilotInitiation(opts: {
       ok: true,
       capCovers: PILOT_CAP_COVERS,
       principalMinor: opts.principalMinor,
+      providerFeeTotalMinor: 0,
       totalSourceDebitMinor: opts.principalMinor,
       capMinor: 0,
     };
@@ -197,16 +199,15 @@ export function evaluateLivePilotInitiation(opts: {
   if (!provider.ok || !crossBorder.ok || !fx.ok) {
     return { ok: false, code: "GP_PILOT_FEE_CURRENCY_UNRESOLVED" };
   }
-  const totalSourceDebitMinor = opts.principalMinor + provider.amount + crossBorder.amount + fx.amount;
+  const providerFeeTotalMinor = provider.amount + crossBorder.amount + fx.amount;
+  // from.debited is the principal. Adding the itemized fees again would double-count.
+  const totalSourceDebitMinor = opts.principalMinor;
   if (totalSourceDebitMinor > capMinor) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
 
   if (opts.availableBalanceMinor == null || !Number.isInteger(opts.availableBalanceMinor)) {
     return { ok: false, code: "GP_PILOT_FUNDING_UNVERIFIED" };
   }
-  if (
-    opts.availableBalanceMinor < opts.principalMinor ||
-    opts.availableBalanceMinor < totalSourceDebitMinor
-  ) {
+  if (opts.availableBalanceMinor < totalSourceDebitMinor) {
     return { ok: false, code: "GP_PILOT_FUNDING_SHORT" };
   }
 
@@ -227,6 +228,7 @@ export function evaluateLivePilotInitiation(opts: {
     ok: true,
     capCovers: PILOT_CAP_COVERS,
     principalMinor: opts.principalMinor,
+    providerFeeTotalMinor,
     totalSourceDebitMinor,
     capMinor,
   };
@@ -238,18 +240,39 @@ export type PilotAttemptSnapshot = {
   outboundPaymentId: string;
   status: string;
   failureCode: string;
+  initiatedAt?: string | null;
 };
+
+const STICKY_FAILURE = new Set([
+  "GP_UNDER_REVIEW",
+  "GP_PILOT_SLOT",
+  "GP_PAYMENT_OUTCOME_UNCERTAIN",
+]);
+
+export function pilotFailureIsSticky(failureCode: string | null | undefined): boolean {
+  return STICKY_FAILURE.has(String(failureCode || ""));
+}
 
 const OCCUPYING_STATUSES = new Set(["PROCESSING", "SUCCEEDED", "RECONCILED", "ACTION_REQUIRED"]);
 
 function attemptOccupiesPilot(row: PilotAttemptSnapshot): boolean {
   if (row.outboundPaymentId) return true;
+  if (row.initiatedAt) return true;
   if (OCCUPYING_STATUSES.has(row.status)) return true;
-  if (row.failureCode === "GP_UNDER_REVIEW" || row.failureCode === "GP_PILOT_SLOT") return true;
+  if (pilotFailureIsSticky(row.failureCode)) return true;
   if (row.status === "PENDING" || row.status === "AWAITING_FA_FUNDS" || row.status === "AWAITING_MINIMUM") {
     return true;
   }
   return false;
+}
+
+function claimingRowIsFresh(row: PilotAttemptSnapshot): boolean {
+  return (
+    !row.outboundPaymentId &&
+    !row.initiatedAt &&
+    !pilotFailureIsSticky(row.failureCode) &&
+    row.status === "PENDING"
+  );
 }
 
 /**
@@ -267,8 +290,8 @@ export function evaluatePilotOccupancy(opts: {
     return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
   }
   for (const row of opts.attempts) {
-    if (row.id === opts.claimingAttemptId) continue;
     if (!attemptOccupiesPilot(row)) continue;
+    if (row.id === opts.claimingAttemptId && claimingRowIsFresh(row)) continue;
     return { ok: false, code: "GP_PILOT_PAYMENT_ALREADY_STARTED" };
   }
   return { ok: true };

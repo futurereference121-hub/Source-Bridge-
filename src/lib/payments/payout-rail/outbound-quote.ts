@@ -473,8 +473,8 @@ export function assessAttemptPreservation(opts: {
   baseIdempotencyKey: string;
   nowMs: number;
 }): { preserve: false } | { preserve: true; code: string; nextIdempotencyKey: string | null } {
-  if (opts.failureCode === "GP_UNDER_REVIEW") {
-    return { preserve: true, code: "GP_UNDER_REVIEW", nextIdempotencyKey: null };
+  if (opts.failureCode === "GP_UNDER_REVIEW" || opts.failureCode === "GP_PILOT_SLOT") {
+    return { preserve: true, code: opts.failureCode, nextIdempotencyKey: null };
   }
   if (opts.stripeOutboundPaymentId) {
     return { preserve: true, code: "GP_PAYMENT_IN_FLIGHT", nextIdempotencyKey: null };

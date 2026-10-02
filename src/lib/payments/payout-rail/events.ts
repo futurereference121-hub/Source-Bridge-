@@ -14,8 +14,10 @@ import {
 import { syncGlobalPayoutRecipientByStripeId } from "@/lib/payments/payout-rail/recipient";
 import {
   canAdvanceOutboundStatus,
+  decideOutboundEventTransition,
   isUnderReviewOutboundEvent,
   mapThinOutboundEventType,
+  outboundPaymentIsUnderReview,
 } from "@/lib/payments/payout-rail/status-mapper";
 import { globalPayoutsReconciliationAllowed } from "@/lib/payments/payout-rail/live-pilot";
 import { finalizeOutboundSuccess } from "@/lib/payments/payout-rail/outbound-payment";
@@ -187,7 +189,15 @@ async function reconcileOutboundFromEvent(opts: {
   });
   if (!attempt) return;
 
-  if (isUnderReviewOutboundEvent(opts.eventType)) {
+  const decision = decideOutboundEventTransition({
+    currentStatus: attempt.status,
+    failureCode: attempt.failureCode,
+    eventType: opts.eventType,
+  });
+  if (!decision.changed && !decision.finalize) return;
+
+  if (isUnderReviewOutboundEvent(opts.eventType) || decision.failureCode === "GP_UNDER_REVIEW") {
+    if (decision.finalize) return;
     await prisma.outboundPaymentAttempt.updateMany({
       where: {
         id: attempt.id,
@@ -224,6 +234,29 @@ async function reconcileOutboundFromEvent(opts: {
       opts.outboundPaymentId,
       opts.stripeMode,
     );
+    if (!providerBody) {
+      throw Object.assign(new Error("Outbound payment could not be retrieved"), {
+        status: 503,
+        code: "GP_RECONCILIATION_INCOMPLETE",
+      });
+    }
+    if (outboundPaymentIsUnderReview(providerBody)) {
+      await prisma.outboundPaymentAttempt.updateMany({
+        where: {
+          id: attempt.id,
+          status: { notIn: ["SUCCEEDED", "RECONCILED", "RETURNED", "FAILED"] },
+        },
+        data: {
+          status: "PROCESSING",
+          failureCode: "GP_UNDER_REVIEW",
+          failureMessage: sanitizeProviderFailureText(
+            "Held for provider review. Payment is not finalized.",
+          ),
+          lastAttemptAt: new Date(),
+        },
+      });
+      return;
+    }
 
     await finalizeOutboundSuccess({
       attemptId: attempt.id,

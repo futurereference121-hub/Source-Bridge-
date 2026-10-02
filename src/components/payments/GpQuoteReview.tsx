@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { formatMinor } from "@/lib/payments/money";
 import { GP_POSTED_WORDING } from "@/lib/payments/payout-rail/outbound-display";
 
@@ -19,6 +19,7 @@ type Review = {
   fxFeeCurrency: string;
   feePayer: string;
   expiresAt: string;
+  payoutLabel?: string;
 };
 
 function feeLine(label: string, amount: number, currency: string) {
@@ -43,8 +44,11 @@ export function GpQuoteReview(props: {
   const [review, setReview] = useState<Review | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   async function post(action: "prepare" | "confirm") {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError("");
     try {
@@ -69,6 +73,7 @@ export function GpQuoteReview(props: {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payout estimate was not accepted.");
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -96,6 +101,7 @@ export function GpQuoteReview(props: {
           {feeLine("FX fee", review.fxFeeMinor, review.fxFeeCurrency)}
           <p>Paid by: {review.feePayer}</p>
           <p>Estimate expires: {new Date(review.expiresAt).toLocaleString()}</p>
+          {review.payoutLabel ? <p data-testid="gp-payout-state">{review.payoutLabel}</p> : null}
           <p className="text-white/55">{GP_POSTED_WORDING}</p>
         </div>
       ) : (

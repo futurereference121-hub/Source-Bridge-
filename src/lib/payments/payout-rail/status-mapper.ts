@@ -94,7 +94,77 @@ export function canAdvanceOutboundStatus(
   if (current === "SUCCEEDED" || current === "RECONCILED") {
     return next === "RETURNED" || next === "RECONCILED";
   }
+  if (current === "RETURNED" || current === "FAILED") {
+    return next === current;
+  }
   return nxt >= cur;
+}
+
+/**
+ * Pinned API 2026-08-26.preview keeps status as processing | failed | posted |
+ * returned | canceled. under_review is status_details.processing.reason, added
+ * in 2026-06-24 and present because this version's status_details covers
+ * processing as well as failed and returned. It is not a new top-level status.
+ */
+export function decideOutboundEventTransition(opts: {
+  currentStatus: string;
+  failureCode: string;
+  eventType: string;
+  providerUnderReview?: boolean;
+}): {
+  changed: boolean;
+  finalize: boolean;
+  status: string;
+  failureCode: string;
+} {
+  const current = opts.currentStatus;
+  const kept = {
+    changed: false,
+    finalize: false,
+    status: current,
+    failureCode: opts.failureCode,
+  };
+  const settled =
+    current === "SUCCEEDED" ||
+    current === "RECONCILED" ||
+    current === "RETURNED" ||
+    current === "FAILED";
+
+  if (isUnderReviewOutboundEvent(opts.eventType) || opts.providerUnderReview) {
+    if (settled) return kept;
+    return {
+      changed: current !== "PROCESSING" || opts.failureCode !== "GP_UNDER_REVIEW",
+      finalize: false,
+      status: "PROCESSING",
+      failureCode: "GP_UNDER_REVIEW",
+    };
+  }
+
+  const mapped = mapThinOutboundEventType(opts.eventType);
+  if (!mapped) return kept;
+
+  if (mapped === "SUCCEEDED") {
+    if (settled) return kept;
+    return { changed: true, finalize: true, status: "SUCCEEDED", failureCode: "" };
+  }
+  if (mapped === "RETURNED") {
+    if (current === "RETURNED") return kept;
+    return { changed: true, finalize: false, status: "RETURNED", failureCode: "RETURNED" };
+  }
+  if (mapped === "FAILED" || mapped === "ACTION_REQUIRED") {
+    if (current === "SUCCEEDED" || current === "RECONCILED" || current === "RETURNED") return kept;
+    return { changed: true, finalize: false, status: mapped, failureCode: mapped };
+  }
+  if (mapped === "PROCESSING") {
+    if (opts.failureCode === "GP_UNDER_REVIEW" || settled) return kept;
+    return {
+      changed: current !== "PROCESSING",
+      finalize: false,
+      status: "PROCESSING",
+      failureCode: opts.failureCode,
+    };
+  }
+  return kept;
 }
 
 export function mapThinOutboundEventType(eventType: string): LocalOutboundStatus | null {
