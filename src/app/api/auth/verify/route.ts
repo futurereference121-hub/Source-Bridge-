@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { createSession, toPublicAccount } from "@/lib/auth";
+import { verificationTokenRejection } from "@/lib/auth/verification-token";
 import { hashToken } from "@/lib/storage";
 import { jsonError } from "@/lib/validation";
 
@@ -20,16 +21,13 @@ export async function POST(req: NextRequest) {
       include: { user: true },
     });
 
-    if (!record) return jsonError("Invalid verification link", 400);
-    if (record.usedAt) {
-      return jsonError("This verification link has already been used", 400, {
-        code: "TOKEN_USED",
-      });
-    }
-    if (record.expiresAt.getTime() <= Date.now()) {
-      return jsonError("This verification link has expired", 400, {
-        code: "TOKEN_EXPIRED",
-      });
+    const rejection = verificationTokenRejection(record);
+    if (rejection || !record) {
+      return jsonError(
+        rejection?.error ?? "Invalid verification link",
+        400,
+        rejection?.code ? { code: rejection.code } : undefined,
+      );
     }
 
     await prisma.$transaction([

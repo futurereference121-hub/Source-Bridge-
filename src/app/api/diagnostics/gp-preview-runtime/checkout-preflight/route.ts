@@ -8,6 +8,7 @@ import {
   isGpPreviewRuntimeDiagGateOpen,
   verifyGpPreviewRuntimeDiagAuth,
 } from "@/lib/payments/payout-rail/preview-runtime-diag";
+import { previewMailReadiness } from "@/lib/auth/preview-mail-readiness";
 import { runCheckoutPreflight } from "@/lib/payments/payout-rail/preview-checkout-preflight";
 
 export const runtime = "nodejs";
@@ -24,15 +25,17 @@ export async function GET(req: Request) {
     return new Response(null, { status: 404 });
   }
   void req;
+  const mail = previewMailReadiness();
   try {
     const result = await runCheckoutPreflight();
-    return Response.json(result, { status: 200, headers: noStore });
+    return Response.json({ ...result, mail }, { status: 200, headers: noStore });
   } catch {
     return Response.json(
       {
         label: "GP_NORMAL_CHECKOUT_PREFLIGHT",
         ok: false,
         blocker: "checkout_preflight_failed",
+        mail,
         mutations: { stripe_writes: 0, db_writes: 0 },
         production_untouched: true,
       },

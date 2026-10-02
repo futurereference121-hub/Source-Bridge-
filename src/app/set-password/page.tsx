@@ -57,16 +57,14 @@ function RequestLinkForm() {
         Set your password
       </h1>
       <p className="mt-3 text-white/60">
-        Enter your account email and we&apos;ll send you a secure link to set
-        or reset your password.
+        Enter your account email and we&apos;ll send you a secure link.
       </p>
 
       {sent ? (
         <div className="panel-navy mt-10 space-y-4 rounded-xl px-5 py-6 sm:px-6">
           <p className="text-sm text-white/70">
-            If an account exists for <span className="text-white">{email}</span>{" "}
-            and its email is verified, a link is on its way. Check your inbox
-            (and spam).
+            If an account exists for <span className="text-white">{email}</span>,
+            a link is on its way. Check your inbox (and spam).
           </p>
           {previewUrl ? (
             <div className="space-y-2 border-t border-white/10 pt-4">
