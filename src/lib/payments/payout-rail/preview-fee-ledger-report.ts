@@ -326,6 +326,17 @@ function integersEqual(left: MonetaryEvidence, right: MonetaryEvidence): boolean
   return left.safe_minor === right.safe_minor;
 }
 
+export function safeProviderError(status: number, body: Record<string, unknown> | null): {
+  http_status: number;
+  code: string | null;
+  type: string | null;
+} {
+  const err = asRecord(body?.error);
+  const code = typeof err?.code === "string" && /^[a-z0-9_]{1,64}$/.test(err.code) ? err.code : null;
+  const type = typeof err?.type === "string" && /^[a-z0-9_]{1,64}$/.test(err.type) ? err.type : null;
+  return { http_status: status, code, type };
+}
+
 export function buildFeeLedgerEvidence(opts: {
   hostH8: string | null;
   initiationIsFalse: boolean;
@@ -342,10 +353,13 @@ export function buildFeeLedgerEvidence(opts: {
   paymentBody: Record<string, unknown> | null;
   transactionList: {
     queried: boolean;
+    filter: string;
     httpOk: boolean;
     complete: boolean;
     pages: number;
     rows: unknown[];
+    error: { http_status: number; code: string | null; type: string | null } | null;
+    rejected_filters: Array<{ filter: string; http_status: number; code: string | null; type: string | null }>;
   };
   entryList: {
     queried: boolean;
@@ -400,10 +414,12 @@ export function buildFeeLedgerEvidence(opts: {
     quote,
     payment,
     transactions: {
-      filter: "financial_account_and_flow",
+      filter: opts.transactionList.filter,
       relationship: "flow.outbound_payment",
       queried: opts.transactionList.queried,
       http_ok: opts.transactionList.httpOk,
+      error: opts.transactionList.error,
+      rejected_filters: opts.transactionList.rejected_filters,
       pages: opts.transactionList.pages,
       page_cap: FEE_LEDGER_PAGE_CAP,
       complete: opts.transactionList.complete,

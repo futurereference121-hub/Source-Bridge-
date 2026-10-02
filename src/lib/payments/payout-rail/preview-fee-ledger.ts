@@ -10,6 +10,7 @@ import { discoveryHash8 } from "@/lib/payments/payout-rail/preview-sandbox-disco
 import {
   buildFeeLedgerEvidence,
   FEE_LEDGER_PAGE_CAP,
+  safeProviderError,
   transactionLinkedToPayment,
 } from "@/lib/payments/payout-rail/preview-fee-ledger-report";
 import { SANDBOX_VERIFY_FIXTURE } from "@/lib/payments/payout-rail/preview-sandbox-verify-report";
@@ -54,21 +55,37 @@ async function listGet(startPath: string, allowedPrefix: string): Promise<{
   complete: boolean;
   pages: number;
   rows: unknown[];
+  error: { http_status: number; code: string | null; type: string | null } | null;
 }> {
   const rows: unknown[] = [];
   let path = startPath;
   for (let page = 0; page < FEE_LEDGER_PAGE_CAP; page += 1) {
     const res = await gpFetch({ mode: "TEST", method: "GET", path });
     if (!res.ok || !Array.isArray(res.body.data)) {
-      return { httpOk: false, complete: false, pages: page + 1, rows };
+      return {
+        httpOk: false,
+        complete: false,
+        pages: page + 1,
+        rows,
+        error: safeProviderError(res.status, res.body),
+      };
     }
     rows.push(...res.body.data);
     const next = nextListPath(res.body.next_page_url, allowedPrefix);
-    if (next === "invalid") return { httpOk: true, complete: false, pages: page + 1, rows };
-    if (!next) return { httpOk: true, complete: true, pages: page + 1, rows };
+    if (next === "invalid") {
+      return { httpOk: true, complete: false, pages: page + 1, rows, error: null };
+    }
+    if (!next) return { httpOk: true, complete: true, pages: page + 1, rows, error: null };
     path = next;
   }
-  return { httpOk: true, complete: false, pages: FEE_LEDGER_PAGE_CAP, rows };
+  return { httpOk: true, complete: false, pages: FEE_LEDGER_PAGE_CAP, rows, error: null };
+}
+
+function transactionQuery(filter: "both" | "flow" | "financial_account", faId: string, paymentId: string): string {
+  const params = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+  if (filter === "both" || filter === "financial_account") params.set("financial_account", faId);
+  if (filter === "both" || filter === "flow") params.set("flow", paymentId);
+  return `/v2/money_management/transactions?${params.toString()}`;
 }
 
 export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
@@ -91,10 +108,13 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
     paymentBody: null as Record<string, unknown> | null,
     transactionList: {
       queried: false,
+      filter: "none",
       httpOk: false,
       complete: false,
       pages: 0,
       rows: [] as unknown[],
+      error: null,
+      rejected_filters: [] as Array<{ filter: string; http_status: number; code: string | null; type: string | null }>,
     },
     entryList: {
       queried: false,
@@ -213,10 +233,26 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
     });
   }
 
-  const listed = await listGet(
-    `/v2/money_management/transactions?financial_account=${encodeURIComponent(financialAccountId)}&flow=${encodeURIComponent(paymentId)}&limit=${PAGE_LIMIT}`,
-    "/v2/money_management/transactions",
-  );
+  const rejected: Array<{ filter: string; http_status: number; code: string | null; type: string | null }> = [];
+  let listed = {
+    httpOk: false,
+    complete: false,
+    pages: 0,
+    rows: [] as unknown[],
+    error: null as { http_status: number; code: string | null; type: string | null } | null,
+  };
+  let filterUsed = "none";
+  for (const filter of ["both", "flow", "financial_account"] as const) {
+    const result = await listGet(
+      transactionQuery(filter, financialAccountId, paymentId),
+      "/v2/money_management/transactions",
+    );
+    listed = result;
+    filterUsed = filter;
+    if (result.httpOk) break;
+    if (result.error) rejected.push({ filter, ...result.error });
+    if (result.error?.http_status !== 400 || result.error.code !== "invalid_filters") break;
+  }
   const linkedIds = listed.rows
     .filter((row) => transactionLinkedToPayment(row, paymentId))
     .map((row) => {
@@ -267,10 +303,13 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
     paymentBody,
     transactionList: {
       queried: true,
+      filter: filterUsed,
       httpOk: listed.httpOk,
       complete: listed.complete,
       pages: listed.pages,
       rows: listed.rows,
+      error: listed.httpOk ? null : listed.error,
+      rejected_filters: rejected,
     },
     entryList: {
       queried: listed.httpOk,

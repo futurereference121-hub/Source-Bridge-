@@ -8,6 +8,7 @@ import {
   buildFeeLedgerEvidence,
   entryLinkedToPayment,
   readMonetaryAmount,
+  safeProviderError,
   transactionLinkedToPayment,
 } from "../src/lib/payments/payout-rail/preview-fee-ledger-report.ts";
 
@@ -95,9 +96,12 @@ const report = buildFeeLedgerEvidence({
   paymentBody,
   transactionList: {
     queried: true,
+    filter: "financial_account_and_flow",
     httpOk: true,
     complete: true,
     pages: 1,
+    error: null,
+    rejected_filters: [],
     rows: [
       {
         id: TXN,
@@ -171,7 +175,16 @@ const truncated = buildFeeLedgerEvidence({
   paymentOk: true,
   paymentLivemode: false,
   paymentBody,
-  transactionList: { queried: true, httpOk: true, complete: false, pages: 5, rows: [] },
+  transactionList: {
+    queried: true,
+    filter: "both",
+    httpOk: false,
+    complete: false,
+    pages: 1,
+    rows: [],
+    error: { http_status: 400, code: "invalid_filters", type: "invalid_request_error" },
+    rejected_filters: [],
+  },
   entryList: { queried: true, httpOk: true, complete: false, pages: 0, groups: [] },
 }) as { ok: boolean; comparison: { actual_fees_versus_estimates: string } };
 ok("incomplete discovery is not a zero-fee result", !truncated.ok && truncated.comparison.actual_fees_versus_estimates === "incomplete");
@@ -184,5 +197,10 @@ ok("fee route is GET only", route.includes("export async function GET") && !rout
 ok("retrieval is TEST GET only", retrieval.includes('mode: "TEST"') && retrieval.includes('method: "GET"') && !retrieval.includes('method: "POST"'));
 ok("retrieval matches by flow id", retrieval.includes("transactionLinkedToPayment"));
 ok("mutation routes stay disabled", e2e.includes("status: 410") && restore.includes("status: 410"));
+const hidden = safeProviderError(403, {
+  error: { code: "more_permissions_required", type: "invalid_request_error", message: "obp_test_secret_should_not_appear" },
+});
+ok("provider error keeps only the safe code", hidden.code === "more_permissions_required" && hidden.http_status === 403);
+ok("provider error drops the message", !JSON.stringify(hidden).includes("obp_test_secret"));
 
 console.log(`\n${passed} passed`);
