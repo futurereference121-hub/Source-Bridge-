@@ -292,6 +292,7 @@ function mapTicket(
     shipmentPhotoUrl?: string | null;
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
+    payoutRail?: string | null;
     fundedAt?: Date | string | null;
     paymentIntentStatus?: string | null;
     proposedBy?: {
@@ -498,6 +499,7 @@ function mapTicket(
     declineReason: t.declineReason,
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
+    payoutRail: extras?.payoutRail || "STRIPE_CONNECT",
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
@@ -994,6 +996,7 @@ export async function listConversationPaymentTickets(
           deliveredAt: true,
           inspectionEndsAt: true,
           origin: true,
+          payoutRail: true,
         },
       },
     },
@@ -1083,6 +1086,7 @@ export async function listConversationPaymentTickets(
       shippedAt: t.protectedTransaction?.shippedAt ?? null,
       deliveredAt: t.protectedTransaction?.deliveredAt ?? null,
       inspectionEndsAt: t.protectedTransaction?.inspectionEndsAt ?? null,
+      payoutRail: t.protectedTransaction?.payoutRail ?? null,
       fundedAt: t.protectedTransaction?.fundedAt ?? null,
       viewerId: viewerId || undefined,
       sellerConnectReady: connectBySeller.get(t.sellerId)?.ready ?? false,
@@ -2275,6 +2279,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           deliveredAt: true,
           inspectionEndsAt: true,
           origin: true,
+          payoutRail: true,
         },
       },
     },
@@ -2310,6 +2315,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
   });
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
+    payoutRail: pt?.payoutRail ?? null,
     paymentIntentStatus,
     procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,

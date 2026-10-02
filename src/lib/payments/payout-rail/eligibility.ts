@@ -14,6 +14,7 @@ import {
   normalizeStripeMode,
   type StripeMode,
 } from "@/lib/payments/flags";
+import { liveUserAllowed } from "@/lib/payments/payout-rail/live-pilot";
 
 function parseList(raw: string | undefined): string[] {
   return String(raw || "")
@@ -75,13 +76,39 @@ export function isConnectPayoutCountryUnsupported(
 export function isGlobalPayoutsUserAllowed(opts: {
   userId: string;
   email?: string | null;
+  mode?: StripeMode;
 }): boolean {
-  if (!isGlobalPayoutsEnabled()) return false;
-  const list = getGlobalPayoutsUserAllowlist();
-  if (list.length === 0) return true; // country gate alone
-  const id = opts.userId.toLowerCase();
-  const email = String(opts.email || "").trim().toLowerCase();
-  return list.includes(id) || (email.length > 0 && list.includes(email));
+  const mode = normalizeStripeMode(opts.mode ?? getStripeMode());
+  return liveUserAllowed({
+    enabled: isGlobalPayoutsEnabled(),
+    mode,
+    allowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST || "",
+    userId: opts.userId,
+    email: opts.email,
+  });
+}
+
+/** Recheck LIVE user and country eligibility immediately before a provider write. */
+export function assertLiveOnboardingWrite(opts: {
+  mode: StripeMode;
+  userId: string;
+  email?: string | null;
+  country: string;
+}): void {
+  const mode = normalizeStripeMode(opts.mode);
+  if (mode !== "LIVE") return;
+  if (!isGlobalPayoutsCountryAllowed(opts.country)) {
+    throw Object.assign(new Error("Payouts are not yet available in your location."), {
+      status: 409,
+      code: "PAYOUTS_UNAVAILABLE",
+    });
+  }
+  if (!isGlobalPayoutsUserAllowed({ userId: opts.userId, email: opts.email, mode: "LIVE" })) {
+    throw Object.assign(new Error("Payouts are not yet available for this account."), {
+      status: 409,
+      code: "PAYOUTS_UNAVAILABLE",
+    });
+  }
 }
 
 /**

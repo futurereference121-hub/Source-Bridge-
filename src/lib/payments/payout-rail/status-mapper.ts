@@ -26,10 +26,36 @@ const RANK: Record<LocalOutboundStatus, number> = {
   RECONCILED: 7,
 };
 
+function asRecord(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  return raw as Record<string, unknown>;
+}
+
+/** Stripe holds the payment in processing with status_details.processing.reason = under_review. */
+export function outboundPaymentIsUnderReview(
+  body: Record<string, unknown> | null | undefined,
+): boolean {
+  const details = asRecord(body?.status_details);
+  const processing = asRecord(details?.processing);
+  return String(processing?.reason || "").toLowerCase() === "under_review";
+}
+
+export function isUnderReviewOutboundEvent(eventType: string): boolean {
+  return String(eventType || "").toLowerCase().includes("under_review");
+}
+
+export function underReviewBlocksFinalization(opts: {
+  failureCode?: string | null;
+  providerUnderReview: boolean;
+}): boolean {
+  return opts.providerUnderReview || opts.failureCode === "GP_UNDER_REVIEW";
+}
+
 export function mapOutboundPaymentProviderStatus(
   body: Record<string, unknown> | null | undefined,
 ): LocalOutboundStatus {
   if (!body) return "PROCESSING";
+  if (outboundPaymentIsUnderReview(body)) return "PROCESSING";
   const raw = String(
     body.status || body.state || body.outcome || "",
   ).toLowerCase();
@@ -73,6 +99,7 @@ export function canAdvanceOutboundStatus(
 
 export function mapThinOutboundEventType(eventType: string): LocalOutboundStatus | null {
   const t = eventType.toLowerCase();
+  if (t.includes("under_review")) return "PROCESSING";
   if (t.includes("posted") || t.includes("succeeded")) return "SUCCEEDED";
   if (t.includes("returned")) return "RETURNED";
   if (t.includes("failed") || t.includes("canceled") || t.includes("cancelled")) {

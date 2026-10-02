@@ -7,6 +7,7 @@ import { Container } from "@/components/ui/Container";
 import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
+import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 import {
   useProtectedOrders,
@@ -36,6 +37,7 @@ type Order = ProtectedOrderSummary & {
     name: string;
     slug: string | null;
   } | null;
+  payoutRail?: string | null;
   actions: {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
@@ -88,6 +90,7 @@ export default function PurchasesPage() {
   const [issueId, setIssueId] = useState<string | null>(null);
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
+  const [gpConfirmed, setGpConfirmed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (authReady && !signedIn) router.replace("/sign-in");
@@ -422,12 +425,26 @@ export default function PurchasesPage() {
                   ) : null}
                 </dl>
 
+                {o.actions.canReleaseProcurement && o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" ? (
+                  <GpQuoteReview
+                    protectedTxnId={o.id}
+                    kind="PROCUREMENT"
+                    confirmed={Boolean(gpConfirmed[`${o.id}:PROCUREMENT`])}
+                    onConfirmed={(confirmed) =>
+                      setGpConfirmed((prev) => ({ ...prev, [`${o.id}:PROCUREMENT`]: confirmed }))
+                    }
+                  />
+                ) : null}
                 {o.actions.canReleaseProcurement ? (
                   <div className="mt-5 border-t border-white/10 pt-4">
                     <PrimaryButton
                       type="button"
                       showArrow={false}
-                      disabled={busyId === o.id}
+                      disabled={
+                        busyId === o.id ||
+                        (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" &&
+                          !gpConfirmed[`${o.id}:PROCUREMENT`])
+                      }
                       className="rounded-lg"
                       onClick={() =>
                         void releaseItemFunds(
@@ -469,11 +486,24 @@ export default function PurchasesPage() {
                       <p className="font-medium text-white/90">
                         Item received — choose one
                       </p>
+                      {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" ? (
+                        <GpQuoteReview
+                          protectedTxnId={o.id}
+                          kind="FINAL"
+                          confirmed={Boolean(gpConfirmed[`${o.id}:FINAL`])}
+                          onConfirmed={(confirmed) =>
+                            setGpConfirmed((prev) => ({ ...prev, [`${o.id}:FINAL`]: confirmed }))
+                          }
+                        />
+                      ) : null}
                       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                         <PrimaryButton
                           type="button"
                           showArrow={false}
-                          disabled={busyId === o.id}
+                          disabled={
+                            busyId === o.id ||
+                            (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && !gpConfirmed[`${o.id}:FINAL`])
+                          }
                           className="rounded-lg"
                           onClick={() =>
                             void submitDecision(o.id, "RELEASE_NOW")
@@ -507,12 +537,25 @@ export default function PurchasesPage() {
                       . Remaining residual auto-releases after the deadline
                       unless you release early or report a problem.
                     </p>
+                    {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && showInsp ? (
+                      <GpQuoteReview
+                        protectedTxnId={o.id}
+                        kind="FINAL"
+                        confirmed={Boolean(gpConfirmed[`${o.id}:FINAL`])}
+                        onConfirmed={(confirmed) =>
+                          setGpConfirmed((prev) => ({ ...prev, [`${o.id}:FINAL`]: confirmed }))
+                        }
+                      />
+                    ) : null}
                     <div className="flex flex-wrap gap-2">
                       {showInsp ? (
                         <PrimaryButton
                           type="button"
                           showArrow={false}
-                          disabled={busyId === o.id}
+                          disabled={
+                            busyId === o.id ||
+                            (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && !gpConfirmed[`${o.id}:FINAL`])
+                          }
                           className="rounded-lg"
                           onClick={() =>
                             void submitDecision(o.id, "RELEASE_NOW")

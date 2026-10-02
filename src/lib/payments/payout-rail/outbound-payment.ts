@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
   assertStripeModeCompatible,
+  isGlobalPayoutsEnabled,
   isPaymentsEnabled,
   normalizeStripeMode,
 } from "@/lib/payments/flags";
@@ -27,7 +28,10 @@ import {
 } from "@/lib/payments/breakdown";
 import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
-import { ensureFinancialAccountFunding } from "@/lib/payments/payout-rail/fa-funding";
+import {
+  ensureFinancialAccountFunding,
+  readFinancialAccountBalance,
+} from "@/lib/payments/payout-rail/fa-funding";
 import {
   getGlobalPayoutsFinancialAccountId,
   gpFetch,
@@ -41,6 +45,7 @@ import {
   mergeAttemptNote,
   mergeStoredQuoteSnapshot,
   parseGpProviderError,
+  parseQuoteSnapshot,
   payoutMethodCountry,
   payoutMethodCurrencies,
   proveNoExistingOutboundPayment,
@@ -51,8 +56,21 @@ import {
   type QuoteSnapshot,
   type RetryAttemptRecord,
 } from "@/lib/payments/payout-rail/outbound-quote";
-import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
-import { mapOutboundPaymentProviderStatus } from "@/lib/payments/payout-rail/status-mapper";
+import {
+  canInitiateGlobalPayoutsMoney,
+  isGlobalPayoutsCountryAllowed,
+} from "@/lib/payments/payout-rail/eligibility";
+import {
+  evaluateLivePilotInitiation,
+  evaluatePilotOccupancy,
+  evaluateQuoteConfirmation,
+  LIVE_PILOT_LOCK_KEY,
+} from "@/lib/payments/payout-rail/live-pilot";
+import {
+  mapOutboundPaymentProviderStatus,
+  outboundPaymentIsUnderReview,
+  underReviewBlocksFinalization,
+} from "@/lib/payments/payout-rail/status-mapper";
 import {
   assertNoConnectTransferSucceeded,
   hasGpSucceeded,
@@ -81,6 +99,22 @@ const RELEASE_ERROR_CODES = new Set([
   "GP_PAYMENT_ALREADY_EXISTS",
   "GP_RETRY_IN_PROGRESS",
   "GP_RETRY_NOT_AVAILABLE",
+  "GP_QUOTE_REVIEW_REQUIRED",
+  "GP_QUOTE_ACTOR_MISMATCH",
+  "GP_UNDER_REVIEW",
+  "GP_PILOT_ACTOR_UNAUTHORIZED",
+  "GP_PILOT_USER_NOT_ALLOWLISTED",
+  "GP_PILOT_COUNTRY_NOT_ALLOWLISTED",
+  "GP_PILOT_SOURCE_CURRENCY_INVALID",
+  "GP_PILOT_AMOUNT_CAP_INVALID",
+  "GP_PILOT_AMOUNT_CAP_EXCEEDED",
+  "GP_PILOT_TRANSACTION_NOT_AUTHORIZED",
+  "GP_PILOT_FEE_CURRENCY_UNRESOLVED",
+  "GP_PILOT_FUNDING_UNVERIFIED",
+  "GP_PILOT_FUNDING_SHORT",
+  "GP_PILOT_DESTINATION_MINIMUM",
+  "GP_PILOT_DESTINATION_MINIMUMS_INVALID",
+  "GP_PILOT_PAYMENT_ALREADY_STARTED",
 ]);
 
 /** Stripe codes stay on the attempt row. The thrown code must not fall through to a second write. */
@@ -322,10 +356,136 @@ export async function releaseFinalViaGlobalPayouts(opts: {
   });
 }
 
+function livePilotEnv() {
+  return {
+    userAllowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST || "",
+    configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
+    amountCapRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_AMOUNT_CAP_MINOR || "",
+    authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
+    destinationMinimumsRaw: process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
+  };
+}
+
+async function assertLivePilotReleaseReady(opts: {
+  txn: { id: string; sellerId: string; buyerId: string; currency: string };
+  txnMode: "TEST" | "LIVE";
+  actorUserId?: string | null;
+  amount: number;
+  snapshotRaw: string;
+  nowMs: number;
+  recipientId: string;
+  payoutMethodId: string;
+  termsHash: string;
+}) {
+  if (opts.txnMode !== "LIVE") return;
+  const snap = parseQuoteSnapshot(opts.snapshotRaw);
+  const confirmed = evaluateQuoteConfirmation({
+    stored: snap,
+    actorUserId: opts.actorUserId || "",
+    transactionId: opts.txn.id,
+    mode: "LIVE",
+    recipientId: opts.recipientId,
+    payoutMethodId: opts.payoutMethodId,
+    sourceAmountMinor: opts.amount,
+    sourceCurrency: opts.txn.currency,
+    destinationCurrency: snap?.destinationCurrency || "",
+    termsHash: opts.termsHash,
+    nowMs: opts.nowMs,
+  });
+  if (!confirmed.ok) {
+    throw Object.assign(new Error("Review and confirm the payout estimate before release."), {
+      status: 409,
+      code: confirmed.code,
+    });
+  }
+  const seller = await prisma.user.findUnique({
+    where: { id: opts.txn.sellerId },
+    select: { email: true, country: true },
+  });
+  const balance = await readFinancialAccountBalance("LIVE");
+  const env = livePilotEnv();
+  const decision = evaluateLivePilotInitiation({
+    mode: "LIVE",
+    gpEnabled: isGlobalPayoutsEnabled(),
+    userAllowlistRaw: env.userAllowlistRaw,
+    userId: opts.txn.sellerId,
+    email: seller?.email ?? null,
+    countryAllowed: isGlobalPayoutsCountryAllowed(seller?.country || ""),
+    actorUserId: opts.actorUserId || "",
+    buyerId: opts.txn.buyerId,
+    sourceCurrency: opts.txn.currency,
+    configuredSourceCurrencyRaw: env.configuredSourceCurrencyRaw,
+    amountCapRaw: env.amountCapRaw,
+    principalMinor: opts.amount,
+    providerFeeMinor: snap?.providerFeeMinor ?? 0,
+    crossBorderFeeMinor: snap?.crossBorderFeeMinor ?? 0,
+    fxFeeMinor: snap?.fxFeeMinor ?? 0,
+    providerFeeCurrency: snap?.providerFeeCurrency || "",
+    crossBorderFeeCurrency: snap?.crossBorderFeeCurrency || "",
+    fxFeeCurrency: snap?.fxFeeCurrency || "",
+    availableBalanceMinor: balance.availableMinor,
+    destinationAmountMinor: snap?.destinationAmountMinor ?? null,
+    destinationCurrency: snap?.destinationCurrency || "",
+    destinationQuoted: true,
+    destinationMinimumsRaw: env.destinationMinimumsRaw,
+    authorizedTransactionIdRaw: env.authorizedTransactionIdRaw,
+    transactionId: opts.txn.id,
+  });
+  if (!decision.ok) {
+    throw Object.assign(new Error("Live payout pilot limits denied this release."), {
+      status: 409,
+      code: decision.code,
+    });
+  }
+}
+
+async function claimLivePilotSlot(opts: {
+  transactionId: string;
+  attemptId: string;
+}) {
+  const authorized = (process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "").trim();
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${LIVE_PILOT_LOCK_KEY})`;
+    const rows = await tx.outboundPaymentAttempt.findMany({
+      where: { stripeMode: "LIVE" },
+      select: {
+        id: true,
+        protectedTxnId: true,
+        stripeOutboundPaymentId: true,
+        status: true,
+        failureCode: true,
+      },
+    });
+    const decision = evaluatePilotOccupancy({
+      authorizedTransactionId: authorized,
+      requestedTransactionId: opts.transactionId,
+      claimingAttemptId: opts.attemptId,
+      attempts: rows.map((row) => ({
+        id: row.id,
+        transactionId: row.protectedTxnId,
+        outboundPaymentId: row.stripeOutboundPaymentId,
+        status: row.status,
+        failureCode: row.failureCode,
+      })),
+    });
+    if (!decision.ok) {
+      throw Object.assign(new Error("Another live pilot payout is already in progress."), {
+        status: 409,
+        code: decision.code,
+      });
+    }
+    await tx.outboundPaymentAttempt.update({
+      where: { id: opts.attemptId },
+      data: { failureCode: "GP_PILOT_SLOT" },
+    });
+  });
+}
+
 async function executeOutboundRelease(opts: {
   txn: {
     id: string;
     sellerId: string;
+    buyerId: string;
     currency: string;
     termsHash: string;
     listingId: string | null;
@@ -558,6 +718,21 @@ async function executeOutboundRelease(opts: {
     );
   }
 
+  if (txnMode === "LIVE") {
+    await assertLivePilotReleaseReady({
+      txn,
+      txnMode,
+      actorUserId: opts.actorUserId,
+      amount,
+      snapshotRaw: attempt.fxRateSnapshot,
+      nowMs: Date.now(),
+      recipientId: txn.sellerGpRecipientId,
+      payoutMethodId: txn.sellerGpPayoutMethodId,
+      termsHash: txn.termsHash,
+    });
+    await claimLivePilotSlot({ transactionId: txn.id, attemptId: attempt.id });
+  }
+
   const faId =
     funding.financialAccountId ||
     getGlobalPayoutsFinancialAccountId(txnMode);
@@ -672,6 +847,23 @@ async function executeOutboundRelease(opts: {
       nowMs: Date.now(),
       requiresQuote: route.requiresQuote,
       storedSnapshot: attempt.fxRateSnapshot,
+      actorUserId: opts.actorUserId,
+      assertBeforeProviderWrite:
+        txnMode === "LIVE"
+          ? async () => {
+              await assertLivePilotReleaseReady({
+                txn,
+                txnMode,
+                actorUserId: opts.actorUserId,
+                amount,
+                snapshotRaw: attempt.fxRateSnapshot,
+                nowMs: Date.now(),
+                recipientId: txn.sellerGpRecipientId,
+                payoutMethodId: txn.sellerGpPayoutMethodId,
+                termsHash: txn.termsHash,
+              });
+            }
+          : undefined,
       post: async (req) =>
         gpFetch({
           mode: txnMode,
@@ -748,6 +940,7 @@ async function executeOutboundRelease(opts: {
 
     const outboundId = typeof payout.body.id === "string" ? payout.body.id : "";
     capturedOutboundId = outboundId;
+    const underReview = outboundPaymentIsUnderReview(payout.body);
     const providerStatus = mapOutboundPaymentProviderStatus(payout.body);
     // Never mark paid on submit alone — PROCESSING until posted/succeeded event.
     const localStatus =
@@ -763,10 +956,14 @@ async function executeOutboundRelease(opts: {
         initiatedAt: new Date(),
         lastAttemptAt: new Date(),
         attemptCount: { increment: 1 },
+        failureCode: underReview ? "GP_UNDER_REVIEW" : "",
+        failureMessage: underReview
+          ? "Held for provider review. Payment is not finalized."
+          : "",
       },
     });
 
-    if (localStatus !== "SUCCEEDED") {
+    if (underReview || localStatus !== "SUCCEEDED") {
       // Domain counters update only on SUCCEEDED (webhook or immediate posted).
       await recordAuditEvent({
         protectedTxnId: txn.id,
@@ -1126,6 +1323,16 @@ export async function finalizeOutboundSuccess(opts: {
   isFullResidual: boolean;
   providerBody?: Record<string, unknown>;
 }) {
+  if (
+    underReviewBlocksFinalization({
+      providerUnderReview: outboundPaymentIsUnderReview(opts.providerBody),
+    })
+  ) {
+    throw Object.assign(new Error("Outbound payment is under review and was not finalized."), {
+      status: 409,
+      code: "GP_UNDER_REVIEW",
+    });
+  }
   const { kind, amount, idempotencyKey } = opts;
   const next = nextStatus(opts.status, opts.domainAction);
   const feeMeta = extractProviderFees(opts.providerBody);

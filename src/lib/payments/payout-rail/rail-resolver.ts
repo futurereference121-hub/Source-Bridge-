@@ -129,6 +129,7 @@ export async function resolvePayoutRail(opts: {
   const userAllowed = isGlobalPayoutsUserAllowed({
     userId: opts.userId,
     email,
+    mode,
   });
   const connectUnsupported = isConnectPayoutCountryUnsupported(country);
 

@@ -12,6 +12,7 @@ import {
 } from "@/lib/payments/flags";
 import {
   isGlobalPayoutsCountryAllowed,
+  assertLiveOnboardingWrite,
   isGlobalPayoutsUserAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
 import { gpErrorMessage, gpFetch, hasGlobalPayoutsRestrictedKey } from "@/lib/payments/payout-rail/gp-client";
@@ -216,7 +217,11 @@ export async function createGlobalPayoutOnboardingLink(opts: {
     );
   }
   if (
-    !isGlobalPayoutsUserAllowed({ userId: opts.userId, email: opts.email })
+    !isGlobalPayoutsUserAllowed({
+      userId: opts.userId,
+      email: opts.email,
+      mode: stripeMode,
+    })
   ) {
     throw Object.assign(
       new Error("Payouts are not yet available for this account."),
@@ -235,6 +240,12 @@ export async function createGlobalPayoutOnboardingLink(opts: {
     // Money mutations not required for recipient create + hosted link.
     // Capability must match country payout method (TH → wire, not local).
     const bankMethod = recipientBankCapabilityForCountry(country);
+    assertLiveOnboardingWrite({
+      mode: stripeMode,
+      userId: opts.userId,
+      email: opts.email,
+      country,
+    });
     const created = await gpFetch({
       mode: stripeMode,
       method: "POST",
@@ -307,6 +318,12 @@ export async function createGlobalPayoutOnboardingLink(opts: {
     );
   }
 
+  assertLiveOnboardingWrite({
+    mode: stripeMode,
+    userId: opts.userId,
+    email: opts.email,
+    country,
+  });
   const link = await gpFetch({
     mode: stripeMode,
     method: "POST",

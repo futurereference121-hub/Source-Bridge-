@@ -55,6 +55,7 @@ runNodeTestScripts(
     "scripts/test-gp-outbound-quote.ts",
     "scripts/test-gp-sandbox-verify.ts",
     "scripts/test-gp-diagnostic-mutations.ts",
+    "scripts/test-gp-live-pilot.ts",
     "scripts/test-global-payouts-webhook.mjs",
     "scripts/test-global-payouts-release-flow.mjs",
     "scripts/test-preview-auth-url.mjs",

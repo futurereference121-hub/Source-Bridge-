@@ -44,21 +44,35 @@ export function sanitizeProviderFailureText(
   return s.slice(0, SAFE_FAILURE_MAX);
 }
 
+export const GP_POSTED_WORDING =
+  "Posted means funds left the financial account. It does not confirm the recipient bank has paid.";
+
 export function deriveOutboundDisplayState(
   status: string | null | undefined,
+  failureCode?: string | null,
 ): OutboundDisplayState {
   const s = String(status || "")
     .trim()
     .toUpperCase();
+  if (s === "PROCESSING" && failureCode === "GP_UNDER_REVIEW") {
+    return {
+      phase: "manual_review",
+      sellerLabel: "Payout under review",
+      buyerLabel: "Release pending provider review",
+      adminLabel: "UNDER_REVIEW — payment not finalized",
+      pendingProvider: true,
+      needsAdminAction: false,
+    };
+  }
 
   switch (s) {
     case "SUCCEEDED":
     case "RECONCILED":
       return {
         phase: "completed",
-        sellerLabel: "Payout completed",
+        sellerLabel: "Payout sent — funds left the financial account",
         buyerLabel: "Released to sourcer",
-        adminLabel: "SUCCEEDED",
+        adminLabel: GP_POSTED_WORDING,
         pendingProvider: false,
         needsAdminAction: false,
       };

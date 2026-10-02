@@ -7,6 +7,7 @@
  */
 
 import { sanitizeProviderFailureText } from "./outbound-display.ts";
+import { evaluateQuoteConfirmation } from "./live-pilot.ts";
 
 export const OUTBOUND_PAYMENT_QUOTE_PATH = "/v2/money_management/outbound_payment_quotes";
 export const OUTBOUND_PAYMENT_PATH = "/v2/money_management/outbound_payments";
@@ -35,6 +36,16 @@ export type QuoteSnapshot = {
   providerFeeMinor: number;
   crossBorderFeeMinor: number;
   fxFeeMinor: number;
+  providerFeeCurrency?: string;
+  crossBorderFeeCurrency?: string;
+  fxFeeCurrency?: string;
+  confirmedByUserId?: string;
+  transactionId?: string;
+  recipientId?: string;
+  payoutMethodId?: string;
+  mode?: "TEST" | "LIVE";
+  termsHash?: string;
+  feePayer?: string;
 };
 
 export type QuoteHttpResult = {
@@ -387,15 +398,33 @@ export function validateOutboundQuote(opts: {
   let providerFeeMinor = 0;
   let crossBorderFeeMinor = 0;
   let fxFeeMinor = 0;
+  let providerFeeCurrency = "";
+  let crossBorderFeeCurrency = "";
+  let fxFeeCurrency = "";
+  const rememberFee = (current: string, next: string): string => {
+    if (!next) return current || "unresolved";
+    if (!current) return next;
+    if (current !== next) return "mixed";
+    return current;
+  };
   if (Array.isArray(opts.body.estimated_fees)) {
     for (const raw of opts.body.estimated_fees) {
       const fee = asRecord(raw);
-      const val = integerFee(fee?.amount);
+      const amount = asRecord(fee?.amount);
+      const val = integerFee(amount);
       if (val == null) continue;
+      const feeCurrency = typeof amount?.currency === "string" ? amount.currency.toLowerCase() : "";
       const type = String(fee?.type || "").toLowerCase();
-      if (type.includes("cross")) crossBorderFeeMinor += val;
-      else if (type.includes("fx") || type.includes("exchange")) fxFeeMinor += val;
-      else providerFeeMinor += val;
+      if (type.includes("cross")) {
+        crossBorderFeeMinor += val;
+        crossBorderFeeCurrency = rememberFee(crossBorderFeeCurrency, feeCurrency);
+      } else if (type.includes("fx") || type.includes("exchange")) {
+        fxFeeMinor += val;
+        fxFeeCurrency = rememberFee(fxFeeCurrency, feeCurrency);
+      } else {
+        providerFeeMinor += val;
+        providerFeeCurrency = rememberFee(providerFeeCurrency, feeCurrency);
+      }
     }
   }
   const rates = asRecord(fx?.rates);
@@ -417,6 +446,10 @@ export function validateOutboundQuote(opts: {
       providerFeeMinor,
       crossBorderFeeMinor,
       fxFeeMinor,
+      providerFeeCurrency,
+      crossBorderFeeCurrency,
+      fxFeeCurrency,
+      feePayer: "Source Bridge",
     },
   };
 }
@@ -440,6 +473,9 @@ export function assessAttemptPreservation(opts: {
   baseIdempotencyKey: string;
   nowMs: number;
 }): { preserve: false } | { preserve: true; code: string; nextIdempotencyKey: string | null } {
+  if (opts.failureCode === "GP_UNDER_REVIEW") {
+    return { preserve: true, code: "GP_UNDER_REVIEW", nextIdempotencyKey: null };
+  }
   if (opts.stripeOutboundPaymentId) {
     return { preserve: true, code: "GP_PAYMENT_IN_FLIGHT", nextIdempotencyKey: null };
   }
@@ -477,6 +513,94 @@ export function assessAttemptPreservation(opts: {
   return { preserve: false };
 }
 
+function localGateResult(err: unknown): { ok: false; code: string; parsed: null; uncertain: false } | null {
+  if (!err || typeof err !== "object" || !("code" in err)) return null;
+  const code = String((err as { code?: string }).code || "");
+  if (
+    code.startsWith("GP_PILOT") ||
+    code.startsWith("GP_QUOTE") ||
+    code === "PAYOUTS_UNAVAILABLE" ||
+    code === "GLOBAL_PAYOUTS_INITIATION_DISABLED"
+  ) {
+    return { ok: false, code, parsed: null, uncertain: false };
+  }
+  return null;
+}
+
+/**
+ * Creates an OutboundPaymentQuote only. Never posts an OutboundPayment.
+ */
+export async function prepareQuoteOnly(opts: {
+  sourceAmountMinor: number;
+  sourceCurrency: string;
+  destinationCurrency: string;
+  financialAccountId: string;
+  recipientId: string;
+  payoutMethodId: string;
+  quoteIdempotencyKey: string;
+  mode: "TEST" | "LIVE";
+  nowMs: number;
+  post: (req: {
+    path: string;
+    idempotencyKey: string;
+    body: Record<string, unknown>;
+  }) => Promise<QuoteHttpResult>;
+  assertBeforeProviderWrite?: () => Promise<void>;
+}): Promise<
+  | { ok: true; snapshot: QuoteSnapshot }
+  | { ok: false; code: string; parsed: GpProviderError | null; uncertain: boolean }
+> {
+  try {
+    if (opts.assertBeforeProviderWrite) await opts.assertBeforeProviderWrite();
+  } catch (err) {
+    const gated = localGateResult(err);
+    if (gated) return gated;
+    return { ok: false, code: "GP_QUOTE_FAILED", parsed: null, uncertain: false };
+  }
+  let quoted: QuoteHttpResult;
+  try {
+    quoted = await opts.post({
+      path: OUTBOUND_PAYMENT_QUOTE_PATH,
+      idempotencyKey: opts.quoteIdempotencyKey,
+      body: buildQuoteBody({
+        financialAccountId: opts.financialAccountId,
+        recipientId: opts.recipientId,
+        payoutMethodId: opts.payoutMethodId,
+        sourceAmountMinor: opts.sourceAmountMinor,
+        sourceCurrency: opts.sourceCurrency,
+        destinationCurrency: opts.destinationCurrency,
+      }),
+    });
+  } catch (err) {
+    const gated = localGateResult(err);
+    if (gated) return gated;
+    return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
+  }
+  if (!quoted.ok) {
+    const parsed = parseGpProviderError(quoted);
+    const uncertain = providerOutcomeUncertain(quoted.status, false);
+    return {
+      ok: false,
+      code: uncertain ? "GP_PAYMENT_OUTCOME_UNCERTAIN" : parsed.code || "GP_QUOTE_FAILED",
+      parsed,
+      uncertain,
+    };
+  }
+  const validated = validateOutboundQuote({
+    body: quoted.body,
+    financialAccountId: opts.financialAccountId,
+    recipientId: opts.recipientId,
+    payoutMethodId: opts.payoutMethodId,
+    sourceAmountMinor: opts.sourceAmountMinor,
+    sourceCurrency: opts.sourceCurrency,
+    destinationCurrency: opts.destinationCurrency,
+    mode: opts.mode,
+    nowMs: opts.nowMs,
+  });
+  if (!validated.ok) return { ok: false, code: validated.code, parsed: null, uncertain: false };
+  return { ok: true, snapshot: validated.snapshot };
+}
+
 export async function executeQuotedPayout(opts: {
   sourceAmountMinor: number;
   sourceCurrency: string;
@@ -491,6 +615,7 @@ export async function executeQuotedPayout(opts: {
   /** True when the financial-account country differs from the payout-method country. */
   requiresQuote: boolean;
   storedSnapshot: string;
+  actorUserId?: string | null;
   post: (req: {
     path: string;
     idempotencyKey: string;
@@ -498,6 +623,7 @@ export async function executeQuotedPayout(opts: {
   }) => Promise<QuoteHttpResult>;
   persistQuote: (snapshot: QuoteSnapshot) => Promise<void>;
   markPaymentSubmission: () => Promise<void>;
+  assertBeforeProviderWrite?: () => Promise<void>;
 }): Promise<
   | { ok: true; body: Record<string, unknown>; quoteUsed: boolean }
   | { ok: false; code: string; parsed: GpProviderError | null; uncertain: boolean }
@@ -509,9 +635,27 @@ export async function executeQuotedPayout(opts: {
     return { ok: false, code: "GP_QUOTE_POLICY_UNSUPPORTED", parsed: null, uncertain: false };
   }
   let quoteId = "";
+  const stored = parseQuoteSnapshot(opts.storedSnapshot);
 
-  if (needsQuote) {
-    const stored = parseQuoteSnapshot(opts.storedSnapshot);
+  if (opts.mode === "LIVE") {
+    const confirmed = evaluateQuoteConfirmation({
+      stored,
+      actorUserId: opts.actorUserId || "",
+      transactionId: opts.metadata.protectedTxnId || "",
+      mode: "LIVE",
+      recipientId: opts.recipientId,
+      payoutMethodId: opts.payoutMethodId,
+      sourceAmountMinor: opts.sourceAmountMinor,
+      sourceCurrency: source,
+      destinationCurrency: destination,
+      termsHash: opts.metadata.termsHash || "",
+      nowMs: opts.nowMs,
+    });
+    if (!confirmed.ok) {
+      return { ok: false, code: confirmed.code, parsed: null, uncertain: false };
+    }
+    if (needsQuote) quoteId = confirmed.quoteId;
+  } else if (needsQuote) {
     if (stored) {
       if (
         stored.sourceAmountMinor !== opts.sourceAmountMinor ||
@@ -542,7 +686,9 @@ export async function executeQuotedPayout(opts: {
             destinationCurrency: destination,
           }),
         });
-      } catch {
+      } catch (err) {
+        const gated = localGateResult(err);
+        if (gated) return gated;
         return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
       }
       if (!quoted.ok) {
@@ -574,6 +720,13 @@ export async function executeQuotedPayout(opts: {
     }
   }
 
+  try {
+    if (opts.assertBeforeProviderWrite) await opts.assertBeforeProviderWrite();
+  } catch (err) {
+    const gated = localGateResult(err);
+    if (gated) return gated;
+    return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
+  }
   await opts.markPaymentSubmission();
   let created: QuoteHttpResult;
   try {
@@ -600,7 +753,9 @@ export async function executeQuotedPayout(opts: {
             metadata: opts.metadata,
           }),
     });
-  } catch {
+  } catch (err) {
+    const gated = localGateResult(err);
+    if (gated) return gated;
     return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
   }
   if (!created.ok) {

@@ -169,6 +169,7 @@ export function mapProtectedTxnSummary(
     finalTransferredMinor?: number;
     refundedMinor?: number;
     stripeMode: string;
+    payoutRail?: string | null;
     fundedAt: Date | null;
     procurementReleasedAt?: Date | null;
     shippedAt: Date | null;
@@ -271,6 +272,7 @@ export function mapProtectedTxnSummary(
     procurementTransferredMinor: t.procurementTransferredMinor ?? 0,
     books,
     stripeMode: t.stripeMode,
+    payoutRail: t.payoutRail,
     fundedAt: t.fundedAt?.toISOString() ?? null,
     procurementReleasedAt: t.procurementReleasedAt?.toISOString() ?? null,
     shippedAt: t.shippedAt?.toISOString() ?? null,
