@@ -87,6 +87,9 @@ export function GpQuoteReview(props: {
       <p className="text-white/60">
         Source Bridge pays the provider fees below. They are not deducted from the sourcer entitlement.
       </p>
+      <p className="text-white/60" data-testid="gp-fee-estimate-notice">
+        These provider fees are estimates. They are not confirmed financial-account charges.
+      </p>
       {review ? (
         <div className="space-y-1">
           <p>
@@ -96,9 +99,9 @@ export function GpQuoteReview(props: {
             Destination:{" "}
             {formatMinor(review.destinationAmountMinor, review.destinationCurrency.toUpperCase())}
           </p>
-          {feeLine("Provider fee", review.providerFeeMinor, review.providerFeeCurrency)}
-          {feeLine("Cross-border fee", review.crossBorderFeeMinor, review.crossBorderFeeCurrency)}
-          {feeLine("FX fee", review.fxFeeMinor, review.fxFeeCurrency)}
+          {feeLine("Estimated provider fee", review.providerFeeMinor, review.providerFeeCurrency)}
+          {feeLine("Estimated cross-border fee", review.crossBorderFeeMinor, review.crossBorderFeeCurrency)}
+          {feeLine("Estimated FX fee", review.fxFeeMinor, review.fxFeeCurrency)}
           <p>Paid by: {review.feePayer}</p>
           <p>Estimate expires: {new Date(review.expiresAt).toLocaleString()}</p>
           {review.payoutLabel ? <p data-testid="gp-payout-state">{review.payoutLabel}</p> : null}

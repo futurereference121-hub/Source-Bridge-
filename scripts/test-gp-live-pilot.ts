@@ -448,6 +448,13 @@ const pilotSource = read("src/lib/payments/payout-rail/live-pilot.ts");
 ok("cap is not hardcoded", !/\b1000\b/.test(pilotSource));
 const quoteReview = read("src/lib/payments/payout-rail/quote-review.ts");
 ok("quote review does not post an outbound payment", !quoteReview.includes("OUTBOUND_PAYMENT_PATH"));
+const reviewUi = read("src/components/payments/GpQuoteReview.tsx");
+ok(
+  "quote review distinguishes estimates from booked charges",
+  reviewUi.includes("These provider fees are estimates. They are not confirmed financial-account charges.") &&
+    reviewUi.includes("Estimated provider fee") &&
+    !reviewUi.includes("confirmed Stripe debit"),
+);
 ok("confirmation does not rewrite stored terms before checking them", quoteReview.includes("confirmedByUserId: opts.actorUserId") && !quoteReview.includes("termsHash: txn.termsHash,\n      feePayer"));
 const claimSource = read("src/lib/payments/payout-rail/outbound-payment.ts");
 const claimStart = claimSource.indexOf("async function claimLivePilotSlot");
