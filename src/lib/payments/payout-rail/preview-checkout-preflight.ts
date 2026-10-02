@@ -24,7 +24,7 @@ import {
   accountLoginFacts,
   isUsableCheckoutBuyer,
   preflightHash8,
-  readCashAvailable,
+  readFaAvailableBalances,
   type AccountLoginFacts,
 } from "@/lib/payments/payout-rail/preview-checkout-preflight-report";
 
@@ -102,21 +102,18 @@ async function readTestFinancialAccount() {
   const idMatches = restricted.ok && restrictedId === faId;
   const livemodeFalse = restricted.body.livemode === false;
   let credential = "restricted_test";
-  let source = restricted.body;
-  if (idMatches && livemodeFalse) {
-    const cash = readCashAvailable(restricted.body);
-    if (cash.available_minor == null) {
-      const platform = await platformTestGet(
-        `/v2/money_management/financial_accounts/${encodeURIComponent(faId)}`,
-      );
-      const platformId = typeof platform.body.id === "string" ? platform.body.id : "";
-      if (platform.ok && platformId === faId && platform.body.livemode === false) {
-        credential = "platform_test_secret_proven";
-        source = platform.body;
-      }
+  let balances = idMatches && livemodeFalse ? readFaAvailableBalances(restricted.body) : [];
+  if (idMatches && livemodeFalse && balances.length === 0) {
+    const platform = await platformTestGet(
+      `/v2/money_management/financial_accounts/${encodeURIComponent(faId)}`,
+    );
+    const platformId = typeof platform.body.id === "string" ? platform.body.id : "";
+    if (platform.ok && platformId === faId && platform.body.livemode === false) {
+      credential = "platform_test_secret_proven";
+      balances = readFaAvailableBalances(platform.body);
     }
   }
-  const cash = readCashAvailable(source);
+  const gbp = balances.find((row) => row.currency === "gbp") ?? null;
   return {
     configured: true,
     prefix: "fa_test_",
@@ -125,8 +122,9 @@ async function readTestFinancialAccount() {
     id_matches_configured: idMatches,
     livemode_false: livemodeFalse,
     credential,
-    available_minor: idMatches && livemodeFalse ? cash.available_minor : null,
-    currency: idMatches && livemodeFalse ? cash.currency : null,
+    available_minor: gbp ? gbp.available_minor : balances.length === 1 ? balances[0].available_minor : null,
+    currency: gbp ? gbp.currency : balances.length === 1 ? balances[0].currency : null,
+    available_by_currency: balances,
   };
 }
 
@@ -182,6 +180,17 @@ export async function runCheckoutPreflight(): Promise<Record<string, unknown>> {
     take: USER_CAP,
     orderBy: { createdAt: "asc" },
   });
+  const [otherUsers, otherVerified, otherWithPassword] = await Promise.all([
+    prisma.user.count({
+      where: { deletedAt: null, NOT: { username: SOURCER_USERNAME } },
+    }),
+    prisma.user.count({
+      where: { deletedAt: null, emailVerified: true, NOT: { username: SOURCER_USERNAME } },
+    }),
+    prisma.user.count({
+      where: { deletedAt: null, passwordHash: { not: null }, NOT: { username: SOURCER_USERNAME } },
+    }),
+  ]);
   const usable: AccountLoginFacts[] = [];
   for (const row of buyers) {
     const facts = accountLoginFacts(row);
@@ -250,6 +259,9 @@ export async function runCheckoutPreflight(): Promise<Record<string, unknown>> {
             : null,
         }
       : null,
+    other_user_count: otherUsers,
+    other_verified_count: otherVerified,
+    other_password_count: otherWithPassword,
     usable_buyer_count: usable.length,
     usable_buyer_scan_capped: buyers.length >= USER_CAP,
     usable_buyers: usable.map((row) => ({

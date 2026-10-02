@@ -8,7 +8,7 @@ import {
   accountLoginFacts,
   emailPlaceholderKind,
   isUsableCheckoutBuyer,
-  readCashAvailable,
+  readFaAvailableBalances,
 } from "../src/lib/payments/payout-rail/preview-checkout-preflight-report.ts";
 
 let passed = 0;
@@ -60,7 +60,12 @@ ok(
   ) === true,
 );
 ok("demo account is not a usable buyer", isUsableCheckoutBuyer({ ...facts, email_verified: true, has_password: true, is_demo: true }, "other") === false);
-ok("cash available stays an integer minor", readCashAvailable({ balance: { cash: { available: { value: 4150, currency: "gbp" } } } }).available_minor === 4150);
+ok(
+  "available balance is read from the currency map",
+  JSON.stringify(readFaAvailableBalances({
+    balance: { available: { gbp: { value: 9600, currency: "gbp" } } },
+  })) === JSON.stringify([{ currency: "gbp", available_minor: 9600 }]),
+);
 
 const route = source("../src/app/api/diagnostics/gp-preview-runtime/checkout-preflight/route.ts");
 const runner = source("../src/lib/payments/payout-rail/preview-checkout-preflight.ts");

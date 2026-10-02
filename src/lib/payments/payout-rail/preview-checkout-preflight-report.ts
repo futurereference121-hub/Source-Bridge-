@@ -86,24 +86,37 @@ export function isUsableCheckoutBuyer(
   );
 }
 
-export function readCashAvailable(body: Record<string, unknown> | null): {
-  available_minor: number | null;
-  currency: string | null;
-} {
+function integerMinor(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && Number.isSafeInteger(value)) return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  return null;
+}
+
+/** Documented v2 shape: balance.available is a map of ISO currency to {value, currency}. */
+export function readFaAvailableBalances(body: Record<string, unknown> | null): Array<{
+  currency: string;
+  available_minor: number;
+}> {
   const balance =
     body?.balance && typeof body.balance === "object"
       ? (body.balance as Record<string, unknown>)
-      : body;
-  const cash =
-    balance && typeof balance === "object"
-      ? ((balance as { cash?: { available?: { value?: unknown; currency?: unknown } } }).cash
-          ?.available ??
-        (balance as { available?: { value?: unknown; currency?: unknown } }).available)
       : null;
-  const value = cash && typeof cash.value === "number" && Number.isInteger(cash.value) ? cash.value : null;
-  const currency =
-    cash && typeof cash.currency === "string" && /^[a-z]{3}$/i.test(cash.currency)
-      ? cash.currency.toLowerCase()
+  const available =
+    balance?.available && typeof balance.available === "object"
+      ? (balance.available as Record<string, unknown>)
       : null;
-  return { available_minor: value, currency };
+  if (!available) return [];
+  const rows: Array<{ currency: string; available_minor: number }> = [];
+  for (const [key, raw] of Object.entries(available)) {
+    if (!/^[a-z]{3}$/.test(key) || !raw || typeof raw !== "object") continue;
+    const amount = raw as { value?: unknown; currency?: unknown };
+    const minor = integerMinor(amount.value);
+    const currency = typeof amount.currency === "string" ? amount.currency.toLowerCase() : key;
+    if (minor == null || currency !== key) continue;
+    rows.push({ currency, available_minor: minor });
+  }
+  return rows;
 }
