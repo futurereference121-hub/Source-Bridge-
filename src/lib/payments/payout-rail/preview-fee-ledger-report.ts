@@ -326,6 +326,26 @@ function integersEqual(left: MonetaryEvidence, right: MonetaryEvidence): boolean
   return left.safe_minor === right.safe_minor;
 }
 
+/**
+ * The platform TEST secret key may list this ledger only after it retrieves
+ * the same fa_test_ financial account in test mode. It is not a credential cycle.
+ */
+export function platformTestKeyMayListLedger(opts: {
+  restrictedHttpStatus: number | null;
+  restrictedCode: string | null;
+  keyPrefixOk: boolean;
+  retrievedIdMatches: boolean;
+  livemodeFalse: boolean;
+}): boolean {
+  return (
+    opts.restrictedHttpStatus === 403 &&
+    opts.restrictedCode === "forbidden" &&
+    opts.keyPrefixOk &&
+    opts.retrievedIdMatches &&
+    opts.livemodeFalse
+  );
+}
+
 export function safeProviderError(status: number, body: Record<string, unknown> | null): {
   http_status: number;
   code: string | null;
@@ -360,6 +380,14 @@ export function buildFeeLedgerEvidence(opts: {
     rows: unknown[];
     error: { http_status: number; code: string | null; type: string | null } | null;
     rejected_filters: Array<{ filter: string; http_status: number; code: string | null; type: string | null }>;
+    credential?: string;
+    platform_key_proof?: {
+      attempted: boolean;
+      fa_retrieve_ok: boolean;
+      fa_id_matches: boolean;
+      livemode_false: boolean;
+      used_for_list: boolean;
+    } | null;
   };
   entryList: {
     queried: boolean;
@@ -420,6 +448,8 @@ export function buildFeeLedgerEvidence(opts: {
       http_ok: opts.transactionList.httpOk,
       error: opts.transactionList.error,
       rejected_filters: opts.transactionList.rejected_filters,
+      credential: opts.transactionList.credential || "restricted_test",
+      platform_key_proof: opts.transactionList.platform_key_proof ?? null,
       pages: opts.transactionList.pages,
       page_cap: FEE_LEDGER_PAGE_CAP,
       complete: opts.transactionList.complete,

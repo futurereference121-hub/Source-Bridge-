@@ -5,11 +5,16 @@
  */
 
 import { prisma } from "@/lib/db";
-import { getGlobalPayoutsFinancialAccountId, gpFetch } from "@/lib/payments/payout-rail/gp-client";
+import {
+  STRIPE_GP_API_VERSION,
+  getGlobalPayoutsFinancialAccountId,
+  gpFetch,
+} from "@/lib/payments/payout-rail/gp-client";
 import { discoveryHash8 } from "@/lib/payments/payout-rail/preview-sandbox-discovery";
 import {
   buildFeeLedgerEvidence,
   FEE_LEDGER_PAGE_CAP,
+  platformTestKeyMayListLedger,
   safeProviderError,
   transactionLinkedToPayment,
 } from "@/lib/payments/payout-rail/preview-fee-ledger-report";
@@ -50,7 +55,46 @@ function nextListPath(next: unknown, allowedPrefix: string): string | null | "in
   return next.slice(origin.length);
 }
 
-async function listGet(startPath: string, allowedPrefix: string): Promise<{
+type ListGetter = (path: string) => Promise<{
+  ok: boolean;
+  status: number;
+  body: Record<string, unknown>;
+}>;
+
+async function restrictedGet(path: string) {
+  return gpFetch({ mode: "TEST", method: "GET", path });
+}
+
+async function platformTestGet(path: string): Promise<{
+  ok: boolean;
+  status: number;
+  body: Record<string, unknown>;
+}> {
+  const key = String(process.env.STRIPE_SECRET_KEY_TEST || "").trim();
+  if (!key.startsWith("sk_test_")) return { ok: false, status: 0, body: {} };
+  const res = await fetch(`https://api.stripe.com${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Stripe-Version": STRIPE_GP_API_VERSION,
+      Accept: "application/json",
+    },
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    const parsed = await res.json();
+    body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    body = {};
+  }
+  return { ok: res.ok, status: res.status, body };
+}
+
+async function listGet(
+  startPath: string,
+  allowedPrefix: string,
+  get: ListGetter = restrictedGet,
+): Promise<{
   httpOk: boolean;
   complete: boolean;
   pages: number;
@@ -60,7 +104,7 @@ async function listGet(startPath: string, allowedPrefix: string): Promise<{
   const rows: unknown[] = [];
   let path = startPath;
   for (let page = 0; page < FEE_LEDGER_PAGE_CAP; page += 1) {
-    const res = await gpFetch({ mode: "TEST", method: "GET", path });
+    const res = await get(path);
     if (!res.ok || !Array.isArray(res.body.data)) {
       return {
         httpOk: false,
@@ -253,6 +297,55 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
     if (result.error) rejected.push({ filter, ...result.error });
     if (result.error?.http_status !== 400 || result.error.code !== "invalid_filters") break;
   }
+  let credential = "restricted_test";
+  let platformKeyProof: {
+    attempted: boolean;
+    fa_retrieve_ok: boolean;
+    fa_id_matches: boolean;
+    livemode_false: boolean;
+    used_for_list: boolean;
+  } | null = null;
+  if (
+    !listed.httpOk &&
+    listed.error?.http_status === 403 &&
+    listed.error.code === "forbidden"
+  ) {
+    const proof = await platformTestGet(
+      `/v2/money_management/financial_accounts/${encodeURIComponent(financialAccountId)}`,
+    );
+    const faIdMatches = proof.ok && proof.body.id === financialAccountId;
+    const livemodeFalse = proof.body.livemode === false;
+    const mayList = platformTestKeyMayListLedger({
+      restrictedHttpStatus: listed.error.http_status,
+      restrictedCode: listed.error.code,
+      keyPrefixOk: String(process.env.STRIPE_SECRET_KEY_TEST || "").trim().startsWith("sk_test_"),
+      retrievedIdMatches: faIdMatches,
+      livemodeFalse,
+    });
+    platformKeyProof = {
+      attempted: true,
+      fa_retrieve_ok: proof.ok,
+      fa_id_matches: faIdMatches,
+      livemode_false: livemodeFalse,
+      used_for_list: mayList,
+    };
+    if (mayList) {
+      credential = "platform_test_secret_proven";
+      rejected.length = 0;
+      for (const filter of ["both", "flow", "financial_account"] as const) {
+        const result = await listGet(
+          transactionQuery(filter, financialAccountId, paymentId),
+          "/v2/money_management/transactions",
+          platformTestGet,
+        );
+        listed = result;
+        filterUsed = filter;
+        if (result.httpOk) break;
+        if (result.error) rejected.push({ filter: `platform_${filter}`, ...result.error });
+        if (result.error?.http_status !== 400 || result.error.code !== "invalid_filters") break;
+      }
+    }
+  }
   const linkedIds = listed.rows
     .filter((row) => transactionLinkedToPayment(row, paymentId))
     .map((row) => {
@@ -310,6 +403,8 @@ export async function runSandboxFeeLedger(): Promise<Record<string, unknown>> {
       rows: listed.rows,
       error: listed.httpOk ? null : listed.error,
       rejected_filters: rejected,
+      credential,
+      platform_key_proof: platformKeyProof,
     },
     entryList: {
       queried: listed.httpOk,

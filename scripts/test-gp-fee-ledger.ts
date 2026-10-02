@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   buildFeeLedgerEvidence,
   entryLinkedToPayment,
+  platformTestKeyMayListLedger,
   readMonetaryAmount,
   safeProviderError,
   transactionLinkedToPayment,
@@ -202,5 +203,27 @@ const hidden = safeProviderError(403, {
 });
 ok("provider error keeps only the safe code", hidden.code === "more_permissions_required" && hidden.http_status === 403);
 ok("provider error drops the message", !JSON.stringify(hidden).includes("obp_test_secret"));
+ok(
+  "platform key is used only after the same financial account is retrieved",
+  platformTestKeyMayListLedger({
+    restrictedHttpStatus: 403,
+    restrictedCode: "forbidden",
+    keyPrefixOk: true,
+    retrievedIdMatches: true,
+    livemodeFalse: true,
+  }) === true,
+);
+ok(
+  "platform key is not used when the account proof fails",
+  platformTestKeyMayListLedger({
+    restrictedHttpStatus: 403,
+    restrictedCode: "forbidden",
+    keyPrefixOk: true,
+    retrievedIdMatches: false,
+    livemodeFalse: true,
+  }) === false,
+);
+ok("retrieval names one proven platform key", retrieval.includes("STRIPE_SECRET_KEY_TEST") && retrieval.includes("platformTestKeyMayListLedger"));
+ok("retrieval does not scan live keys", !retrieval.includes("sk_live_") && !retrieval.includes("rk_live_"));
 
 console.log(`\n${passed} passed`);
