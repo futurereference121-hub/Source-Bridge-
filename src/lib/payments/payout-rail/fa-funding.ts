@@ -1,7 +1,8 @@
 /**
- * Financial Account funding / balance reads for Global Payouts.
- * Live FA funding is disabled until GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED.
- * Never auto top-up live balances.
+ * Financial Account balance reads for Global Payouts.
+ * This module never creates a transfer, tops up an account, or moves a buyer
+ * checkout receipt. Release uses an already-funded account; a short or
+ * unreadable balance stops the payout.
  */
 
 import {
@@ -72,8 +73,10 @@ export async function readFinancialAccountBalance(
 }
 
 /**
- * Record-only funding step. Does NOT move live funds unless initiation is enabled.
- * When initiation is disabled, returns pending so release can mark AWAITING_FA_FUNDS.
+ * Confirm the financial account already has the payout amount.
+ * Performs one balance read. Does not transfer funds into the account.
+ * A short or unreadable balance, or disabled initiation, returns awaiting_funds
+ * so release stops before any outbound payment is created.
  */
 export async function ensureFinancialAccountFunding(opts: {
   mode: StripeMode;
@@ -107,28 +110,24 @@ export async function ensureFinancialAccountFunding(opts: {
     };
   }
 
-  // Read balance; do not auto top-up. Ops fund FA separately.
+  // GET the existing balance only. Never top up, and never move the buyer receipt.
   const bal = await readFinancialAccountBalance(stripeMode);
-  if (
-    bal.availableMinor != null &&
-    bal.availableMinor < opts.amountMinor
-  ) {
+  void opts.idempotencyKey;
+  void opts.protectedTxnId;
+  void opts.currency;
+  if (!bal.rawOk || bal.availableMinor == null) {
+    return {
+      status: "awaiting_funds",
+      financialAccountId: faId,
+      reason: "Financial Account balance could not be verified",
+    };
+  }
+  if (bal.availableMinor < opts.amountMinor) {
     return {
       status: "awaiting_funds",
       financialAccountId: faId,
       reason: "Insufficient Financial Account available balance",
     };
-  }
-
-  // Optional: when Stripe exposes an explicit payments→FA transfer API, call it
-  // here behind the same initiation gate. Until then, rely on prefunded FA.
-  void opts.idempotencyKey;
-  void opts.protectedTxnId;
-  void opts.currency;
-
-  if (!bal.rawOk) {
-    // Soft-ready: allow OutboundPayment create to fail closed at Stripe if needed.
-    return { status: "ready", financialAccountId: faId };
   }
 
   return { status: "ready", financialAccountId: faId };

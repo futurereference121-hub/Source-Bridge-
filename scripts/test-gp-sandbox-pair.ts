@@ -91,6 +91,60 @@ try {
   process.env.GP_SANDBOX_MAX_AMOUNT_MINOR = "5000";
   process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST = "TH";
   ok("identical buyer and sourcer stay off", readGpSandboxPair() == null);
+  ok("identical id is still a designated participant", isApprovedSandboxParticipant(BUYER) === true);
+  ok("identical id does not use ordinary sourcer onboarding", isApprovedSandboxSourcer(BUYER) === true);
+  ok("identical id onboarding stays TEST", sandboxStripeModeForUser(BUYER) === "TEST");
+  const identicalSelf = decideSandboxCheckout({ buyerId: BUYER, sellerId: BUYER, ordinaryMode: "LIVE" });
+  ok(
+    "identical id cannot check out as themselves",
+    identicalSelf.state === "refused" && identicalSelf.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  const identicalBuyer = decideSandboxCheckout({ buyerId: BUYER, sellerId: OTHER, ordinaryMode: "LIVE" });
+  ok(
+    "identical id cannot buy from someone else on LIVE",
+    identicalBuyer.state === "refused" && identicalBuyer.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  const identicalSourcer = decideSandboxCheckout({ buyerId: OTHER, sellerId: BUYER, ordinaryMode: "LIVE" });
+  ok(
+    "identical id cannot sell to someone else on LIVE",
+    identicalSourcer.state === "refused" && identicalSourcer.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  ok("identical id direct payment is refused", (() => {
+    try {
+      assertSandboxCommercialTerms({
+        buyerId: BUYER,
+        sellerId: OTHER,
+        currency: "GBP",
+        principalMinor: 1000,
+        paymentOption: "INSTANT",
+      });
+      return false;
+    } catch (err) {
+      return (err as { code?: string }).code === "GP_SANDBOX_CONFIG_INVALID";
+    }
+  })());
+  ok("identical id protected payment is refused", (() => {
+    try {
+      assertSandboxCommercialTerms({
+        buyerId: OTHER,
+        sellerId: BUYER,
+        currency: "GBP",
+        principalMinor: 1000,
+        paymentOption: "PROTECTED",
+      });
+      return false;
+    } catch (err) {
+      return (err as { code?: string }).code === "GP_SANDBOX_CONFIG_INVALID";
+    }
+  })());
+  ok(
+    "identical id leaves other customers ordinary",
+    decideSandboxCheckout({
+      buyerId: OTHER,
+      sellerId: `c${"e".repeat(24)}`,
+      ordinaryMode: "LIVE",
+    }).state === "ordinary",
+  );
 
   process.env.GP_SANDBOX_APPROVED_SOURCER_ID = `${SOURCER},${OTHER}`;
   ok("id list is ambiguous", readGpSandboxPair() == null);
@@ -374,6 +428,12 @@ try {
   ok("webhook reconciliation does not consult the sandbox flag", !events.includes("isGlobalPayoutsSandboxEnabled"));
   const quote = readFileSync(new URL("../src/lib/payments/payout-rail/quote-review.ts", import.meta.url), "utf8");
   ok("quotes check initiation before provider preparation", quote.includes("initiationEnabled: canInitiateGlobalPayoutsMoney(txnMode)"));
+  const ticketsLib = readFileSync(new URL("../src/lib/payments/tickets.ts", import.meta.url), "utf8");
+  ok("ticket creation and acceptance use the sandbox gate", ticketsLib.includes("assertSandboxCommercialTerms"));
+  const funding = readFileSync(new URL("../src/lib/payments/payout-rail/fa-funding.ts", import.meta.url), "utf8");
+  ok("financial account check reads with GET", funding.includes('method: "GET"'));
+  ok("financial account check does not create a transfer", !funding.includes('method: "POST"') && !funding.includes("transfers.create"));
+  ok("unreadable financial account balance blocks release", funding.includes("Financial Account balance could not be verified"));
   const product = readFileSync(new URL("../src/app/api/payments/product-checkout/route.ts", import.meta.url), "utf8");
   ok(
     "listed checkout gates the pair before Connect status",

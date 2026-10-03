@@ -108,16 +108,19 @@ function commercialConfig(
 
 /**
  * Valid participant ids, even when initiation or the rest of the configuration
- * is off. Identical ids are ambiguous and do not identify anyone.
+ * is off. The same valid id in both fields is still that designated participant.
  */
 export function readGpSandboxIdHold(
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxIdHold | null {
   const buyerId = immutableUserId(env.GP_SANDBOX_APPROVED_BUYER_ID);
   const sourcerId = immutableUserId(env.GP_SANDBOX_APPROVED_SOURCER_ID);
-  if (buyerId && sourcerId && buyerId === sourcerId) return null;
   if (!buyerId && !sourcerId) return null;
   return { buyerId, sourcerId };
+}
+
+function identicalParticipantIds(hold: SandboxIdHold): boolean {
+  return Boolean(hold.buyerId && hold.sourcerId && hold.buyerId === hold.sourcerId);
 }
 
 export function readGpSandboxPair(
@@ -127,7 +130,7 @@ export function readGpSandboxPair(
   if (!isGlobalPayoutsSandboxEnabled()) return null;
   if (liveInitiationRequested(env)) return null;
   const hold = readGpSandboxIdHold(env);
-  if (!hold?.buyerId || !hold.sourcerId) return null;
+  if (!hold?.buyerId || !hold.sourcerId || identicalParticipantIds(hold)) return null;
   const commercial = commercialConfig(env);
   if (!commercial) return null;
   return {
@@ -172,6 +175,10 @@ export function decideSandboxCheckout(opts: {
       stripeMode: opts.ordinaryMode ?? getStripeMode(),
       payoutRail: "STRIPE_CONNECT",
     };
+  }
+
+  if (identicalParticipantIds(hold)) {
+    return { state: "refused", code: "GP_SANDBOX_CONFIG_INVALID" };
   }
 
   const pair = readGpSandboxPair();
