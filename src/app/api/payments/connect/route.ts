@@ -11,15 +11,19 @@ import {
 } from "@/lib/payments/stripe/connect";
 import { assertEligiblePaymentParty } from "@/lib/payments/eligibility";
 import { prisma } from "@/lib/db";
+import { getAppUrlFromRequest } from "@/lib/app-url";
+import {
+  needsPayoutCountrySelection,
+  normalizePayoutCountryCode,
+} from "@/lib/payments/payout-rail/payout-country";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import { getGlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
+import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
 
 export const runtime = "nodejs";
 
 function appBaseUrl(req: NextRequest): string {
-  const env = (process.env.APP_URL || "").replace(/\/$/, "");
-  if (env) return env;
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  return host ? `${proto}://${host}` : "http://localhost:3000";
+  return getAppUrlFromRequest(req);
 }
 
 export async function GET() {
@@ -28,16 +32,24 @@ export async function GET() {
     const status = await getConnectStatus(user.id);
     const full = await prisma.user.findUnique({
       where: { id: user.id },
-      select: { id: true, email: true },
+      select: { id: true, email: true, country: true },
     });
+    const gp = await getGlobalPayoutStatus(user.id);
     const allowlist = paymentsAllowlistGateSnapshot(
       full || { id: user.id, email: user.email },
     );
+    const country = normalizePayoutCountryCode(full?.country) || "";
     return Response.json({
       ok: true,
       flags: paymentFlagsSnapshot(),
       paymentsAccess: allowlist,
       connect: status,
+      country,
+      needsPayoutCountry: needsPayoutCountrySelection({
+        country: full?.country,
+        connectHasAccount: status.hasAccount,
+        gpHasRecipient: gp.hasRecipient,
+      }),
     }, {
       headers: {
         "Cache-Control": "private, no-store, no-cache, must-revalidate",
@@ -58,12 +70,20 @@ export async function POST(req: NextRequest) {
     if (isAdminUser(user)) {
       return jsonError("Admin accounts cannot onboard for seller payouts", 403);
     }
+    if (isApprovedSandboxSourcer(user.id)) {
+      return jsonError(
+        "This account uses Global Payouts setup for the approved test.",
+        409,
+        { code: "GP_SANDBOX_USE_GLOBAL_PAYOUTS" },
+      );
+    }
 
     const full = await prisma.user.findUniqueOrThrow({
       where: { id: user.id },
       select: {
         id: true,
         email: true,
+        country: true,
         isDemo: true,
         isTestAccount: true,
         isAdmin: true,
@@ -79,6 +99,8 @@ export async function POST(req: NextRequest) {
 
     const body = (await req.json().catch(() => ({}))) as {
       action?: string;
+      country?: string;
+      expectedRail?: string;
     };
     const action = body.action || "onboard";
     const base = appBaseUrl(req);
@@ -97,14 +119,106 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, url: link.url });
     }
 
-    // onboard (default)
+    // onboard (default) — always revalidate country + rail before Stripe redirect.
+    const existing = await getConnectStatus(user.id);
+    const country =
+      normalizePayoutCountryCode(body.country) ||
+      normalizePayoutCountryCode(full.country);
+    if (!country) {
+      return Response.json(
+        {
+          ok: false,
+          error: "Select where you will receive payouts before continuing.",
+          code: "PAYOUT_COUNTRY_REQUIRED",
+        },
+        { status: 400 },
+      );
+    }
+    // Reject client-tampered country that differs from the stored value once set.
+    const storedCountry = normalizePayoutCountryCode(full.country);
+    if (storedCountry && storedCountry !== country) {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout country does not match your saved country. Refresh and try again.",
+          code: "PAYOUT_COUNTRY_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+
+    const rail = await resolvePayoutRail({
+      userId: user.id,
+      email: full.email,
+      country,
+    });
+    if (rail.rail === "UNSUPPORTED") {
+      return Response.json(
+        {
+          ok: false,
+          error: "Payouts are not yet available in your location.",
+          code: "PAYOUTS_UNAVAILABLE",
+        },
+        { status: 409 },
+      );
+    }
+    if (rail.rail !== "STRIPE_CONNECT") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout setup for your location uses a different path. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+    const expectedRail = String(body.expectedRail || "")
+      .trim()
+      .toUpperCase();
+    if (expectedRail && expectedRail !== "STRIPE_CONNECT") {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Payout route confirmation is out of date. Refresh and try again.",
+          code: "PAYOUT_RAIL_MISMATCH",
+        },
+        { status: 409 },
+      );
+    }
+
+    if (!existing.hasAccount) {
+      const link = await createConnectOnboardingLink({
+        userId: user.id,
+        email: full.email,
+        country,
+        returnUrl: `${base}/profile/settings/payments?connect=return`,
+        refreshUrl: `${base}/profile/settings/payments?connect=refresh`,
+      });
+      return Response.json({
+        ok: true,
+        url: link.url,
+        stripeAccountId: link.stripeAccountId,
+        rail: rail.rail,
+        country,
+      });
+    }
+
     const link = await createConnectOnboardingLink({
       userId: user.id,
       email: full.email,
       returnUrl: `${base}/profile/settings/payments?connect=return`,
       refreshUrl: `${base}/profile/settings/payments?connect=refresh`,
     });
-    return Response.json({ ok: true, url: link.url, stripeAccountId: link.stripeAccountId });
+    return Response.json({
+      ok: true,
+      url: link.url,
+      stripeAccountId: link.stripeAccountId,
+      rail: rail.rail,
+      country,
+    });
   } catch (err) {
     const status = (err as { status?: number }).status || 500;
     const message =

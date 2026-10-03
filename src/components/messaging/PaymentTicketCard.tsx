@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, ShieldCheck, X } from 
 import { formatMinor } from "@/lib/payments/money";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
+import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
@@ -118,6 +119,7 @@ export type PaymentTicketView = {
   sellerApprovedRevision: number | null;
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
+  payoutRail?: string | null;
   fundedAt?: string | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
@@ -250,6 +252,8 @@ export function PaymentTicketCard({
   const [error, setError] = useState("");
   const [payNotice, setPayNotice] = useState("");
   const [confirmRelease, setConfirmRelease] = useState(false);
+  const [gpQuoteConfirmed, setGpQuoteConfirmed] = useState(false);
+  const [gpProcurementQuoteConfirmed, setGpProcurementQuoteConfirmed] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -737,6 +741,7 @@ export function PaymentTicketCard({
         error?: string;
         message?: string;
         alreadyReleased?: boolean;
+        pendingProvider?: boolean;
         activityVersion?: number;
         ticket?: PaymentTicketView;
         transaction?: {
@@ -752,8 +757,11 @@ export function PaymentTicketCard({
         );
       } else {
         setPayNotice(
-          json.message ||
-            "Item funds released. Shipping and remaining amount stay protected.",
+          json.pendingProvider
+            ? json.message ||
+                "Item-fund release submitted. Payout is confirming — not yet marked paid."
+            : json.message ||
+                "Item funds released. Shipping and remaining amount stay protected.",
         );
         setConfirmRelease(false);
         let nextLocal: PaymentTicketView | null = null;
@@ -960,8 +968,10 @@ export function PaymentTicketCard({
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
+        message?: string;
         alreadyConfirmed?: boolean;
         transferTriggered?: boolean;
+        pendingProvider?: boolean;
         decision?: string;
         activityVersion?: number;
         ticket?: PaymentTicketView;
@@ -977,9 +987,12 @@ export function PaymentTicketCard({
       } else {
         if (decision === "RELEASE_NOW") {
           setPayNotice(
-            json.alreadyConfirmed || !json.transferTriggered
-              ? "Funds release already processed (or zero residual)."
-              : "Residual seller funds released to the sourcer.",
+            json.pendingProvider
+              ? json.message ||
+                  "Release submitted. Payout is confirming — not yet marked paid."
+              : json.alreadyConfirmed || !json.transferTriggered
+                ? "Funds release already processed (or zero residual)."
+                : "Residual seller funds released to the sourcer.",
           );
         } else if (decision === "START_INSPECTION") {
           setPayNotice(
@@ -1024,8 +1037,9 @@ export function PaymentTicketCard({
                   ? "DISPUTED"
                   : json.transaction?.status || prev.protectedTxnStatus;
             const released =
-              txnStatus === "RELEASED" ||
-              Boolean(json.transaction?.releasedAt);
+              !json.pendingProvider &&
+              (txnStatus === "RELEASED" ||
+                Boolean(json.transaction?.releasedAt));
             nextLocal = {
               ...prev,
               inspectionEndsAt:
@@ -1307,6 +1321,7 @@ export function PaymentTicketCard({
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseNow) &&
     Boolean(ticket.protectedTransactionId);
+  const gpRail = ticket.payoutRail === "STRIPE_GLOBAL_PAYOUTS";
   const canReportIssue =
     !historical &&
     paymentsAccess &&
@@ -2429,10 +2444,18 @@ export function PaymentTicketCard({
               )}
               {inInspection ? (
                 <div className="flex flex-wrap gap-2">
+                  {canReleaseNow && gpRail && ticket.protectedTransactionId ? (
+                    <GpQuoteReview
+                      protectedTxnId={ticket.protectedTransactionId}
+                      kind="FINAL"
+                      confirmed={gpQuoteConfirmed}
+                      onConfirmed={setGpQuoteConfirmed}
+                    />
+                  ) : null}
                   {canReleaseNow ? (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={busy || (gpRail && !gpQuoteConfirmed)}
                       onClick={() => void submitReceiptDecision("RELEASE_NOW")}
                       className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
                     >
@@ -2635,10 +2658,18 @@ export function PaymentTicketCard({
               Payment processing
             </span>
           ) : null}
+          {canRelease && gpRail && ticket.protectedTransactionId ? (
+            <GpQuoteReview
+              protectedTxnId={ticket.protectedTransactionId}
+              kind="PROCUREMENT"
+              confirmed={gpProcurementQuoteConfirmed}
+              onConfirmed={setGpProcurementQuoteConfirmed}
+            />
+          ) : null}
           {canRelease && !confirmRelease ? (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || (gpRail && !gpProcurementQuoteConfirmed)}
               onClick={() => setConfirmRelease(true)}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
             >
@@ -2781,7 +2812,7 @@ export function PaymentTicketCard({
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || (gpRail && !gpProcurementQuoteConfirmed)}
               onClick={() => void releaseItemFunds()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
             >

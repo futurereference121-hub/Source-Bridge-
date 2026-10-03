@@ -51,6 +51,12 @@ runNodeTestScripts(
     "scripts/test-ticket-edit-draft-isolation.mjs",
     "scripts/test-status-rate-limits.mjs",
     "scripts/test-admin-live-queue.mjs",
+    "scripts/test-global-payouts.mjs",
+    "scripts/test-gp-outbound-quote.ts",
+    "scripts/test-gp-live-pilot.ts",
+    "scripts/test-global-payouts-webhook.mjs",
+    "scripts/test-global-payouts-release-flow.mjs",
+    "scripts/test-gp-sandbox-pair.ts",
   ],
   { label: "payments:fast" },
 );

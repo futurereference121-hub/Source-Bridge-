@@ -486,6 +486,8 @@ export async function createConnectOnboardingLink(opts: {
   email: string;
   returnUrl: string;
   refreshUrl: string;
+  /** ISO 3166-1 alpha-2 — required when creating a new Connect account. */
+  country?: string;
 }) {
   assertConnectOnboardingApiReady();
   const mode = getStripeMode();
@@ -493,11 +495,21 @@ export async function createConnectOnboardingLink(opts: {
   // Reuse existing mapping for *this mode only* — never overwrite the other mode.
   let row = await findConnectForMode(opts.userId, mode);
   if (!row) {
+    const country = String(opts.country || "")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z]{2}$/.test(country)) {
+      throw Object.assign(
+        new Error("Select where you will receive payouts before continuing."),
+        { status: 400, code: "PAYOUT_COUNTRY_REQUIRED" },
+      );
+    }
     // New Connect platforms reject Accounts v1 type=express; use Accounts v2.
     // Idempotency key includes mode so TEST and LIVE accounts stay distinct.
     const account = await createExpressStyleConnectedAccount({
       email: opts.email,
       userId: opts.userId,
+      country,
       stripeMode: mode,
       idempotencyKey: `connect_create_${opts.userId}_${mode}`,
     });

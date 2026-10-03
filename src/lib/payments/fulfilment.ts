@@ -169,6 +169,7 @@ export function mapProtectedTxnSummary(
     finalTransferredMinor?: number;
     refundedMinor?: number;
     stripeMode: string;
+    payoutRail?: string | null;
     fundedAt: Date | null;
     procurementReleasedAt?: Date | null;
     shippedAt: Date | null;
@@ -271,6 +272,7 @@ export function mapProtectedTxnSummary(
     procurementTransferredMinor: t.procurementTransferredMinor ?? 0,
     books,
     stripeMode: t.stripeMode,
+    payoutRail: t.payoutRail,
     fundedAt: t.fundedAt?.toISOString() ?? null,
     procurementReleasedAt: t.procurementReleasedAt?.toISOString() ?? null,
     shippedAt: t.shippedAt?.toISOString() ?? null,
@@ -930,11 +932,17 @@ async function releaseNowAfterReceipt(opts: {
     actorUserId: opts.buyerId,
   });
 
+  const pendingProvider = Boolean(
+    "pendingProvider" in result && result.pendingProvider,
+  );
+
   return {
     alreadyConfirmed: Boolean(result.alreadyReleased),
     decision: "RELEASE_NOW" as const,
-    transferTriggered: !result.alreadyReleased,
+    // pendingProvider means release was submitted but not domain-paid yet
+    transferTriggered: !result.alreadyReleased && !pendingProvider,
     alreadyReleased: Boolean(result.alreadyReleased),
+    pendingProvider,
     transferId: result.transferId ?? null,
     transaction: result.txn,
     activityVersion:

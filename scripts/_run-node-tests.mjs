@@ -13,7 +13,13 @@ export function runNodeTestScripts(scripts, { label = "suite" } = {}) {
   for (const rel of scripts) {
     const abs = path.join(root, rel);
     console.log(`\n=== ${rel} ===\n`);
-    const result = spawnSync(process.execPath, [abs], {
+    const needsStripTypes =
+      rel.includes("test-global-payouts-webhook") ||
+      rel.endsWith(".ts");
+    const args = needsStripTypes
+      ? ["--experimental-strip-types", abs]
+      : [abs];
+    const result = spawnSync(process.execPath, args, {
       cwd: root,
       stdio: "inherit",
       env: process.env,

@@ -344,9 +344,12 @@ export async function executeAdminProtectedMoneyDecision(
       actorUserId: input.adminUserId,
       ...(typedRelease ? { amountMinor: requestedReleaseMinor } : {}),
     });
-    released = !result.alreadyReleased;
+    const pendingProvider = Boolean(
+      "pendingProvider" in result && result.pendingProvider,
+    );
+    released = !result.alreadyReleased && !pendingProvider;
     transferId = result.transferId ?? null;
-    releaseAppliedMinor = result.amountMinor ?? 0;
+    releaseAppliedMinor = pendingProvider ? 0 : (result.amountMinor ?? 0);
     working =
       (await prisma.protectedTransaction.findUnique({
         where: { id: working.id },

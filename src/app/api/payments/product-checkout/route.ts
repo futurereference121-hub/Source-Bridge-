@@ -23,6 +23,11 @@ import { majorToMinor, normalizeCurrency, totalChargeMinor } from "@/lib/payment
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import {
+  assertSandboxCommercialTerms,
+  decideSandboxCheckout,
+} from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   isDirectPaymentOption,
   normalizeTxnPaymentOption,
@@ -120,27 +125,20 @@ export async function POST(req: NextRequest) {
       labels: ["buyer", "seller"],
     });
 
-    const connect = await getConnectStatus(listing.userId);
-    if (!connect.canReceiveProtectedPayments) {
-      if (isDirect) {
-        return jsonError(
-          "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
-          409,
-        );
-      }
-      return jsonError(
-        "Seller has not completed Payments & Payouts onboarding",
-        409,
-      );
+    const sandboxParticipants = decideSandboxCheckout({
+      buyerId: user.id,
+      sellerId: listing.userId,
+    });
+    if (sandboxParticipants.state === "refused") {
+      return jsonError("This payment is outside the approved test pair.", 409, {
+        code: sandboxParticipants.code,
+      });
     }
 
     const config = await getPlatformPaymentConfig();
     const currency = normalizeCurrency(listing.currency || "USD");
     assertCurrencyAllowed(currency, config);
     const itemCostMinor = majorToMinor(listing.price, currency);
-    // Snapshot listing price into ProtectedTransaction — paid purchases keep
-    // these minor amounts even if the seller edits the listing later.
-    // Server recalculates fees — never trust client totals.
     const fees = calculateFees({
       itemCostMinor,
       shippingMinor: parsed.data.shippingMinor ?? 0,
@@ -149,6 +147,76 @@ export async function POST(req: NextRequest) {
     });
     const total = totalChargeMinor(fees);
     const feeLabel = platformFeePublicLabel(storageOption);
+    let storedMode = getStripeMode();
+    let storedRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS" = "STRIPE_CONNECT";
+    try {
+      const decided = assertSandboxCommercialTerms({
+        buyerId: user.id,
+        sellerId: listing.userId,
+        currency,
+        principalMinor:
+          fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+        paymentOption: storageOption,
+      });
+      if (decided.state === "pair") {
+        storedMode = "TEST";
+        storedRail = "STRIPE_GLOBAL_PAYOUTS";
+      }
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      return jsonError(
+        err instanceof Error ? err.message : "Payment refused",
+        (err as { status?: number }).status || 409,
+        code ? { code } : undefined,
+      );
+    }
+
+    const rail = await resolvePayoutRail({
+      userId: listing.userId,
+      email: listing.user.email,
+      mode: storedMode,
+    });
+    if (!rail.payoutReady) {
+      if (isDirect) {
+        return jsonError(
+          rail.rail === "UNSUPPORTED"
+            ? "Payouts are not yet available in the seller's location."
+            : "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
+          409,
+        );
+      }
+      return jsonError(
+        rail.rail === "UNSUPPORTED"
+          ? "Payouts are not yet available in the seller's location."
+          : "Seller has not completed Payments & Payouts onboarding",
+        409,
+      );
+    }
+    if (isDirect && rail.rail !== "STRIPE_CONNECT") {
+      return jsonError(
+        "Direct Payment requires Connect payouts. Use Protected Payment for this seller.",
+        409,
+      );
+    }
+    // Keep Connect status fetch for Direct destination validation below when needed.
+    let sellerConnectAccountId = "";
+    if (isDirect) {
+      const connect = await getConnectStatus(listing.userId);
+      if (!connect.canReceiveProtectedPayments) {
+        return jsonError(
+          "Seller has not completed Payments & Payouts. Direct Payment is unavailable until Connect is ready.",
+          409,
+        );
+      }
+      sellerConnectAccountId = connect.stripeAccountId || "";
+    } else if (rail.rail === "STRIPE_CONNECT") {
+      const connect = await getConnectStatus(listing.userId);
+      sellerConnectAccountId = connect.stripeAccountId || "";
+    }
+
+    // Snapshot listing price into ProtectedTransaction — paid purchases keep
+    // these minor amounts even if the seller edits the listing later.
+    // Server recalculates fees — never trust client totals.
     const terms: CanonicalTerms = {
       currency,
       itemCostMinor: fees.itemCostMinor,
@@ -191,7 +259,8 @@ export async function POST(req: NextRequest) {
         listingId: listing.id,
         title: listing.name,
         currency,
-        stripeMode: getStripeMode(),
+        stripeMode: storedMode,
+        payoutRail: storedRail,
         termsHash,
         termsVersion: 1,
         itemCostMinor: fees.itemCostMinor,
@@ -200,7 +269,7 @@ export async function POST(req: NextRequest) {
         protectionFeeMinor: fees.protectionFeeMinor,
         totalChargeMinor: total,
         selectedSize: parsed.data.selectedSize || "",
-        sellerConnectAccountId: connect.stripeAccountId || "",
+        sellerConnectAccountId,
       },
     });
 

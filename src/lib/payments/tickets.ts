@@ -18,6 +18,7 @@ import {
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
 import { recordAuditEvent } from "@/lib/payments/ledger";
+import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
 import { normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { releaseListingReservation } from "@/lib/payments/listing-lifecycle";
@@ -292,6 +293,7 @@ function mapTicket(
     shipmentPhotoUrl?: string | null;
     deliveredAt?: Date | string | null;
     inspectionEndsAt?: Date | string | null;
+    payoutRail?: string | null;
     fundedAt?: Date | string | null;
     paymentIntentStatus?: string | null;
     proposedBy?: {
@@ -498,6 +500,7 @@ function mapTicket(
     declineReason: t.declineReason,
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
+    payoutRail: extras?.payoutRail || "STRIPE_CONNECT",
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
@@ -584,16 +587,17 @@ function mapTicket(
 }
 
 async function extrasWithParties(
-  t: { buyerId: string; sellerId: string; createdById: string },
+  t: { buyerId: string; sellerId: string; createdById: string; stripeMode?: string | null },
   extras?: Parameters<typeof mapTicket>[1],
 ): Promise<NonNullable<Parameters<typeof mapTicket>[1]>> {
   const parties = await loadRoleParties(t.buyerId, t.sellerId, t.createdById);
+  const payoutMode = (t.stripeMode || getStripeMode()).toUpperCase() === "LIVE" ? "LIVE" : "TEST";
   const connect = extras?.sellerConnectReady == null
     ? await prisma.stripeConnectAccount.findUnique({
         where: {
           userId_stripeMode: {
             userId: t.sellerId,
-            stripeMode: getStripeMode(),
+            stripeMode: payoutMode,
           },
         },
         select: {
@@ -603,13 +607,39 @@ async function extrasWithParties(
         },
       })
     : null;
-  const sellerConnectReady =
+  let sellerConnectReady =
     extras?.sellerConnectReady ??
     Boolean(
       connect?.stripeAccountId &&
         connect.chargesEnabled &&
         connect.payoutsEnabled,
     );
+  // Additive: GP recipient+method ready also counts as payout-ready for ticket UX.
+  if (!sellerConnectReady && extras?.sellerConnectReady == null) {
+    const { isGlobalPayoutsEnabled } = await import("@/lib/payments/flags");
+    if (isGlobalPayoutsEnabled()) {
+      const gp = await prisma.globalPayoutRecipient.findUnique({
+        where: {
+          userId_stripeMode: {
+            userId: t.sellerId,
+            stripeMode: payoutMode,
+          },
+        },
+        select: {
+          stripeRecipientId: true,
+          status: true,
+          payoutMethodReady: true,
+          defaultPayoutMethodId: true,
+        },
+      });
+      sellerConnectReady = Boolean(
+        gp?.stripeRecipientId &&
+          gp.payoutMethodReady &&
+          gp.defaultPayoutMethodId &&
+          String(gp.status).toUpperCase() === "ACTIVE",
+      );
+    }
+  }
   const sellerConnectHasAccount =
     extras?.sellerConnectHasAccount ?? Boolean(connect?.stripeAccountId);
   return {
@@ -968,6 +998,7 @@ export async function listConversationPaymentTickets(
           deliveredAt: true,
           inspectionEndsAt: true,
           origin: true,
+          payoutRail: true,
         },
       },
     },
@@ -1014,6 +1045,32 @@ export async function listConversationPaymentTickets(
       },
     ]),
   );
+  const gpReadySellers = new Set<string>();
+  if (sellerIds.length > 0) {
+    const { isGlobalPayoutsEnabled } = await import("@/lib/payments/flags");
+    if (isGlobalPayoutsEnabled()) {
+      const gpRows = await prisma.globalPayoutRecipient.findMany({
+        where: { userId: { in: sellerIds }, stripeMode: "TEST" },
+        select: {
+          userId: true,
+          stripeRecipientId: true,
+          status: true,
+          payoutMethodReady: true,
+          defaultPayoutMethodId: true,
+        },
+      });
+      for (const gp of gpRows) {
+        if (
+          gp.stripeRecipientId &&
+          gp.payoutMethodReady &&
+          gp.defaultPayoutMethodId &&
+          String(gp.status).toUpperCase() === "ACTIVE"
+        ) {
+          gpReadySellers.add(gp.userId);
+        }
+      }
+    }
+  }
   const disputeStatusByTxn = new Map<string, string>();
   const disputeMetaByTxn = new Map<
     string,
@@ -1057,9 +1114,12 @@ export async function listConversationPaymentTickets(
       shippedAt: t.protectedTransaction?.shippedAt ?? null,
       deliveredAt: t.protectedTransaction?.deliveredAt ?? null,
       inspectionEndsAt: t.protectedTransaction?.inspectionEndsAt ?? null,
+      payoutRail: t.protectedTransaction?.payoutRail ?? null,
       fundedAt: t.protectedTransaction?.fundedAt ?? null,
       viewerId: viewerId || undefined,
-      sellerConnectReady: connectBySeller.get(t.sellerId)?.ready ?? false,
+      sellerConnectReady:
+        (connectBySeller.get(t.sellerId)?.ready ?? false) ||
+        (String(t.stripeMode || "").toUpperCase() === "TEST" && gpReadySellers.has(t.sellerId)),
       sellerConnectHasAccount: connectBySeller.get(t.sellerId)?.hasAccount ?? false,
       openDisputeStatus: t.protectedTransactionId
         ? disputeStatusByTxn.get(t.protectedTransactionId) ?? null
@@ -1422,6 +1482,15 @@ export async function createOrRevisePaymentTicket(opts: {
 
   const { fees, currency, procurementMinor, total, platformFeeIncludedInPrice } =
     await resolveAmounts(opts.amounts, seller, paymentOption);
+  const sandboxDecision = assertSandboxCommercialTerms({
+    buyerId: opts.buyerId,
+    sellerId: opts.sellerId,
+    currency,
+    principalMinor:
+      fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
+    paymentOption,
+  });
+  const ticketStripeMode = sandboxDecision.state === "pair" ? "TEST" : getStripeMode();
 
   // Edit path: supersede one specific open ticket. New proposes never auto-
   // supersede siblings — multi-ticket independence for B/C after A is funded.
@@ -1625,7 +1694,7 @@ export async function createOrRevisePaymentTicket(opts: {
           procurementAdvanceMinor: procurementMinor,
           platformFeeIncludedInPrice,
           notes: opts.amounts.notes || "",
-          stripeMode: getStripeMode(),
+          stripeMode: ticketStripeMode,
           protectedTransactionId: { set: null },
           declinedById: { set: null },
           declinedAt: { set: null },
@@ -1683,7 +1752,7 @@ export async function createOrRevisePaymentTicket(opts: {
         procurementAdvanceMinor: procurementMinor,
         platformFeeIncludedInPrice,
         notes: opts.amounts.notes || "",
-        stripeMode: getStripeMode(),
+        stripeMode: ticketStripeMode,
         lastMeaningfulActivityAt: new Date(),
         ...(traceId ? { proposalTraceId: traceId } : {}),
         // Creator auto-approves their own revision
@@ -2122,6 +2191,21 @@ export async function respondToPaymentTicket(opts: {
       ? ticket.sellerApprovedRevision === ticket.revision
       : ticket.buyerApprovedRevision === ticket.revision);
 
+  const acceptedSandbox = bothWillApprove
+    ? assertSandboxCommercialTerms({
+        buyerId: ticket.buyerId,
+        sellerId: ticket.sellerId,
+        currency: ticket.currency,
+        principalMinor:
+          ticket.itemCostMinor + ticket.shippingMinor + ticket.sellerServiceFeeMinor,
+        paymentOption: ticket.paymentOption,
+      })
+    : null;
+  const acceptedStripeMode =
+    acceptedSandbox?.state === "pair" ? "TEST" : getStripeMode();
+  const acceptedPayoutRail =
+    acceptedSandbox?.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : "STRIPE_CONNECT";
+
   // Block dual-accept if another active funded agreement exists for this sourcing request.
   if (bothWillApprove && ticket.sourcingRequestId) {
     await assertNoConcurrentSourcingAgreement({
@@ -2138,6 +2222,7 @@ export async function respondToPaymentTicket(opts: {
         ...data,
         status: bothWillApprove ? "ACCEPTED" : "PROPOSED",
         lastMeaningfulActivityAt: new Date(),
+        ...(bothWillApprove ? { stripeMode: acceptedStripeMode } : {}),
       },
     });
 
@@ -2169,7 +2254,8 @@ export async function respondToPaymentTicket(opts: {
           sourcingRequestId: ticket.sourcingRequestId,
           title: ticket.title,
           currency: ticket.currency,
-          stripeMode: getStripeMode(),
+          stripeMode: acceptedStripeMode,
+          payoutRail: acceptedPayoutRail,
           termsHash: ticket.termsHash,
           termsVersion: ticket.revision,
           itemCostMinor: ticket.itemCostMinor,
@@ -2249,6 +2335,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           deliveredAt: true,
           inspectionEndsAt: true,
           origin: true,
+          payoutRail: true,
         },
       },
     },
@@ -2284,6 +2371,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
   });
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
+    payoutRail: pt?.payoutRail ?? null,
     paymentIntentStatus,
     procurementTransferredMinor: pt?.procurementTransferredMinor ?? 0,
     finalTransferredMinor: pt?.finalTransferredMinor ?? 0,
