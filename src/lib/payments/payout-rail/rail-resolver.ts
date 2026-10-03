@@ -259,6 +259,40 @@ export async function buildPayoutRailLockSnapshot(opts: {
   );
 }
 
+/**
+ * Lock the rail already stored on a Global Payouts transaction.
+ * Does not ask the current resolver, so a later configuration change cannot
+ * retarget the transaction onto Connect.
+ */
+export async function snapshotStoredGlobalPayoutRail(opts: {
+  sellerId: string;
+  mode: StripeMode;
+}): Promise<{
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS";
+  sellerConnectAccountId: string;
+  sellerGpRecipientId: string;
+  sellerGpPayoutMethodId: string;
+}> {
+  const mode = normalizeStripeMode(opts.mode);
+  const gp = await prisma.globalPayoutRecipient.findUnique({
+    where: {
+      userId_stripeMode: { userId: opts.sellerId, stripeMode: mode },
+    },
+  });
+  if (!isGpRecipientPayoutReady(gp)) {
+    throw Object.assign(
+      new Error("Sourcer must complete payout setup before this agreement can be funded."),
+      { status: 409, code: "GP_NOT_READY" },
+    );
+  }
+  return {
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    sellerConnectAccountId: "",
+    sellerGpRecipientId: gp?.stripeRecipientId || "",
+    sellerGpPayoutMethodId: gp?.defaultPayoutMethodId || "",
+  };
+}
+
 /** Universal payout readiness for Trust Passport / Go Live. */
 export async function isUniversalPayoutReady(opts: {
   userId: string;

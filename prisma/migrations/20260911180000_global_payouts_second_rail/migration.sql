@@ -6,6 +6,7 @@ ALTER TABLE "ProtectedTransaction" ADD COLUMN "payoutRail" TEXT NOT NULL DEFAULT
 ALTER TABLE "ProtectedTransaction" ADD COLUMN "payoutRailLockedAt" TIMESTAMP(3);
 ALTER TABLE "ProtectedTransaction" ADD COLUMN "sellerGpRecipientId" TEXT NOT NULL DEFAULT '';
 ALTER TABLE "ProtectedTransaction" ADD COLUMN "sellerGpPayoutMethodId" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "PaymentTicket" ADD COLUMN "payoutRail" TEXT NOT NULL DEFAULT 'STRIPE_CONNECT';
 
 -- CreateIndex
 CREATE INDEX "ProtectedTransaction_payoutRail_status_idx" ON "ProtectedTransaction"("payoutRail", "status");

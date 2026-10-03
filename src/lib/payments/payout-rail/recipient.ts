@@ -20,8 +20,10 @@ import { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/rail-resolv
 import { sandboxStripeModeForUser } from "@/lib/payments/payout-rail/sandbox-pair";
 
 function gpModeForUser(userId: string, mode?: StripeMode): StripeMode {
+  const sandbox = sandboxStripeModeForUser(userId);
+  if (sandbox) return sandbox;
   if (mode) return normalizeStripeMode(mode);
-  return sandboxStripeModeForUser(userId) ?? getStripeMode();
+  return getStripeMode();
 }
 
 /**
@@ -207,7 +209,7 @@ export async function createGlobalPayoutOnboardingLink(opts: {
       code: "GLOBAL_PAYOUTS_DISABLED",
     });
   }
-  const stripeMode = normalizeStripeMode(opts.mode ?? getStripeMode());
+  const stripeMode = gpModeForUser(opts.userId, opts.mode);
   if (!hasGlobalPayoutsRestrictedKey(stripeMode)) {
     throw Object.assign(new Error("Payout setup is not currently available."), {
       status: 503,
@@ -370,7 +372,7 @@ export async function syncGlobalPayoutRecipient(
   userId: string,
   mode?: StripeMode,
 ) {
-  const stripeMode = normalizeStripeMode(mode ?? getStripeMode());
+  const stripeMode = gpModeForUser(userId, mode);
   const row = await prisma.globalPayoutRecipient.findUnique({
     where: { userId_stripeMode: { userId, stripeMode } },
   });

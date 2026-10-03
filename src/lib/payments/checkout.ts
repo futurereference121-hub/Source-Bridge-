@@ -24,7 +24,9 @@ import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
 import {
   buildPayoutRailLockSnapshot,
+  lockedPayoutRailFromTxn,
   resolvePayoutRail,
+  snapshotStoredGlobalPayoutRail,
 } from "@/lib/payments/payout-rail/rail-resolver";
 import { decideSandboxCheckout } from "@/lib/payments/payout-rail/sandbox-pair";
 
@@ -59,19 +61,36 @@ export async function createPaymentIntentForTxn(opts: {
   if (txn.buyerId !== opts.buyerId) {
     throw Object.assign(new Error("Only the buyer can pay"), { status: 403 });
   }
+  const storedRail = lockedPayoutRailFromTxn(txn);
+  const honorStoredGlobalPayouts = storedRail === "STRIPE_GLOBAL_PAYOUTS";
   const sandboxCheckout = decideSandboxCheckout({
     buyerId: txn.buyerId,
     sellerId: txn.sellerId,
   });
-  if (sandboxCheckout.state === "refused") {
-    throw Object.assign(new Error("This payment is outside the approved test pair."), {
-      status: 409,
-      code: sandboxCheckout.code,
-    });
-  }
-  if (sandboxCheckout.state === "pair") {
-    const storedRail = String(txn.payoutRail || "").trim().toUpperCase();
-    if (normalizeStripeMode(txn.stripeMode) !== "TEST" || storedRail !== "STRIPE_GLOBAL_PAYOUTS") {
+  if (honorStoredGlobalPayouts) {
+    if (normalizeStripeMode(txn.stripeMode) !== "TEST") {
+      throw Object.assign(
+        new Error("Stored payment mode does not match the approved test pair."),
+        { status: 409, code: "GP_SANDBOX_MODE_MISMATCH" },
+      );
+    }
+    if (
+      sandboxCheckout.state === "refused" &&
+      sandboxCheckout.code === "GP_SANDBOX_INITIATION_DISABLED"
+    ) {
+      throw Object.assign(new Error("New test payments are stopped."), {
+        status: 409,
+        code: sandboxCheckout.code,
+      });
+    }
+  } else {
+    if (sandboxCheckout.state === "refused") {
+      throw Object.assign(new Error("This payment is outside the approved test pair."), {
+        status: 409,
+        code: sandboxCheckout.code,
+      });
+    }
+    if (sandboxCheckout.state === "pair") {
       throw Object.assign(
         new Error("Stored payment mode does not match the approved test pair."),
         { status: 409, code: "GP_SANDBOX_MODE_MISMATCH" },
@@ -150,10 +169,15 @@ export async function createPaymentIntentForTxn(opts: {
     }
   }
 
-  const rail = await resolvePayoutRail({
-    userId: txn.sellerId,
-    mode: txnMode,
-  });
+  const rail = honorStoredGlobalPayouts
+    ? {
+        rail: "STRIPE_GLOBAL_PAYOUTS" as const,
+        payoutReady: true,
+      }
+    : await resolvePayoutRail({
+        userId: txn.sellerId,
+        mode: txnMode,
+      });
 
   const wantsDirect =
     isDirectPaymentOption(txn.paymentOption) && isDirectPaymentsEnabled();
@@ -249,10 +273,15 @@ export async function createPaymentIntentForTxn(opts: {
   // Soft-lock intended rail before PI (hard lock confirmed at fund).
   if (!txn.payoutRailLockedAt) {
     try {
-      const snap = await buildPayoutRailLockSnapshot({
-        sellerId: txn.sellerId,
-        mode: txnMode,
-      });
+      const snap = honorStoredGlobalPayouts
+        ? await snapshotStoredGlobalPayoutRail({
+            sellerId: txn.sellerId,
+            mode: txnMode,
+          })
+        : await buildPayoutRailLockSnapshot({
+            sellerId: txn.sellerId,
+            mode: txnMode,
+          });
       await prisma.protectedTransaction.update({
         where: { id: txn.id },
         data: {
@@ -264,7 +293,7 @@ export async function createPaymentIntentForTxn(opts: {
         },
       });
     } catch (err) {
-      // buildPayoutRailLockSnapshot throws if not ready — already gated above.
+      // Snapshot throws if payout setup is not ready — already gated above.
       throw err;
     }
   }
@@ -559,10 +588,16 @@ export async function markTxnFundedFromWebhook(opts: {
   } | null = null;
   if (!txn.payoutRailLockedAt) {
     try {
-      const snap = await buildPayoutRailLockSnapshot({
-        sellerId: txn.sellerId,
-        mode: txnMode,
-      });
+      const snap =
+        lockedPayoutRailFromTxn(txn) === "STRIPE_GLOBAL_PAYOUTS"
+          ? await snapshotStoredGlobalPayoutRail({
+              sellerId: txn.sellerId,
+              mode: txnMode,
+            })
+          : await buildPayoutRailLockSnapshot({
+              sellerId: txn.sellerId,
+              mode: txnMode,
+            });
       railLock = {
         payoutRail: snap.payoutRail,
         payoutRailLockedAt: new Date(),

@@ -4,10 +4,13 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { isGlobalPayoutsSandboxEnabled } from "../src/lib/payments/flags.ts";
+import { globalPayoutsReconciliationAllowed } from "../src/lib/payments/payout-rail/live-pilot.ts";
 import {
   assertSandboxCommercialTerms,
   decideSandboxCheckout,
   evaluateSandboxReleaseLimits,
+  isApprovedSandboxParticipant,
   isApprovedSandboxSourcer,
   readGpSandboxPair,
   sandboxStripeModeForUser,
@@ -70,6 +73,19 @@ try {
   process.env.GLOBAL_PAYOUTS_ENABLED = "true";
   process.env.GP_SANDBOX_APPROVED_BUYER_ID = BUYER;
   ok("partial ids stay off", readGpSandboxPair() == null);
+  const partial = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok(
+    "one valid id refuses that participant",
+    partial.state === "refused" && partial.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  ok(
+    "one valid id leaves other customers ordinary",
+    decideSandboxCheckout({
+      buyerId: OTHER,
+      sellerId: `c${"e".repeat(24)}`,
+      ordinaryMode: "LIVE",
+    }).state === "ordinary",
+  );
   process.env.GP_SANDBOX_APPROVED_SOURCER_ID = BUYER;
   process.env.GP_SANDBOX_CURRENCY = "GBP";
   process.env.GP_SANDBOX_MAX_AMOUNT_MINOR = "5000";
@@ -88,6 +104,11 @@ try {
   enablePair();
   process.env.GP_SANDBOX_CURRENCY = "GB";
   ok("short currency stays off", readGpSandboxPair() == null);
+  const badCurrency = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok(
+    "partial currency refuses the pair",
+    badCurrency.state === "refused" && badCurrency.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
   process.env.GP_SANDBOX_CURRENCY = "GBP";
   process.env.GP_SANDBOX_MAX_AMOUNT_MINOR = "50.5";
   ok("fractional amount stays off", readGpSandboxPair() == null);
@@ -96,17 +117,74 @@ try {
   process.env.GP_SANDBOX_MAX_AMOUNT_MINOR = "5000";
   process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST = "";
   ok("empty country allowlist stays off", readGpSandboxPair() == null);
+  const emptyCountry = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok("empty country refuses the pair", emptyCountry.state === "refused" && emptyCountry.code === "GP_SANDBOX_CONFIG_INVALID");
   process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST = "*";
   ok("wildcard country stays off", readGpSandboxPair() == null);
   process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST = "TH";
   process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED = "true";
   ok("live initiation keeps the sandbox off", readGpSandboxPair() == null);
+  const liveOn = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok("live initiation does not open live checkout", liveOn.state === "refused");
   process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED = "false";
   process.env.GLOBAL_PAYOUTS_SANDBOX_ENABLED = "false";
   ok("sandbox flag off stays off", readGpSandboxPair() == null);
+  const stopped = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok(
+    "sandbox flag off refuses the pair",
+    stopped.state === "refused" && stopped.code === "GP_SANDBOX_INITIATION_DISABLED",
+  );
+  ok("sandbox flag off still identifies the sourcer", isApprovedSandboxSourcer(SOURCER) === true);
+  ok("sandbox flag off still identifies the buyer", isApprovedSandboxParticipant(BUYER) === true);
+  ok("sandbox flag off stops TEST initiation", isGlobalPayoutsSandboxEnabled() === false);
+  ok(
+    "reconciliation stays allowed while the master flag is on",
+    globalPayoutsReconciliationAllowed({
+      masterEnabled: true,
+      liveInitiationEnabled: false,
+    }) === true,
+  );
+  const stoppedCross = decideSandboxCheckout({ buyerId: BUYER, sellerId: OTHER, ordinaryMode: "LIVE" });
+  ok(
+    "sandbox flag off still refuses cross-pair",
+    stoppedCross.state === "refused" && stoppedCross.code === "GP_SANDBOX_PAIR_REQUIRED",
+  );
+  const stoppedOther = decideSandboxCheckout({
+    buyerId: OTHER,
+    sellerId: `c${"e".repeat(24)}`,
+    ordinaryMode: "LIVE",
+  });
+  ok(
+    "sandbox flag off leaves other customers ordinary",
+    stoppedOther.state === "ordinary" && stoppedOther.stripeMode === "LIVE" && stoppedOther.payoutRail === "STRIPE_CONNECT",
+  );
+  const stoppedRelease = evaluateSandboxReleaseLimits({
+    buyerId: BUYER,
+    sellerId: SOURCER,
+    sourceCurrency: "GBP",
+    principalMinor: 1000,
+    providerFeeMinor: 0,
+    crossBorderFeeMinor: 0,
+    fxFeeMinor: 0,
+    providerFeeCurrency: "",
+    crossBorderFeeCurrency: "",
+    fxFeeCurrency: "",
+    availableBalanceMinor: 5000,
+    checkFunding: false,
+  });
+  ok("sandbox flag off rejects a new payout", !stoppedRelease.ok && stoppedRelease.code === "GP_SANDBOX_DISABLED");
   process.env.GLOBAL_PAYOUTS_ENABLED = "false";
   process.env.GLOBAL_PAYOUTS_SANDBOX_ENABLED = "true";
   ok("master flag off stays off", readGpSandboxPair() == null);
+  const masterOff = decideSandboxCheckout({ buyerId: BUYER, sellerId: SOURCER, ordinaryMode: "LIVE" });
+  ok("master flag off does not fall through to live", masterOff.state === "refused");
+  ok(
+    "master flag off stops reconciliation",
+    globalPayoutsReconciliationAllowed({
+      masterEnabled: false,
+      liveInitiationEnabled: false,
+    }) === false,
+  );
 
   enablePair();
   const pair = readGpSandboxPair();
@@ -117,6 +195,20 @@ try {
     selected.state === "pair" && selected.stripeMode === "TEST" && selected.payoutRail === "STRIPE_GLOBAL_PAYOUTS",
   );
   ok("approved sourcer onboarding uses TEST", sandboxStripeModeForUser(SOURCER) === "TEST");
+  ok("pair direct payment is refused", (() => {
+    try {
+      assertSandboxCommercialTerms({
+        buyerId: BUYER,
+        sellerId: SOURCER,
+        currency: "GBP",
+        principalMinor: 1000,
+        paymentOption: "INSTANT",
+      });
+      return false;
+    } catch (err) {
+      return (err as { code?: string }).code === "GP_SANDBOX_PROTECTED_ONLY";
+    }
+  })());
   ok("ordinary user onboarding is not forced", sandboxStripeModeForUser(OTHER) == null);
   ok(
     "buyer with another sourcer is refused",
@@ -265,6 +357,29 @@ try {
   ok("ticket request schema has no stripe mode field", !tickets.includes("stripeMode"));
   const checkout = readFileSync(new URL("../src/lib/payments/checkout.ts", import.meta.url), "utf8");
   ok("checkout rejects a stored mode that is not the approved pair", checkout.includes("GP_SANDBOX_MODE_MISMATCH"));
+  ok(
+    "checkout keeps a stored Global Payouts rail",
+    checkout.includes("snapshotStoredGlobalPayoutRail") && checkout.includes("honorStoredGlobalPayouts"),
+  );
+  const connect = readFileSync(new URL("../src/app/api/payments/connect/route.ts", import.meta.url), "utf8");
+  ok("Connect onboarding blocks both approved participants", connect.includes("isApprovedSandboxParticipant"));
+  const recipient = readFileSync(new URL("../src/lib/payments/payout-rail/recipient.ts", import.meta.url), "utf8");
+  ok(
+    "approved sourcer payout setup prefers TEST over the platform mode",
+    recipient.indexOf("const sandbox = sandboxStripeModeForUser(userId);") <
+      recipient.indexOf("if (mode) return normalizeStripeMode(mode);"),
+  );
+  const events = readFileSync(new URL("../src/lib/payments/payout-rail/events.ts", import.meta.url), "utf8");
+  ok("webhook reconciliation follows the master flag", events.includes("globalPayoutsReconciliationAllowed"));
+  ok("webhook reconciliation does not consult the sandbox flag", !events.includes("isGlobalPayoutsSandboxEnabled"));
+  const quote = readFileSync(new URL("../src/lib/payments/payout-rail/quote-review.ts", import.meta.url), "utf8");
+  ok("quotes check initiation before provider preparation", quote.includes("initiationEnabled: canInitiateGlobalPayoutsMoney(txnMode)"));
+  const product = readFileSync(new URL("../src/app/api/payments/product-checkout/route.ts", import.meta.url), "utf8");
+  ok(
+    "listed checkout gates the pair before Connect status",
+    product.indexOf("const sandboxParticipants = decideSandboxCheckout") <
+      product.indexOf("getConnectStatus(listing.userId)"),
+  );
   const webhook = readFileSync(
     new URL("../src/app/api/webhooks/stripe/global-payouts/route.ts", import.meta.url),
     "utf8",

@@ -18,7 +18,7 @@ import {
 } from "@/lib/payments/payout-rail/payout-country";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import { getGlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
-import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
+import { isApprovedSandboxParticipant } from "@/lib/payments/payout-rail/sandbox-pair";
 
 export const runtime = "nodejs";
 
@@ -70,9 +70,9 @@ export async function POST(req: NextRequest) {
     if (isAdminUser(user)) {
       return jsonError("Admin accounts cannot onboard for seller payouts", 403);
     }
-    if (isApprovedSandboxSourcer(user.id)) {
+    if (isApprovedSandboxParticipant(user.id)) {
       return jsonError(
-        "This account uses Global Payouts setup for the approved test.",
+        "This account is reserved for the approved test and cannot start Connect onboarding.",
         409,
         { code: "GP_SANDBOX_USE_GLOBAL_PAYOUTS" },
       );

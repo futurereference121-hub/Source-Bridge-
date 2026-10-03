@@ -89,7 +89,9 @@ export async function handleGlobalPayoutsThinEvent(opts: {
       liveInitiationEnabled: isGlobalPayoutsLiveInitiationEnabled(),
     })
   ) {
-    // Ack + store so Stripe does not retry forever; no business mutation.
+    // Master flag off acknowledges without applying. This is not an emergency
+    // stop: leave GLOBAL_PAYOUTS_ENABLED on and set GLOBAL_PAYOUTS_SANDBOX_ENABLED
+    // false to stop new initiation while reconciliation still runs.
     await prisma.processedWebhookEvent
       .create({
         data: {

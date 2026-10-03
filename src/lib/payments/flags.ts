@@ -184,7 +184,11 @@ export function isGlobalPayoutsLiveInitiationEnabled(): boolean {
   );
 }
 
-/** Sandbox/TEST GP money ops allowed only when master GP is on (still no live objects). */
+/**
+ * Sandbox/TEST GP money initiation. Default on when the master flag is on.
+ * Set false to stop new TEST purchases, quotes, payouts, and retries without
+ * stopping webhook reconciliation. Leave GLOBAL_PAYOUTS_ENABLED true for that.
+ */
 export function isGlobalPayoutsSandboxEnabled(): boolean {
   return isGlobalPayoutsEnabled() && envBool("GLOBAL_PAYOUTS_SANDBOX_ENABLED", true);
 }

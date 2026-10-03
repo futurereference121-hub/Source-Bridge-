@@ -1,8 +1,13 @@
 /**
  * Production Global Payouts Sandbox pair.
  * Server-controlled and fail-closed. Client fields, usernames, headers, and
- * URL parameters cannot select TEST mode. Missing or ambiguous configuration
- * leaves every checkout on the ordinary Stripe mode.
+ * URL parameters cannot select TEST mode.
+ *
+ * Identified participants never fall through to ordinary LIVE checkout.
+ * GLOBAL_PAYOUTS_SANDBOX_ENABLED=false stops new purchases, quotes, payouts,
+ * and retries while GLOBAL_PAYOUTS_ENABLED stays on so webhook reconciliation
+ * still applies. Turning the master flag off acknowledges events without
+ * applying them and is not the stop control.
  */
 
 import {
@@ -43,7 +48,18 @@ export type SandboxCheckoutDecision =
       currency: string;
       maxAmountMinor: number;
     }
-  | { state: "refused"; code: "GP_SANDBOX_PAIR_REQUIRED" };
+  | {
+      state: "refused";
+      code:
+        | "GP_SANDBOX_PAIR_REQUIRED"
+        | "GP_SANDBOX_INITIATION_DISABLED"
+        | "GP_SANDBOX_CONFIG_INVALID";
+    };
+
+export type SandboxIdHold = {
+  buyerId: string | null;
+  sourcerId: string | null;
+};
 
 function singleToken(raw: string | undefined): string | null {
   const text = String(raw ?? "");
@@ -62,47 +78,76 @@ function immutableUserId(raw: string | undefined): string | null {
   return null;
 }
 
+function liveInitiationRequested(env: NodeJS.ProcessEnv): boolean {
+  const liveInitiation = String(env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED || "")
+    .trim()
+    .toLowerCase();
+  return (
+    liveInitiation === "1" ||
+    liveInitiation === "true" ||
+    liveInitiation === "yes" ||
+    liveInitiation === "on"
+  );
+}
+
+function commercialConfig(
+  env: NodeJS.ProcessEnv,
+): { currency: string; maxAmountMinor: number } | null {
+  const currency = singleToken(env.GP_SANDBOX_CURRENCY)?.toUpperCase() || "";
+  if (!CURRENCY.test(currency)) return null;
+  const amountRaw = singleToken(env.GP_SANDBOX_MAX_AMOUNT_MINOR);
+  if (!amountRaw || !POSITIVE_MINOR.test(amountRaw)) return null;
+  const maxAmountMinor = Number(amountRaw);
+  if (!Number.isSafeInteger(maxAmountMinor) || maxAmountMinor <= 0) return null;
+  const countries = countryAllowlist();
+  if (countries.length === 0 || countries.some((code) => !/^[A-Z]{2}$/.test(code))) {
+    return null;
+  }
+  return { currency, maxAmountMinor };
+}
+
+/**
+ * Valid participant ids, even when initiation or the rest of the configuration
+ * is off. Identical ids are ambiguous and do not identify anyone.
+ */
+export function readGpSandboxIdHold(
+  env: NodeJS.ProcessEnv = process.env,
+): SandboxIdHold | null {
+  const buyerId = immutableUserId(env.GP_SANDBOX_APPROVED_BUYER_ID);
+  const sourcerId = immutableUserId(env.GP_SANDBOX_APPROVED_SOURCER_ID);
+  if (buyerId && sourcerId && buyerId === sourcerId) return null;
+  if (!buyerId && !sourcerId) return null;
+  return { buyerId, sourcerId };
+}
+
 export function readGpSandboxPair(
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxPairConfig | null {
   if (!isGlobalPayoutsEnabled()) return null;
   if (!isGlobalPayoutsSandboxEnabled()) return null;
-  const liveInitiation = String(env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED || "")
-    .trim()
-    .toLowerCase();
-  if (liveInitiation === "1" || liveInitiation === "true" || liveInitiation === "yes" || liveInitiation === "on") {
-    return null;
-  }
-
-  const buyerId = immutableUserId(env.GP_SANDBOX_APPROVED_BUYER_ID);
-  const sourcerId = immutableUserId(env.GP_SANDBOX_APPROVED_SOURCER_ID);
-  if (!buyerId || !sourcerId || buyerId === sourcerId) return null;
-
-  const currency = singleToken(env.GP_SANDBOX_CURRENCY)?.toUpperCase() || "";
-  if (!CURRENCY.test(currency)) return null;
-
-  const amountRaw = singleToken(env.GP_SANDBOX_MAX_AMOUNT_MINOR);
-  if (!amountRaw || !POSITIVE_MINOR.test(amountRaw)) return null;
-  const maxAmountMinor = Number(amountRaw);
-  if (!Number.isSafeInteger(maxAmountMinor) || maxAmountMinor <= 0) return null;
-
-  const countries = countryAllowlist();
-  if (countries.length === 0 || countries.some((code) => !/^[A-Z]{2}$/.test(code))) {
-    return null;
-  }
-
-  return { enabled: true, buyerId, sourcerId, currency, maxAmountMinor };
+  if (liveInitiationRequested(env)) return null;
+  const hold = readGpSandboxIdHold(env);
+  if (!hold?.buyerId || !hold.sourcerId) return null;
+  const commercial = commercialConfig(env);
+  if (!commercial) return null;
+  return {
+    enabled: true,
+    buyerId: hold.buyerId,
+    sourcerId: hold.sourcerId,
+    currency: commercial.currency,
+    maxAmountMinor: commercial.maxAmountMinor,
+  };
 }
 
 export function isApprovedSandboxSourcer(userId: string): boolean {
-  const pair = readGpSandboxPair();
-  return Boolean(pair && pair.sourcerId === userId);
+  const hold = readGpSandboxIdHold();
+  return Boolean(hold?.sourcerId && hold.sourcerId === userId);
 }
 
 export function isApprovedSandboxParticipant(userId: string): boolean {
-  const pair = readGpSandboxPair();
-  if (!pair) return false;
-  return userId === pair.buyerId || userId === pair.sourcerId;
+  const hold = readGpSandboxIdHold();
+  if (!hold) return false;
+  return userId === hold.buyerId || userId === hold.sourcerId;
 }
 
 /**
@@ -114,13 +159,23 @@ export function decideSandboxCheckout(opts: {
   sellerId: string;
   ordinaryMode?: StripeMode;
 }): SandboxCheckoutDecision {
-  const pair = readGpSandboxPair();
-  if (!pair) return { state: "inactive" };
+  const hold = readGpSandboxIdHold();
+  if (!hold) return { state: "inactive" };
   const buyerId = opts.buyerId.trim();
   const sellerId = opts.sellerId.trim();
-  const buyer = buyerId === pair.buyerId;
-  const sourcer = sellerId === pair.sourcerId;
-  if (buyer && sourcer) {
+  const involved =
+    (hold.buyerId != null && (buyerId === hold.buyerId || sellerId === hold.buyerId)) ||
+    (hold.sourcerId != null && (buyerId === hold.sourcerId || sellerId === hold.sourcerId));
+  if (!involved) {
+    return {
+      state: "ordinary",
+      stripeMode: opts.ordinaryMode ?? getStripeMode(),
+      payoutRail: "STRIPE_CONNECT",
+    };
+  }
+
+  const pair = readGpSandboxPair();
+  if (pair && buyerId === pair.buyerId && sellerId === pair.sourcerId) {
     return {
       state: "pair",
       stripeMode: "TEST",
@@ -129,14 +184,26 @@ export function decideSandboxCheckout(opts: {
       maxAmountMinor: pair.maxAmountMinor,
     };
   }
-  if (buyer || sourcer || buyerId === pair.sourcerId || sellerId === pair.buyerId) {
-    return { state: "refused", code: "GP_SANDBOX_PAIR_REQUIRED" };
+
+  const exact = Boolean(
+    hold.buyerId &&
+      hold.sourcerId &&
+      buyerId === hold.buyerId &&
+      sellerId === hold.sourcerId,
+  );
+  if (
+    exact &&
+    isGlobalPayoutsEnabled() &&
+    !liveInitiationRequested(process.env) &&
+    commercialConfig(process.env) &&
+    !isGlobalPayoutsSandboxEnabled()
+  ) {
+    return { state: "refused", code: "GP_SANDBOX_INITIATION_DISABLED" };
   }
-  return {
-    state: "ordinary",
-    stripeMode: opts.ordinaryMode ?? getStripeMode(),
-    payoutRail: "STRIPE_CONNECT",
-  };
+  if (exact || !hold.buyerId || !hold.sourcerId) {
+    return { state: "refused", code: "GP_SANDBOX_CONFIG_INVALID" };
+  }
+  return { state: "refused", code: "GP_SANDBOX_PAIR_REQUIRED" };
 }
 
 export function sandboxStripeModeForUser(userId: string): StripeMode | null {
@@ -153,7 +220,13 @@ export function assertSandboxCommercialTerms(opts: {
 }): SandboxCheckoutDecision {
   const decision = decideSandboxCheckout({ buyerId: opts.buyerId, sellerId: opts.sellerId });
   if (decision.state === "refused") {
-    throw Object.assign(new Error("This payment is outside the approved test pair."), {
+    const message =
+      decision.code === "GP_SANDBOX_INITIATION_DISABLED"
+        ? "New test payments are stopped."
+        : decision.code === "GP_SANDBOX_CONFIG_INVALID"
+          ? "This test payment is not available."
+          : "This payment is outside the approved test pair.";
+    throw Object.assign(new Error(message), {
       status: 409,
       code: decision.code,
     });

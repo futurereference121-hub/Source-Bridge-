@@ -1491,6 +1491,8 @@ export async function createOrRevisePaymentTicket(opts: {
     paymentOption,
   });
   const ticketStripeMode = sandboxDecision.state === "pair" ? "TEST" : getStripeMode();
+  const ticketPayoutRail =
+    sandboxDecision.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : "STRIPE_CONNECT";
 
   // Edit path: supersede one specific open ticket. New proposes never auto-
   // supersede siblings — multi-ticket independence for B/C after A is funded.
@@ -1695,6 +1697,7 @@ export async function createOrRevisePaymentTicket(opts: {
           platformFeeIncludedInPrice,
           notes: opts.amounts.notes || "",
           stripeMode: ticketStripeMode,
+          payoutRail: ticketPayoutRail,
           protectedTransactionId: { set: null },
           declinedById: { set: null },
           declinedAt: { set: null },
@@ -1753,6 +1756,7 @@ export async function createOrRevisePaymentTicket(opts: {
         platformFeeIncludedInPrice,
         notes: opts.amounts.notes || "",
         stripeMode: ticketStripeMode,
+        payoutRail: ticketPayoutRail,
         lastMeaningfulActivityAt: new Date(),
         ...(traceId ? { proposalTraceId: traceId } : {}),
         // Creator auto-approves their own revision
@@ -2201,10 +2205,16 @@ export async function respondToPaymentTicket(opts: {
         paymentOption: ticket.paymentOption,
       })
     : null;
+  const storedTicketMode =
+    String(ticket.stripeMode || "").toUpperCase() === "LIVE" ? "LIVE" : "TEST";
+  const storedTicketRail =
+    String(ticket.payoutRail || "").trim().toUpperCase() === "STRIPE_GLOBAL_PAYOUTS"
+      ? "STRIPE_GLOBAL_PAYOUTS"
+      : "STRIPE_CONNECT";
   const acceptedStripeMode =
-    acceptedSandbox?.state === "pair" ? "TEST" : getStripeMode();
+    acceptedSandbox?.state === "pair" ? "TEST" : storedTicketMode;
   const acceptedPayoutRail =
-    acceptedSandbox?.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : "STRIPE_CONNECT";
+    acceptedSandbox?.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : storedTicketRail;
 
   // Block dual-accept if another active funded agreement exists for this sourcing request.
   if (bothWillApprove && ticket.sourcingRequestId) {
@@ -2222,7 +2232,9 @@ export async function respondToPaymentTicket(opts: {
         ...data,
         status: bothWillApprove ? "ACCEPTED" : "PROPOSED",
         lastMeaningfulActivityAt: new Date(),
-        ...(bothWillApprove ? { stripeMode: acceptedStripeMode } : {}),
+        ...(bothWillApprove
+          ? { stripeMode: acceptedStripeMode, payoutRail: acceptedPayoutRail }
+          : {}),
       },
     });
 
