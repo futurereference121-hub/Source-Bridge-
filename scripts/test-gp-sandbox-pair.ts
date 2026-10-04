@@ -4,12 +4,17 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { isGlobalPayoutsSandboxEnabled } from "../src/lib/payments/flags.ts";
+import { getStripeMode, isGlobalPayoutsSandboxEnabled } from "../src/lib/payments/flags.ts";
+import {
+  payoutCountryLocked,
+  projectStoredGlobalPayoutStatus,
+} from "../src/lib/payments/payout-rail/gp-status-view.ts";
 import { globalPayoutsReconciliationAllowed } from "../src/lib/payments/payout-rail/live-pilot.ts";
 import {
   assertSandboxCommercialTerms,
   decideSandboxCheckout,
   evaluateSandboxReleaseLimits,
+  gpModeForUser,
   isApprovedSandboxParticipant,
   isApprovedSandboxSourcer,
   readGpSandboxPair,
@@ -417,12 +422,103 @@ try {
   );
   const connect = readFileSync(new URL("../src/app/api/payments/connect/route.ts", import.meta.url), "utf8");
   ok("Connect onboarding blocks both approved participants", connect.includes("isApprovedSandboxParticipant"));
-  const recipient = readFileSync(new URL("../src/lib/payments/payout-rail/recipient.ts", import.meta.url), "utf8");
+  const modePolicy = readFileSync(
+    new URL("../src/lib/payments/payout-rail/sandbox-pair.ts", import.meta.url),
+    "utf8",
+  );
   ok(
     "approved sourcer payout setup prefers TEST over the platform mode",
-    recipient.indexOf("const sandbox = sandboxStripeModeForUser(userId);") <
-      recipient.indexOf("if (mode) return normalizeStripeMode(mode);"),
+    modePolicy.indexOf("const sandbox = sandboxStripeModeForUser(userId);") <
+      modePolicy.indexOf("if (mode) return normalizeStripeMode(mode);"),
   );
+  const statusRoute = readFileSync(
+    new URL("../src/app/api/payments/global-payouts/route.ts", import.meta.url),
+    "utf8",
+  );
+  ok(
+    "status lookup passes no client mode",
+    statusRoute.includes("getGlobalPayoutStatus(user.id)") && !statusRoute.includes("stripeMode"),
+  );
+
+  process.env.LIVE_PAYMENTS_ENABLED = "true";
+  process.env.GLOBAL_PAYOUTS_ENABLED = "true";
+  process.env.GLOBAL_PAYOUTS_SANDBOX_ENABLED = "false";
+  process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED = "false";
+  process.env.GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST = "TH";
+  process.env.GP_SANDBOX_APPROVED_BUYER_ID = BUYER;
+  process.env.GP_SANDBOX_APPROVED_SOURCER_ID = SOURCER;
+  process.env.GP_SANDBOX_CURRENCY = "GBP";
+  process.env.GP_SANDBOX_MAX_AMOUNT_MINOR = "5000";
+  ok("platform mode is LIVE while sandbox initiation is off", getStripeMode() === "LIVE");
+  ok("sandbox initiation stays disabled", isGlobalPayoutsSandboxEnabled() === false);
+  ok("approved sourcer status uses TEST", gpModeForUser(SOURCER) === "TEST");
+  ok("approved sourcer ignores a LIVE mode argument", gpModeForUser(SOURCER, "LIVE") === "TEST");
+  ok("ordinary user keeps platform LIVE", gpModeForUser(OTHER) === "LIVE");
+  ok("ordinary user keeps an explicit TEST mode", gpModeForUser(OTHER, "TEST") === "TEST");
+  const stored = projectStoredGlobalPayoutStatus({
+    enabled: true,
+    configured: true,
+    stripeMode: gpModeForUser(SOURCER),
+    row: {
+      stripeRecipientId: "acct_test_ready",
+      status: "ACTIVE",
+      country: "TH",
+      defaultCurrency: "THB",
+      payoutMethodReady: true,
+      defaultPayoutMethodId: "pm_test_default",
+      requirementsJson: "{}",
+      disabledReason: "",
+      recipientType: "individual",
+    },
+  });
+  ok(
+    "stored ACTIVE TEST recipient is ready",
+    stored.stripeMode === "TEST" &&
+      stored.hasRecipient === true &&
+      stored.status === "ACTIVE" &&
+      stored.payoutMethodReady === true &&
+      stored.payoutReady === true &&
+      stored.country === "TH",
+  );
+  ok(
+    "saved recipient country is locked",
+    payoutCountryLocked({
+      connectHasAccount: false,
+      gpHasRecipient: stored.hasRecipient,
+    }) === true,
+  );
+  const stoppedPair = decideSandboxCheckout({
+    buyerId: BUYER,
+    sellerId: SOURCER,
+    ordinaryMode: "LIVE",
+  });
+  ok(
+    "ready recipient does not enable sandbox initiation",
+    stoppedPair.state === "refused" && stoppedPair.code === "GP_SANDBOX_INITIATION_DISABLED",
+  );
+  process.env.GP_SANDBOX_APPROVED_SOURCER_ID = BUYER;
+  const identical = decideSandboxCheckout({
+    buyerId: BUYER,
+    sellerId: BUYER,
+    ordinaryMode: "LIVE",
+  });
+  ok(
+    "identical participant ids stay invalid",
+    identical.state === "refused" && identical.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  process.env.GP_SANDBOX_APPROVED_SOURCER_ID = SOURCER;
+  process.env.GP_SANDBOX_CURRENCY = "luckyday";
+  const invalidCurrency = decideSandboxCheckout({
+    buyerId: BUYER,
+    sellerId: SOURCER,
+    ordinaryMode: "LIVE",
+  });
+  ok(
+    "invalid currency stays invalid",
+    invalidCurrency.state === "refused" && invalidCurrency.code === "GP_SANDBOX_CONFIG_INVALID",
+  );
+  process.env.GP_SANDBOX_APPROVED_SOURCER_ID = "luckyday";
+  ok("username is not a sourcer id", gpModeForUser(SOURCER) === "LIVE");
   const events = readFileSync(new URL("../src/lib/payments/payout-rail/events.ts", import.meta.url), "utf8");
   ok("webhook reconciliation follows the master flag", events.includes("globalPayoutsReconciliationAllowed"));
   ok("webhook reconciliation does not consult the sandbox flag", !events.includes("isGlobalPayoutsSandboxEnabled"));

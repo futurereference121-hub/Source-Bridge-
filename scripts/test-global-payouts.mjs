@@ -338,10 +338,14 @@ ok(
 // 20 Flag OFF skips GP table reads (safe before migration)
 {
   const recipient = read("src/lib/payments/payout-rail/recipient.ts");
+  const statusView = read("src/lib/payments/payout-rail/gp-status-view.ts");
+  const disabledGate = recipient.indexOf("if (!isGlobalPayoutsEnabled())");
   ok(
     "20 getGlobalPayoutStatus early-returns when disabled",
-    recipient.includes("if (!isGlobalPayoutsEnabled())") &&
-      recipient.includes('status: "NOT_STARTED"'),
+    disabledGate >= 0 &&
+      disabledGate < recipient.indexOf("globalPayoutRecipient.findUnique") &&
+      statusView.includes("if (!opts.enabled)") &&
+      statusView.includes('status: "NOT_STARTED"'),
   );
 }
 

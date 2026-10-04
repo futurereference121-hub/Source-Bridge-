@@ -5,7 +5,6 @@
 
 import { prisma } from "@/lib/db";
 import {
-  getStripeMode,
   isGlobalPayoutsEnabled,
   normalizeStripeMode,
   type StripeMode,
@@ -16,15 +15,11 @@ import {
   isGlobalPayoutsUserAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
 import { gpErrorMessage, gpFetch, hasGlobalPayoutsRestrictedKey } from "@/lib/payments/payout-rail/gp-client";
-import { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/rail-resolver";
-import { sandboxStripeModeForUser } from "@/lib/payments/payout-rail/sandbox-pair";
-
-function gpModeForUser(userId: string, mode?: StripeMode): StripeMode {
-  const sandbox = sandboxStripeModeForUser(userId);
-  if (sandbox) return sandbox;
-  if (mode) return normalizeStripeMode(mode);
-  return getStripeMode();
-}
+import {
+  projectStoredGlobalPayoutStatus,
+  type GlobalPayoutStatusView,
+} from "@/lib/payments/payout-rail/gp-status-view";
+import { gpModeForUser } from "@/lib/payments/payout-rail/sandbox-pair";
 
 /**
  * Stripe Global Payouts payout-method capability for a recipient country.
@@ -119,75 +114,31 @@ function recipientCapabilitiesBody(country: string) {
   };
 }
 
-export type GlobalPayoutStatus = {
-  enabled: boolean;
-  configured: boolean;
-  hasRecipient: boolean;
-  status: string;
-  country: string;
-  defaultCurrency: string;
-  payoutMethodReady: boolean;
-  payoutReady: boolean;
-  requirementsDueCount: number;
-  disabledReason: string;
-  stripeMode: StripeMode;
-  recipientType: string;
-};
-
-function reqDueCount(requirementsJson: string): number {
-  try {
-    const parsed = JSON.parse(requirementsJson || "{}") as {
-      currently_due?: unknown[];
-      past_due?: unknown[];
-    };
-    const a = Array.isArray(parsed.currently_due) ? parsed.currently_due.length : 0;
-    const b = Array.isArray(parsed.past_due) ? parsed.past_due.length : 0;
-    return a + b;
-  } catch {
-    return 0;
-  }
-}
+export type GlobalPayoutStatus = GlobalPayoutStatusView;
 
 export async function getGlobalPayoutStatus(
   userId: string,
   mode?: StripeMode,
 ): Promise<GlobalPayoutStatus> {
-  const stripeMode = normalizeStripeMode(mode ?? getStripeMode());
+  const stripeMode = gpModeForUser(userId, mode);
   // Flag OFF: no GP table reads — identical to Connect-only (safe before migration).
   if (!isGlobalPayoutsEnabled()) {
-    return {
+    return projectStoredGlobalPayoutStatus({
       enabled: false,
       configured: false,
-      hasRecipient: false,
-      status: "NOT_STARTED",
-      country: "",
-      defaultCurrency: "",
-      payoutMethodReady: false,
-      payoutReady: false,
-      requirementsDueCount: 0,
-      disabledReason: "",
       stripeMode,
-      recipientType: "individual",
-    };
+      row: null,
+    });
   }
   const row = await prisma.globalPayoutRecipient.findUnique({
     where: { userId_stripeMode: { userId, stripeMode } },
   });
-  const payoutReady = isGpRecipientPayoutReady(row);
-  return {
+  return projectStoredGlobalPayoutStatus({
     enabled: true,
     configured: hasGlobalPayoutsRestrictedKey(stripeMode),
-    hasRecipient: Boolean(row?.stripeRecipientId),
-    status: row?.status || "NOT_STARTED",
-    country: row?.country || "",
-    defaultCurrency: row?.defaultCurrency || "",
-    payoutMethodReady: Boolean(row?.payoutMethodReady),
-    payoutReady,
-    requirementsDueCount: reqDueCount(row?.requirementsJson || "{}"),
-    disabledReason: row?.disabledReason || "",
     stripeMode,
-    recipientType: row?.recipientType || "individual",
-  };
+    row,
+  });
 }
 
 /**

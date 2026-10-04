@@ -15,6 +15,7 @@ import {
   isGlobalPayoutsCountryAllowed,
   isGlobalPayoutsUserAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
+import { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/gp-status-view";
 import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
 import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
 
@@ -39,19 +40,7 @@ function normalizeCountry(raw: string | null | undefined): string {
   return String(raw || "").trim().toUpperCase();
 }
 
-export function isGpRecipientPayoutReady(row: {
-  status: string;
-  payoutMethodReady: boolean;
-  defaultPayoutMethodId?: string | null;
-  stripeRecipientId?: string | null;
-} | null | undefined): boolean {
-  if (!row) return false;
-  if (!row.stripeRecipientId) return false;
-  if (!row.payoutMethodReady) return false;
-  if (!String(row.defaultPayoutMethodId || "").trim()) return false;
-  const status = String(row.status || "").toUpperCase();
-  return status === "ACTIVE";
-}
+export { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/gp-status-view";
 
 /**
  * Resolve intended rail for a sourcer (pre-fund / onboarding).

@@ -14,6 +14,7 @@ import {
   getStripeMode,
   isGlobalPayoutsEnabled,
   isGlobalPayoutsSandboxEnabled,
+  normalizeStripeMode,
   type StripeMode,
 } from "../flags.ts";
 import { quotedPayoutCover } from "./live-pilot.ts";
@@ -216,6 +217,19 @@ export function decideSandboxCheckout(opts: {
 export function sandboxStripeModeForUser(userId: string): StripeMode | null {
   if (!isApprovedSandboxSourcer(userId)) return null;
   return "TEST";
+}
+
+/**
+ * Mode for Global Payouts onboarding, return sync, and status.
+ * The approved Sandbox sourcer stays TEST even when initiation is off.
+ * Any explicit mode is ignored for that sourcer, so a client cannot select LIVE.
+ * Everyone else keeps the supplied mode or the platform mode.
+ */
+export function gpModeForUser(userId: string, mode?: StripeMode): StripeMode {
+  const sandbox = sandboxStripeModeForUser(userId);
+  if (sandbox) return sandbox;
+  if (mode) return normalizeStripeMode(mode);
+  return getStripeMode();
 }
 
 export function assertSandboxCommercialTerms(opts: {

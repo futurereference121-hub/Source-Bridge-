@@ -3,6 +3,7 @@ import { requireSessionUser, isAdminUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { prisma } from "@/lib/db";
 import { getSellerConnectFundingState } from "@/lib/payments/stripe/connect";
+import { payoutCountryLocked } from "@/lib/payments/payout-rail/gp-status-view";
 import { getGlobalPayoutStatus } from "@/lib/payments/payout-rail/recipient";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import { buildPayoutRouteConfirmation } from "@/lib/payments/payout-rail/payout-route-confirm";
@@ -90,7 +91,10 @@ export async function GET(req: NextRequest) {
         country: storedCountry,
         needsPayoutCountry: needsCountry,
         countries: getSupportedPayoutCountryOptions(),
-        countryLocked: Boolean(connect.hasAccount || gp.hasRecipient),
+        countryLocked: payoutCountryLocked({
+          connectHasAccount: connect.hasAccount,
+          gpHasRecipient: gp.hasRecipient,
+        }),
         preview: Boolean(previewCountry),
         rail: {
           rail: rail.rail,
@@ -206,7 +210,10 @@ export async function POST(req: NextRequest) {
         gpHasRecipient: gpBefore.hasRecipient,
       }),
       countries: getSupportedPayoutCountryOptions(),
-      countryLocked: Boolean(connect.hasAccount || gpBefore.hasRecipient),
+      countryLocked: payoutCountryLocked({
+        connectHasAccount: connect.hasAccount,
+        gpHasRecipient: gpBefore.hasRecipient,
+      }),
       rail: {
         rail: rail.rail,
         reason: rail.reason,
