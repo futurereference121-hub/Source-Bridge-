@@ -47,6 +47,21 @@ assert.match(propose, /100dvh|85dvh/);
 assert.match(propose, /safe-area-inset-bottom/);
 assert.match(propose, /safe-area-inset-top/);
 assert.match(propose, /data-testid="ticket-propose-submit"/);
+assert.match(
+  propose,
+  /ticket-currency-select/,
+  "currency menu must use the readable native option contrast",
+);
+assert.match(
+  read("src/app/globals.css"),
+  /\.ticket-currency-select option \{[\s\S]*color: #020b1c;/,
+  "currency options need dark text before hover",
+);
+assert.match(
+  read("src/app/globals.css"),
+  /\.ticket-currency-select option:checked\s*\{[\s\S]*color: #020b1c;/,
+  "selected and keyboard currency options stay readable",
+);
 assert.match(propose, /data-testid="ticket-propose-cancel"/);
 assert.match(propose, /max-w-md/);
 assert.match(propose, /min-w-0/);

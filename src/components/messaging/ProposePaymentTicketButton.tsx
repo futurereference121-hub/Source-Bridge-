@@ -696,7 +696,7 @@ export function ProposePaymentTicketButton({
         <select
           value={currency}
           onChange={(e) => setCurrency(e.target.value)}
-          className="mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
+          className="ticket-currency-select mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           disabled={busy}
         >
           {TICKET_CURRENCY_OPTIONS.map((opt) => (

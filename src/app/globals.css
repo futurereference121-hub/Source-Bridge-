@@ -316,6 +316,22 @@ button:active:not(:disabled) {
   animation: hiw-ring-pulse 1.8s ease-out infinite;
 }
 
+/* Windows Chromium paints the native select popup on a light surface and
+   inherits the closed control's white text, so labels vanish until hover.
+   The closed control keeps its own text color. */
+.ticket-currency-select option {
+  background-color: #ffffff;
+  color: #020b1c;
+}
+
+.ticket-currency-select option:hover,
+.ticket-currency-select option:focus,
+.ticket-currency-select option:focus-visible,
+.ticket-currency-select option:checked {
+  background-color: #dbe7ff;
+  color: #020b1c;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-up,
   .animate-fade-in,
