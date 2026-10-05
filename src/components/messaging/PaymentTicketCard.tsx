@@ -7,6 +7,7 @@ import { formatMinor } from "@/lib/payments/money";
 import { listingProtectedShipmentPhotoRequired } from "@/lib/payments/fulfilment-rules";
 import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPaymentCheckout";
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
+import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
@@ -120,6 +121,7 @@ export type PaymentTicketView = {
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
   payoutRail?: string | null;
+  stripeMode?: string | null;
   fundedAt?: string | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
@@ -1321,7 +1323,10 @@ export function PaymentTicketCard({
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseNow) &&
     Boolean(ticket.protectedTransactionId);
-  const gpRail = ticket.payoutRail === "STRIPE_GLOBAL_PAYOUTS";
+  const quoteConfirmationRequired = gpQuoteConfirmationRequired(
+    ticket.stripeMode,
+    ticket.payoutRail,
+  );
   const canReportIssue =
     !historical &&
     paymentsAccess &&
@@ -2444,7 +2449,7 @@ export function PaymentTicketCard({
               )}
               {inInspection ? (
                 <div className="flex flex-wrap gap-2">
-                  {canReleaseNow && gpRail && ticket.protectedTransactionId ? (
+                  {canReleaseNow && quoteConfirmationRequired && ticket.protectedTransactionId ? (
                     <GpQuoteReview
                       protectedTxnId={ticket.protectedTransactionId}
                       kind="FINAL"
@@ -2455,7 +2460,7 @@ export function PaymentTicketCard({
                   {canReleaseNow ? (
                     <button
                       type="button"
-                      disabled={busy || (gpRail && !gpQuoteConfirmed)}
+                      disabled={busy || (quoteConfirmationRequired && !gpQuoteConfirmed)}
                       onClick={() => void submitReceiptDecision("RELEASE_NOW")}
                       className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
                     >
@@ -2658,7 +2663,7 @@ export function PaymentTicketCard({
               Payment processing
             </span>
           ) : null}
-          {canRelease && gpRail && ticket.protectedTransactionId ? (
+          {canRelease && quoteConfirmationRequired && ticket.protectedTransactionId ? (
             <GpQuoteReview
               protectedTxnId={ticket.protectedTransactionId}
               kind="PROCUREMENT"
@@ -2669,7 +2674,7 @@ export function PaymentTicketCard({
           {canRelease && !confirmRelease ? (
             <button
               type="button"
-              disabled={busy || (gpRail && !gpProcurementQuoteConfirmed)}
+              disabled={busy || (quoteConfirmationRequired && !gpProcurementQuoteConfirmed)}
               onClick={() => setConfirmRelease(true)}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy hover:bg-electric-hover disabled:opacity-50"
             >
@@ -2812,7 +2817,7 @@ export function PaymentTicketCard({
           <div className="mt-2 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={busy || (gpRail && !gpProcurementQuoteConfirmed)}
+              disabled={busy || (quoteConfirmationRequired && !gpProcurementQuoteConfirmed)}
               onClick={() => void releaseItemFunds()}
               className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
             >

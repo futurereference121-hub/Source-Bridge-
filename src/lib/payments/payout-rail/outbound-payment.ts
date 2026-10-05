@@ -394,26 +394,9 @@ async function assertLivePilotReleaseReady(opts: {
   termsHash: string;
 }) {
   if (opts.txnMode === "TEST") {
+    // Buyer release, or the recorded inspection window, is the TEST authorization.
+    // executeQuotedPayout creates, validates, stores, and attaches the quote.
     const snap = parseQuoteSnapshot(opts.snapshotRaw);
-    const confirmed = evaluateQuoteConfirmation({
-      stored: snap,
-      actorUserId: opts.actorUserId || "",
-      transactionId: opts.txn.id,
-      mode: "TEST",
-      recipientId: opts.recipientId,
-      payoutMethodId: opts.payoutMethodId,
-      sourceAmountMinor: opts.amount,
-      sourceCurrency: opts.txn.currency,
-      destinationCurrency: snap?.destinationCurrency || "",
-      termsHash: opts.termsHash,
-      nowMs: opts.nowMs,
-    });
-    if (!confirmed.ok) {
-      throw Object.assign(new Error("Review and confirm the payout estimate before release."), {
-        status: 409,
-        code: confirmed.code,
-      });
-    }
     const balance = await readFinancialAccountBalance("TEST");
     const decision = evaluateSandboxReleaseLimits({
       buyerId: opts.txn.buyerId,
@@ -1004,8 +987,13 @@ async function executeOutboundRelease(opts: {
           body: req.body,
         }),
       persistQuote: async (snapshot: QuoteSnapshot) => {
-        await prisma.outboundPaymentAttempt.update({
-          where: { id: attempt.id },
+        const stored = await prisma.outboundPaymentAttempt.updateMany({
+          where: {
+            id: attempt.id,
+            fxRateSnapshot: attempt.fxRateSnapshot || "",
+            initiatedAt: null,
+            stripeOutboundPaymentId: "",
+          },
           data: {
             stripeFinancialAccountId: faId,
             destinationCurrency: snapshot.destinationCurrency.toUpperCase(),
@@ -1016,13 +1004,29 @@ async function executeOutboundRelease(opts: {
             fxRateSnapshot: JSON.stringify(snapshot),
           },
         });
+        if (stored.count !== 1) {
+          throw Object.assign(
+            new Error("Outbound payment outcome is still uncertain. Automatic retry is blocked."),
+            { status: 409, code: "GP_PAYMENT_IN_FLIGHT", pendingProvider: true },
+          );
+        }
       },
       markPaymentSubmission: async () => {
-        submissionMarked = true;
-        await prisma.outboundPaymentAttempt.update({
-          where: { id: attempt.id },
+        const claimed = await prisma.outboundPaymentAttempt.updateMany({
+          where: {
+            id: attempt.id,
+            initiatedAt: null,
+            stripeOutboundPaymentId: "",
+          },
           data: { initiatedAt: new Date(), stripeFinancialAccountId: faId },
         });
+        if (claimed.count !== 1) {
+          throw Object.assign(
+            new Error("Outbound payment outcome is still uncertain. Automatic retry is blocked."),
+            { status: 409, code: "GP_PAYMENT_IN_FLIGHT", pendingProvider: true },
+          );
+        }
+        submissionMarked = true;
       },
     });
 

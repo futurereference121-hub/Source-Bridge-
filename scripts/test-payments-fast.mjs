@@ -58,6 +58,7 @@ runNodeTestScripts(
     "scripts/test-global-payouts-release-flow.mjs",
     "scripts/test-gp-sandbox-pair.ts",
     "scripts/test-gp-sandbox-ticket-form.mjs",
+    "scripts/test-gp-test-release.mjs",
   ],
   { label: "payments:fast" },
 );

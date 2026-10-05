@@ -33,6 +33,12 @@ function existing(abs) {
 }
 
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier === "stripe" && process.env.SB_GP_RELEASE_TEST === "1") {
+    return {
+      url: pathToFileURL(path.join(root, "scripts", "gp-test-release-stripe-mock.mjs")).href,
+      shortCircuit: true,
+    };
+  }
   if (specifier === "next/server") {
     return {
       url: pathToFileURL(path.join(root, "scripts", "gp-sandbox-next-server-mock.mjs")).href,

@@ -8,6 +8,7 @@ import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
+import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 import {
   useProtectedOrders,
@@ -38,6 +39,7 @@ type Order = ProtectedOrderSummary & {
     slug: string | null;
   } | null;
   payoutRail?: string | null;
+  stripeMode?: string | null;
   actions: {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
@@ -246,6 +248,10 @@ export default function PurchasesPage() {
               const showInsp =
                 o.status === "IN_INSPECTION" && Boolean(o.actions.canReleaseNow);
               const showIssueHold = o.status === "DISPUTED";
+              const quoteConfirmationRequired = gpQuoteConfirmationRequired(
+                o.stripeMode,
+                o.payoutRail,
+              );
 
               return (
               <li
@@ -425,7 +431,7 @@ export default function PurchasesPage() {
                   ) : null}
                 </dl>
 
-                {o.actions.canReleaseProcurement && o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" ? (
+                {o.actions.canReleaseProcurement && quoteConfirmationRequired ? (
                   <GpQuoteReview
                     protectedTxnId={o.id}
                     kind="PROCUREMENT"
@@ -442,7 +448,7 @@ export default function PurchasesPage() {
                       showArrow={false}
                       disabled={
                         busyId === o.id ||
-                        (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" &&
+                        (quoteConfirmationRequired &&
                           !gpConfirmed[`${o.id}:PROCUREMENT`])
                       }
                       className="rounded-lg"
@@ -486,7 +492,7 @@ export default function PurchasesPage() {
                       <p className="font-medium text-white/90">
                         Item received — choose one
                       </p>
-                      {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" ? (
+                      {quoteConfirmationRequired ? (
                         <GpQuoteReview
                           protectedTxnId={o.id}
                           kind="FINAL"
@@ -502,7 +508,7 @@ export default function PurchasesPage() {
                           showArrow={false}
                           disabled={
                             busyId === o.id ||
-                            (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && !gpConfirmed[`${o.id}:FINAL`])
+                            (quoteConfirmationRequired && !gpConfirmed[`${o.id}:FINAL`])
                           }
                           className="rounded-lg"
                           onClick={() =>
@@ -537,7 +543,7 @@ export default function PurchasesPage() {
                       . Remaining residual auto-releases after the deadline
                       unless you release early or report a problem.
                     </p>
-                    {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && showInsp ? (
+                    {quoteConfirmationRequired && showInsp ? (
                       <GpQuoteReview
                         protectedTxnId={o.id}
                         kind="FINAL"
@@ -554,7 +560,7 @@ export default function PurchasesPage() {
                           showArrow={false}
                           disabled={
                             busyId === o.id ||
-                            (o.payoutRail === "STRIPE_GLOBAL_PAYOUTS" && !gpConfirmed[`${o.id}:FINAL`])
+                            (quoteConfirmationRequired && !gpConfirmed[`${o.id}:FINAL`])
                           }
                           className="rounded-lg"
                           onClick={() =>

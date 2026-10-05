@@ -802,6 +802,23 @@ export async function processInspectionReleases(limit = 25) {
         results.push({ id: txn.id, ok: false, error: "open_issue" });
         continue;
       }
+      if (
+        lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS" &&
+        normalizeStripeMode(fresh.stripeMode) === "TEST"
+      ) {
+        const inspectionAuth = await prisma.financialAuditEvent.findFirst({
+          where: {
+            protectedTxnId: fresh.id,
+            action: "START_INSPECTION",
+            actorUserId: fresh.buyerId,
+          },
+          select: { id: true },
+        });
+        if (!inspectionAuth) {
+          results.push({ id: txn.id, ok: false, error: "inspection_not_authorized" });
+          continue;
+        }
+      }
       await prisma.protectedTransaction.update({
         where: { id: fresh.id },
         data: { status: nextStatus("IN_INSPECTION", "COMPLETE_INSPECTION") },
@@ -839,6 +856,23 @@ export async function processInspectionReleases(limit = 25) {
         if (!fresh || fresh.status !== "READY_TO_RELEASE") {
           results.push({ id: txn.id, ok: false, error: "state_changed" });
           continue;
+        }
+        if (
+          lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS" &&
+          normalizeStripeMode(fresh.stripeMode) === "TEST"
+        ) {
+          const releaseAuth = await prisma.financialAuditEvent.findFirst({
+            where: {
+              protectedTxnId: fresh.id,
+              actorUserId: fresh.buyerId,
+              action: { in: ["BUYER_RELEASE_NOW", "START_INSPECTION"] },
+            },
+            select: { id: true },
+          });
+          if (!releaseAuth) {
+            results.push({ id: txn.id, ok: false, error: "release_not_authorized" });
+            continue;
+          }
         }
         await releaseFinal({ protectedTxnId: fresh.id, actorUserId: null });
         results.push({ id: txn.id, ok: true });
