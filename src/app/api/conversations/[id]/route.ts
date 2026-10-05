@@ -23,6 +23,7 @@ import {
   isInstantPaymentsEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
+import { sandboxTicketCurrencyPolicy } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   conversationActivityAt,
   getConversationActivityVersion,
@@ -197,6 +198,9 @@ export async function GET(_req: Request, { params }: Params) {
       peerAllowed,
       bothAllowed: selfAllowed && peerAllowed,
       peerPresent: Boolean(peerPart),
+      ticketCurrency: peerPart
+        ? sandboxTicketCurrencyPolicy(user.id, peerPart.userId)
+        : null,
     };
 
     return Response.json(

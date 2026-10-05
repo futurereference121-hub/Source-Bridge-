@@ -46,6 +46,12 @@ export type ProposedTicketTimelineMessage = {
   };
 };
 
+export type TicketCurrencyPolicy = {
+  buyerId: string;
+  sellerId: string;
+  currency: string;
+};
+
 export type PaymentsProposalAccess = {
   allowlistConfigured?: boolean;
   testRampOpen?: boolean;
@@ -54,7 +60,39 @@ export type PaymentsProposalAccess = {
   peerAllowed?: boolean;
   bothAllowed?: boolean;
   peerPresent?: boolean;
+  /** Server pair policy from conversation eligibility. Absent for ordinary chats. */
+  ticketCurrency?: TicketCurrencyPolicy | null;
 };
+
+/** Visible options and the currency the form will submit. Role-specific. */
+export function ticketFormCurrency(opts: {
+  policy: TicketCurrencyPolicy | null | undefined;
+  buyerId: string;
+  sellerId: string;
+  draftCurrency: string;
+}): { currency: string; options: readonly { code: string; label: string }[] } {
+  const required = String(opts.policy?.currency || "").trim().toUpperCase();
+  const locked =
+    Boolean(opts.policy) &&
+    Boolean(opts.buyerId) &&
+    Boolean(opts.sellerId) &&
+    opts.buyerId === opts.policy?.buyerId &&
+    opts.sellerId === opts.policy?.sellerId &&
+    /^[A-Z]{3}$/.test(required);
+  if (locked) {
+    const known = TICKET_CURRENCY_OPTIONS.find((opt) => opt.code === required);
+    return {
+      currency: required,
+      options: [known || { code: required, label: required }],
+    };
+  }
+  const draft = String(opts.draftCurrency || "EUR").trim().toUpperCase();
+  const knownDraft = TICKET_CURRENCY_OPTIONS.find((opt) => opt.code === draft);
+  return {
+    currency: knownDraft ? knownDraft.code : "EUR",
+    options: TICKET_CURRENCY_OPTIONS,
+  };
+}
 
 export type EditTicketPrefill = {
   conversationId: string;
@@ -345,6 +383,13 @@ export function ProposePaymentTicketButton({
     buyerIsMe === true ? "You" : buyerIsMe === false ? peerHandle : "—";
   const sourcerHandle =
     buyerIsMe === true ? peerHandle : buyerIsMe === false ? "You" : "—";
+  const currencyChoice = ticketFormCurrency({
+    policy: proposalAccess?.ticketCurrency,
+    buyerId: selectedBuyerId,
+    sellerId: selectedSellerId,
+    draftCurrency: currency,
+  });
+  const submittedCurrency = currencyChoice.currency;
 
   async function submitProposal() {
     const proposalTraceId =
@@ -355,7 +400,7 @@ export function ProposePaymentTicketButton({
     setBusy(true);
     setError("");
 
-    const cur = currency || "EUR";
+    const cur = submittedCurrency;
     const item = parseDraftMajorToMinor(itemMajor, cur, { allowEmptyZero: false });
     const shipping = parseDraftMajorToMinor(shippingMajor, cur, {
       allowEmptyZero: true,
@@ -428,7 +473,7 @@ export function ProposePaymentTicketButton({
           shippingMinor: Math.max(0, shipping),
           sellerServiceFeeMinor: Math.max(0, service),
           title: title || undefined,
-          currency: currency || "EUR",
+          currency: submittedCurrency,
           paymentOption: "PROTECTED",
           procurementAdvanceAgreed: procurementFlag ? procurement : false,
           // Fee is always calculated server-side (7% on item+shipping) and
@@ -694,12 +739,15 @@ export function ProposePaymentTicketButton({
       <label className="mt-2 block min-w-0 text-[11px] text-white/55">
         Currency
         <select
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
+          value={submittedCurrency}
+          onChange={(e) => {
+            if (currencyChoice.options.length === 1) return;
+            setCurrency(e.target.value);
+          }}
           className="ticket-currency-select mt-1 w-full min-w-0 max-w-full rounded-md border border-white/15 bg-transparent px-2 py-1.5 text-sm text-white"
           disabled={busy}
         >
-          {TICKET_CURRENCY_OPTIONS.map((opt) => (
+          {currencyChoice.options.map((opt) => (
             <option key={opt.code} value={opt.code}>
               {opt.label}
             </option>
@@ -712,7 +760,7 @@ export function ProposePaymentTicketButton({
           value={itemMajor}
           onChange={(e) => setItemMajor(e.target.value)}
           onBlur={() =>
-            setItemMajor((v) => formatDraftMajorOnBlur(v, currency || "EUR"))
+            setItemMajor((v) => formatDraftMajorOnBlur(v, submittedCurrency))
           }
           inputMode="decimal"
           required
@@ -729,7 +777,7 @@ export function ProposePaymentTicketButton({
           onChange={(e) => setShippingMajor(e.target.value)}
           onBlur={() =>
             setShippingMajor((v) => {
-              const next = formatDraftMajorOnBlur(v, currency || "EUR");
+              const next = formatDraftMajorOnBlur(v, submittedCurrency);
               return next === "" ? "0" : next;
             })
           }
@@ -747,7 +795,7 @@ export function ProposePaymentTicketButton({
           onChange={(e) => setServiceMajor(e.target.value)}
           onBlur={() =>
             setServiceMajor((v) => {
-              const next = formatDraftMajorOnBlur(v, currency || "EUR");
+              const next = formatDraftMajorOnBlur(v, submittedCurrency);
               return next === "" ? "0" : next;
             })
           }
@@ -781,7 +829,7 @@ export function ProposePaymentTicketButton({
         <p className="mt-2 text-[11px] text-white/45">
           Estimated buyer total:{" "}
           {(() => {
-            const cur = currency || "EUR";
+            const cur = submittedCurrency;
             const item = estimateDraftMinor(itemMajor, cur);
             const ship = estimateDraftMinor(shippingMajor, cur);
             const svc = estimateDraftMinor(serviceMajor, cur);

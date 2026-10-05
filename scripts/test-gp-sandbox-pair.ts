@@ -13,6 +13,7 @@ import { globalPayoutsReconciliationAllowed } from "../src/lib/payments/payout-r
 import {
   assertSandboxCommercialTerms,
   decideSandboxCheckout,
+  sandboxTicketCurrencyPolicy,
   evaluateSandboxReleaseLimits,
   gpModeForUser,
   isApprovedSandboxParticipant,
@@ -381,6 +382,16 @@ try {
     checkFunding: true,
   });
   ok("wrong currency is rejected", !wrongCurrency.ok && wrongCurrency.code === "GP_SANDBOX_CURRENCY");
+  const policy = sandboxTicketCurrencyPolicy(BUYER, SOURCER);
+  ok(
+    "ticket form policy is the configured pair currency",
+    policy?.buyerId === BUYER && policy.sellerId === SOURCER && policy.currency === "GBP",
+  );
+  ok(
+    "reversed participants keep the same buyer and sourcer",
+    sandboxTicketCurrencyPolicy(SOURCER, BUYER)?.buyerId === BUYER,
+  );
+  ok("ordinary participants have no ticket currency policy", sandboxTicketCurrencyPolicy(OTHER, `c${"e".repeat(24)}`) == null);
   const mismatch = evaluateSandboxReleaseLimits({
     buyerId: OTHER,
     sellerId: SOURCER,

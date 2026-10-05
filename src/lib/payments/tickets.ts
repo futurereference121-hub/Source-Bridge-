@@ -275,6 +275,7 @@ function mapTicket(
     declineReason: string;
     protectedTransactionId: string | null;
     stripeMode: string;
+    payoutRail?: string | null;
     createdAt: Date;
     updatedAt: Date;
     lastMeaningfulActivityAt?: Date;
@@ -500,7 +501,7 @@ function mapTicket(
     declineReason: t.declineReason,
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
-    payoutRail: extras?.payoutRail || "STRIPE_CONNECT",
+    payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),

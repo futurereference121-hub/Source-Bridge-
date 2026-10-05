@@ -143,6 +143,29 @@ export function readGpSandboxPair(
   };
 }
 
+/**
+ * Currency the normal ticket form may offer when these two participants are
+ * the approved Sandbox pair in one direction. Null for every other pair.
+ * The checkout decision remains authoritative at submit.
+ */
+export function sandboxTicketCurrencyPolicy(
+  participantA: string,
+  participantB: string,
+): { buyerId: string; sellerId: string; currency: string } | null {
+  const a = participantA.trim();
+  const b = participantB.trim();
+  if (!a || !b || a === b) return null;
+  const forward = decideSandboxCheckout({ buyerId: a, sellerId: b });
+  if (forward.state === "pair") {
+    return { buyerId: a, sellerId: b, currency: forward.currency };
+  }
+  const reverse = decideSandboxCheckout({ buyerId: b, sellerId: a });
+  if (reverse.state === "pair") {
+    return { buyerId: b, sellerId: a, currency: reverse.currency };
+  }
+  return null;
+}
+
 export function isApprovedSandboxSourcer(userId: string): boolean {
   const hold = readGpSandboxIdHold();
   return Boolean(hold?.sourcerId && hold.sourcerId === userId);
