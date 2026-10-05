@@ -29,6 +29,8 @@ import {
 import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
 import {
+  balanceFailureCode,
+  balanceFailureMessage,
   ensureFinancialAccountFunding,
   readFinancialAccountBalance,
 } from "@/lib/payments/payout-rail/fa-funding";
@@ -397,7 +399,7 @@ async function assertLivePilotReleaseReady(opts: {
     // Buyer release, or the recorded inspection window, is the TEST authorization.
     // executeQuotedPayout creates, validates, stores, and attaches the quote.
     const snap = parseQuoteSnapshot(opts.snapshotRaw);
-    const balance = await readFinancialAccountBalance("TEST");
+    const balance = await readFinancialAccountBalance("TEST", opts.txn.currency);
     const decision = evaluateSandboxReleaseLimits({
       buyerId: opts.txn.buyerId,
       sellerId: opts.txn.sellerId,
@@ -445,7 +447,7 @@ async function assertLivePilotReleaseReady(opts: {
     where: { id: opts.txn.sellerId },
     select: { email: true, country: true },
   });
-  const balance = await readFinancialAccountBalance("LIVE");
+  const balance = await readFinancialAccountBalance("LIVE", opts.txn.currency);
   const env = livePilotEnv();
   const decision = evaluateLivePilotInitiation({
     mode: "LIVE",
@@ -785,6 +787,7 @@ async function executeOutboundRelease(opts: {
       data: {
         status: "AWAITING_FA_FUNDS",
         stripeFinancialAccountId: funding.financialAccountId,
+        failureCode: funding.code.slice(0, 80),
         failureMessage: funding.reason.slice(0, 500),
         lastAttemptAt: new Date(),
       },
@@ -956,8 +959,14 @@ async function executeOutboundRelease(opts: {
             code: cover.code,
           });
         }
-        const balance = await readFinancialAccountBalance(txnMode);
-        if (balance.availableMinor != null && balance.availableMinor < cover.requiredCoverMinor) {
+        const balance = await readFinancialAccountBalance(txnMode, txn.currency);
+        if (!balance.rawOk || balance.availableMinor == null) {
+          throw Object.assign(new Error(balanceFailureMessage(balance)), {
+            status: 409,
+            code: balanceFailureCode(balance),
+          });
+        }
+        if (balance.availableMinor < cover.requiredCoverMinor) {
           throw Object.assign(
             new Error("Financial account balance does not cover the payout and its separate provider fees."),
             { status: 409, code: "GP_PILOT_FUNDING_SHORT" },

@@ -540,7 +540,10 @@ try {
   const funding = readFileSync(new URL("../src/lib/payments/payout-rail/fa-funding.ts", import.meta.url), "utf8");
   ok("financial account check reads with GET", funding.includes('method: "GET"'));
   ok("financial account check does not create a transfer", !funding.includes('method: "POST"') && !funding.includes("transfers.create"));
-  ok("unreadable financial account balance blocks release", funding.includes("Financial Account balance could not be verified"));
+  ok(
+    "unreadable financial account balance blocks release",
+    funding.includes("GP_FA_BALANCE_HTTP") && funding.includes("balance.available"),
+  );
   const product = readFileSync(new URL("../src/app/api/payments/product-checkout/route.ts", import.meta.url), "utf8");
   ok(
     "listed checkout gates the pair before Connect status",

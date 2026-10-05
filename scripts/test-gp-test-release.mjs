@@ -78,6 +78,11 @@ const controls = {
     feeMode: "normal",
     quoteThrow: false,
     paymentThrow: false,
+    faStatus: 200,
+    faErrorCode: "account_invalid",
+    faId: "",
+    faLivemode: false,
+    available: "gbp",
   };
 
 const httpLog = [];
@@ -507,12 +512,41 @@ async function mockStripeResponse(parsed, method, body) {
     return jsonResponse({ data: [] });
   }
   if (parsed.pathname.includes("financial_accounts")) {
-    const account = { id: parsed.pathname.split("/").pop() };
-    if (controls.faCountry) account.country = controls.faCountry;
-    account.balance = {
-      cash: { available: { value: controls.balance, currency: "gbp" } },
-    };
-    return jsonResponse(account);
+    if (controls.faStatus !== 200) {
+      return jsonResponse(
+        {
+          error: {
+            type: "invalid_request_error",
+            code: controls.faErrorCode,
+            message: "sk_test_should_not_leak",
+          },
+        },
+        controls.faStatus,
+      );
+    }
+    const currency = "gbp";
+    let available;
+    if (controls.available === "usd-only") {
+      available = { usd: { value: controls.balance, currency: "usd" } };
+    } else if (controls.available === "mismatch") {
+      available = { gbp: { value: controls.balance, currency: "usd" } };
+    } else if (controls.available === "fraction") {
+      available = { gbp: { value: 10.5, currency: "gbp" } };
+    } else if (controls.available === "negative") {
+      available = { gbp: { value: -1, currency: "gbp" } };
+    } else {
+      available = { [currency]: { value: controls.balance, currency } };
+    }
+    const id = controls.faId || parsed.pathname.split("/").pop();
+    return jsonResponse({
+      id,
+      object: "v2.money_management.financial_account",
+      livemode: controls.faLivemode === true || String(id || "").includes("fa_live"),
+      country: controls.faCountry,
+      status: "open",
+      type: "storage",
+      balance: { available },
+    });
   }
   if (parsed.pathname.includes("payout_methods")) {
     return jsonResponse({
@@ -544,6 +578,11 @@ function resetControls() {
   controls.feeMode = "normal";
   controls.quoteThrow = false;
   controls.paymentThrow = false;
+  controls.faStatus = 200;
+  controls.faErrorCode = "account_invalid";
+  controls.faId = "";
+  controls.faLivemode = false;
+  controls.available = "gbp";
 }
 
 function gpTxn(overrides = {}) {
@@ -890,6 +929,88 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   assert(posts("outbound_payment_quotes", since).length === 1, "funding check quoted before the fee-inclusive gate");
   assert(posts("outbound_payments", since).length === 0, "short funding submitted a payment");
   assert(attemptFor(txn.id)?.failureCode === "GP_PILOT_FUNDING_SHORT", "funding failure code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.faStatus = 403;
+  const since = httpLog.length;
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `unreadable balance status ${res.status}`);
+  assert(posts("outbound_payment_quotes", since).length === 0, "failed balance read quoted");
+  assert(posts("outbound_payments", since).length === 0, "failed balance read submitted a payment");
+  const attempt = attemptFor(txn.id);
+  assert(attempt?.failureCode === "GP_FA_BALANCE_HTTP", "http failure code");
+  assert(
+    String(attempt?.failureMessage || "").includes("403") &&
+      String(attempt?.failureMessage || "").includes("account_invalid"),
+    "http failure keeps status and code",
+  );
+  assert(!String(attempt?.failureMessage || "").includes("sk_test_"), "http failure leaked provider text");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.available = "usd-only";
+  const since = httpLog.length;
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `other currency status ${res.status}`);
+  assert(posts("outbound_payment_quotes", since).length === 0, "other currency quoted");
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_CURRENCY", "missing currency code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.available = "mismatch";
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `mismatched currency status ${res.status}`);
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_CURRENCY", "mismatched currency code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.available = "fraction";
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `fractional balance status ${res.status}`);
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_AMOUNT", "fractional amount code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.available = "negative";
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `negative balance status ${res.status}`);
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_AMOUNT", "negative amount code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.faLivemode = true;
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `mode mismatch status ${res.status}`);
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_MODE_MISMATCH", "mode mismatch code");
+  park(txn.id);
+  resetControls();
+}
+
+{
+  const txn = gpTxn();
+  controls.faId = "fa_other_account";
+  const res = await releaseNow(txn.id);
+  assert(res.status === 409, `account mismatch status ${res.status}`);
+  assert(attemptFor(txn.id)?.failureCode === "GP_FA_ACCOUNT_MISMATCH", "account mismatch code");
   park(txn.id);
   resetControls();
 }

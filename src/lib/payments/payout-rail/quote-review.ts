@@ -418,7 +418,7 @@ async function liveLimitDecision(
     where: { id: txn.sellerId },
     select: { email: true, country: true },
   });
-  const balance = await readFinancialAccountBalance("LIVE");
+  const balance = await readFinancialAccountBalance("LIVE", txn.currency);
   const env = pilotEnv();
   const decision = evaluateLivePilotInitiation({
     mode: "LIVE",
@@ -463,7 +463,7 @@ async function sandboxLimitDecision(
   },
   checkFunding: boolean,
 ): Promise<{ ok: true } | { ok: false; code: string }> {
-  const balance = checkFunding ? await readFinancialAccountBalance("TEST") : null;
+  const balance = checkFunding ? await readFinancialAccountBalance("TEST", txn.currency) : null;
   const decision = evaluateSandboxReleaseLimits({
     buyerId: txn.buyerId,
     sellerId: txn.sellerId,
