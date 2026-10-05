@@ -1620,6 +1620,7 @@ export async function finalizeOutboundSuccess(opts: {
     idempotencyKey: `ledger_${idempotencyKey}`,
     stripeObjectId: opts.outboundId,
     stripeObjectType: "outbound_payment",
+    stripeMode: normalizeStripeMode(updated.stripeMode),
     meta: {
       rail: "STRIPE_GLOBAL_PAYOUTS",
       providerFeesAbsorbedByPlatform: true,

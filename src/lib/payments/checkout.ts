@@ -638,6 +638,11 @@ export async function markTxnFundedFromWebhook(opts: {
     idempotencyKey: `charge_${opts.paymentIntentId}`,
     stripeObjectId: opts.paymentIntentId,
     stripeObjectType: "payment_intent",
+    // Global Payouts can be TEST while the platform mode is LIVE. Connect keeps
+    // the platform-mode default.
+    ...(lockedPayoutRailFromTxn(updated) === "STRIPE_GLOBAL_PAYOUTS"
+      ? { stripeMode: txnMode }
+      : {}),
     meta: { eventId: opts.eventId, chargeId: opts.chargeId },
   });
 

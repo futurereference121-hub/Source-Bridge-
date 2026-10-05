@@ -78,6 +78,7 @@ const controls = {
     feeMode: "normal",
     quoteThrow: false,
     paymentThrow: false,
+    paymentStatus: "processing",
     faStatus: 200,
     faErrorCode: "account_invalid",
     faId: "",
@@ -506,7 +507,10 @@ async function mockStripeResponse(parsed, method, body) {
   if (parsed.pathname.includes("outbound_payments") && method === "POST") {
     if (controls.paymentThrow) throw new Error("socket hang up");
     paySeq += 1;
-    return jsonResponse({ id: `obp_test_${paySeq}`, status: "processing" });
+    return jsonResponse({
+      id: `obp_test_${paySeq}`,
+      status: controls.paymentStatus,
+    });
   }
   if (parsed.pathname.includes("outbound_payments") && method === "GET") {
     return jsonResponse({ data: [] });
@@ -578,6 +582,7 @@ function resetControls() {
   controls.feeMode = "normal";
   controls.quoteThrow = false;
   controls.paymentThrow = false;
+  controls.paymentStatus = "processing";
   controls.faStatus = 200;
   controls.faErrorCode = "account_invalid";
   controls.faId = "";
@@ -1242,6 +1247,11 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
     tables.protectedTransaction.find((row) => row.id === txn.id).finalTransferredMinor === 1000,
     "connect books the seller entitlement once",
   );
+  const connectLedger = tables.ledgerEntry.filter((row) => row.protectedTxnId === txn.id);
+  assert(connectLedger.length === 1, "connect release books one ledger row");
+  assert(connectLedger[0].stripeMode === "LIVE", "connect ledger keeps the platform mode");
+  assert(connectLedger[0].entryType === "FINAL_TRANSFER", "connect ledger remains a final transfer");
+  assert(connectLedger[0].amountMinor === 1000, "connect ledger amount stays the entitlement");
 }
 
 {
@@ -1260,6 +1270,111 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const snap = attemptFor(txn.id)?.fxRateSnapshot || "";
   assert(!snap.includes("confirmedByUserId"), "LIVE path fabricated a confirmer");
   park(txn.id);
+}
+
+{
+  const { getStripeMode } = await import("../src/lib/payments/flags.ts");
+  const { markTxnFundedFromWebhook } = await import("../src/lib/payments/checkout.ts");
+  const { finalizeOutboundSuccess } = await import(
+    "../src/lib/payments/payout-rail/outbound-payment.ts"
+  );
+  assert(getStripeMode() === "LIVE", "platform mode is LIVE for this regression");
+
+  const testFund = gpTxn({
+    status: "AWAITING_PAYMENT",
+    payoutRailLockedAt: new Date(),
+    stripePaymentIntentId: "pi_test_gp_ledger",
+  });
+  const funded = await markTxnFundedFromWebhook({
+    paymentIntentId: "pi_test_gp_ledger",
+    chargeId: "ch_test_gp_ledger",
+    amountMinor: 3745,
+    currency: "gbp",
+    eventId: "evt_test_gp_ledger",
+  });
+  assert(funded.handled === true, `TEST GP funding ${funded.reason || "failed"}`);
+  const testCharge = tables.ledgerEntry.find(
+    (row) => row.protectedTxnId === testFund.id && row.entryType === "CHARGE",
+  );
+  assert(testCharge?.stripeMode === "TEST", "TEST GP charge ledger uses the transaction mode");
+  assert(testCharge.amountMinor === 3745, "TEST GP charge amount stays 3745");
+  assert(testCharge.stripeObjectId === "pi_test_gp_ledger", "TEST GP charge keeps the payment reference");
+
+  const connectFund = gpTxn({
+    status: "AWAITING_PAYMENT",
+    payoutRail: "STRIPE_CONNECT",
+    payoutRailLockedAt: new Date(),
+    sellerGpRecipientId: "",
+    sellerGpPayoutMethodId: "",
+    stripePaymentIntentId: "pi_test_connect_ledger",
+    buyerId: OTHER_A,
+    sellerId: OTHER_B,
+  });
+  const connectFunded = await markTxnFundedFromWebhook({
+    paymentIntentId: "pi_test_connect_ledger",
+    chargeId: "ch_test_connect_ledger",
+    amountMinor: 3745,
+    currency: "gbp",
+    eventId: "evt_test_connect_ledger",
+  });
+  assert(connectFunded.handled === true, `connect funding ${connectFunded.reason || "failed"}`);
+  const connectCharge = tables.ledgerEntry.find(
+    (row) => row.protectedTxnId === connectFund.id && row.entryType === "CHARGE",
+  );
+  assert(connectCharge?.stripeMode === "LIVE", "connect charge ledger keeps the platform mode");
+
+  controls.paymentStatus = "posted";
+  const posted = gpTxn({ status: "READY_TO_RELEASE" });
+  const postedRes = await releaseNow(posted.id);
+  controls.paymentStatus = "processing";
+  assert(postedRes.status === 200, `posted TEST release ${postedRes.status} ${postedRes.json.error || ""}`);
+  const postedLedger = tables.ledgerEntry.find(
+    (row) => row.protectedTxnId === posted.id && row.entryType === "FINAL_TRANSFER",
+  );
+  assert(postedLedger?.stripeMode === "TEST", "TEST GP payout ledger uses the transaction mode");
+  assert(postedLedger.amountMinor === 3500, "TEST GP payout ledger amount stays 3500");
+  assert(postedLedger.stripeObjectType === "outbound_payment", "TEST GP payout ledger type stays outbound");
+
+  const liveTxn = gpTxn({
+    stripeMode: "LIVE",
+    status: "READY_TO_RELEASE",
+    payoutRailLockedAt: new Date(),
+  });
+  tables.outboundPaymentAttempt.push({
+    id: "attempt_live_ledger",
+    protectedTxnId: liveTxn.id,
+    kind: "FINAL",
+    status: "PROCESSING",
+    amountMinor: 3500,
+    currency: "gbp",
+    stripeMode: "LIVE",
+    idempotencyKey: `final_gp_${liveTxn.id}_terms35`,
+    fxRateSnapshot: "",
+    stripeOutboundPaymentId: "",
+    destinationCurrency: "",
+    destinationAmountMinor: 0,
+    providerFeeMinor: 0,
+    crossBorderFeeMinor: 0,
+    fxFeeMinor: 0,
+  });
+  const liveFinal = await finalizeOutboundSuccess({
+    attemptId: "attempt_live_ledger",
+    outboundId: "obp_live_ledger",
+    txn: liveTxn,
+    status: "READY_TO_RELEASE",
+    domainAction: "RELEASE_FINAL",
+    kind: "FINAL",
+    amount: 3500,
+    idempotencyKey: `final_gp_${liveTxn.id}_terms35`,
+    isFullResidual: true,
+  });
+  assert(liveFinal.alreadyReleased === false, "LIVE finalize did not book the payout");
+  const liveLedger = tables.ledgerEntry.find(
+    (row) => row.protectedTxnId === liveTxn.id && row.entryType === "FINAL_TRANSFER",
+  );
+  assert(liveLedger?.stripeMode === "LIVE", "genuine LIVE payout ledger stays LIVE");
+  assert(liveLedger.amountMinor === 3500, "LIVE payout ledger amount stays 3500");
+  assert(liveLedger.stripeObjectId === "obp_live_ledger", "LIVE payout ledger keeps its provider reference");
 }
 
 assert(process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED === "false", "live initiation flag restored");

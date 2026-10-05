@@ -6,6 +6,7 @@
  */
 
 import { prisma } from "@/lib/db";
+import { normalizeStripeMode } from "@/lib/payments/flags";
 import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import { sanitizeProviderFailureText } from "@/lib/payments/payout-rail/outbound-display";
 import type { ProtectedStatus } from "@/lib/payments/state-machine";
@@ -165,6 +166,7 @@ export async function handleOutboundReturned(opts: {
       title: txn.title,
       idempotencyKey: attempt.idempotencyKey,
       outboundId: opts.outboundId || attempt.stripeOutboundPaymentId,
+      stripeMode: normalizeStripeMode(txn.stripeMode),
     };
   });
 
@@ -183,6 +185,7 @@ export async function handleOutboundReturned(opts: {
       idempotencyKey: `ledger_gp_returned_${outcome.idempotencyKey}`,
       stripeObjectId: outcome.outboundId || "",
       stripeObjectType: "outbound_payment_return",
+      stripeMode: outcome.stripeMode,
       meta: {
         rail: "STRIPE_GLOBAL_PAYOUTS",
         reason: "RETURNED",
