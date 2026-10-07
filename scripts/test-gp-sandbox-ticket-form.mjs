@@ -430,7 +430,7 @@ async function openForm(page, origin, boot) {
 async function main() {
   const { GET } = await import("../src/app/api/conversations/[id]/route.ts");
   const { POST } = await import("../src/app/api/payments/tickets/route.ts");
-  const { GP_GBP_FEE_EXPLANATION } = await import("../src/lib/payments/gp-pricing.ts");
+  const { GP_GBP_FLAT_FEE_EXPLANATION } = await import("../src/lib/payments/gp-pricing.ts");
   const { readGpSandboxPair } = await import("../src/lib/payments/payout-rail/sandbox-pair.ts");
   const { normalizeCurrency, roundBpsToMinor } = await import("../src/lib/payments/money.ts");
 
@@ -512,7 +512,7 @@ async function main() {
     assert(desktopText.includes("5.25") && desktopText.includes("40.25"), `desktop fee preview ${desktopText}`);
     const explanationText = await explanation.innerText();
     assert(
-      explanationText.trim() === GP_GBP_FEE_EXPLANATION,
+      explanationText.trim() === GP_GBP_FLAT_FEE_EXPLANATION,
       `desktop explanation ${JSON.stringify(explanationText)}`,
     );
     const desktopBox = await explanation.boundingBox();
@@ -562,13 +562,13 @@ async function main() {
     assert(allowed?.currency === "GBP", "resolved allowed currency");
     const principal = stored.itemCostMinor + stored.shippingMinor + stored.sellerServiceFeeMinor;
     assert(principal === 3500, "£35 entitlement");
-    assert(stored.protectionFeeMinor === 525, "progressive fee");
+    assert(stored.protectionFeeMinor === 525, "flat fee");
     assert(stored.totalChargeMinor === 4025, "buyer total");
-    assert(stored.pricingPolicy === "GP_GBP_PROGRESSIVE_V1", "stored policy");
+    assert(stored.pricingPolicy === "GP_GBP_FLAT_V1", "stored policy");
     assert(pairJson.ticket.protectionFeeMinor === 525, "response fee");
     assert(pairJson.ticket.totalChargeMinor === 4025, "response total");
     assert(
-      pairJson.ticket.feeExplanation === GP_GBP_FEE_EXPLANATION,
+      pairJson.ticket.feeExplanation === GP_GBP_FLAT_FEE_EXPLANATION,
       "response explanation",
     );
     assert(pairBody.protectionFeeMinor == null && pairBody.pricingPolicy == null, "client does not send the fee");

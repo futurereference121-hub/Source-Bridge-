@@ -14,9 +14,12 @@ import {
 import { getStripeMode } from "@/lib/payments/flags";
 import {
   GP_GBP_FEE_EXPLANATION,
+  GP_GBP_FLAT_FEE_EXPLANATION,
+  GP_GBP_FLAT_V1,
   GP_GBP_PROGRESSIVE_V1,
   formatGbpMinor,
   globalPayoutsGbpFeeMinor,
+  globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
 } from "@/lib/payments/gp-pricing";
 import { normalizeCurrency } from "@/lib/payments/money";
@@ -46,7 +49,8 @@ function reject(message: string, status: number, code: string): never {
  * Price after the server has already chosen the rail.
  * Empty stored policy keeps the Connect calculation, including on an old
  * Global Payouts ticket. A missing policy (null) on a new Global Payouts
- * agreement uses the GBP progressive schedule.
+ * agreement uses the GBP flat schedule. A stored progressive policy stays
+ * on that older schedule.
  */
 export function priceAfterResolvedRail(opts: {
   itemCostMinor: number;
@@ -65,7 +69,7 @@ export function priceAfterResolvedRail(opts: {
     opts.itemCostMinor + opts.shippingMinor + opts.sellerServiceFeeMinor;
   const included = Boolean(opts.platformFeeIncludedInPrice);
   const existing = opts.existingPricingPolicy;
-  if (existing && existing !== GP_GBP_PROGRESSIVE_V1) {
+  if (existing && existing !== GP_GBP_PROGRESSIVE_V1 && existing !== GP_GBP_FLAT_V1) {
     reject(
       "This agreement uses a pricing policy that cannot be revised.",
       409,
@@ -73,10 +77,13 @@ export function priceAfterResolvedRail(opts: {
     );
   }
 
-  const storedGp = existing === GP_GBP_PROGRESSIVE_V1;
+  const storedProgressive = existing === GP_GBP_PROGRESSIVE_V1;
+  const storedFlat = existing === GP_GBP_FLAT_V1;
   const isNew = existing == null;
   const useGpSchedule =
-    storedGp || (isNew && opts.payoutRail === "STRIPE_GLOBAL_PAYOUTS");
+    storedProgressive ||
+    storedFlat ||
+    (isNew && opts.payoutRail === "STRIPE_GLOBAL_PAYOUTS");
 
   let protectionFeeMinor: number;
   let pricingPolicy = "";
@@ -119,9 +126,15 @@ export function priceAfterResolvedRail(opts: {
         "GP_MINIMUM_ENTITLEMENT",
       );
     }
-    protectionFeeMinor = globalPayoutsGbpFeeMinor(entitlement);
-    pricingPolicy = GP_GBP_PROGRESSIVE_V1;
-    feeExplanation = GP_GBP_FEE_EXPLANATION;
+    if (storedProgressive) {
+      protectionFeeMinor = globalPayoutsGbpFeeMinor(entitlement);
+      pricingPolicy = GP_GBP_PROGRESSIVE_V1;
+      feeExplanation = GP_GBP_FEE_EXPLANATION;
+    } else {
+      protectionFeeMinor = globalPayoutsGbpFlatFeeMinor(entitlement);
+      pricingPolicy = GP_GBP_FLAT_V1;
+      feeExplanation = GP_GBP_FLAT_FEE_EXPLANATION;
+    }
   } else {
     const fees = calculateFees({
       itemCostMinor: opts.itemCostMinor,

@@ -29,10 +29,13 @@ const { readFileSync } = fs;
 const assert = (await import("node:assert/strict")).default;
 const {
   GP_GBP_FEE_EXPLANATION,
+  GP_GBP_FLAT_FEE_EXPLANATION,
+  GP_GBP_FLAT_V1,
   GP_GBP_PROGRESSIVE_V1,
   feeExplanationForPolicy,
   formatGbpMinor,
   globalPayoutsGbpFeeMinor,
+  globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
 } = await import("../src/lib/payments/gp-pricing.ts");
 const { priceAfterResolvedRail } = await import("../src/lib/payments/commercial-quote.ts");
@@ -70,37 +73,54 @@ function gpQuote(entitlement, extra = {}) {
 const approved = [
   [2500, 375, 2875],
   [3500, 525, 4025],
-  [5000, 750, 5750],
-  [10000, 1500, 11500],
-  [20000, 2400, 22400],
-  [50000, 5100, 55100],
+  [9999, 1500, 11499],
+  [10000, 1100, 11100],
+  [10001, 1100, 11101],
+  [20000, 2200, 22200],
+  [50000, 5500, 55500],
 ];
 for (const [entitlement, fee, total] of approved) {
   const quoted = gpQuote(entitlement);
   assert.equal(quoted.protectionFeeMinor, fee, `fee for ${entitlement}`);
   assert.equal(quoted.totalChargeMinor, total, `total for ${entitlement}`);
-  assert.equal(quoted.pricingPolicy, GP_GBP_PROGRESSIVE_V1);
-  assert.equal(quoted.feeExplanation, GP_GBP_FEE_EXPLANATION);
-  assert.equal(globalPayoutsGbpFeeMinor(entitlement), fee);
+  assert.equal(quoted.pricingPolicy, GP_GBP_FLAT_V1);
+  assert.equal(quoted.feeExplanation, GP_GBP_FLAT_FEE_EXPLANATION);
+  assert.equal(globalPayoutsGbpFlatFeeMinor(entitlement), fee);
+  assert.equal(quoted.protectionFeeMinor, roundBpsToMinor(entitlement, entitlement < 10000 ? 1500 : 1100));
 }
 
-assert.equal(globalPayoutsGbpFeeMinor(2501), 375);
+assert.equal(gpQuote(20000).protectionFeeMinor, 2200);
+assert.notEqual(gpQuote(20000).protectionFeeMinor, globalPayoutsGbpFeeMinor(20000));
+
+const belowThreshold = gpQuote(9999);
+const atThreshold = gpQuote(10000);
+assert.equal(belowThreshold.totalChargeMinor, 11499);
+assert.equal(atThreshold.totalChargeMinor, 11100);
+assert.ok(
+  atThreshold.totalChargeMinor < belowThreshold.totalChargeMinor,
+  "buyer total drops at the £100 flat-rate threshold",
+);
+assert.equal(belowThreshold.totalChargeMinor - atThreshold.totalChargeMinor, 399);
+
+const drops = [];
+for (let entitlement = 2500; entitlement < 20000; entitlement += 1) {
+  const total = entitlement + globalPayoutsGbpFlatFeeMinor(entitlement);
+  const nextTotal = entitlement + 1 + globalPayoutsGbpFlatFeeMinor(entitlement + 1);
+  if (nextTotal < total) drops.push([entitlement, total, nextTotal]);
+}
+assert.deepEqual(drops, [[9999, 11499, 11100]]);
+
+assert.equal(globalPayoutsGbpFeeMinor(2500), 375);
 assert.equal(globalPayoutsGbpFeeMinor(9999), 1500);
 assert.equal(globalPayoutsGbpFeeMinor(10000), 1500);
 assert.equal(globalPayoutsGbpFeeMinor(10001), 1500);
 assert.equal(globalPayoutsGbpFeeMinor(10006), 1501);
-assert.equal(gpQuote(2500).totalChargeMinor, 2875);
-assert.equal(gpQuote(2501).totalChargeMinor, 2876);
-assert.equal(gpQuote(9999).totalChargeMinor, 11499);
-assert.equal(gpQuote(10000).totalChargeMinor, 11500);
-assert.equal(gpQuote(10001).totalChargeMinor, 11501);
-assert.equal(gpQuote(10006).totalChargeMinor, 11507);
-
+assert.equal(globalPayoutsGbpFeeMinor(20000), 2400);
 for (let entitlement = 0; entitlement < 20000; entitlement += 1) {
   const next = entitlement + 1;
   const total = entitlement + globalPayoutsGbpFeeMinor(entitlement);
   const nextTotal = next + globalPayoutsGbpFeeMinor(next);
-  assert.ok(nextTotal > total, `buyer total decreased at ${entitlement}`);
+  assert.ok(nextTotal > total, `progressive buyer total decreased at ${entitlement}`);
 }
 
 assert.throws(() => gpQuote(2499), (err) => err.code === "GP_MINIMUM_ENTITLEMENT");
@@ -163,7 +183,40 @@ const legacy = priceAfterResolvedRail({
 assert.equal(legacy.protectionFeeMinor, 245);
 assert.equal(legacy.totalChargeMinor, 3745);
 assert.equal(legacy.pricingPolicy, "");
-assert.notEqual(legacy.protectionFeeMinor, globalPayoutsGbpFeeMinor(3500));
+assert.notEqual(legacy.protectionFeeMinor, globalPayoutsGbpFlatFeeMinor(3500));
+
+const storedProgressive = priceAfterResolvedRail({
+  itemCostMinor: 20000,
+  shippingMinor: 0,
+  sellerServiceFeeMinor: 0,
+  currency: "GBP",
+  paymentOption: "PROTECTED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  existingPricingPolicy: GP_GBP_PROGRESSIVE_V1,
+  config: connectConfig,
+});
+assert.equal(storedProgressive.protectionFeeMinor, 2400);
+assert.equal(storedProgressive.totalChargeMinor, 22400);
+assert.equal(storedProgressive.pricingPolicy, GP_GBP_PROGRESSIVE_V1);
+assert.equal(storedProgressive.feeExplanation, GP_GBP_FEE_EXPLANATION);
+
+const storedFlat = priceAfterResolvedRail({
+  itemCostMinor: 20000,
+  shippingMinor: 0,
+  sellerServiceFeeMinor: 0,
+  currency: "GBP",
+  paymentOption: "PROTECTED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  existingPricingPolicy: GP_GBP_FLAT_V1,
+  config: connectConfig,
+});
+assert.equal(storedFlat.protectionFeeMinor, 2200);
+assert.equal(storedFlat.totalChargeMinor, 22200);
+assert.equal(storedFlat.pricingPolicy, GP_GBP_FLAT_V1);
+assert.throws(
+  () => gpQuote(20000, { existingPricingPolicy: "OTHER" }),
+  (err) => err.code === "GP_PRICING_POLICY_UNKNOWN",
+);
 
 const legacyBooks = computeProtectedFinancials({
   itemCostMinor: 2000,
@@ -228,8 +281,10 @@ const terms = {
   revision: 1,
 };
 assert.equal(hashTerms(terms), hashTerms({ ...terms, pricingPolicy: "" }));
+assert.notEqual(hashTerms(terms), hashTerms({ ...terms, pricingPolicy: GP_GBP_FLAT_V1 }));
 assert.notEqual(hashTerms(terms), hashTerms({ ...terms, pricingPolicy: GP_GBP_PROGRESSIVE_V1 }));
 assert.equal(feeExplanationForPolicy(""), "");
+assert.equal(feeExplanationForPolicy(GP_GBP_FLAT_V1), GP_GBP_FLAT_FEE_EXPLANATION);
 assert.equal(feeExplanationForPolicy(GP_GBP_PROGRESSIVE_V1), GP_GBP_FEE_EXPLANATION);
 
 for (const rel of [

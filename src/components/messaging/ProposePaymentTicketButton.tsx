@@ -6,9 +6,12 @@ import { Loader2, ShieldCheck, X } from "lucide-react";
 import type { PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
 import {
   GP_GBP_FEE_EXPLANATION,
+  GP_GBP_FLAT_FEE_EXPLANATION,
+  GP_GBP_FLAT_V1,
   GP_GBP_MINIMUM_ENTITLEMENT_MINOR,
   GP_GBP_PROGRESSIVE_V1,
   globalPayoutsGbpFeeMinor,
+  globalPayoutsGbpFlatFeeMinor,
 } from "@/lib/payments/gp-pricing";
 import {
   formatMinor,
@@ -405,7 +408,9 @@ export function ProposePaymentTicketButton({
     proposalAccess?.ticketCurrency?.currency === "GBP" &&
     proposalAccess.ticketCurrency.buyerId === selectedBuyerId &&
     proposalAccess.ticketCurrency.sellerId === selectedSellerId &&
-    (editingPolicy === null || editingPolicy === GP_GBP_PROGRESSIVE_V1);
+    (editingPolicy === null ||
+      editingPolicy === GP_GBP_PROGRESSIVE_V1 ||
+      editingPolicy === GP_GBP_FLAT_V1);
   const gpFloorMinor = showGpPricing
     ? proposalAccess?.ticketCurrency?.minimumEntitlementMinor ||
       GP_GBP_MINIMUM_ENTITLEMENT_MINOR
@@ -860,10 +865,13 @@ export function ProposePaymentTicketButton({
             const ship = estimateDraftMinor(shippingMajor, cur);
             const svc = estimateDraftMinor(serviceMajor, cur);
             const sellerSubtotal = item + ship + svc;
+            const editingProgressive = editingPolicy === GP_GBP_PROGRESSIVE_V1;
             const fee =
               sellerSubtotal > 0
                 ? showGpPricing
-                  ? globalPayoutsGbpFeeMinor(sellerSubtotal)
+                  ? editingProgressive
+                    ? globalPayoutsGbpFeeMinor(sellerSubtotal)
+                    : globalPayoutsGbpFlatFeeMinor(sellerSubtotal)
                   : roundBpsToMinor(sellerSubtotal, 700)
                 : 0;
             const total = sellerSubtotal + fee;
@@ -877,7 +885,7 @@ export function ProposePaymentTicketButton({
                 </p>
                 {showGpPricing ? (
                   <p data-testid="ticket-fee-explanation" className="break-words text-white/55">
-                    {GP_GBP_FEE_EXPLANATION}
+                    {editingProgressive ? GP_GBP_FEE_EXPLANATION : GP_GBP_FLAT_FEE_EXPLANATION}
                   </p>
                 ) : null}
                 {belowGpMinimum ? (
