@@ -1013,6 +1013,8 @@ model PaymentTicket {
   stripeMode            String    @default("TEST")
   /// STRIPE_CONNECT | STRIPE_GLOBAL_PAYOUTS. Stored at propose and kept at accept.
   payoutRail            String    @default("STRIPE_CONNECT")
+  /// Empty keeps the recorded fee. New GBP Global Payouts agreements store the policy id.
+  pricingPolicy         String    @default("")
   /// Last explicit ticket action (propose/revise/accept/pay attempt). Not poll/GET.
   lastMeaningfulActivityAt DateTime @default(now())
   /// Hide from chat timeline and the active cap without deleting money records.
@@ -1082,6 +1084,8 @@ model ProtectedTransaction {
   sellerConnectAccountId   String    @default("")
   /// Locked payout rail at fund: STRIPE_CONNECT | STRIPE_GLOBAL_PAYOUTS (default Connect for legacy).
   payoutRail               String    @default("STRIPE_CONNECT")
+  /// Empty keeps the recorded fee. Copied from the ticket or set on new Global Payouts checkout.
+  pricingPolicy            String    @default("")
   payoutRailLockedAt       DateTime?
   /// GP recipient / payout-method snapshot at rail lock (never bank credentials).
   sellerGpRecipientId      String    @default("")

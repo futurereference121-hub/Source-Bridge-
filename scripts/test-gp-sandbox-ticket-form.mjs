@@ -430,6 +430,7 @@ async function openForm(page, origin, boot) {
 async function main() {
   const { GET } = await import("../src/app/api/conversations/[id]/route.ts");
   const { POST } = await import("../src/app/api/payments/tickets/route.ts");
+  const { GP_GBP_FEE_EXPLANATION } = await import("../src/lib/payments/gp-pricing.ts");
   const { readGpSandboxPair } = await import("../src/lib/payments/payout-rail/sandbox-pair.ts");
   const { normalizeCurrency, roundBpsToMinor } = await import("../src/lib/payments/money.ts");
 
@@ -498,7 +499,27 @@ async function main() {
     });
     await page.getByRole("radio", { name: "Me", exact: true }).check();
     const restored = await readCurrency(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByTestId("ticket-edit-item-cost").fill("10");
+    await page.getByTestId("ticket-minimum-entitlement").waitFor({ timeout: 5000 });
+    await page.getByTestId("ticket-propose-submit").click();
+    await page.waitForTimeout(200);
+    assert((await page.evaluate(() => window.__captured.length)) === 0, "below-minimum form does not submit");
+    await page.getByTestId("ticket-edit-item-cost").fill("35");
+    const explanation = page.getByTestId("ticket-fee-explanation");
+    await explanation.waitFor({ timeout: 5000 });
+    const desktopText = await page.getByTestId("ticket-fee-preview").innerText();
+    assert(desktopText.includes("5.25") && desktopText.includes("40.25"), `desktop fee preview ${desktopText}`);
+    const explanationText = await explanation.innerText();
+    assert(
+      explanationText.trim() === GP_GBP_FEE_EXPLANATION,
+      `desktop explanation ${JSON.stringify(explanationText)}`,
+    );
+    const desktopBox = await explanation.boundingBox();
+    assert(desktopBox && desktopBox.width > 80 && desktopBox.x >= 0 && desktopBox.x + desktopBox.width <= 1280, "desktop explanation fits");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileBox = await explanation.boundingBox();
+    assert(mobileBox && mobileBox.width > 40 && mobileBox.x >= 0 && mobileBox.x + mobileBox.width <= 394, "mobile explanation fits");
     await page.getByTestId("ticket-propose-submit").click();
     await page.waitForFunction(() => window.__captured.length === 1);
     const pairBody = (await page.evaluate(() => window.__captured))[0];
@@ -540,8 +561,37 @@ async function main() {
     assert(normalizeCurrency(pairBody.currency) === stored.currency, "normalized currency");
     assert(allowed?.currency === "GBP", "resolved allowed currency");
     const principal = stored.itemCostMinor + stored.shippingMinor + stored.sellerServiceFeeMinor;
-    assert(principal > 0 && principal <= 5000, "amount cap");
-    assert(stored.protectionFeeMinor === roundBpsToMinor(principal, 700), "7% fee");
+    assert(principal === 3500, "£35 entitlement");
+    assert(stored.protectionFeeMinor === 525, "progressive fee");
+    assert(stored.totalChargeMinor === 4025, "buyer total");
+    assert(stored.pricingPolicy === "GP_GBP_PROGRESSIVE_V1", "stored policy");
+    assert(pairJson.ticket.protectionFeeMinor === 525, "response fee");
+    assert(pairJson.ticket.totalChargeMinor === 4025, "response total");
+    assert(
+      pairJson.ticket.feeExplanation === GP_GBP_FEE_EXPLANATION,
+      "response explanation",
+    );
+    assert(pairBody.protectionFeeMinor == null && pairBody.pricingPolicy == null, "client does not send the fee");
+
+    const belowMin = await POST(
+      new Request("http://form.test/api/payments/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...pairBody, itemCostMinor: 1000, proposalTraceId: "below-min-trace" }),
+      }),
+    );
+    const belowMinJson = await belowMin.json();
+    assert(belowMin.status === 400 && belowMinJson.code === "GP_MINIMUM_ENTITLEMENT", `below min ${belowMin.status} ${belowMinJson.code}`);
+    const forged = await POST(
+      new Request("http://form.test/api/payments/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...pairBody, protectionFeeMinor: 1, proposalTraceId: "forged-fee-trace" }),
+      }),
+    );
+    const forgedJson = await forged.json();
+    assert(forged.status === 400 && forgedJson.code === "CLIENT_FEE_REJECTED", `forged fee ${forged.status} ${forgedJson.code}`);
+    assert(state.tickets.length === 1, "rejected amounts were not stored");
 
     const rejectedBody = { ...pairBody, currency: "THB", proposalTraceId: "thb-rejected-trace" };
     const rejected = await POST(
@@ -569,6 +619,10 @@ async function main() {
     assert(ordinaryStored.stripeMode === "LIVE", "ordinary mode");
     assert(ordinaryStored.payoutRail === "STRIPE_CONNECT", "ordinary rail");
     assert(ordinaryStored.currency === ordinaryBody.currency, "ordinary currency preserved");
+    const ordinaryPrincipal =
+      ordinaryStored.itemCostMinor + ordinaryStored.shippingMinor + ordinaryStored.sellerServiceFeeMinor;
+    assert(ordinaryStored.protectionFeeMinor === roundBpsToMinor(ordinaryPrincipal, 700), "ordinary 7% fee");
+    assert(!ordinaryStored.pricingPolicy, "ordinary policy empty");
 
     const trace = {
       visibleBeforeRole: beforeRole,

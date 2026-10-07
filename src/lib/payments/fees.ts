@@ -30,6 +30,35 @@ export type FeeLineItems = MoneyBreakdownInput & {
   feeKind: "PROTECTION" | "SERVICE";
 };
 
+/** Item, shipping, and sourcer fee. Platform fee is applied separately. */
+export function resolveAgreedSellerLines(opts: {
+  itemCostMinor: number;
+  shippingMinor: number;
+  config: FeeConfig;
+  sellerServiceFeeMinorOverride?: number;
+}): {
+  itemCostMinor: number;
+  shippingMinor: number;
+  sellerServiceFeeMinor: number;
+} {
+  const itemCostMinor = assertNonNegativeInt(opts.itemCostMinor, "itemCostMinor");
+  const shippingMinor = assertNonNegativeInt(opts.shippingMinor, "shippingMinor");
+  let sellerServiceFeeMinor: number;
+  if (opts.sellerServiceFeeMinorOverride !== undefined) {
+    sellerServiceFeeMinor = assertNonNegativeInt(
+      opts.sellerServiceFeeMinorOverride,
+      "sellerServiceFeeMinor",
+    );
+  } else {
+    const sellerServiceBase = itemCostMinor + shippingMinor;
+    sellerServiceFeeMinor = Math.ceil(
+      (sellerServiceBase * Math.max(0, opts.config.sellerServiceFeeBps)) /
+        10_000,
+    );
+  }
+  return { itemCostMinor, shippingMinor, sellerServiceFeeMinor };
+}
+
 /**
  * Server-side fee calculation. Client may propose item/shipping/sellerService only;
  * platform fee is ALWAYS recalculated here (never trust client fee/total).
@@ -50,27 +79,10 @@ export function calculateFees(opts: {
   /** Optional override when seller and buyer agreed a fixed seller service fee. */
   sellerServiceFeeMinorOverride?: number;
 }): FeeLineItems {
-  const itemCostMinor = assertNonNegativeInt(opts.itemCostMinor, "itemCostMinor");
-  const shippingMinor = assertNonNegativeInt(opts.shippingMinor, "shippingMinor");
   const direct = isDirectPaymentOption(opts.paymentOption);
-
-  // Resolve sourcer/service fee first so platform fee can include it in the base.
-  let sellerServiceFeeMinor: number;
-  if (opts.sellerServiceFeeMinorOverride !== undefined) {
-    sellerServiceFeeMinor = assertNonNegativeInt(
-      opts.sellerServiceFeeMinorOverride,
-      "sellerServiceFeeMinor",
-    );
-  } else {
-    const sellerServiceBase = itemCostMinor + shippingMinor;
-    sellerServiceFeeMinor = Math.ceil(
-      (sellerServiceBase * Math.max(0, opts.config.sellerServiceFeeBps)) /
-        10_000,
-    );
-  }
-
-  const feeBaseMinor =
-    itemCostMinor + shippingMinor + sellerServiceFeeMinor;
+  const { itemCostMinor, shippingMinor, sellerServiceFeeMinor } =
+    resolveAgreedSellerLines(opts);
+  const feeBaseMinor = itemCostMinor + shippingMinor + sellerServiceFeeMinor;
 
   const feeBps = direct
     ? opts.config.directServiceFeeBps

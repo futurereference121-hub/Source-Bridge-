@@ -57,8 +57,9 @@ assert.match(threads, /sendAdminDisputeMessage/);
 assert.match(card, /showReviewLink/);
 
 // Product fee model: listed checkout uses calculateFees + platform config (7%)
-assert.match(productCheckout, /calculateFees/);
-assert.match(productCheckout, /getPlatformPaymentConfig/);
+assert.match(productCheckout, /quoteCommercialTerms/);
+assert.match(read("src/lib/payments/commercial-quote.ts"), /calculateFees/);
+assert.match(read("src/lib/payments/commercial-quote.ts"), /getPlatformPaymentConfig/);
 assert.match(config, /SOURCE_BRIDGE_FEE_BPS\s*=\s*700/);
 assert.match(fees, /roundBpsToMinor/);
 assert.match(createScript, /LIVE Payment Test Product/);

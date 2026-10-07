@@ -60,6 +60,7 @@ runNodeTestScripts(
     "scripts/test-gp-sandbox-ticket-form.mjs",
     "scripts/test-gp-test-release.mjs",
     "scripts/test-gp-fa-balance.mjs",
+    "scripts/test-gp-gbp-pricing.mjs",
   ],
   { label: "payments:fast" },
 );

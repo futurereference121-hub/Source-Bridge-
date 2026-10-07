@@ -16,6 +16,8 @@ export type CanonicalTerms = {
   buyerId: string;
   sellerId: string;
   revision: number;
+  /** Set only for agreements that store a pricing policy. Omitted when empty so legacy hashes stay stable. */
+  pricingPolicy?: string;
 };
 
 /** Stable JSON for hashing — sorted keys, no whitespace variance. */
@@ -36,6 +38,8 @@ export function canonicalizeTerms(terms: CanonicalTerms): string {
     title: terms.title.trim(),
     totalChargeMinor: terms.totalChargeMinor,
   };
+  const pricingPolicy = String(terms.pricingPolicy || "").trim();
+  const payload = pricingPolicy ? { ...ordered, pricingPolicy } : ordered;
   const expected = totalChargeMinor(ordered);
   if (expected !== ordered.totalChargeMinor) {
     throw Object.assign(new Error("terms totalChargeMinor mismatch"), {
@@ -43,7 +47,7 @@ export function canonicalizeTerms(terms: CanonicalTerms): string {
       code: "TOTAL_MISMATCH",
     });
   }
-  return JSON.stringify(ordered);
+  return JSON.stringify(payload);
 }
 
 export function hashTerms(terms: CanonicalTerms): string {

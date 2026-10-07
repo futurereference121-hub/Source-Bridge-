@@ -121,6 +121,8 @@ export type PaymentTicketView = {
   protectedTransactionId: string | null;
   protectedTxnStatus?: string | null;
   payoutRail?: string | null;
+  pricingPolicy?: string | null;
+  feeExplanation?: string | null;
   stripeMode?: string | null;
   fundedAt?: string | null;
   paymentIntentStatus?: string | null;
@@ -188,6 +190,7 @@ export type PaymentTicketView = {
       sellerServiceFee: string;
       sourceBridgeProtectionFee: string;
     };
+    feeExplanation?: string | null;
     releaseStructure?: {
       itemFundsReleasedEarlyMinor: number;
       remainingProtectedSellerShareMinor: number;
@@ -2002,6 +2005,11 @@ export function PaymentTicketCard({
             {formatMinor(ticket.totalChargeMinor, cur)}
           </dd>
         </div>
+        {ticket.feeExplanation || ticket.breakdown.feeExplanation ? (
+          <p className="break-words pt-1 text-[11px] text-white/45">
+            {ticket.feeExplanation || ticket.breakdown.feeExplanation}
+          </p>
+        ) : null}
       </dl>
 
       <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
@@ -2864,6 +2872,7 @@ export function PaymentTicketCard({
               notes: ticket.notes || "",
               buyerId: ticket.buyerId,
               sellerId: ticket.sellerId,
+              pricingPolicy: ticket.pricingPolicy || "",
             }}
             onCloseEdit={() => setEditOpen(false)}
             onCreated={({ ticket: next }) => {

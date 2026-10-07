@@ -23,6 +23,7 @@ import {
   isInstantPaymentsEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
+import { gpGbpEntitlementFloorMinor } from "@/lib/payments/gp-pricing";
 import { sandboxTicketCurrencyPolicy } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   conversationActivityAt,
@@ -198,9 +199,21 @@ export async function GET(_req: Request, { params }: Params) {
       peerAllowed,
       bothAllowed: selfAllowed && peerAllowed,
       peerPresent: Boolean(peerPart),
-      ticketCurrency: peerPart
-        ? sandboxTicketCurrencyPolicy(user.id, peerPart.userId)
-        : null,
+      ticketCurrency: (() => {
+        const policy = peerPart
+          ? sandboxTicketCurrencyPolicy(user.id, peerPart.userId)
+          : null;
+        if (!policy || policy.currency !== "GBP") return policy;
+        let minimumEntitlementMinor = 2500;
+        try {
+          minimumEntitlementMinor = gpGbpEntitlementFloorMinor(
+            process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
+          );
+        } catch {
+          minimumEntitlementMinor = 2500;
+        }
+        return { ...policy, minimumEntitlementMinor };
+      })(),
     };
 
     return Response.json(

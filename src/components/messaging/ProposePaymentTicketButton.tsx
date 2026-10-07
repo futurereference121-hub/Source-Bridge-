@@ -5,6 +5,12 @@ import { createPortal } from "react-dom";
 import { Loader2, ShieldCheck, X } from "lucide-react";
 import type { PaymentTicketView } from "@/components/messaging/PaymentTicketCard";
 import {
+  GP_GBP_FEE_EXPLANATION,
+  GP_GBP_MINIMUM_ENTITLEMENT_MINOR,
+  GP_GBP_PROGRESSIVE_V1,
+  globalPayoutsGbpFeeMinor,
+} from "@/lib/payments/gp-pricing";
+import {
   formatMinor,
   majorToMinor,
   minorToMajor as minorToMajorUnits,
@@ -50,6 +56,7 @@ export type TicketCurrencyPolicy = {
   buyerId: string;
   sellerId: string;
   currency: string;
+  minimumEntitlementMinor?: number;
 };
 
 export type PaymentsProposalAccess = {
@@ -109,6 +116,7 @@ export type EditTicketPrefill = {
   notes?: string;
   buyerId?: string;
   sellerId?: string;
+  pricingPolicy?: string;
 };
 
 type ProposePaymentTicketButtonProps = {
@@ -390,6 +398,18 @@ export function ProposePaymentTicketButton({
     draftCurrency: currency,
   });
   const submittedCurrency = currencyChoice.currency;
+  const editingPolicy = isEdit ? editFromTicket?.pricingPolicy || "" : null;
+  const showGpPricing =
+    submittedCurrency === "GBP" &&
+    currencyChoice.options.length === 1 &&
+    proposalAccess?.ticketCurrency?.currency === "GBP" &&
+    proposalAccess.ticketCurrency.buyerId === selectedBuyerId &&
+    proposalAccess.ticketCurrency.sellerId === selectedSellerId &&
+    (editingPolicy === null || editingPolicy === GP_GBP_PROGRESSIVE_V1);
+  const gpFloorMinor = showGpPricing
+    ? proposalAccess?.ticketCurrency?.minimumEntitlementMinor ||
+      GP_GBP_MINIMUM_ENTITLEMENT_MINOR
+    : 0;
 
   async function submitProposal() {
     const proposalTraceId =
@@ -455,6 +475,13 @@ export function ProposePaymentTicketButton({
     }
     if (selectedBuyerId === selectedSellerId) {
       setError(`Buyer and sourcer must be different people. Ref: ${proposalTraceId}`);
+      setBusy(false);
+      return;
+    }
+    if (showGpPricing && item + Math.max(0, shipping) + Math.max(0, service) < gpFloorMinor) {
+      setError(
+        `Minimum seller amount for this payment is ${formatMinor(gpFloorMinor, "GBP")}. Ref: ${proposalTraceId}`,
+      );
       setBusy(false);
       return;
     }
@@ -826,8 +853,7 @@ export function ProposePaymentTicketButton({
         </label>
       ) : null}
       {itemMajor || shippingMajor ? (
-        <p className="mt-2 text-[11px] text-white/45">
-          Estimated buyer total:{" "}
+        <div className="mt-2 min-w-0 space-y-1 text-[11px] text-white/45">
           {(() => {
             const cur = submittedCurrency;
             const item = estimateDraftMinor(itemMajor, cur);
@@ -835,13 +861,34 @@ export function ProposePaymentTicketButton({
             const svc = estimateDraftMinor(serviceMajor, cur);
             const sellerSubtotal = item + ship + svc;
             const fee =
-              sellerSubtotal > 0 ? roundBpsToMinor(sellerSubtotal, 700) : 0;
+              sellerSubtotal > 0
+                ? showGpPricing
+                  ? globalPayoutsGbpFeeMinor(sellerSubtotal)
+                  : roundBpsToMinor(sellerSubtotal, 700)
+                : 0;
             const total = sellerSubtotal + fee;
-            return formatMinor(total, cur);
+            const belowGpMinimum =
+              showGpPricing && sellerSubtotal > 0 && sellerSubtotal < gpFloorMinor;
+            return (
+              <>
+                <p data-testid="ticket-fee-preview" className="break-words">
+                  Source Bridge fee: {formatMinor(fee, cur)}. Estimated buyer total:{" "}
+                  {formatMinor(total, cur)} (includes Source Bridge fee)
+                </p>
+                {showGpPricing ? (
+                  <p data-testid="ticket-fee-explanation" className="break-words text-white/55">
+                    {GP_GBP_FEE_EXPLANATION}
+                  </p>
+                ) : null}
+                {belowGpMinimum ? (
+                  <p data-testid="ticket-minimum-entitlement" className="break-words text-amber-300">
+                    Minimum seller amount for this payment is {formatMinor(gpFloorMinor, "GBP")}.
+                  </p>
+                ) : null}
+              </>
+            );
           })()}
-          {" "}
-          (includes Source Bridge fee)
-        </p>
+        </div>
       ) : null}
       {error ? <p className="mt-2 text-[11px] text-amber-300">{error}</p> : null}
     </>

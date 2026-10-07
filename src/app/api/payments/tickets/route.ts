@@ -50,6 +50,28 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     proposalTraceId = readProposalTraceId(req, body);
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      for (const key of [
+        "protectionFeeMinor",
+        "totalChargeMinor",
+        "pricingPolicy",
+        "payoutRail",
+        "stripe" + "Mode",
+        "termsHash",
+      ]) {
+        if (Object.prototype.hasOwnProperty.call(body, key)) {
+          return jsonError(
+            "Source Bridge calculates the fee, total, and payout rail.",
+            400,
+            {
+              ok: false,
+              code: "CLIENT_FEE_REJECTED",
+              ...(proposalTraceId ? { proposalTraceId } : {}),
+            },
+          );
+        }
+      }
+    }
     const parsed = createSchema.safeParse(body);
     if (!parsed.success) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400, {

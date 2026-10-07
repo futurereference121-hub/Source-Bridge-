@@ -14,20 +14,15 @@ import {
 import {
   isDirectPaymentsEnabled,
   isProtectedPaymentsEnabled,
-  getStripeMode,
 } from "@/lib/payments/flags";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
-import { calculateFees } from "@/lib/payments/fees";
-import { getPlatformPaymentConfig, assertCurrencyAllowed } from "@/lib/payments/config";
-import { majorToMinor, normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
+import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
+import { majorToMinor, normalizeCurrency } from "@/lib/payments/money";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
-import {
-  assertSandboxCommercialTerms,
-  decideSandboxCheckout,
-} from "@/lib/payments/payout-rail/sandbox-pair";
+import { decideSandboxCheckout } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   isDirectPaymentOption,
   normalizeTxnPaymentOption,
@@ -135,41 +130,24 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const config = await getPlatformPaymentConfig();
     const currency = normalizeCurrency(listing.currency || "USD");
-    assertCurrencyAllowed(currency, config);
     const itemCostMinor = majorToMinor(listing.price, currency);
-    const fees = calculateFees({
+    const quoted = await quoteCommercialTerms({
       itemCostMinor,
       shippingMinor: parsed.data.shippingMinor ?? 0,
-      config,
+      currency,
       paymentOption: storageOption,
+      buyerId: user.id,
+      sellerId: listing.userId,
+      existingPricingPolicy: null,
     });
-    const total = totalChargeMinor(fees);
-    const feeLabel = platformFeePublicLabel(storageOption);
-    let storedMode = getStripeMode();
-    let storedRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS" = "STRIPE_CONNECT";
-    try {
-      const decided = assertSandboxCommercialTerms({
-        buyerId: user.id,
-        sellerId: listing.userId,
-        currency,
-        principalMinor:
-          fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
-        paymentOption: storageOption,
-      });
-      if (decided.state === "pair") {
-        storedMode = "TEST";
-        storedRail = "STRIPE_GLOBAL_PAYOUTS";
-      }
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      return jsonError(
-        err instanceof Error ? err.message : "Payment refused",
-        (err as { status?: number }).status || 409,
-        code ? { code } : undefined,
-      );
-    }
+    const fees = quoted;
+    const total = quoted.totalChargeMinor;
+    const feeLabel = quoted.pricingPolicy
+      ? "Source Bridge fee"
+      : platformFeePublicLabel(storageOption);
+    const storedMode = quoted.stripeMode;
+    const storedRail = quoted.payoutRail;
 
     const rail = await resolvePayoutRail({
       userId: listing.userId,
@@ -232,6 +210,7 @@ export async function POST(req: NextRequest) {
       buyerId: user.id,
       sellerId: listing.userId,
       revision: 1,
+      ...(quoted.pricingPolicy ? { pricingPolicy: quoted.pricingPolicy } : {}),
     };
     const termsHash = hashTerms(terms);
 
@@ -263,6 +242,7 @@ export async function POST(req: NextRequest) {
         payoutRail: storedRail,
         termsHash,
         termsVersion: 1,
+        pricingPolicy: quoted.pricingPolicy,
         itemCostMinor: fees.itemCostMinor,
         shippingMinor: fees.shippingMinor,
         sellerServiceFeeMinor: fees.sellerServiceFeeMinor,
@@ -306,6 +286,7 @@ export async function POST(req: NextRequest) {
             platformFee: feeLabel,
             sourceBridgeProtectionFee: feeLabel,
           },
+          feeExplanation: quoted.feeExplanation,
         },
         next: "POST /api/payments/checkout with protectedTxnId",
       },
@@ -315,7 +296,10 @@ export async function POST(req: NextRequest) {
     const status = (err as { status?: number }).status || 500;
     const message = err instanceof Error ? err.message : "Failed";
     if (status === 401) return jsonError("Sign in required", 401);
-    if (status >= 400 && status < 500) return jsonError(message, status);
+    if (status >= 400 && status < 500) {
+      const code = (err as { code?: string }).code;
+      return jsonError(message, status, code ? { code } : undefined);
+    }
     console.error("[payments:product-checkout]", err);
     return jsonError("Product checkout failed", 500);
   }

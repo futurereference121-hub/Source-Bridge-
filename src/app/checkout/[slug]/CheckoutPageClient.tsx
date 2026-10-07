@@ -92,6 +92,7 @@ export function CheckoutPageClient({ slug }: Props) {
     platformFee: number;
     total: number;
     platformFeeLabel: string;
+    feeExplanation?: string;
     currency: string;
   } | null>(null);
   const [stripePay, setStripePay] = useState<{
@@ -219,6 +220,7 @@ export function CheckoutPageClient({ slug }: Props) {
           (mode === "direct"
             ? "Source Bridge service fee (7%)"
             : "Source Bridge Protection Fee (7%)"),
+        feeExplanation: typeof bd.feeExplanation === "string" ? bd.feeExplanation : "",
         currency,
       });
 
@@ -449,6 +451,11 @@ export function CheckoutPageClient({ slug }: Props) {
                   {formatMinor(feeBreakdown.platformFee, feeBreakdown.currency)}
                 </dd>
               </div>
+              {feeBreakdown.feeExplanation ? (
+                <p className="break-words text-[11px] text-white/45">
+                  {feeBreakdown.feeExplanation}
+                </p>
+              ) : null}
               <div className="flex justify-between gap-4 border-t border-white/10 pt-3">
                 <dt className="text-white/45">Total</dt>
                 <dd className="font-medium text-white">

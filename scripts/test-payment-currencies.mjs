@@ -21,6 +21,7 @@ const proposeSrc = read("src/components/messaging/ProposePaymentTicketButton.tsx
 const checkoutSrc = read("src/lib/payments/checkout.ts");
 const productSrc = read("src/app/api/payments/product-checkout/route.ts");
 const ticketsSrc = read("src/lib/payments/tickets.ts");
+const quoteSrc = read("src/lib/payments/commercial-quote.ts");
 
 assert.match(supportedSrc, /EUR/);
 assert.match(supportedSrc, /resolveAllowedPaymentCurrencies/);
@@ -37,8 +38,9 @@ assert.match(proposeSrc, /TICKET_CURRENCY_OPTIONS/);
 assert.match(proposeSrc, /EUR/);
 assert.doesNotMatch(proposeSrc, /return `£\$\{/);
 assert.match(checkoutSrc, /currency: txn\.currency\.toLowerCase\(\)/);
-assert.match(productSrc, /assertCurrencyAllowed/);
-assert.match(ticketsSrc, /assertCurrencyAllowed/);
+assert.match(quoteSrc, /assertCurrencyAllowed/);
+assert.match(productSrc, /quoteCommercialTerms/);
+assert.match(ticketsSrc, /quoteCommercialTerms/);
 
 const runner = `
 import assert from "node:assert/strict";

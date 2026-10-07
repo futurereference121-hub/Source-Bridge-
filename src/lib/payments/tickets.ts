@@ -1,9 +1,5 @@
 import { prisma } from "@/lib/db";
-import {
-  calculateFees,
-  procurementAdvanceAmount,
-} from "@/lib/payments/fees";
-import { getPlatformPaymentConfig, assertCurrencyAllowed } from "@/lib/payments/config";
+import { procurementAdvanceAmount } from "@/lib/payments/fees";
 import {
   assertEligiblePaymentParty,
   assertNotSelfTrade,
@@ -19,7 +15,8 @@ import {
 } from "@/lib/payments/flags";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
-import { normalizeCurrency, totalChargeMinor } from "@/lib/payments/money";
+import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
+import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { releaseListingReservation } from "@/lib/payments/listing-lifecycle";
 import {
@@ -265,6 +262,7 @@ function mapTicket(
     procurementAdvanceAgreed: boolean;
     procurementAdvanceMinor: number;
     platformFeeIncludedInPrice?: boolean;
+    pricingPolicy?: string | null;
     notes: string;
     buyerApprovedRevision: number | null;
     sellerApprovedRevision: number | null;
@@ -502,6 +500,8 @@ function mapTicket(
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
     payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
+    pricingPolicy: t.pricingPolicy || "",
+    feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
     stripeMode: t.stripeMode,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
@@ -568,6 +568,7 @@ function mapTicket(
         sellerServiceFee: books.labels.sellerServiceFee,
         sourceBridgeProtectionFee: books.labels.platformFee,
       },
+      feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
       /** Shown before accept when procurement advance is agreed. */
       releaseStructure:
         t.procurementAdvanceAgreed && books.procurementAdvanceMinor > 0
@@ -1347,36 +1348,52 @@ async function resolveAmounts(
   input: TicketAmountsInput,
   seller: PartyUser,
   paymentOption: "PROTECTED" | "INSTANT",
+  commercial: {
+    buyerId: string;
+    sellerId: string;
+    existingPricingPolicy: string | null;
+  },
 ) {
-  const config = await getPlatformPaymentConfig();
-  const currency = normalizeCurrency(input.currency || "USD");
-  assertCurrencyAllowed(currency, config);
-  const fees = calculateFees({
+  const quoted = await quoteCommercialTerms({
     itemCostMinor: input.itemCostMinor,
-    shippingMinor: input.shippingMinor ?? 0,
-    config,
+    shippingMinor: input.shippingMinor,
+    sellerServiceFeeMinor: input.sellerServiceFeeMinor,
+    currency: input.currency,
     paymentOption,
-    sellerServiceFeeMinorOverride: input.sellerServiceFeeMinor,
+    buyerId: commercial.buyerId,
+    sellerId: commercial.sellerId,
+    platformFeeIncludedInPrice: input.platformFeeIncludedInPrice,
+    existingPricingPolicy: commercial.existingPricingPolicy,
   });
   const agreed = Boolean(input.procurementAdvanceAgreed);
   const eligible = isProcurementEligible({
-    globallyEnabled: config.procurementAdvancesGloballyOn,
+    globallyEnabled: quoted.config.procurementAdvancesGloballyOn,
     featureFlagOn: isProcurementAdvancesEnabled(),
     seller,
-    minTrustLevel: config.procurementMinTrustLevel,
+    minTrustLevel: quoted.config.procurementMinTrustLevel,
     paymentOption,
     agreed,
   });
   const procurementMinor = procurementAdvanceAmount({
     agreed,
-    itemCostMinor: fees.itemCostMinor,
+    itemCostMinor: quoted.itemCostMinor,
     eligible,
   });
-  const included = Boolean(input.platformFeeIncludedInPrice);
-  const total = included
-    ? fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor
-    : totalChargeMinor(fees);
-  return { fees, currency, procurementMinor, total, config, platformFeeIncludedInPrice: included };
+  return {
+    fees: {
+      itemCostMinor: quoted.itemCostMinor,
+      shippingMinor: quoted.shippingMinor,
+      sellerServiceFeeMinor: quoted.sellerServiceFeeMinor,
+      protectionFeeMinor: quoted.protectionFeeMinor,
+    },
+    currency: quoted.currency,
+    procurementMinor,
+    total: quoted.totalChargeMinor,
+    platformFeeIncludedInPrice: quoted.platformFeeIncludedInPrice,
+    pricingPolicy: quoted.pricingPolicy,
+    payoutRail: quoted.payoutRail,
+    stripeMode: quoted.stripeMode,
+  };
 }
 
 export async function createOrRevisePaymentTicket(opts: {
@@ -1481,19 +1498,38 @@ export async function createOrRevisePaymentTicket(opts: {
     });
   }
 
-  const { fees, currency, procurementMinor, total, platformFeeIncludedInPrice } =
-    await resolveAmounts(opts.amounts, seller, paymentOption);
-  const sandboxDecision = assertSandboxCommercialTerms({
+  let existingPricingPolicy: string | null = null;
+  if (opts.reviseFromTicketId) {
+    const priorPolicy = await prisma.paymentTicket.findFirst({
+      where: {
+        id: opts.reviseFromTicketId,
+        conversationId: opts.conversationId,
+      },
+      select: { pricingPolicy: true },
+    });
+    if (!priorPolicy) {
+      throw Object.assign(new Error("Ticket to revise not found"), {
+        status: 404,
+        code: "TICKET_NOT_FOUND",
+      });
+    }
+    existingPricingPolicy = priorPolicy.pricingPolicy || "";
+  }
+
+  const {
+    fees,
+    currency,
+    procurementMinor,
+    total,
+    platformFeeIncludedInPrice,
+    pricingPolicy,
+    payoutRail: ticketPayoutRail,
+    stripeMode: ticketStripeMode,
+  } = await resolveAmounts(opts.amounts, seller, paymentOption, {
     buyerId: opts.buyerId,
     sellerId: opts.sellerId,
-    currency,
-    principalMinor:
-      fees.itemCostMinor + fees.shippingMinor + fees.sellerServiceFeeMinor,
-    paymentOption,
+    existingPricingPolicy,
   });
-  const ticketStripeMode = sandboxDecision.state === "pair" ? "TEST" : getStripeMode();
-  const ticketPayoutRail =
-    sandboxDecision.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : "STRIPE_CONNECT";
 
   // Edit path: supersede one specific open ticket. New proposes never auto-
   // supersede siblings — multi-ticket independence for B/C after A is funded.
@@ -1638,6 +1674,7 @@ export async function createOrRevisePaymentTicket(opts: {
     buyerId: opts.buyerId,
     sellerId: opts.sellerId,
     revision,
+    ...(pricingPolicy ? { pricingPolicy } : {}),
   };
   const termsHash = hashTerms(terms);
 
@@ -1699,6 +1736,7 @@ export async function createOrRevisePaymentTicket(opts: {
           notes: opts.amounts.notes || "",
           stripeMode: ticketStripeMode,
           payoutRail: ticketPayoutRail,
+          pricingPolicy,
           protectedTransactionId: { set: null },
           declinedById: { set: null },
           declinedAt: { set: null },
@@ -1758,6 +1796,7 @@ export async function createOrRevisePaymentTicket(opts: {
         notes: opts.amounts.notes || "",
         stripeMode: ticketStripeMode,
         payoutRail: ticketPayoutRail,
+        pricingPolicy,
         lastMeaningfulActivityAt: new Date(),
         ...(traceId ? { proposalTraceId: traceId } : {}),
         // Creator auto-approves their own revision
@@ -2278,6 +2317,7 @@ export async function respondToPaymentTicket(opts: {
           totalChargeMinor: ticket.totalChargeMinor,
           procurementAdvanceAgreed: ticket.procurementAdvanceAgreed,
           procurementAdvanceMinor: ticket.procurementAdvanceMinor,
+          pricingPolicy: ticket.pricingPolicy || "",
         },
       });
       row = await tx.paymentTicket.update({
