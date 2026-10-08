@@ -40,6 +40,7 @@ import {
 } from "@/lib/payments/payout-rail/gp-client";
 import {
   assessAttemptPreservation,
+  backgroundAttemptDecision,
   correctedQuoteRetryKey,
   evaluateQuoteRoute,
   executeQuotedPayout,
@@ -63,12 +64,16 @@ import {
   isGlobalPayoutsCountryAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
 import {
+  evaluateBackgroundQuote,
+  evaluateDurableReleaseAuthorization,
   evaluateLivePilotInitiation,
   evaluatePilotOccupancy,
   evaluateQuoteConfirmation,
+  inspectionExpiryMayRelease,
   LIVE_PILOT_LOCK_KEY,
   pilotFailureIsSticky,
   quotedPayoutCover,
+  type BackgroundReleaseAuthorization,
 } from "@/lib/payments/payout-rail/live-pilot";
 import { evaluateSandboxReleaseLimits } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
@@ -120,6 +125,10 @@ const RELEASE_ERROR_CODES = new Set([
   "GP_PILOT_DESTINATION_MINIMUM",
   "GP_PILOT_DESTINATION_MINIMUMS_INVALID",
   "GP_PILOT_PAYMENT_ALREADY_STARTED",
+  "GP_WORKER_ACTOR_FORBIDDEN",
+  "inspection_not_authorized",
+  "release_not_authorized",
+  "window_open",
 ]);
 
 /** Stripe codes stay on the attempt row. The thrown code must not fall through to a second write. */
@@ -242,6 +251,11 @@ export async function releaseFinalViaGlobalPayouts(opts: {
   actorUserId?: string | null;
   action?: Extract<DomainAction, "RELEASE_FINAL">;
   amountMinor?: number;
+  backgroundRelease?: {
+    buyerId: string;
+    action: "START_INSPECTION" | "BUYER_RELEASE_NOW";
+    purpose: "INSPECTION_EXPIRY" | "AUTHORIZED_RETRY";
+  } | null;
 }) {
   if (!isPaymentsEnabled() || !isStripeConfigured()) {
     throw Object.assign(new Error("Payments not configured"), {
@@ -358,6 +372,11 @@ export async function releaseFinalViaGlobalPayouts(opts: {
     idempotencyKey,
     actorUserId: opts.actorUserId,
     isFullResidual,
+    backgroundRelease: await verifiedBackgroundRelease({
+      txn,
+      actorUserId: opts.actorUserId,
+      backgroundRelease: opts.backgroundRelease,
+    }),
   });
 }
 
@@ -384,6 +403,67 @@ function coverForRelease(amount: number, currency: string, snapshot: QuoteSnapsh
   });
 }
 
+async function verifiedBackgroundRelease(opts: {
+  txn: { id: string; buyerId: string; inspectionEndsAt: Date | null };
+  actorUserId?: string | null;
+  backgroundRelease?: {
+    buyerId: string;
+    action: "START_INSPECTION" | "BUYER_RELEASE_NOW";
+    purpose: "INSPECTION_EXPIRY" | "AUTHORIZED_RETRY";
+  } | null;
+}): Promise<BackgroundReleaseAuthorization | null> {
+  const claimed = opts.backgroundRelease;
+  if (!claimed) return null;
+  const refused =
+    claimed.purpose === "INSPECTION_EXPIRY" ? "inspection_not_authorized" : "release_not_authorized";
+  if (claimed.buyerId !== opts.txn.buyerId) {
+    throw Object.assign(new Error("Background release is not authorized by a recorded buyer action."), {
+      status: 409,
+      code: refused,
+    });
+  }
+  const audit = await prisma.financialAuditEvent.findFirst({
+    where: {
+      protectedTxnId: opts.txn.id,
+      actorUserId: opts.txn.buyerId,
+      action: claimed.action,
+    },
+    select: { actorUserId: true, action: true },
+  });
+  const durable = evaluateDurableReleaseAuthorization({
+    workerActorUserId: opts.actorUserId,
+    buyerId: opts.txn.buyerId,
+    recordedActorUserId: audit?.actorUserId,
+    recordedAction: audit?.action,
+    purpose: claimed.purpose,
+  });
+  if (!durable.ok || !audit?.actorUserId) {
+    throw Object.assign(new Error("Background release is not authorized by a recorded buyer action."), {
+      status: 409,
+      code: durable.ok ? refused : durable.code,
+    });
+  }
+  if (claimed.purpose === "INSPECTION_EXPIRY") {
+    const expiry = inspectionExpiryMayRelease({
+      nowMs: Date.now(),
+      inspectionEndsAtMs: opts.txn.inspectionEndsAt ? opts.txn.inspectionEndsAt.getTime() : null,
+      authorized: true,
+    });
+    if (!expiry.ok) {
+      throw Object.assign(new Error("Inspection window has not authorized release."), {
+        status: 409,
+        code: expiry.code,
+      });
+    }
+  }
+  return {
+    buyerId: opts.txn.buyerId,
+    action: durable.action,
+    purpose: claimed.purpose,
+    recordedActorUserId: audit.actorUserId,
+  };
+}
+
 async function assertLivePilotReleaseReady(opts: {
   txn: { id: string; sellerId: string; buyerId: string; currency: string };
   txnMode: "TEST" | "LIVE";
@@ -394,6 +474,8 @@ async function assertLivePilotReleaseReady(opts: {
   recipientId: string;
   payoutMethodId: string;
   termsHash: string;
+  backgroundRelease?: BackgroundReleaseAuthorization | null;
+  allowQuoteRefresh?: boolean;
 }) {
   if (opts.txnMode === "TEST") {
     // Buyer release, or the recorded inspection window, is the TEST authorization.
@@ -424,24 +506,60 @@ async function assertLivePilotReleaseReady(opts: {
   }
   if (opts.txnMode !== "LIVE") return;
   const snap = parseQuoteSnapshot(opts.snapshotRaw);
-  const confirmed = evaluateQuoteConfirmation({
-    stored: snap,
-    actorUserId: opts.actorUserId || "",
-    transactionId: opts.txn.id,
-    mode: "LIVE",
-    recipientId: opts.recipientId,
-    payoutMethodId: opts.payoutMethodId,
-    sourceAmountMinor: opts.amount,
-    sourceCurrency: opts.txn.currency,
-    destinationCurrency: snap?.destinationCurrency || "",
-    termsHash: opts.termsHash,
-    nowMs: opts.nowMs,
-  });
-  if (!confirmed.ok) {
-    throw Object.assign(new Error("Review and confirm the payout estimate before release."), {
-      status: 409,
-      code: confirmed.code,
+  let destinationQuoted = true;
+  if (opts.backgroundRelease) {
+    const durable = evaluateDurableReleaseAuthorization({
+      workerActorUserId: opts.actorUserId,
+      buyerId: opts.txn.buyerId,
+      recordedActorUserId: opts.backgroundRelease.recordedActorUserId,
+      recordedAction: opts.backgroundRelease.action,
+      purpose: opts.backgroundRelease.purpose,
     });
+    if (!durable.ok) {
+      throw Object.assign(new Error("Background release is not authorized by a recorded buyer action."), {
+        status: 409,
+        code: durable.code,
+      });
+    }
+    const quoteUse = evaluateBackgroundQuote({
+      stored: snap,
+      transactionId: opts.txn.id,
+      recipientId: opts.recipientId,
+      payoutMethodId: opts.payoutMethodId,
+      sourceAmountMinor: opts.amount,
+      sourceCurrency: opts.txn.currency,
+      destinationCurrency: snap?.destinationCurrency || "",
+      termsHash: opts.termsHash,
+      nowMs: opts.nowMs,
+      allowRefresh: Boolean(opts.allowQuoteRefresh),
+    });
+    if (!quoteUse.ok) {
+      throw Object.assign(new Error("Stored payout quote cannot be submitted."), {
+        status: 409,
+        code: quoteUse.code,
+      });
+    }
+    destinationQuoted = quoteUse.action === "use";
+  } else {
+    const confirmed = evaluateQuoteConfirmation({
+      stored: snap,
+      actorUserId: opts.actorUserId || "",
+      transactionId: opts.txn.id,
+      mode: "LIVE",
+      recipientId: opts.recipientId,
+      payoutMethodId: opts.payoutMethodId,
+      sourceAmountMinor: opts.amount,
+      sourceCurrency: opts.txn.currency,
+      destinationCurrency: snap?.destinationCurrency || "",
+      termsHash: opts.termsHash,
+      nowMs: opts.nowMs,
+    });
+    if (!confirmed.ok) {
+      throw Object.assign(new Error("Review and confirm the payout estimate before release."), {
+        status: 409,
+        code: confirmed.code,
+      });
+    }
   }
   const seller = await prisma.user.findUnique({
     where: { id: opts.txn.sellerId },
@@ -456,7 +574,7 @@ async function assertLivePilotReleaseReady(opts: {
     userId: opts.txn.sellerId,
     email: seller?.email ?? null,
     countryAllowed: isGlobalPayoutsCountryAllowed(seller?.country || ""),
-    actorUserId: opts.actorUserId || "",
+    actorUserId: opts.backgroundRelease ? "" : opts.actorUserId || "",
     buyerId: opts.txn.buyerId,
     sourceCurrency: opts.txn.currency,
     configuredSourceCurrencyRaw: env.configuredSourceCurrencyRaw,
@@ -469,12 +587,13 @@ async function assertLivePilotReleaseReady(opts: {
     crossBorderFeeCurrency: snap?.crossBorderFeeCurrency || "",
     fxFeeCurrency: snap?.fxFeeCurrency || "",
     availableBalanceMinor: balance.availableMinor,
-    destinationAmountMinor: snap?.destinationAmountMinor ?? null,
-    destinationCurrency: snap?.destinationCurrency || "",
-    destinationQuoted: true,
+    destinationAmountMinor: destinationQuoted ? snap?.destinationAmountMinor ?? null : null,
+    destinationCurrency: destinationQuoted ? snap?.destinationCurrency || "" : "",
+    destinationQuoted,
     destinationMinimumsRaw: env.destinationMinimumsRaw,
     authorizedTransactionIdRaw: env.authorizedTransactionIdRaw,
     transactionId: opts.txn.id,
+    durableBuyerId: opts.backgroundRelease ? opts.backgroundRelease.recordedActorUserId : undefined,
   });
   if (!decision.ok) {
     throw Object.assign(new Error("Live payout pilot limits denied this release."), {
@@ -565,6 +684,7 @@ async function executeOutboundRelease(opts: {
   idempotencyKey: string;
   actorUserId?: string | null;
   isFullResidual: boolean;
+  backgroundRelease?: BackgroundReleaseAuthorization | null;
 }) {
   const { txn, txnMode, amount, idempotencyKey, kind } = opts;
 
@@ -600,8 +720,10 @@ async function executeOutboundRelease(opts: {
       },
     );
   }
+  let allowQuoteRefresh = false;
   if (existingAttempt) {
-    const preserved = assessAttemptPreservation({
+    const decision = backgroundAttemptDecision({
+      hasBackgroundAuthorization: Boolean(opts.backgroundRelease) && txnMode === "LIVE",
       status: existingAttempt.status,
       failureCode: existingAttempt.failureCode,
       failureMessage: existingAttempt.failureMessage,
@@ -611,17 +733,20 @@ async function executeOutboundRelease(opts: {
       baseIdempotencyKey: idempotencyKey,
       nowMs: Date.now(),
     });
-    if (preserved.preserve && existingAttempt.status !== "SUCCEEDED" && existingAttempt.status !== "RECONCILED") {
+    if (decision.action === "stop") {
       throw Object.assign(
         new Error("Prior Global Payouts attempt is preserved. It was not retried."),
         {
           status: 409,
-          code: preserved.code,
-          nextIdempotencyKey: preserved.nextIdempotencyKey,
+          code: decision.code,
+          nextIdempotencyKey: decision.nextIdempotencyKey,
           attemptId: existingAttempt.id,
         },
       );
     }
+    allowQuoteRefresh = decision.allowQuoteRefresh;
+  } else if (opts.backgroundRelease && txnMode === "LIVE") {
+    allowQuoteRefresh = true;
   }
   if (
     existingAttempt?.status === "PROCESSING" &&
@@ -818,6 +943,7 @@ async function executeOutboundRelease(opts: {
     );
   }
 
+  const liveBackground = txnMode === "LIVE" ? opts.backgroundRelease ?? null : null;
   if (txnMode === "LIVE" || txnMode === "TEST") {
     await assertLivePilotReleaseReady({
       txn,
@@ -829,6 +955,8 @@ async function executeOutboundRelease(opts: {
       recipientId: txn.sellerGpRecipientId,
       payoutMethodId: txn.sellerGpPayoutMethodId,
       termsHash: txn.termsHash,
+      backgroundRelease: liveBackground,
+      allowQuoteRefresh,
     });
     if (txnMode === "LIVE") {
       await claimLivePilotSlot({ transactionId: txn.id, attemptId: attempt.id });
@@ -939,7 +1067,7 @@ async function executeOutboundRelease(opts: {
       financialAccountId: faId,
       recipientId: txn.sellerGpRecipientId,
       payoutMethodId: txn.sellerGpPayoutMethodId,
-      paymentIdempotencyKey: stripeIdempotencyKey,
+      paymentIdempotencyKey: liveBackground ? idempotencyKey : stripeIdempotencyKey,
       metadata: {
         protectedTxnId: txn.id,
         kind,
@@ -951,6 +1079,8 @@ async function executeOutboundRelease(opts: {
       requiresQuote: route.requiresQuote,
       storedSnapshot: attempt.fxRateSnapshot,
       actorUserId: opts.actorUserId,
+      backgroundRelease: liveBackground,
+      allowQuoteRefresh,
       assertBeforeProviderWrite: async (snapshot) => {
         const cover = coverForRelease(amount, txn.currency, snapshot);
         if (!cover.ok) {
@@ -983,6 +1113,8 @@ async function executeOutboundRelease(opts: {
             recipientId: txn.sellerGpRecipientId,
             payoutMethodId: txn.sellerGpPayoutMethodId,
             termsHash: txn.termsHash,
+            backgroundRelease: liveBackground,
+            allowQuoteRefresh,
           });
         }
       },

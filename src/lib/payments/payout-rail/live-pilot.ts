@@ -170,6 +170,8 @@ export function evaluateLivePilotInitiation(opts: {
   destinationMinimumsRaw: string;
   authorizedTransactionIdRaw: string;
   transactionId: string;
+  /** Set only after a recorded buyer action. Never the worker's user id. */
+  durableBuyerId?: string | null;
 }):
   | {
       ok: true;
@@ -191,7 +193,13 @@ export function evaluateLivePilotInitiation(opts: {
     };
   }
   if (!opts.gpEnabled) return { ok: false, code: "GLOBAL_PAYOUTS_DISABLED" };
-  if (opts.actorUserId !== opts.buyerId || !opts.actorUserId) {
+  // A background worker is not the buyer. Durable authorization is checked
+  // separately and must name this transaction's buyer. It does not fill actorUserId.
+  if (opts.durableBuyerId) {
+    if (opts.actorUserId || opts.durableBuyerId !== opts.buyerId) {
+      return { ok: false, code: "GP_PILOT_ACTOR_UNAUTHORIZED" };
+    }
+  } else if (opts.actorUserId !== opts.buyerId || !opts.actorUserId) {
     return { ok: false, code: "GP_PILOT_ACTOR_UNAUTHORIZED" };
   }
   if (
@@ -394,6 +402,120 @@ export function evaluateQuoteConfirmation(opts: {
     return { ok: false, code: "GP_QUOTE_MISMATCH" };
   }
   return { ok: true, quoteId: stored.quoteId };
+}
+
+export type DurableReleasePurpose = "INSPECTION_EXPIRY" | "AUTHORIZED_RETRY";
+
+/** Verified from a financial audit row. recordedActorUserId is that row's actor, not a copy of the buyer id. */
+export type BackgroundReleaseAuthorization = {
+  buyerId: string;
+  action: "START_INSPECTION" | "BUYER_RELEASE_NOW";
+  purpose: DurableReleasePurpose;
+  recordedActorUserId: string;
+};
+
+/**
+ * Recorded buyer authorization for a background release.
+ * This is not quote confirmation and does not satisfy evaluateQuoteConfirmation.
+ * The worker user id must be empty. confirmedByUserId is not written here.
+ *
+ * Stripe API 2026-08-26.preview locks an OutboundPaymentQuote FX rate for five
+ * minutes (fx_quote.lock_expires_at / lock_status). The published guidance is
+ * to request another quote after that lock expires. Stripe has not disclosed
+ * that a marketplace may submit the replacement from a background worker
+ * without a second buyer confirmation. That disclosure remains unresolved.
+ */
+export function evaluateDurableReleaseAuthorization(opts: {
+  workerActorUserId?: string | null;
+  buyerId: string;
+  recordedActorUserId?: string | null;
+  recordedAction?: string | null;
+  purpose: DurableReleasePurpose;
+}):
+  | { ok: true; buyerId: string; action: "START_INSPECTION" | "BUYER_RELEASE_NOW" }
+  | { ok: false; code: string } {
+  if (opts.workerActorUserId) return { ok: false, code: "GP_WORKER_ACTOR_FORBIDDEN" };
+  const authorizedBuyer = Boolean(opts.recordedActorUserId) && opts.recordedActorUserId === opts.buyerId;
+  if (opts.purpose === "INSPECTION_EXPIRY") {
+    if (!authorizedBuyer || opts.recordedAction !== "START_INSPECTION") {
+      return { ok: false, code: "inspection_not_authorized" };
+    }
+    return { ok: true, buyerId: opts.buyerId, action: "START_INSPECTION" };
+  }
+  if (
+    !authorizedBuyer ||
+    (opts.recordedAction !== "START_INSPECTION" && opts.recordedAction !== "BUYER_RELEASE_NOW")
+  ) {
+    return { ok: false, code: "release_not_authorized" };
+  }
+  return {
+    ok: true,
+    buyerId: opts.buyerId,
+    action: opts.recordedAction as "START_INSPECTION" | "BUYER_RELEASE_NOW",
+  };
+}
+
+/** Deadline plus the recorded Start Inspection action. READY_TO_RELEASE is not an input. */
+export function inspectionExpiryMayRelease(opts: {
+  nowMs: number;
+  inspectionEndsAtMs: number | null;
+  authorized: boolean;
+}): { ok: true } | { ok: false; code: "window_open" | "inspection_not_authorized" } {
+  if (!opts.authorized) return { ok: false, code: "inspection_not_authorized" };
+  if (opts.inspectionEndsAtMs == null || opts.inspectionEndsAtMs > opts.nowMs) {
+    return { ok: false, code: "window_open" };
+  }
+  return { ok: true };
+}
+
+/**
+ * Quote check for a background release that already has durable buyer authorization.
+ * A matching unexpired quote is used as stored. An expired quote may be refreshed
+ * only before any payment submission. Term changes are refused. This function
+ * does not compare the worker to confirmedByUserId and does not create one.
+ */
+export function evaluateBackgroundQuote(opts: {
+  stored: QuoteConfirmationSnapshot | null;
+  transactionId: string;
+  recipientId: string;
+  payoutMethodId: string;
+  sourceAmountMinor: number;
+  sourceCurrency: string;
+  destinationCurrency: string;
+  termsHash: string;
+  nowMs: number;
+  allowRefresh: boolean;
+}):
+  | { ok: true; action: "use"; quoteId: string }
+  | { ok: true; action: "refresh" }
+  | { ok: false; code: string } {
+  const stored = opts.stored;
+  const source = opts.sourceCurrency.toLowerCase();
+  const destination = opts.destinationCurrency.toLowerCase();
+  if (stored?.quoteId) {
+    const sameTerms =
+      stored.transactionId === opts.transactionId &&
+      stored.mode === "LIVE" &&
+      stored.recipientId === opts.recipientId &&
+      stored.payoutMethodId === opts.payoutMethodId &&
+      stored.termsHash === opts.termsHash &&
+      stored.sourceAmountMinor === opts.sourceAmountMinor &&
+      stored.sourceCurrency === source &&
+      stored.destinationCurrency === destination;
+    if (!sameTerms) return { ok: false, code: "GP_QUOTE_MISMATCH" };
+    const expiresMs = Date.parse(stored.expiresAt || "");
+    const expired = !stored.expiresAt || Number.isNaN(expiresMs) || expiresMs <= opts.nowMs;
+    if (!expired) {
+      if (!Number.isInteger(stored.destinationAmountMinor) || (stored.destinationAmountMinor ?? 0) <= 0) {
+        return { ok: false, code: "GP_QUOTE_MISMATCH" };
+      }
+      return { ok: true, action: "use", quoteId: stored.quoteId };
+    }
+    if (!opts.allowRefresh) return { ok: false, code: "GP_QUOTE_EXPIRED" };
+    return { ok: true, action: "refresh" };
+  }
+  if (!opts.allowRefresh) return { ok: false, code: "GP_QUOTE_REVIEW_REQUIRED" };
+  return { ok: true, action: "refresh" };
 }
 
 export function planQuotePreparation(opts: {

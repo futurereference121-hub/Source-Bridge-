@@ -23,6 +23,10 @@ import {
 import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
 import {
+  evaluateDurableReleaseAuthorization,
+  inspectionExpiryMayRelease,
+} from "@/lib/payments/payout-rail/live-pilot";
+import {
   releaseFinalViaGlobalPayouts,
   releaseProcurementViaGlobalPayouts,
 } from "@/lib/payments/payout-rail/outbound-payment";
@@ -366,6 +370,12 @@ export async function releaseFinal(opts: {
    * RELEASED so inspection cron cannot dump the withheld remainder.
    */
   amountMinor?: number;
+  /** Present only for inspection expiry or an authorized background retry. */
+  backgroundRelease?: {
+    buyerId: string;
+    action: "START_INSPECTION" | "BUYER_RELEASE_NOW";
+    purpose: "INSPECTION_EXPIRY" | "AUTHORIZED_RETRY";
+  } | null;
 }) {
   if (!isPaymentsEnabled() || !isStripeConfigured()) {
     throw Object.assign(new Error("Payments not configured"), {
@@ -802,22 +812,40 @@ export async function processInspectionReleases(limit = 25) {
         results.push({ id: txn.id, ok: false, error: "open_issue" });
         continue;
       }
-      if (
-        lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS" &&
-        normalizeStripeMode(fresh.stripeMode) === "TEST"
-      ) {
+      if (lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS") {
         const inspectionAuth = await prisma.financialAuditEvent.findFirst({
           where: {
             protectedTxnId: fresh.id,
             action: "START_INSPECTION",
             actorUserId: fresh.buyerId,
           },
-          select: { id: true },
+          select: { id: true, actorUserId: true, action: true },
         });
-        if (!inspectionAuth) {
-          results.push({ id: txn.id, ok: false, error: "inspection_not_authorized" });
+        const expiry = inspectionExpiryMayRelease({
+          nowMs: Date.now(),
+          inspectionEndsAtMs: fresh.inspectionEndsAt ? fresh.inspectionEndsAt.getTime() : null,
+          authorized: Boolean(inspectionAuth),
+        });
+        if (!expiry.ok) {
+          const error = expiry.code === "window_open" ? "window_open" : "inspection_not_authorized";
+          results.push({ id: txn.id, ok: false, error });
           continue;
         }
+        await prisma.protectedTransaction.update({
+          where: { id: fresh.id },
+          data: { status: nextStatus("IN_INSPECTION", "COMPLETE_INSPECTION") },
+        });
+        await releaseFinal({
+          protectedTxnId: fresh.id,
+          actorUserId: null,
+          backgroundRelease: {
+            buyerId: fresh.buyerId,
+            action: "START_INSPECTION",
+            purpose: "INSPECTION_EXPIRY",
+          },
+        });
+        results.push({ id: txn.id, ok: true });
+        continue;
       }
       await prisma.protectedTransaction.update({
         where: { id: fresh.id },
@@ -857,22 +885,37 @@ export async function processInspectionReleases(limit = 25) {
           results.push({ id: txn.id, ok: false, error: "state_changed" });
           continue;
         }
-        if (
-          lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS" &&
-          normalizeStripeMode(fresh.stripeMode) === "TEST"
-        ) {
+        if (lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS") {
           const releaseAuth = await prisma.financialAuditEvent.findFirst({
             where: {
               protectedTxnId: fresh.id,
               actorUserId: fresh.buyerId,
               action: { in: ["BUYER_RELEASE_NOW", "START_INSPECTION"] },
             },
-            select: { id: true },
+            select: { id: true, actorUserId: true, action: true },
           });
-          if (!releaseAuth) {
+          const durable = evaluateDurableReleaseAuthorization({
+            workerActorUserId: null,
+            buyerId: fresh.buyerId,
+            recordedActorUserId: releaseAuth?.actorUserId,
+            recordedAction: releaseAuth?.action,
+            purpose: "AUTHORIZED_RETRY",
+          });
+          if (!durable.ok) {
             results.push({ id: txn.id, ok: false, error: "release_not_authorized" });
             continue;
           }
+          await releaseFinal({
+            protectedTxnId: fresh.id,
+            actorUserId: null,
+            backgroundRelease: {
+              buyerId: fresh.buyerId,
+              action: durable.action,
+              purpose: "AUTHORIZED_RETRY",
+            },
+          });
+          results.push({ id: txn.id, ok: true });
+          continue;
         }
         await releaseFinal({ protectedTxnId: fresh.id, actorUserId: null });
         results.push({ id: txn.id, ok: true });

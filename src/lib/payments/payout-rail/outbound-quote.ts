@@ -7,7 +7,13 @@
  */
 
 import { sanitizeProviderFailureText } from "./outbound-display.ts";
-import { evaluateQuoteConfirmation } from "./live-pilot.ts";
+import {
+  evaluateBackgroundQuote,
+  evaluateDurableReleaseAuthorization,
+  evaluateQuoteConfirmation,
+  pilotFailureIsSticky,
+  type BackgroundReleaseAuthorization,
+} from "./live-pilot.ts";
 
 export const OUTBOUND_PAYMENT_QUOTE_PATH = "/v2/money_management/outbound_payment_quotes";
 export const OUTBOUND_PAYMENT_PATH = "/v2/money_management/outbound_payments";
@@ -522,12 +528,108 @@ export function assessAttemptPreservation(opts: {
   return { preserve: false };
 }
 
+/** A replacement quote is allowed only before any payment exists. */
+export function preSubmissionQuoteRefreshAllowed(opts: {
+  status: string;
+  failureCode: string;
+  stripeOutboundPaymentId: string;
+  initiatedAt: Date | null;
+}): boolean {
+  if (opts.stripeOutboundPaymentId || opts.initiatedAt) return false;
+  if (
+    ["RETURNED", "CANCELED", "CANCELLED", "PROCESSING", "SUCCEEDED", "RECONCILED", "ACTION_REQUIRED"].includes(
+      opts.status,
+    )
+  ) {
+    return false;
+  }
+  if (pilotFailureIsSticky(opts.failureCode)) return false;
+  if (
+    opts.status === "FAILED" &&
+    opts.failureCode &&
+    !["GP_QUOTE_EXPIRED", "GP_QUOTE_REVIEW_REQUIRED", "GP_QUOTE_FAILED"].includes(opts.failureCode)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Background workers may replace an expired quote only before submission.
+ * In-flight, uncertain, returned, canceled, and other definite failures stop.
+ * A worker without durable authorization keeps the previous preservation rules.
+ */
+export function backgroundAttemptDecision(opts: {
+  hasBackgroundAuthorization: boolean;
+  status: string;
+  failureCode: string;
+  failureMessage: string;
+  fxRateSnapshot: string;
+  stripeOutboundPaymentId: string;
+  initiatedAt: Date | null;
+  baseIdempotencyKey: string;
+  nowMs: number;
+}):
+  | { action: "continue"; allowQuoteRefresh: boolean }
+  | { action: "stop"; code: string; nextIdempotencyKey: string | null } {
+  const preserved = assessAttemptPreservation({
+    status: opts.status,
+    failureCode: opts.failureCode,
+    failureMessage: opts.failureMessage,
+    fxRateSnapshot: opts.fxRateSnapshot,
+    stripeOutboundPaymentId: opts.stripeOutboundPaymentId,
+    initiatedAt: opts.initiatedAt,
+    baseIdempotencyKey: opts.baseIdempotencyKey,
+    nowMs: opts.nowMs,
+  });
+  const refreshAllowed = preSubmissionQuoteRefreshAllowed({
+    status: opts.status,
+    failureCode: opts.failureCode,
+    stripeOutboundPaymentId: opts.stripeOutboundPaymentId,
+    initiatedAt: opts.initiatedAt,
+  });
+  const quoteRefresh =
+    opts.hasBackgroundAuthorization &&
+    preserved.preserve &&
+    preserved.code === "GP_QUOTE_EXPIRED" &&
+    refreshAllowed;
+  if (
+    preserved.preserve &&
+    opts.status !== "SUCCEEDED" &&
+    opts.status !== "RECONCILED" &&
+    !quoteRefresh
+  ) {
+    return {
+      action: "stop",
+      code: preserved.code,
+      nextIdempotencyKey: preserved.nextIdempotencyKey,
+    };
+  }
+  if (opts.hasBackgroundAuthorization && !refreshAllowed) {
+    const code =
+      opts.status === "RETURNED"
+        ? "GP_RETURNED_MANUAL_REVIEW"
+        : preserved.preserve
+          ? preserved.code
+          : "GP_FAILED_ATTEMPT_PRESERVED";
+    return { action: "stop", code, nextIdempotencyKey: null };
+  }
+  return {
+    action: "continue",
+    allowQuoteRefresh: opts.hasBackgroundAuthorization && refreshAllowed,
+  };
+}
+
 function localGateResult(err: unknown): { ok: false; code: string; parsed: null; uncertain: false } | null {
   if (!err || typeof err !== "object" || !("code" in err)) return null;
   const code = String((err as { code?: string }).code || "");
   if (
     code.startsWith("GP_PILOT") ||
     code.startsWith("GP_QUOTE") ||
+    code === "GP_WORKER_ACTOR_FORBIDDEN" ||
+    code === "inspection_not_authorized" ||
+    code === "release_not_authorized" ||
+    code === "window_open" ||
     code === "PAYOUTS_UNAVAILABLE" ||
     code === "GLOBAL_PAYOUTS_INITIATION_DISABLED"
   ) {
@@ -625,6 +727,12 @@ export async function executeQuotedPayout(opts: {
   requiresQuote: boolean;
   storedSnapshot: string;
   actorUserId?: string | null;
+  /**
+   * Recorded buyer action for inspection expiry or an authorized retry.
+   * Absent on a buyer-present release, which still uses quote confirmation.
+   */
+  backgroundRelease?: BackgroundReleaseAuthorization | null;
+  allowQuoteRefresh?: boolean;
   post: (req: {
     path: string;
     idempotencyKey: string;
@@ -647,7 +755,93 @@ export async function executeQuotedPayout(opts: {
   const stored = parseQuoteSnapshot(opts.storedSnapshot);
   let activeSnapshot: QuoteSnapshot | null = stored;
 
-  if (opts.mode === "LIVE") {
+  if (opts.mode === "LIVE" && opts.backgroundRelease) {
+    const durable = evaluateDurableReleaseAuthorization({
+      workerActorUserId: opts.actorUserId,
+      buyerId: opts.backgroundRelease.buyerId,
+      recordedActorUserId: opts.backgroundRelease.recordedActorUserId,
+      recordedAction: opts.backgroundRelease.action,
+      purpose: opts.backgroundRelease.purpose,
+    });
+    if (!durable.ok) {
+      return { ok: false, code: durable.code, parsed: null, uncertain: false };
+    }
+    const quoteUse = evaluateBackgroundQuote({
+      stored,
+      transactionId: opts.metadata.protectedTxnId || "",
+      recipientId: opts.recipientId,
+      payoutMethodId: opts.payoutMethodId,
+      sourceAmountMinor: opts.sourceAmountMinor,
+      sourceCurrency: source,
+      destinationCurrency: destination,
+      termsHash: opts.metadata.termsHash || "",
+      nowMs: opts.nowMs,
+      allowRefresh: Boolean(opts.allowQuoteRefresh),
+    });
+    if (!quoteUse.ok) {
+      return { ok: false, code: quoteUse.code, parsed: null, uncertain: false };
+    }
+    if (quoteUse.action === "use") {
+      if (needsQuote) quoteId = quoteUse.quoteId;
+    } else if (needsQuote) {
+      let quoted: QuoteHttpResult;
+      try {
+        quoted = await opts.post({
+          path: OUTBOUND_PAYMENT_QUOTE_PATH,
+          idempotencyKey: quoteIdempotencyKey(correctedQuoteRetryKey(opts.paymentIdempotencyKey)),
+          body: buildQuoteBody({
+            financialAccountId: opts.financialAccountId,
+            recipientId: opts.recipientId,
+            payoutMethodId: opts.payoutMethodId,
+            sourceAmountMinor: opts.sourceAmountMinor,
+            sourceCurrency: source,
+            destinationCurrency: destination,
+          }),
+        });
+      } catch (err) {
+        const gated = localGateResult(err);
+        if (gated) return gated;
+        return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
+      }
+      if (!quoted.ok) {
+        const parsed = parseGpProviderError(quoted);
+        const uncertain = providerOutcomeUncertain(quoted.status, false);
+        return {
+          ok: false,
+          code: uncertain ? "GP_PAYMENT_OUTCOME_UNCERTAIN" : parsed.code || "GP_QUOTE_FAILED",
+          parsed,
+          uncertain,
+        };
+      }
+      const validated = validateOutboundQuote({
+        body: quoted.body,
+        financialAccountId: opts.financialAccountId,
+        recipientId: opts.recipientId,
+        payoutMethodId: opts.payoutMethodId,
+        sourceAmountMinor: opts.sourceAmountMinor,
+        sourceCurrency: source,
+        destinationCurrency: destination,
+        mode: opts.mode,
+        nowMs: opts.nowMs,
+      });
+      if (!validated.ok) {
+        return { ok: false, code: validated.code, parsed: null, uncertain: false };
+      }
+      const { confirmedByUserId: _buyerConfirmation, ...withoutConfirmation } = validated.snapshot;
+      void _buyerConfirmation;
+      const refreshed: QuoteSnapshot = {
+        ...withoutConfirmation,
+        transactionId: opts.metadata.protectedTxnId || "",
+        recipientId: opts.recipientId,
+        payoutMethodId: opts.payoutMethodId,
+        mode: "LIVE",
+        termsHash: opts.metadata.termsHash || "",
+      };
+      await opts.persistQuote(refreshed);
+      activeSnapshot = refreshed;
+      quoteId = refreshed.quoteId;
+    }
+  } else if (opts.mode === "LIVE") {
     const confirmed = evaluateQuoteConfirmation({
       stored,
       actorUserId: opts.actorUserId || "",
