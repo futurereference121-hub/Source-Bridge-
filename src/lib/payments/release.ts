@@ -885,6 +885,17 @@ export async function processInspectionReleases(limit = 25) {
           results.push({ id: txn.id, ok: false, error: "state_changed" });
           continue;
         }
+        const openRetryIssue = await prisma.disputeCase.findFirst({
+          where: {
+            protectedTxnId: fresh.id,
+            status: { in: ["OPEN", "UNDER_REVIEW"] },
+          },
+          select: { id: true },
+        });
+        if (openRetryIssue) {
+          results.push({ id: txn.id, ok: false, error: "open_issue" });
+          continue;
+        }
         if (lockedPayoutRailFromTxn(fresh) === "STRIPE_GLOBAL_PAYOUTS") {
           const releaseAuth = await prisma.financialAuditEvent.findFirst({
             where: {

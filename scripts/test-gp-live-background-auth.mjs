@@ -43,12 +43,15 @@ const {
   evaluateQuoteConfirmation,
   globalPayoutsReconciliationAllowed,
   inspectionExpiryMayRelease,
+  recordedInspectionDeadlineAllowsRelease,
 } = await import("../src/lib/payments/payout-rail/live-pilot.ts");
 const {
   backgroundAttemptDecision,
   correctedQuoteRetryKey,
   executeQuotedPayout,
+  planQuoteRefreshIdentity,
   quoteIdempotencyKey,
+  quoteRefreshRequestKey,
 } = await import("../src/lib/payments/payout-rail/outbound-quote.ts");
 const {
   isGlobalPayoutsLiveInitiationEnabled,
@@ -401,25 +404,50 @@ ok(
 }
 
 {
+  const refreshId = "0123456789abcdef";
+  const refreshKey = quoteRefreshRequestKey(paymentKey, refreshId);
   const expired = await runPayout({
     actorUserId: null,
     storedSnapshot: JSON.stringify(storedQuote({ expiresAt: "2026-10-01T07:00:00.000Z", confirmedByUserId: undefined })),
     backgroundRelease: background({ purpose: "AUTHORIZED_RETRY", action: "BUYER_RELEASE_NOW" }),
     allowQuoteRefresh: true,
+    quoteRefreshIdempotencyKey: refreshKey,
   });
   const quoteCall = expired.calls.find((call) => call.path.endsWith("outbound_payment_quotes"));
   const paymentCall = expired.calls.find((call) => call.path.endsWith("outbound_payments"));
   ok("expired authorized quote is refreshed once", expired.result.ok === true && expired.persisted.length === 1);
+  ok("refreshed quote uses the persisted refresh key", quoteCall.idempotencyKey === refreshKey);
   ok(
-    "refreshed quote uses the corrected quote key",
-    quoteCall.idempotencyKey === quoteIdempotencyKey(correctedQuoteRetryKey(paymentKey)),
+    "refreshed quote does not replay the original quote key",
+    quoteCall.idempotencyKey !== quoteIdempotencyKey(paymentKey),
+  );
+  ok(
+    "refreshed quote does not replay the fixed corrected-retry key",
+    quoteCall.idempotencyKey !== quoteIdempotencyKey(correctedQuoteRetryKey(paymentKey)),
   );
   ok("refreshed quote keeps the agreed source amount", quoteCall.body.amount.value === 4000 && quoteCall.body.amount.currency === "gbp");
   ok("refreshed quote keeps the recipient and payout method", quoteCall.body.to.recipient === recipient && quoteCall.body.to.payout_method === method);
   ok("payment key is not replaced", paymentCall.idempotencyKey === paymentKey);
   ok("refreshed snapshot is not a manufactured confirmation", expired.persisted[0].confirmedByUserId == null);
   ok("refreshed snapshot keeps the commercial identity", expired.persisted[0].termsHash === terms && expired.persisted[0].transactionId === txn && expired.persisted[0].mode === "LIVE");
+  ok("refreshed snapshot records the key that created it", expired.persisted[0].createdIdempotencyKey === refreshKey);
   ok("buyer total inputs stay the stored source amount", expired.persisted[0].sourceAmountMinor === 4000);
+}
+
+{
+  const replayed = await runPayout({
+    actorUserId: null,
+    storedSnapshot: JSON.stringify(
+      storedQuote({
+        expiresAt: "2026-10-01T07:00:00.000Z",
+        createdIdempotencyKey: quoteRefreshRequestKey(paymentKey, "fedcba9876543210"),
+      }),
+    ),
+    backgroundRelease: background(),
+    allowQuoteRefresh: true,
+    quoteRefreshIdempotencyKey: quoteRefreshRequestKey(paymentKey, "fedcba9876543210"),
+  });
+  ok("reusing the expired quote key creates nothing", replayed.result.code === "GP_QUOTE_EXPIRED" && replayed.calls.length === 0);
 }
 
 {
@@ -478,6 +506,90 @@ ok(
 ok(
   "a definite non-quote failure is not repaid",
   attempt({ status: "FAILED", failureCode: "GP_OUTBOUND_CREATE_FAILED", fxRateSnapshot: "" }).code === "GP_FAILED_ATTEMPT_PRESERVED",
+);
+{
+  const started = planQuoteRefreshIdentity({
+    paymentIdempotencyKey: paymentKey,
+    stored: storedQuote({ expiresAt: "2026-10-01T07:00:00.000Z" }),
+    existingNote: "",
+    nextRefreshId: "0123456789abcdef",
+    initiatedAt: new Date(now),
+    stripeOutboundPaymentId: "",
+    failureCode: "",
+    status: "PENDING",
+  });
+  ok("initiatedAt blocks refresh without an outbound payment id", started.action === "stop" && started.code === "GP_PAYMENT_OUTCOME_UNCERTAIN");
+}
+{
+  const first = planQuoteRefreshIdentity({
+    paymentIdempotencyKey: paymentKey,
+    stored: storedQuote({ expiresAt: "2026-10-01T07:00:00.000Z", quoteId: "obpq_test_example" }),
+    existingNote: "",
+    nextRefreshId: "0123456789abcdef",
+    initiatedAt: null,
+    stripeOutboundPaymentId: "",
+    failureCode: "",
+    status: "PENDING",
+  });
+  ok("the first refresh claims a new server id", first.action === "claim");
+  const claimedNote = JSON.stringify({
+    gpQuoteRefresh: { v: 1, id: first.refreshId, replacesQuoteId: "obpq_test_example" },
+  });
+  const concurrent = planQuoteRefreshIdentity({
+    paymentIdempotencyKey: paymentKey,
+    stored: storedQuote({ expiresAt: "2026-10-01T07:00:00.000Z", quoteId: "obpq_test_example" }),
+    existingNote: claimedNote,
+    nextRefreshId: "ffffffffffffffff",
+    initiatedAt: null,
+    stripeOutboundPaymentId: "",
+    failureCode: "",
+    status: "PENDING",
+  });
+  ok("a second worker reuses the claimed refresh key", concurrent.action === "reuse" && concurrent.idempotencyKey === first.idempotencyKey);
+  const expiredReplacement = planQuoteRefreshIdentity({
+    paymentIdempotencyKey: paymentKey,
+    stored: storedQuote({
+      expiresAt: "2026-10-01T07:00:00.000Z",
+      quoteId: "obpq_test_fresh",
+      createdIdempotencyKey: first.idempotencyKey,
+    }),
+    existingNote: JSON.stringify({
+      gpQuoteRefresh: { v: 1, id: first.refreshId, replacesQuoteId: "obpq_test_fresh" },
+    }),
+    nextRefreshId: "abcdefabcdefabcd",
+    initiatedAt: null,
+    stripeOutboundPaymentId: "",
+    failureCode: "",
+    status: "PENDING",
+  });
+  ok(
+    "an expired replacement gets a new server id",
+    expiredReplacement.action === "claim" && expiredReplacement.idempotencyKey !== first.idempotencyKey,
+  );
+}
+ok(
+  "START_INSPECTION does not release before the recorded deadline",
+  recordedInspectionDeadlineAllowsRelease({
+    nowMs: now,
+    recordedEndsAtIso: "2026-10-01T09:00:00.000Z",
+    transactionEndsAtMs: now - 1000,
+  }).code === "window_open",
+);
+ok(
+  "a cleared transaction deadline does not count as expiry",
+  recordedInspectionDeadlineAllowsRelease({
+    nowMs: now,
+    recordedEndsAtIso: "2026-10-01T07:00:00.000Z",
+    transactionEndsAtMs: null,
+  }).code === "window_open",
+);
+ok(
+  "START_INSPECTION releases after both recorded deadlines",
+  recordedInspectionDeadlineAllowsRelease({
+    nowMs: now,
+    recordedEndsAtIso: "2026-10-01T07:00:00.000Z",
+    transactionEndsAtMs: now - 1000,
+  }).ok === true,
 );
 {
   const testExpired = attempt({ hasBackgroundAuthorization: false });

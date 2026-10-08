@@ -678,6 +678,7 @@ type TxnRow = {
   deliveredAt: Date | null;
   inspectionEndsAt: Date | null;
   releasedAt: Date | null;
+  termsHash?: string;
 };
 
 async function acknowledgeReceiptAfterShip(opts: {
@@ -840,6 +841,7 @@ async function startInspectionAfterReceipt(opts: {
       inspectionEndsAt: inspectionEnds.toISOString(),
       inspectionHours: config.inspectionHours,
       transferTriggered: false,
+      termsHash: txn.termsHash || "",
     },
   });
 
@@ -923,7 +925,11 @@ async function releaseNowAfterReceipt(opts: {
       protectedTxnId: txn.id,
       actorUserId: opts.buyerId,
       action: "BUYER_RELEASE_NOW",
-      meta: { decision: "RELEASE_NOW", statusBeforeReleaseFinal: status },
+      meta: {
+        decision: "RELEASE_NOW",
+        statusBeforeReleaseFinal: status,
+        termsHash: txn.termsHash || "",
+      },
     });
   }
 

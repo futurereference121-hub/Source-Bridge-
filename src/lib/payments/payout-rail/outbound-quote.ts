@@ -52,6 +52,8 @@ export type QuoteSnapshot = {
   mode?: "TEST" | "LIVE";
   termsHash?: string;
   feePayer?: string;
+  /** Server key that created this quote. A later refresh must not send it again. */
+  createdIdempotencyKey?: string;
 };
 
 export type QuoteHttpResult = {
@@ -146,9 +148,113 @@ export function parseCorrectedAttemptLink(
   }
 }
 
+export type StoredQuoteRefresh = {
+  v: 1;
+  id: string;
+  replacesQuoteId: string;
+};
+
+const QUOTE_REFRESH_ID = /^[a-f0-9]{16}$/;
+
+export function parseQuoteRefreshClaim(note: string | null | undefined): StoredQuoteRefresh | null {
+  if (!note || !note.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(note) as {
+      gpQuoteRefresh?: { v?: number; id?: string; replacesQuoteId?: string };
+    };
+    const claim = parsed.gpQuoteRefresh;
+    if (!claim || claim.v !== 1 || !claim.id || !QUOTE_REFRESH_ID.test(claim.id)) return null;
+    return { v: 1, id: claim.id, replacesQuoteId: String(claim.replacesQuoteId || "") };
+  } catch {
+    return null;
+  }
+}
+
+/** A new quote request key. It is not the original quote key and not a client value. */
+export function quoteRefreshRequestKey(paymentIdempotencyKey: string, refreshId: string): string {
+  return quoteIdempotencyKey(`${paymentIdempotencyKey}_refresh_${refreshId}`);
+}
+
+export function withQuoteRefreshClaim(existingNote: string, claim: StoredQuoteRefresh): string {
+  let base: Record<string, unknown> = {};
+  if (existingNote.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(existingNote) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed;
+    } catch {
+      base = {};
+    }
+  }
+  return JSON.stringify({ ...base, gpQuoteRefresh: claim });
+}
+
+/**
+ * Choose the quote idempotency key for one pre-submission refresh.
+ * Reuse a claim that has not yet produced the stored quote. Mint a new
+ * server id once that claim's quote is the expired snapshot.
+ */
+export function planQuoteRefreshIdentity(opts: {
+  paymentIdempotencyKey: string;
+  stored: QuoteSnapshot | null;
+  existingNote: string;
+  nextRefreshId: string;
+  initiatedAt: Date | string | null;
+  stripeOutboundPaymentId: string;
+  failureCode: string;
+  status: string;
+}):
+  | { action: "reuse" | "claim"; refreshId: string; idempotencyKey: string; replacesQuoteId: string }
+  | { action: "stop"; code: string } {
+  if (opts.stripeOutboundPaymentId) return { action: "stop", code: "GP_PAYMENT_IN_FLIGHT" };
+  if (opts.initiatedAt) return { action: "stop", code: "GP_PAYMENT_OUTCOME_UNCERTAIN" };
+  if (pilotFailureIsSticky(opts.failureCode)) {
+    return { action: "stop", code: opts.failureCode || "GP_PAYMENT_OUTCOME_UNCERTAIN" };
+  }
+  if (opts.status === "RETURNED") return { action: "stop", code: "GP_RETURNED_MANUAL_REVIEW" };
+  if (opts.status === "PROCESSING" || opts.status === "SUCCEEDED" || opts.status === "RECONCILED") {
+    return { action: "stop", code: "GP_PAYMENT_IN_FLIGHT" };
+  }
+  if (opts.status === "CANCELED" || opts.status === "CANCELLED" || opts.status === "ACTION_REQUIRED") {
+    return { action: "stop", code: "GP_FAILED_ATTEMPT_PRESERVED" };
+  }
+  const originalKey = quoteIdempotencyKey(opts.paymentIdempotencyKey);
+  const previousKey = opts.stored?.createdIdempotencyKey || originalKey;
+  const existing = parseQuoteRefreshClaim(opts.existingNote);
+  const existingKey = existing ? quoteRefreshRequestKey(opts.paymentIdempotencyKey, existing.id) : "";
+  const storedQuoteId = opts.stored?.quoteId || "";
+  const claimCreatedStoredQuote = Boolean(existingKey) && existingKey === opts.stored?.createdIdempotencyKey;
+  if (
+    existing &&
+    existingKey &&
+    existing.replacesQuoteId === storedQuoteId &&
+    !claimCreatedStoredQuote &&
+    existingKey !== previousKey &&
+    existingKey !== originalKey
+  ) {
+    return {
+      action: "reuse",
+      refreshId: existing.id,
+      idempotencyKey: existingKey,
+      replacesQuoteId: storedQuoteId,
+    };
+  }
+  if (!QUOTE_REFRESH_ID.test(opts.nextRefreshId)) return { action: "stop", code: "GP_QUOTE_EXPIRED" };
+  const idempotencyKey = quoteRefreshRequestKey(opts.paymentIdempotencyKey, opts.nextRefreshId);
+  if (idempotencyKey === previousKey || idempotencyKey === originalKey) {
+    return { action: "stop", code: "GP_QUOTE_EXPIRED" };
+  }
+  return {
+    action: "claim",
+    refreshId: opts.nextRefreshId,
+    idempotencyKey,
+    replacesQuoteId: storedQuoteId,
+  };
+}
+
 export function mergeAttemptNote(existingNote: string, providerRecord: string): string {
+  const refresh = parseQuoteRefreshClaim(existingNote);
   const link = parseCorrectedAttemptLink(existingNote);
-  if (!link) return providerRecord.slice(0, 500);
+  if (!link && !refresh) return providerRecord.slice(0, 500);
   let provider: unknown = {};
   try {
     provider = JSON.parse(providerRecord);
@@ -157,8 +263,10 @@ export function mergeAttemptNote(existingNote: string, providerRecord: string): 
   }
   return JSON.stringify({
     v: 1,
-    priorAttemptId: link.priorAttemptId,
-    retry: CORRECTED_QUOTE_RETRY_VERSION,
+    ...(link
+      ? { priorAttemptId: link.priorAttemptId, retry: CORRECTED_QUOTE_RETRY_VERSION }
+      : {}),
+    ...(refresh ? { gpQuoteRefresh: refresh } : {}),
     provider,
   }).slice(0, 500);
 }
@@ -630,6 +738,10 @@ function localGateResult(err: unknown): { ok: false; code: string; parsed: null;
     code === "inspection_not_authorized" ||
     code === "release_not_authorized" ||
     code === "window_open" ||
+    code === "terms_changed" ||
+    code === "disputed" ||
+    code === "cancelled" ||
+    code === "open_issue" ||
     code === "PAYOUTS_UNAVAILABLE" ||
     code === "GLOBAL_PAYOUTS_INITIATION_DISABLED"
   ) {
@@ -733,6 +845,8 @@ export async function executeQuotedPayout(opts: {
    */
   backgroundRelease?: BackgroundReleaseAuthorization | null;
   allowQuoteRefresh?: boolean;
+  /** Persisted server key for one pre-submission replacement. Never the expired quote's key. */
+  quoteRefreshIdempotencyKey?: string;
   post: (req: {
     path: string;
     idempotencyKey: string;
@@ -784,11 +898,22 @@ export async function executeQuotedPayout(opts: {
     if (quoteUse.action === "use") {
       if (needsQuote) quoteId = quoteUse.quoteId;
     } else if (needsQuote) {
+      const previousKey = stored?.createdIdempotencyKey || quoteIdempotencyKey(opts.paymentIdempotencyKey);
+      const refreshKey = opts.quoteRefreshIdempotencyKey || "";
+      const originalKey = quoteIdempotencyKey(opts.paymentIdempotencyKey);
+      if (
+        !refreshKey ||
+        refreshKey === previousKey ||
+        refreshKey === originalKey ||
+        refreshKey === quoteIdempotencyKey(correctedQuoteRetryKey(opts.paymentIdempotencyKey))
+      ) {
+        return { ok: false, code: "GP_QUOTE_EXPIRED", parsed: null, uncertain: false };
+      }
       let quoted: QuoteHttpResult;
       try {
         quoted = await opts.post({
           path: OUTBOUND_PAYMENT_QUOTE_PATH,
-          idempotencyKey: quoteIdempotencyKey(correctedQuoteRetryKey(opts.paymentIdempotencyKey)),
+          idempotencyKey: refreshKey,
           body: buildQuoteBody({
             financialAccountId: opts.financialAccountId,
             recipientId: opts.recipientId,
@@ -836,6 +961,7 @@ export async function executeQuotedPayout(opts: {
         payoutMethodId: opts.payoutMethodId,
         mode: "LIVE",
         termsHash: opts.metadata.termsHash || "",
+        createdIdempotencyKey: refreshKey,
       };
       await opts.persistQuote(refreshed);
       activeSnapshot = refreshed;

@@ -1073,7 +1073,11 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
 {
   const unauthorized = gpTxn({ status: "READY_TO_RELEASE" });
   const buyerAuthorized = gpTxn({ status: "READY_TO_RELEASE" });
-  const inspectionAuthorized = gpTxn({ status: "READY_TO_RELEASE" });
+  const inspectionAuthorized = gpTxn({
+    status: "READY_TO_RELEASE",
+    inspectionEndsAt: new Date(Date.now() - 60 * 1000),
+  });
+  const recordedDeadline = inspectionAuthorized.inspectionEndsAt.toISOString();
   tables.financialAuditEvent.push(
     {
       id: "audit_buyer_release",
@@ -1089,7 +1093,10 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
       actorUserId: BUYER,
       action: "START_INSPECTION",
       reason: "",
-      metaJson: "{}",
+      metaJson: JSON.stringify({
+        inspectionEndsAt: recordedDeadline,
+        termsHash: "terms35",
+      }),
     },
   );
   const since = httpLog.length;
@@ -1149,9 +1156,11 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
     (row) => row.protectedTxnId === authorized.id && row.action === "START_INSPECTION",
   );
   assert(auth?.actorUserId === BUYER, "inspection authorization is the buyer audit event");
-  tables.protectedTransaction.find((row) => row.id === authorized.id).inspectionEndsAt = new Date(
-    Date.now() - 60 * 1000,
-  );
+  const expiredAt = new Date(Date.now() - 60 * 1000);
+  tables.protectedTransaction.find((row) => row.id === authorized.id).inspectionEndsAt = expiredAt;
+  const recorded = JSON.parse(auth.metaJson);
+  recorded.inspectionEndsAt = expiredAt.toISOString();
+  auth.metaJson = JSON.stringify(recorded);
   const since = httpLog.length;
   delete globalThis.__SB_COOKIE_VALUES.sb_session;
   const cron = await postJson(

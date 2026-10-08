@@ -469,6 +469,29 @@ export function inspectionExpiryMayRelease(opts: {
 }
 
 /**
+ * START_INSPECTION can release only after the deadline recorded on that buyer
+ * action. A missing or cleared transaction deadline does not count as expiry.
+ * An earlier transaction deadline cannot release before the recorded one.
+ */
+export function recordedInspectionDeadlineAllowsRelease(opts: {
+  nowMs: number;
+  recordedEndsAtIso?: string | null;
+  transactionEndsAtMs: number | null;
+}): { ok: true } | { ok: false; code: "window_open" } {
+  const recordedMs = Date.parse(opts.recordedEndsAtIso || "");
+  const recorded = Number.isNaN(recordedMs) ? null : recordedMs;
+  if (opts.transactionEndsAtMs == null) return { ok: false, code: "window_open" };
+  if (recorded == null) {
+    return opts.transactionEndsAtMs > opts.nowMs
+      ? { ok: false, code: "window_open" }
+      : { ok: true };
+  }
+  const deadline = Math.max(recorded, opts.transactionEndsAtMs);
+  if (deadline > opts.nowMs) return { ok: false, code: "window_open" };
+  return { ok: true };
+}
+
+/**
  * Quote check for a background release that already has durable buyer authorization.
  * A matching unexpired quote is used as stored. An expired quote may be refreshed
  * only before any payment submission. Term changes are refused. This function
