@@ -16,6 +16,7 @@ import {
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
+import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
 
 export {
   BUYER_INACTIVITY_ADMIN_RELEASE_MS,
@@ -150,6 +151,16 @@ export type ConfirmReceiptDecision =
   | "START_INSPECTION"
   | "REPORT_ISSUE";
 
+function globalPayoutsBuyerDisplay(t: {
+  payoutRail?: string | null;
+  outboundPaymentAttempts?: { status?: string | null; failureCode?: string | null }[];
+}): { phase: string; buyerLabel: string } | null {
+  if (String(t.payoutRail || "") !== "STRIPE_GLOBAL_PAYOUTS") return null;
+  const attempt = t.outboundPaymentAttempts?.[0];
+  const state = deriveOutboundDisplayState(attempt?.status, attempt?.failureCode);
+  return { phase: state.phase, buyerLabel: state.buyerLabel };
+}
+
 export function mapProtectedTxnSummary(
   t: {
     id: string;
@@ -204,6 +215,7 @@ export function mapProtectedTxnSummary(
       name: string;
       slug: string | null;
     } | null;
+    outboundPaymentAttempts?: { status?: string | null; failureCode?: string | null }[];
   },
   viewerRole: ProtectedTxnListRole,
   opts?: { procurementFlagOn?: boolean },
@@ -273,6 +285,7 @@ export function mapProtectedTxnSummary(
     books,
     stripeMode: t.stripeMode,
     payoutRail: t.payoutRail,
+    globalPayouts: globalPayoutsBuyerDisplay(t),
     fundedAt: t.fundedAt?.toISOString() ?? null,
     procurementReleasedAt: t.procurementReleasedAt?.toISOString() ?? null,
     shippedAt: t.shippedAt?.toISOString() ?? null,
@@ -497,6 +510,11 @@ export async function listProtectedOrdersForUser(opts: {
         select: { id: true },
         take: 1,
       },
+      outboundPaymentAttempts: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+        select: { status: true, failureCode: true },
+      },
     },
   });
 
@@ -544,6 +562,11 @@ export async function getProtectedOrderForUser(opts: {
         where: { status: { in: ["OPEN", "UNDER_REVIEW"] } },
         select: { id: true },
         take: 1,
+      },
+      outboundPaymentAttempts: {
+        orderBy: { updatedAt: "desc" },
+        take: 1,
+        select: { status: true, failureCode: true },
       },
     },
   });

@@ -8,7 +8,9 @@ import { PrimaryButton } from "@/components/ui/PrimaryButton";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
-import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
+import { PurchaseRecordedAmounts } from "@/components/payments/PurchaseRecordedAmounts";
+import { purchaseCardModel } from "@/lib/payments/purchase-list-presentation";
+import { purchasesPanelState } from "@/lib/payments/purchase-orders-load";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 import {
   useProtectedOrders,
@@ -21,6 +23,9 @@ type Order = ProtectedOrderSummary & {
   currency: string;
   totalChargeMinor: number;
   protectionFeeMinor: number;
+  itemCostMinor?: number;
+  shippingMinor?: number;
+  sellerServiceFeeMinor?: number;
   fundedAt: string | null;
   shippedAt: string | null;
   deliveredAt?: string | null;
@@ -40,6 +45,7 @@ type Order = ProtectedOrderSummary & {
   } | null;
   payoutRail?: string | null;
   stripeMode?: string | null;
+  globalPayouts?: { phase?: string; buyerLabel?: string } | null;
   actions: {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
@@ -86,6 +92,7 @@ export default function PurchasesPage() {
   } = useProtectedOrders({
     role: "buyer",
     enabled: authReady && signedIn,
+    accountId: account?.id ?? null,
   });
   const orders = rawOrders as Order[];
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -225,17 +232,45 @@ export default function PurchasesPage() {
           </Link>
         </div>
 
-        {loading ? (
-          <p className="mt-10 text-white/50">Loading purchases…</p>
-        ) : error ? (
-          <p className="mt-10 text-sm text-amber-200/90">{error}</p>
-        ) : !orders.length ? (
-          <p className="mt-10 text-sm text-white/55">
-            No purchases yet.
-          </p>
-        ) : (
-          <ul className="mt-10 space-y-4">
+        {(() => {
+          const panel = purchasesPanelState({
+            loading,
+            error,
+            count: orders.length,
+          });
+          if (panel === "loading") {
+            return (
+              <p className="mt-10 text-white/50" data-testid="purchases-loading">
+                Loading purchases…
+              </p>
+            );
+          }
+          if (panel === "error") {
+            return (
+              <div className="mt-10" data-testid="purchases-error">
+                <p className="text-sm text-amber-200/90">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => void reload()}
+                  className="mt-3 text-sm text-electric hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            );
+          }
+          if (panel === "empty") {
+            return (
+              <p className="mt-10 text-sm text-white/55" data-testid="purchases-empty">
+                No purchases yet.
+              </p>
+            );
+          }
+          return (
+          <ul className="mt-10 space-y-4" data-testid="purchases-list">
             {orders.map((o) => {
+              const model = purchaseCardModel(o);
+              const quoteKind = model.quoteKind;
               const residual =
                 o.books?.finalResidualMinor ?? 0;
               const procDone =
@@ -248,10 +283,6 @@ export default function PurchasesPage() {
               const showInsp =
                 o.status === "IN_INSPECTION" && Boolean(o.actions.canReleaseNow);
               const showIssueHold = o.status === "DISPUTED";
-              const quoteConfirmationRequired = gpQuoteConfirmationRequired(
-                o.stripeMode,
-                o.payoutRail,
-              );
 
               return (
               <li
@@ -259,29 +290,24 @@ export default function PurchasesPage() {
                 className="rounded-xl border border-white/10 bg-white/[0.03] p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <Link
                       href={`/profile/purchases/${o.id}`}
-                      className="font-display text-xl text-white hover:text-electric"
+                      className="break-words font-display text-xl text-white hover:text-electric"
                     >
-                      {o.title}
+                      {model.title}
                     </Link>
                     <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-electric/80">
                       {o.displayState?.shortLabel ||
                         o.displayState?.label ||
                         o.status.replace(/_/g, " ")}
                     </p>
-                    <p className="mt-1 text-sm text-white/55">
-                      Seller:{" "}
-                      {o.counterparty?.username
-                        ? `@${o.counterparty.username}`
-                        : o.counterparty?.name || "—"}
+                    <p className="mt-1 break-words text-sm text-white/55">
+                      Seller: {model.seller}
                     </p>
                   </div>
-                  <div className="text-right text-sm">
-                    <p className="font-medium text-white">
-                      {formatMinor(o.totalChargeMinor, o.currency)}
-                    </p>
+                  <div className="shrink-0 text-right text-sm">
+                    <p className="font-medium text-white">{model.totalText}</p>
                     <p className="text-white/45">
                       {o.labels.payment.includes("Direct")
                         ? "Service fee"
@@ -294,10 +320,10 @@ export default function PurchasesPage() {
                   <div>
                     <dt className="text-white/40">Status</dt>
                     <dd className="text-white/85">
-                      {o.displayState?.label ||
-                        o.status.replace(/_/g, " ")}
+                      {model.statusLabel}
                     </dd>
                   </div>
+                  <PurchaseRecordedAmounts model={model} />
                   <div>
                     <dt className="text-white/40">Payment</dt>
                     <dd className="text-white/85">{o.labels.payment}</dd>
@@ -431,7 +457,7 @@ export default function PurchasesPage() {
                   ) : null}
                 </dl>
 
-                {o.actions.canReleaseProcurement && quoteConfirmationRequired ? (
+                {quoteKind === "PROCUREMENT" ? (
                   <GpQuoteReview
                     protectedTxnId={o.id}
                     kind="PROCUREMENT"
@@ -448,7 +474,7 @@ export default function PurchasesPage() {
                       showArrow={false}
                       disabled={
                         busyId === o.id ||
-                        (quoteConfirmationRequired &&
+                        (quoteKind === "PROCUREMENT" &&
                           !gpConfirmed[`${o.id}:PROCUREMENT`])
                       }
                       className="rounded-lg"
@@ -492,7 +518,7 @@ export default function PurchasesPage() {
                       <p className="font-medium text-white/90">
                         Item received — choose one
                       </p>
-                      {quoteConfirmationRequired ? (
+                      {quoteKind === "FINAL" ? (
                         <GpQuoteReview
                           protectedTxnId={o.id}
                           kind="FINAL"
@@ -508,7 +534,7 @@ export default function PurchasesPage() {
                           showArrow={false}
                           disabled={
                             busyId === o.id ||
-                            (quoteConfirmationRequired && !gpConfirmed[`${o.id}:FINAL`])
+                            (quoteKind === "FINAL" && !gpConfirmed[`${o.id}:FINAL`])
                           }
                           className="rounded-lg"
                           onClick={() =>
@@ -543,7 +569,7 @@ export default function PurchasesPage() {
                       . Remaining residual auto-releases after the deadline
                       unless you release early or report a problem.
                     </p>
-                    {quoteConfirmationRequired && showInsp ? (
+                    {quoteKind === "FINAL" && showInsp ? (
                       <GpQuoteReview
                         protectedTxnId={o.id}
                         kind="FINAL"
@@ -560,7 +586,7 @@ export default function PurchasesPage() {
                           showArrow={false}
                           disabled={
                             busyId === o.id ||
-                            (quoteConfirmationRequired && !gpConfirmed[`${o.id}:FINAL`])
+                            (quoteKind === "FINAL" && !gpConfirmed[`${o.id}:FINAL`])
                           }
                           className="rounded-lg"
                           onClick={() =>
@@ -629,7 +655,8 @@ export default function PurchasesPage() {
             );
             })}
           </ul>
-        )}
+          );
+        })()}
       </Container>
     </div>
   );

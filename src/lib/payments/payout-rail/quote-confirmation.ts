@@ -20,3 +20,33 @@ export function gpQuoteConfirmationRequired(
   if (payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
   return String(stripeMode || "").trim().toUpperCase() !== "TEST";
 }
+
+const QUOTE_REVIEW_CLOSED = new Set([
+  "RELEASED",
+  "REFUNDED",
+  "PARTIALLY_REFUNDED",
+  "CANCELLED",
+  "FAILED",
+]);
+
+/**
+ * Quote review is only offered with a server action that can still release.
+ * Completed and other terminal purchases never show confirmation controls.
+ */
+export function purchaseQuoteReviewKind(order: {
+  status?: string | null;
+  stripeMode?: string | null;
+  payoutRail?: string | null;
+  actions?: {
+    canReleaseProcurement?: boolean;
+    canReleaseNow?: boolean;
+  } | null;
+}): "PROCUREMENT" | "FINAL" | null {
+  if (!gpQuoteConfirmationRequired(order.stripeMode, order.payoutRail)) return null;
+  const status = String(order.status || "");
+  if (QUOTE_REVIEW_CLOSED.has(status)) return null;
+  if (order.actions?.canReleaseProcurement) return "PROCUREMENT";
+  if (status === "DELIVERED" && order.actions?.canReleaseNow) return "FINAL";
+  if (status === "IN_INSPECTION" && order.actions?.canReleaseNow) return "FINAL";
+  return null;
+}

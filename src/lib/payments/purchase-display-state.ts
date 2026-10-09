@@ -58,12 +58,27 @@ export function shouldApplyOrdersPayload(opts: {
   latestSeq: number;
   incomingVersion: number;
   appliedVersion: number;
-  /** True once a non-empty list has been applied (or force reload). */
+  /** True once any orders array from the server has been stored. */
   hasAppliedOrders?: boolean;
   force?: boolean;
+  /**
+   * Row count in this response. When omitted, older callers keep the
+   * version-only rules. When present, a non-empty payload still paints if
+   * the screen has no rows yet.
+   */
+  incomingCount?: number;
+  /** Rows currently on screen. */
+  visibleCount?: number;
 }): boolean {
-  if (opts.requestSeq < opts.latestSeq) return false;
+  const incoming = opts.incomingCount ?? 0;
+  const visible = opts.visibleCount ?? 0;
+  if (opts.requestSeq < opts.latestSeq) {
+    return incoming > 0 && visible === 0 && !opts.hasAppliedOrders;
+  }
   if (opts.force) return true;
+  if (typeof opts.incomingCount === "number" && incoming > 0 && visible === 0) {
+    return true;
+  }
   if (!opts.hasAppliedOrders) return true;
   if (opts.incomingVersion < opts.appliedVersion) return false;
   if (opts.incomingVersion === opts.appliedVersion) return false;

@@ -164,8 +164,12 @@ assert.match(tracking, /order,/);
 
 assert.match(hook, /ORDERS_SOFT_POLL_MS\s*=\s*2500/);
 assert.match(hook, /subscribePurchaseOrderChanged/);
-assert.match(hook, /shouldApplyOrdersPayload/);
+assert.match(hook, /reduceOrdersList/);
 assert.match(hook, /visibilityState/);
+assert.match(
+  read("src/lib/payments/purchase-orders-load.ts"),
+  /shouldApplyOrdersPayload/,
+);
 
 assert.match(sync, /PURCHASE_ORDER_CHANGED_EVENT/);
 assert.match(sync, /emitPurchaseOrderChanged/);

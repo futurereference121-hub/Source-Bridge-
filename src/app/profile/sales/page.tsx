@@ -78,6 +78,7 @@ export default function SalesFulfilmentPage() {
   } = useProtectedOrders({
     role: "seller",
     enabled: authReady && signedIn,
+    accountId: account?.id ?? null,
   });
   const orders = rawOrders as Order[];
   const [openId, setOpenId] = useState<string | null>(null);

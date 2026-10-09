@@ -7,6 +7,9 @@ import { Container } from "@/components/ui/Container";
 import { useAppUi } from "@/components/providers/AppProviders";
 import { formatMinor } from "@/lib/payments/money";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
+import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
+import { PurchaseRecordedAmounts } from "@/components/payments/PurchaseRecordedAmounts";
+import { purchaseCardModel } from "@/lib/payments/purchase-list-presentation";
 import {
   useProtectedOrders,
   type ProtectedOrderSummary,
@@ -60,14 +63,16 @@ export default function PurchaseOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const txnId = typeof params.id === "string" ? params.id : "";
-  const { signedIn, authReady } = useAppUi();
+  const { account, signedIn, authReady } = useAppUi();
   const { orders, loading: listLoading } = useProtectedOrders({
     role: "buyer",
     enabled: authReady && signedIn,
+    accountId: account?.id ?? null,
   });
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState("");
+  const [gpConfirmed, setGpConfirmed] = useState(false);
 
   useEffect(() => {
     if (authReady && !signedIn) router.replace("/sign-in");
@@ -126,12 +131,11 @@ export default function PurchaseOrderDetailPage() {
   const showError = !order && !showLoading;
 
   const display = order?.displayState;
+  const model = order ? purchaseCardModel(order) : null;
   const residual =
     order?.books?.finalResidualMinor ??
     order?.books?.remainingProtectedSellerShareMinor ??
     0;
-  const feeMinor =
-    order?.books?.platformFeeMinor ?? order?.protectionFeeMinor ?? 0;
 
   return (
     <div className="bg-app-navy min-h-[100svh] pt-28 pb-24 text-white">
@@ -153,7 +157,7 @@ export default function PurchaseOrderDetailPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-electric/90">
               {display?.shortLabel || display?.label || "Purchase"}
             </p>
-            <h1 className="mt-2 font-display text-3xl">{order.title}</h1>
+            <h1 className="mt-2 break-words font-display text-3xl">{order.title}</h1>
             {order.listing?.slug ? (
               <p className="mt-2 text-sm text-white/55">
                 Product:{" "}
@@ -165,31 +169,21 @@ export default function PurchaseOrderDetailPage() {
                 </Link>
               </p>
             ) : null}
-            <p className="mt-1 text-sm text-white/55">
-              Seller:{" "}
-              {order.counterparty?.username
-                ? `@${order.counterparty.username}`
-                : order.counterparty?.name || "—"}
+            <p className="mt-1 break-words text-sm text-white/55">
+              Seller: {model?.seller || "—"}
             </p>
             <dl className="mt-6 grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-white/40">Status</dt>
                 <dd className="text-white/85">
-                  {display?.label || String(order.status).replace(/_/g, " ")}
+                  {model?.statusLabel || display?.label || String(order.status).replace(/_/g, " ")}
                 </dd>
               </div>
               <div>
                 <dt className="text-white/40">Amount paid</dt>
-                <dd className="text-white/85">
-                  {formatMinor(order.totalChargeMinor, order.currency)}
-                </dd>
+                <dd className="text-white/85">{model?.totalText}</dd>
               </div>
-              <div>
-                <dt className="text-white/40">Source Bridge fee</dt>
-                <dd className="text-white/85">
-                  {formatMinor(feeMinor, order.currency)}
-                </dd>
-              </div>
+              {model ? <PurchaseRecordedAmounts model={model} /> : null}
               <div>
                 <dt className="text-white/40">Payment</dt>
                 <dd className="text-white/85">{order.labels.payment}</dd>
@@ -252,6 +246,14 @@ export default function PurchaseOrderDetailPage() {
                   testId={`purchase-detail-shipment-photo-${order.id}`}
                 />
               </div>
+            ) : null}
+            {model?.quoteKind ? (
+              <GpQuoteReview
+                protectedTxnId={order.id}
+                kind={model.quoteKind}
+                confirmed={gpConfirmed}
+                onConfirmed={setGpConfirmed}
+              />
             ) : null}
             {order.origin === "PRODUCT_CHECKOUT" && order.conversationId ? (
               <p className="mt-4 text-xs text-white/45">
