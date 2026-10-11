@@ -6,6 +6,8 @@ import { confirmReceipt } from "@/lib/payments/fulfilment";
 import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { getPaymentTicket } from "@/lib/payments/tickets";
+import { prisma } from "@/lib/db";
+import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
 
 export const runtime = "nodejs";
 
@@ -98,8 +100,18 @@ export async function POST(req: NextRequest) {
 
     const activityVersion =
       (result as { activityVersion?: number }).activityVersion ?? 0;
-    const linkedTicketId =
+    let linkedTicketId =
       (result as { linkedTicketId?: string | null }).linkedTicketId ?? null;
+    const waitingForProceeds = Boolean(
+      (result as { waitingForProceeds?: boolean }).waitingForProceeds,
+    );
+    if (!linkedTicketId) {
+      const linked = await prisma.paymentTicket.findUnique({
+        where: { protectedTransactionId: t.id },
+        select: { id: true },
+      });
+      linkedTicketId = linked?.id ?? null;
+    }
 
     let ticket = null;
     if (linkedTicketId) {
@@ -122,12 +134,23 @@ export async function POST(req: NextRequest) {
         (result as { pendingProvider?: boolean }).pendingProvider,
       ),
       transferId: (result as { transferId?: string | null }).transferId ?? null,
+      waitingForProceeds,
       activityVersion,
       ticket,
       dispute: (result as { dispute?: unknown }).dispute ?? null,
-      message: (result as { pendingProvider?: boolean }).pendingProvider
-        ? "Release submitted. Payout is confirming with the provider — not yet marked paid."
-        : undefined,
+      message: waitingForProceeds
+        ? (ticket &&
+          typeof ticket === "object" &&
+          "gpPayoutProgress" in ticket &&
+          ticket.gpPayoutProgress &&
+          typeof ticket.gpPayoutProgress === "object" &&
+          "headline" in ticket.gpPayoutProgress &&
+          typeof ticket.gpPayoutProgress.headline === "string"
+            ? ticket.gpPayoutProgress.headline
+            : GP_FUNDING_HOLD_COPY)
+        : (result as { pendingProvider?: boolean }).pendingProvider
+          ? "Release submitted. Payout is confirming with the provider — not yet marked paid."
+          : undefined,
       transaction: {
         id: t.id,
         status: t.status,

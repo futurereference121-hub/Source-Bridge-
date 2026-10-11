@@ -108,6 +108,17 @@ export async function reconcileOutboundAttempt(opts: {
     };
   }
 
+  const arrivalRaw = retrieved.body.expected_arrival_date;
+  if (typeof arrivalRaw === "string" && arrivalRaw) {
+    const expectedArrivalAt = new Date(arrivalRaw);
+    if (!Number.isNaN(expectedArrivalAt.getTime())) {
+      await prisma.outboundPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: { expectedArrivalAt },
+      });
+    }
+  }
+
   const mapped = mapOutboundPaymentProviderStatus(retrieved.body);
 
   if (mapped === "SUCCEEDED") {

@@ -4,6 +4,10 @@
 
 import { formatMinor } from "@/lib/payments/money";
 import { purchaseQuoteReviewKind } from "@/lib/payments/payout-rail/quote-confirmation";
+import {
+  GP_FUNDING_HOLD_COPY,
+  type GpBuyerPayoutProgress,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 
 export type PurchaseCardInput = {
   id?: string;
@@ -18,6 +22,7 @@ export type PurchaseCardInput = {
   payoutRail?: string | null;
   stripeMode?: string | null;
   globalPayouts?: { phase?: string; buyerLabel?: string } | null;
+  gpPayoutProgress?: GpBuyerPayoutProgress | null;
   displayState?: { label?: string; shortLabel?: string } | null;
   counterparty?: { username?: string | null; name?: string | null } | null;
   actions?: {
@@ -49,7 +54,7 @@ export type PurchaseCardModel = {
 export function purchasePayoutPhrase(phase: string | null | undefined): string | null {
   switch (phase) {
     case "awaiting_funds":
-      return "Release authorized — payout pending platform funding";
+      return GP_FUNDING_HOLD_COPY;
     case "awaiting_minimum":
       return "Release authorized — payout awaiting minimum";
     case "pending":
@@ -96,17 +101,19 @@ export function purchaseCardModel(order: PurchaseCardInput): PurchaseCardModel {
     order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
       ? purchasePayoutPhrase(order.globalPayouts?.phase)
       : null;
-  const payoutLabel =
-    order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+  const payoutLabel = order.gpPayoutProgress?.headline
+    ? order.gpPayoutProgress.headline
+    : order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
       ? payoutPhrase
         ? `Global Payouts — ${payoutPhrase}`
         : "Global Payouts"
       : null;
   const quoteKind = purchaseQuoteReviewKind(order);
   const offersRelease =
-    Boolean(order.actions?.canReleaseProcurement) ||
-    (status === "DELIVERED" && Boolean(order.actions?.canReleaseNow)) ||
-    (status === "IN_INSPECTION" && Boolean(order.actions?.canReleaseNow));
+    !order.gpPayoutProgress?.hideReleaseActions &&
+    (Boolean(order.actions?.canReleaseProcurement) ||
+      (status === "DELIVERED" && Boolean(order.actions?.canReleaseNow)) ||
+      (status === "IN_INSPECTION" && Boolean(order.actions?.canReleaseNow)));
   return {
     seller,
     title: order.title || "Purchase",

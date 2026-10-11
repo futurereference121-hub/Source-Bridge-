@@ -1115,6 +1115,7 @@ model ProtectedTransaction {
   disputes                 DisputeCase[]
   transferAttempts         TransferAttempt[]
   outboundPaymentAttempts  OutboundPaymentAttempt[]
+  gpProceedsFunding        GpProceedsFunding?
 
   @@index([buyerId, status])
   @@index([sellerId, status])
@@ -1322,6 +1323,8 @@ model OutboundPaymentAttempt {
   deliveredAt               DateTime?
   returnedAt                DateTime?
   succeededAt               DateTime?
+  /// Stripe expected_arrival_date for the seller payout. Null when Stripe has not given one.
+  expectedArrivalAt         DateTime?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -1329,4 +1332,60 @@ model OutboundPaymentAttempt {
   @@index([status, lastAttemptAt])
   @@index([stripeOutboundPaymentId])
   @@index([stripeMode, status])
+}
+
+/// One Global Payouts proceeds funding record per protected transaction.
+/// Money moves only by a v1 payout into that transaction's financial account,
+/// and only up to this charge's own available net.
+model GpProceedsFunding {
+  id                   String    @id @default(cuid())
+  protectedTxnId       String    @unique
+  protectedTxn         ProtectedTransaction @relation(fields: [protectedTxnId], references: [id], onDelete: Restrict)
+  stripeMode           String
+  currency             String
+  chargeId             String    @default("")
+  balanceTransactionId String    @default("")
+  principalMinor       Int
+  payoutFeeMinor       Int       @default(0)
+  chargeNetMinor       Int       @default(0)
+  /// AWAITING_SETTLEMENT | FUNDING | POSTED | SHORT | BLOCKED | FAILED
+  status               String    @default("AWAITING_SETTLEMENT")
+  availableOn          DateTime?
+  failureCode          String    @default("")
+  failureMessage       String    @default("")
+  /// Stable key for the quote request. A crash retries this key. It is not a payout key.
+  quoteIdempotencyKey  String    @default("")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  legs                 GpProceedsFundingLeg[]
+
+  @@index([status, availableOn])
+  @@index([stripeMode, status])
+  @@index([chargeId])
+}
+
+/// One Stripe payout that moves part of a charge's available net into the financial account.
+model GpProceedsFundingLeg {
+  id                 String   @id @default(cuid())
+  fundingId          String
+  funding            GpProceedsFunding @relation(fields: [fundingId], references: [id], onDelete: Restrict)
+  sequence           Int
+  amountMinor        Int
+  currency           String
+  idempotencyKey     String   @unique
+  /// PENDING | POSTED | FAILED | CANCELLED
+  status             String   @default("PENDING")
+  stripePayoutId     String   @default("")
+  stripePayoutStatus String   @default("")
+  faCreditId         String   @default("")
+  failureCode        String   @default("")
+  failureMessage     String   @default("")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  postedAt           DateTime?
+
+  @@unique([fundingId, sequence])
+  @@index([status])
+  @@index([stripePayoutId])
+  @@index([faCreditId])
 }

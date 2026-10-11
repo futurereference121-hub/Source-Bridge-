@@ -1,7 +1,9 @@
 import { processInspectionReleases } from "@/lib/payments/release";
 import { expireStaleUnfundedTickets } from "@/lib/payments/tickets";
 import { reconcileStuckOutboundPayments } from "@/lib/payments/payout-rail/reconcile";
-import { isGlobalPayoutsEnabled } from "@/lib/payments/flags";
+import { reconcileGpProceedsFunding } from "@/lib/payments/payout-rail/proceeds-funding-run";
+import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
+import { isGlobalPayoutsEnabled, isGlobalPayoutsProceedsFundingEnabled } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -37,7 +39,11 @@ export async function POST(req: Request) {
     const gpReconcile = isGlobalPayoutsEnabled()
       ? await reconcileStuckOutboundPayments({ limit: 25 })
       : { scanned: 0, results: [] };
-    return Response.json({ ok: true, results, expiry, gpReconcile });
+    const gpFunding =
+      isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST")
+        ? await reconcileGpProceedsFunding({ stripeMode: "TEST" })
+        : { scanned: 0, funded: 0, resumed: 0 };
+    return Response.json({ ok: true, results, expiry, gpReconcile, gpFunding });
   } catch (err) {
     console.error("[payments-release]", err);
     return jsonError("Payments release failed", 500);

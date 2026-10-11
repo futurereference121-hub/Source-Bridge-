@@ -22,6 +22,7 @@ import {
   normalizeStripeMode,
 } from "@/lib/payments/flags";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { gpFundingBlocksRefund } from "@/lib/payments/payout-rail/proceeds-funding-run";
 
 export type AdminMoneyResolution =
   | "RESOLVED_SELLER"
@@ -202,6 +203,13 @@ export async function executeAdminProtectedMoneyDecision(
         );
       }
 
+      if (await gpFundingBlocksRefund(working.id)) {
+        throwHttp(
+          "This payment has already moved toward the sourcer's international payout. Reverse that funding before refunding.",
+          409,
+          { code: "REFUND_BLOCKED_GP_FUNDING" },
+        );
+      }
       const txnMode = normalizeStripeMode(working.stripeMode);
       assertStripeModeCompatible(txnMode);
       assertMoneyOpEnvironmentMatch({

@@ -254,6 +254,29 @@ function withInclude(row, include) {
     copy.protectedTransaction =
       tables.protectedTransaction.find((txn) => txn.id === row.protectedTransactionId) || null;
   }
+  if (include.outboundPaymentAttempts) {
+    copy.outboundPaymentAttempts = (tables.outboundPaymentAttempt || []).filter(
+      (attempt) => attempt.protectedTxnId === row.id,
+    );
+  }
+  if (include.disputes) {
+    copy.disputes = (tables.disputeCase || []).filter(
+      (dispute) => dispute.protectedTxnId === row.id,
+    );
+  }
+  if (include.gpProceedsFunding || include.legs) {
+    const funding =
+      tables.gpProceedsFunding?.find((item) => item.protectedTxnId === row.id) || null;
+    if (funding) {
+      copy.gpProceedsFunding = {
+        ...funding,
+        legs: (tables.gpProceedsFundingLeg || []).filter((leg) => leg.fundingId === funding.id),
+      };
+    } else {
+      copy.gpProceedsFunding = null;
+    }
+    copy.legs = (tables.gpProceedsFundingLeg || []).filter((leg) => leg.fundingId === row.id);
+  }
   return copy;
 }
 
@@ -363,6 +386,25 @@ function dispatch(model, method, args) {
     return { count };
   }
   if (method === "count") return rows.filter((row) => matches(row, args?.where)).length;
+  if (method === "upsert") {
+    const existing = rows.find((row) => matches(row, args?.where));
+    if (existing) {
+      applyData(existing, args?.update);
+      return copyRow(withInclude(existing, args?.include));
+    }
+    return dispatch(model, "create", {
+      data: { ...(args?.where || {}), ...(args?.create || {}) },
+    });
+  }
+  if (method === "aggregate") {
+    const found = rows.filter((row) => matches(row, args?.where));
+    const sum = {};
+    const fields = args?._sum || {};
+    for (const key of Object.keys(fields)) {
+      sum[key] = found.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+    }
+    return { _sum: sum };
+  }
   throw new Error(`${model}.${method} is not mocked`);
 }
 
@@ -699,7 +741,10 @@ const cardSrc = fs.readFileSync(path.join(root, "src/components/messaging/Paymen
 const purchasesSrc = fs.readFileSync(path.join(root, "src/app/profile/purchases/page.tsx"), "utf8");
 assert(cardSrc.includes('submitReceiptDecision("RELEASE_NOW")'), "conversation release still uses the existing button");
 assert(cardSrc.includes("quoteConfirmationRequired && !gpQuoteConfirmed"), "LIVE inspection release stays behind quote review");
-assert(purchasesSrc.includes("quoteConfirmationRequired &&"), "Purchases release stays behind quote review for LIVE");
+assert(
+  purchasesSrc.includes('quoteKind === "FINAL" && !gpConfirmed'),
+  "Purchases release stays behind quote review for LIVE",
+);
 assert(!cardSrc.includes("confirmedByUserId"), "conversation control does not fabricate confirmation");
 
 const outboundSrc = fs.readFileSync(
@@ -723,7 +768,10 @@ for (const file of [
   "src/app/profile/purchases/page.tsx",
 ]) {
   const text = fs.readFileSync(path.join(root, file), "utf8");
-  assert(text.includes("gpQuoteConfirmationRequired"), `${file} uses the TEST confirmation gate`);
+  const usesGate = file.endsWith("purchases/page.tsx")
+    ? text.includes('quoteKind === "FINAL"') && text.includes("purchaseCardModel")
+    : text.includes("gpQuoteConfirmationRequired");
+  assert(usesGate, `${file} uses the TEST confirmation gate`);
   assert(text.includes("GpQuoteReview"), `${file} still has LIVE quote review`);
 }
 
@@ -930,7 +978,8 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   controls.balance = 3510;
   const since = httpLog.length;
   const res = await releaseNow(txn.id);
-  assert(res.status >= 400, `short funding status ${res.status} ${res.json.error || ""}`);
+  assert(res.status === 200, `short funding status ${res.status} ${res.json.error || ""}`);
+  assert(res.json.waitingForProceeds === true, "short funding did not acknowledge release");
   assert(posts("outbound_payment_quotes", since).length === 1, "funding check quoted before the fee-inclusive gate");
   assert(posts("outbound_payments", since).length === 0, "short funding submitted a payment");
   assert(attemptFor(txn.id)?.failureCode === "GP_PILOT_FUNDING_SHORT", "funding failure code");
@@ -943,7 +992,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   controls.faStatus = 403;
   const since = httpLog.length;
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `unreadable balance status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `unreadable balance status ${res.status}`);
   assert(posts("outbound_payment_quotes", since).length === 0, "failed balance read quoted");
   assert(posts("outbound_payments", since).length === 0, "failed balance read submitted a payment");
   const attempt = attemptFor(txn.id);
@@ -963,7 +1012,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   controls.available = "usd-only";
   const since = httpLog.length;
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `other currency status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `other currency status ${res.status}`);
   assert(posts("outbound_payment_quotes", since).length === 0, "other currency quoted");
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_CURRENCY", "missing currency code");
   park(txn.id);
@@ -974,7 +1023,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const txn = gpTxn();
   controls.available = "mismatch";
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `mismatched currency status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `mismatched currency status ${res.status}`);
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_CURRENCY", "mismatched currency code");
   park(txn.id);
   resetControls();
@@ -984,7 +1033,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const txn = gpTxn();
   controls.available = "fraction";
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `fractional balance status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `fractional balance status ${res.status}`);
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_AMOUNT", "fractional amount code");
   park(txn.id);
   resetControls();
@@ -994,7 +1043,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const txn = gpTxn();
   controls.available = "negative";
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `negative balance status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `negative balance status ${res.status}`);
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_BALANCE_AMOUNT", "negative amount code");
   park(txn.id);
   resetControls();
@@ -1004,7 +1053,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const txn = gpTxn();
   controls.faLivemode = true;
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `mode mismatch status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `mode mismatch status ${res.status}`);
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_MODE_MISMATCH", "mode mismatch code");
   park(txn.id);
   resetControls();
@@ -1014,7 +1063,7 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   const txn = gpTxn();
   controls.faId = "fa_other_account";
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `account mismatch status ${res.status}`);
+  assert(res.status === 200 && res.json.waitingForProceeds === true, `account mismatch status ${res.status}`);
   assert(attemptFor(txn.id)?.failureCode === "GP_FA_ACCOUNT_MISMATCH", "account mismatch code");
   park(txn.id);
   resetControls();
@@ -1384,6 +1433,164 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   assert(liveLedger?.stripeMode === "LIVE", "genuine LIVE payout ledger stays LIVE");
   assert(liveLedger.amountMinor === 3500, "LIVE payout ledger amount stays 3500");
   assert(liveLedger.stripeObjectId === "obp_live_ledger", "LIVE payout ledger keeps its provider reference");
+}
+
+{
+  const disputed = gpTxn({ status: "DISPUTED" });
+  const since = httpLog.length;
+  const res = await releaseNow(disputed.id);
+  assert(res.status === 409, `disputed release status ${res.status} ${res.json.error || ""}`);
+  assert(
+    (res.json.error || "").includes("Cannot release funds while an issue is open"),
+    "disputed buyer release message",
+  );
+  assert(posts("outbound_payment_quotes", since).length === 0, "disputed release created a quote");
+  assert(posts("outbound_payments", since).length === 0, "disputed release created a payment");
+  assert(
+    tables.protectedTransaction.find((row) => row.id === disputed.id).status === "DISPUTED",
+    "disputed release changed status",
+  );
+
+  const cancelled = gpTxn({ status: "CANCELLED" });
+  const cancelledSince = httpLog.length;
+  const cancelledRes = await releaseNow(cancelled.id);
+  assert(
+    cancelledRes.status === 409,
+    `cancelled release status ${cancelledRes.status} ${cancelledRes.json.error || ""}`,
+  );
+  assert(
+    (cancelledRes.json.error || "").includes("Cannot release funds from status CANCELLED"),
+    "cancelled buyer release message",
+  );
+  assert(posts("outbound_payment_quotes", cancelledSince).length === 0, "cancelled release created a quote");
+  assert(posts("outbound_payments", cancelledSince).length === 0, "cancelled release created a payment");
+  assert(
+    tables.protectedTransaction.find((row) => row.id === cancelled.id).status === "CANCELLED",
+    "cancelled release changed status",
+  );
+
+  const { releaseFinal } = await import("../src/lib/payments/release.ts");
+  const expiredAt = new Date(Date.now() - 60 * 1000);
+  const inspectionHeld = gpTxn({
+    status: "IN_INSPECTION",
+    inspectionEndsAt: expiredAt,
+  });
+  tables.financialAuditEvent.push({
+    id: "audit_dispute_inspection",
+    protectedTxnId: inspectionHeld.id,
+    actorUserId: BUYER,
+    action: "START_INSPECTION",
+    reason: "",
+    metaJson: JSON.stringify({
+      inspectionEndsAt: expiredAt.toISOString(),
+      termsHash: "terms35",
+    }),
+  });
+  tables.disputeCase.push({
+    id: "dispute_open_inspection",
+    protectedTxnId: inspectionHeld.id,
+    status: "OPEN",
+    createdAt: new Date(),
+  });
+  const readyHeld = gpTxn({ status: "READY_TO_RELEASE" });
+  tables.financialAuditEvent.push({
+    id: "audit_dispute_ready",
+    protectedTxnId: readyHeld.id,
+    actorUserId: BUYER,
+    action: "BUYER_RELEASE_NOW",
+    reason: "",
+    metaJson: JSON.stringify({ termsHash: "terms35" }),
+  });
+  tables.disputeCase.push({
+    id: "dispute_review_ready",
+    protectedTxnId: readyHeld.id,
+    status: "UNDER_REVIEW",
+    createdAt: new Date(),
+  });
+  const cronSince = httpLog.length;
+  delete globalThis.__SB_COOKIE_VALUES.sb_session;
+  const cron = await postJson(
+    inspectionCron,
+    "http://localhost/api/cron/payments-release",
+    null,
+    { authorization: `Bearer ${process.env.CRON_SECRET}` },
+  );
+  useBuyer();
+  assert(cron.status === 200, `dispute cron status ${cron.status} ${cron.json.error || ""}`);
+  const inspectionResult = cron.json.results.find((row) => row.id === inspectionHeld.id);
+  const readyResult = cron.json.results.find((row) => row.id === readyHeld.id);
+  assert(
+    inspectionResult?.ok === false && inspectionResult.error === "open_issue",
+    `open inspection dispute was ${inspectionResult?.error || "released"}`,
+  );
+  assert(
+    readyResult?.ok === false && readyResult.error === "open_issue",
+    `open ready dispute was ${readyResult?.error || "released"}`,
+  );
+  assert(posts("outbound_payment_quotes", cronSince).length === 0, "open dispute created a quote");
+  assert(posts("outbound_payments", cronSince).length === 0, "open dispute created a payment");
+  assert(
+    tables.protectedTransaction.find((row) => row.id === inspectionHeld.id).status === "IN_INSPECTION",
+    "open dispute inspection changed status",
+  );
+  assert(
+    tables.protectedTransaction.find((row) => row.id === readyHeld.id).status === "READY_TO_RELEASE",
+    "open dispute retry changed status",
+  );
+
+  async function backgroundRefusal(txnId, claim) {
+    const since = httpLog.length;
+    let code = "";
+    try {
+      await releaseFinal({
+        protectedTxnId: txnId,
+        actorUserId: null,
+        backgroundRelease: claim,
+      });
+    } catch (err) {
+      code = err && err.code ? err.code : "";
+    }
+    assert(posts("outbound_payment_quotes", since).length === 0, `${code || txnId} created a quote`);
+    assert(posts("outbound_payments", since).length === 0, `${code || txnId} created a payment`);
+    return code;
+  }
+
+  const openCode = await backgroundRefusal(readyHeld.id, {
+    buyerId: BUYER,
+    action: "BUYER_RELEASE_NOW",
+    purpose: "AUTHORIZED_RETRY",
+  });
+  assert(openCode === "open_issue", `background open dispute code ${openCode}`);
+  const backgroundDisputed = gpTxn({ status: "DISPUTED" });
+  const disputedCode = await backgroundRefusal(backgroundDisputed.id, {
+    buyerId: BUYER,
+    action: "START_INSPECTION",
+    purpose: "INSPECTION_EXPIRY",
+  });
+  assert(
+    disputedCode === "INVALID_TRANSITION" || disputedCode === "disputed",
+    `background disputed code ${disputedCode}`,
+  );
+  const backgroundCancelled = gpTxn({ status: "CANCELLED" });
+  const cancelledCode = await backgroundRefusal(backgroundCancelled.id, {
+    buyerId: BUYER,
+    action: "BUYER_RELEASE_NOW",
+    purpose: "AUTHORIZED_RETRY",
+  });
+  assert(
+    cancelledCode === "INVALID_TRANSITION" || cancelledCode === "cancelled",
+    `background cancelled code ${cancelledCode}`,
+  );
+  assert(
+    tables.protectedTransaction.find((row) => row.id === backgroundDisputed.id).status === "DISPUTED",
+    "background disputed release changed status",
+  );
+  assert(
+    tables.protectedTransaction.find((row) => row.id === backgroundCancelled.id).status === "CANCELLED",
+    "background cancelled release changed status",
+  );
+  park(inspectionHeld.id);
+  park(readyHeld.id);
 }
 
 assert(process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED === "false", "live initiation flag restored");

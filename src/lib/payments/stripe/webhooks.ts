@@ -42,6 +42,10 @@ import { syncConnectAccountByStripeId } from "@/lib/payments/stripe/connect";
 /** Platform destination: Your account, snapshot format. */
 export const PLATFORM_WEBHOOK_EVENTS = [
   "payment_intent.succeeded",
+  "balance.available",
+  "payout.paid",
+  "payout.failed",
+  "payout.updated",
 ] as const;
 
 /**
@@ -519,6 +523,29 @@ export async function handleStripeWebhookPost(
             event.id,
             verifiedMode,
           );
+          break;
+        }
+        case "balance.available": {
+          // The event does not identify which charge settled. Re-read each purchase.
+          const { onPlatformBalanceAvailable } = await import(
+            "@/lib/payments/payout-rail/proceeds-funding-run"
+          );
+          handlerResult = await onPlatformBalanceAvailable(verifiedMode);
+          break;
+        }
+        case "payout.paid":
+        case "payout.failed":
+        case "payout.updated": {
+          const payout = event.data.object as {
+            metadata?: { sb_funding_leg?: string } | null;
+          };
+          const { onPlatformPayoutEvent } = await import(
+            "@/lib/payments/payout-rail/proceeds-funding-run"
+          );
+          handlerResult = await onPlatformPayoutEvent({
+            mode: verifiedMode,
+            metadata: payout.metadata,
+          });
           break;
         }
         case "account.updated": {

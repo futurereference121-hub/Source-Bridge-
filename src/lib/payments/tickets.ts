@@ -17,6 +17,10 @@ import { recordAuditEvent } from "@/lib/payments/ledger";
 import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
 import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
+import {
+  describeGpBuyerPayout,
+  type GpBuyerPayoutProgress,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { releaseListingReservation } from "@/lib/payments/listing-lifecycle";
 import {
@@ -319,6 +323,7 @@ function mapTicket(
     openDisputeStatus?: string | null;
     openDisputeResolutionNote?: string | null;
     openDisputeResolvedAt?: string | null;
+    gpPayoutProgress?: GpBuyerPayoutProgress | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -423,6 +428,7 @@ function mapTicket(
       origin: extras?.origin ?? null,
     });
   const canReleaseNow =
+    !extras?.gpPayoutProgress?.hideReleaseActions &&
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
     buyerCanReleaseNow({
       paymentOption: t.paymentOption,
@@ -499,6 +505,7 @@ function mapTicket(
     declineReason: t.declineReason,
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
+    gpPayoutProgress: extras?.gpPayoutProgress ?? null,
     payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
     pricingPolicy: t.pricingPolicy || "",
     feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
@@ -969,6 +976,70 @@ export async function expireStaleUnfundedTickets(opts?: {
   return { expired, skippedProcessing };
 }
 
+async function gpProgressForTransactions(
+  rows: {
+    id: string;
+    status: string;
+    payoutRail: string | null;
+    fundedAt: Date | null;
+  }[],
+): Promise<Map<string, GpBuyerPayoutProgress>> {
+  const ids = rows
+    .filter((row) => row.payoutRail === "STRIPE_GLOBAL_PAYOUTS")
+    .map((row) => row.id);
+  const out = new Map<string, GpBuyerPayoutProgress>();
+  if (ids.length === 0) return out;
+  const [fundings, attempts] = await Promise.all([
+    prisma.gpProceedsFunding.findMany({
+      where: { protectedTxnId: { in: ids } },
+      select: { protectedTxnId: true, status: true, availableOn: true },
+    }),
+    prisma.outboundPaymentAttempt.findMany({
+      where: { protectedTxnId: { in: ids } },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        protectedTxnId: true,
+        status: true,
+        failureCode: true,
+        stripeOutboundPaymentId: true,
+        expectedArrivalAt: true,
+      },
+    }),
+  ]);
+  const fundingByTxn = new Map(fundings.map((row) => [row.protectedTxnId, row]));
+  const attemptByTxn = new Map<string, (typeof attempts)[number]>();
+  for (const attempt of attempts) {
+    if (!attemptByTxn.has(attempt.protectedTxnId)) {
+      attemptByTxn.set(attempt.protectedTxnId, attempt);
+    }
+  }
+  for (const row of rows) {
+    if (row.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") continue;
+    const funding = fundingByTxn.get(row.id);
+    const attempt = attemptByTxn.get(row.id);
+    const progress = describeGpBuyerPayout({
+      releaseAuthorized:
+        row.status === "READY_TO_RELEASE" ||
+        row.status === "RELEASED" ||
+        Boolean(attempt && attempt.status !== "FAILED"),
+      txnStatus: row.status,
+      outboundStatus: attempt?.status,
+      outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
+      failureCode: attempt?.failureCode,
+      fundingStatus: funding?.status,
+      chargeAvailable:
+        funding?.status === "POSTED" ||
+        funding?.status === "FUNDING" ||
+        funding?.status === "SHORT",
+      availableOn: funding?.availableOn ?? null,
+      fundedAt: row.fundedAt,
+      expectedArrival: attempt?.expectedArrivalAt ?? null,
+    });
+    if (progress) out.set(row.id, progress);
+  }
+  return out;
+}
+
 export async function listConversationPaymentTickets(
   conversationId: string,
   viewerId?: string | null,
@@ -1087,6 +1158,20 @@ export async function listConversationPaymentTickets(
       });
     }
   }
+  const gpProgress = await gpProgressForTransactions(
+    rows.flatMap((t) =>
+      t.protectedTransactionId && t.protectedTransaction
+        ? [
+            {
+              id: t.protectedTransactionId,
+              status: t.protectedTransaction.status,
+              payoutRail: t.protectedTransaction.payoutRail ?? null,
+              fundedAt: t.protectedTransaction.fundedAt ?? null,
+            },
+          ]
+        : [],
+    ),
+  );
   return rows
     .filter((t) =>
       ticketAppearsInChatTimeline({
@@ -1131,6 +1216,9 @@ export async function listConversationPaymentTickets(
         : null,
       openDisputeResolvedAt: t.protectedTransactionId
         ? disputeMetaByTxn.get(t.protectedTransactionId)?.resolvedAt ?? null
+        : null,
+      gpPayoutProgress: t.protectedTransactionId
+        ? gpProgress.get(t.protectedTransactionId) ?? null
         : null,
       origin: t.protectedTransaction?.origin ?? null,
     }),
@@ -2422,6 +2510,17 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     fundedAt: pt?.fundedAt ?? null,
     protectedStatus: pt?.status ?? null,
   });
+  const gpProgress =
+    pt && ticket.protectedTransactionId
+      ? await gpProgressForTransactions([
+          {
+            id: ticket.protectedTransactionId,
+            status: pt.status,
+            payoutRail: pt.payoutRail ?? null,
+            fundedAt: pt.fundedAt ?? null,
+          },
+        ])
+      : new Map<string, GpBuyerPayoutProgress>();
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
     payoutRail: pt?.payoutRail ?? null,
@@ -2447,5 +2546,8 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
       : null,
     viewerId,
     involvesMoney,
+    gpPayoutProgress: ticket.protectedTransactionId
+      ? gpProgress.get(ticket.protectedTransactionId) ?? null
+      : null,
   }));
 }

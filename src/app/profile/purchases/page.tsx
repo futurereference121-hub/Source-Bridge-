@@ -10,6 +10,10 @@ import { formatMinor } from "@/lib/payments/money";
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { PurchaseRecordedAmounts } from "@/components/payments/PurchaseRecordedAmounts";
 import { purchaseCardModel } from "@/lib/payments/purchase-list-presentation";
+import {
+  GP_FUNDING_HOLD_COPY,
+  type GpBuyerPayoutProgress,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 import { purchasesPanelState } from "@/lib/payments/purchase-orders-load";
 import { ViewPhotoControl } from "@/components/media/ViewPhotoControl";
 import {
@@ -46,6 +50,7 @@ type Order = ProtectedOrderSummary & {
   payoutRail?: string | null;
   stripeMode?: string | null;
   globalPayouts?: { phase?: string; buyerLabel?: string } | null;
+  gpPayoutProgress?: GpBuyerPayoutProgress | null;
   actions: {
     canAddTracking: boolean;
     canRefreshTracking: boolean;
@@ -100,6 +105,7 @@ export default function PurchasesPage() {
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
   const [gpConfirmed, setGpConfirmed] = useState<Record<string, boolean>>({});
+  const [releaseHold, setReleaseHold] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (authReady && !signedIn) router.replace("/sign-in");
@@ -111,6 +117,9 @@ export default function PurchasesPage() {
       return;
     }
     setBusyId(orderId);
+    if (decision === "RELEASE_NOW") {
+      setReleaseHold((prev) => ({ ...prev, [orderId]: true }));
+    }
     try {
       const res = await fetch("/api/payments/confirm-receipt", {
         method: "POST",
@@ -127,15 +136,38 @@ export default function PurchasesPage() {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Could not complete");
+      if (!res.ok) {
+        if (decision === "RELEASE_NOW") {
+          showToast(
+            "Release confirmed. We are checking the payout before offering any further action.",
+          );
+          await reload();
+          setReleaseHold((prev) => {
+            const next = { ...prev };
+            delete next[orderId];
+            return next;
+          });
+          return;
+        }
+        throw new Error(data.error || "Could not complete");
+      }
       if (decision === "RELEASE_NOW") {
         showToast(
-          data.transferTriggered
-            ? "Residual seller funds released"
-            : data.alreadyConfirmed
-              ? "Release already processed"
-              : "Release completed",
+          data.waitingForProceeds
+            ? data.message || GP_FUNDING_HOLD_COPY
+            : data.transferTriggered
+              ? "Residual seller funds released"
+              : data.alreadyConfirmed
+                ? "Release already processed"
+                : "Release completed",
         );
+        if (!data.waitingForProceeds) {
+          setReleaseHold((prev) => {
+            const next = { ...prev };
+            delete next[orderId];
+            return next;
+          });
+        }
       } else if (decision === "START_INSPECTION") {
         showToast(
           data.alreadyConfirmed
@@ -160,7 +192,15 @@ export default function PurchasesPage() {
       setIssueDetails("");
       await reload();
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Failed");
+      if (decision === "RELEASE_NOW") {
+        setReleaseHold((prev) => ({ ...prev, [orderId]: true }));
+        showToast(
+          "Release confirmed. We are checking the payout before offering any further action.",
+        );
+        await reload().catch(() => undefined);
+      } else {
+        showToast(err instanceof Error ? err.message : "Failed");
+      }
     } finally {
       setBusyId(null);
     }
@@ -278,10 +318,16 @@ export default function PurchasesPage() {
                 o.procurementTransferredMinor ??
                 0;
               const showConfirmReceipt = o.actions.canConfirmReceipt;
+              const releaseHidden =
+                Boolean(releaseHold[o.id]) || Boolean(o.gpPayoutProgress?.hideReleaseActions);
               const showPostReceipt =
-                o.status === "DELIVERED" && Boolean(o.actions.canReleaseNow);
+                o.status === "DELIVERED" &&
+                Boolean(o.actions.canReleaseNow) &&
+                !releaseHidden;
               const showInsp =
-                o.status === "IN_INSPECTION" && Boolean(o.actions.canReleaseNow);
+                o.status === "IN_INSPECTION" &&
+                Boolean(o.actions.canReleaseNow) &&
+                !releaseHidden;
               const showIssueHold = o.status === "DISPUTED";
 
               return (
@@ -456,6 +502,17 @@ export default function PurchasesPage() {
                     </div>
                   ) : null}
                 </dl>
+
+                {o.gpPayoutProgress ? (
+                  <div className="mt-4 space-y-1 text-sm text-white/80" data-testid="purchase-gp-progress">
+                    <p>{o.gpPayoutProgress.headline}</p>
+                    <p className="text-white/55">{o.gpPayoutProgress.timing}</p>
+                  </div>
+                ) : releaseHold[o.id] ? (
+                  <p className="mt-4 text-sm text-white/80" data-testid="purchase-gp-progress">
+                    {GP_FUNDING_HOLD_COPY}
+                  </p>
+                ) : null}
 
                 {quoteKind === "PROCUREMENT" ? (
                   <GpQuoteReview

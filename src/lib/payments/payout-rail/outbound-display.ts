@@ -1,7 +1,10 @@
 /**
  * Seller / buyer / admin display labels for Global Payouts outbound attempts.
  * Never claim "paid" while provider is still processing (pendingProvider).
+ * Buyer progress for an authorized payout comes from the server status.
+ * This label does not promise that funding will continue.
  */
+import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
 
 export type OutboundDisplayPhase =
   | "none"
@@ -98,7 +101,7 @@ export function deriveOutboundDisplayState(
       return {
         phase: "awaiting_funds",
         sellerLabel: "Payout waiting on platform funding",
-        buyerLabel: "Release authorized — payout pending platform funding",
+        buyerLabel: GP_FUNDING_HOLD_COPY,
         adminLabel: "AWAITING_FA_FUNDS",
         pendingProvider: true,
         needsAdminAction: true,

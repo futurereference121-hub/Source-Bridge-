@@ -9,6 +9,10 @@ import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPayment
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
+  GP_FUNDING_HOLD_COPY,
+  type GpBuyerPayoutProgress,
+} from "@/lib/payments/payout-rail/proceeds-funding";
+import {
   ProposePaymentTicketButton,
 } from "@/components/messaging/ProposePaymentTicketButton";
 import { AddPhotoControl } from "@/components/media/AddPhotoControl";
@@ -125,6 +129,7 @@ export type PaymentTicketView = {
   feeExplanation?: string | null;
   stripeMode?: string | null;
   fundedAt?: string | null;
+  gpPayoutProgress?: GpBuyerPayoutProgress | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;
@@ -304,13 +309,14 @@ export function PaymentTicketCard({
   const [issueReason, setIssueReason] = useState("");
   const [issueDetails, setIssueDetails] = useState("");
   const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
+  const [releaseHold, setReleaseHold] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  const load = useCallback(async (opts?: { silent?: boolean }) => {
+  const load = useCallback(async (opts?: { silent?: boolean }): Promise<PaymentTicketView | null> => {
     const silent = Boolean(opts?.silent);
     if (!silent) {
       setLoading(true);
@@ -330,7 +336,7 @@ export function PaymentTicketCard({
       if (res.status === 404) {
         setGone(true);
         setTicket(null);
-        return;
+        return null;
       }
       if (!res.ok || !json.ticket) {
         if (!silent) {
@@ -339,17 +345,19 @@ export function PaymentTicketCard({
             setTicket(null);
           }
         }
-      } else {
-        const next = normalizeTicketView(json.ticket as PaymentTicketView);
-        // Role-neutral: never persist a previous viewer's identity on the ticket.
-        delete (next as { viewer?: unknown }).viewer;
-        setTicket((prev) => {
-          if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
-          return next;
-        });
+        return null;
       }
+      const next = normalizeTicketView(json.ticket as PaymentTicketView);
+      // Role-neutral: never persist a previous viewer's identity on the ticket.
+      delete (next as { viewer?: unknown }).viewer;
+      setTicket((prev) => {
+        if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
+        return next;
+      });
+      return next;
     } catch {
       if (!silent) setError("Could not load Payment Ticket");
+      return null;
     } finally {
       if (!silent) setLoading(false);
     }
@@ -949,6 +957,7 @@ export function PaymentTicketCard({
     setBusy(true);
     setPendingAction(decision);
     setError("");
+    if (decision === "RELEASE_NOW") setReleaseHold(true);
     try {
       const evidenceNote = issueEvidenceUrls.length
         ? `Evidence: ${issueEvidenceUrls.join(" ")}`
@@ -974,6 +983,7 @@ export function PaymentTicketCard({
         ok?: boolean;
         error?: string;
         message?: string;
+        waitingForProceeds?: boolean;
         alreadyConfirmed?: boolean;
         transferTriggered?: boolean;
         pendingProvider?: boolean;
@@ -988,17 +998,38 @@ export function PaymentTicketCard({
         };
       };
       if (!res.ok) {
-        setError(json.error || "Could not complete decision");
-      } else {
         if (decision === "RELEASE_NOW") {
           setPayNotice(
-            json.pendingProvider
-              ? json.message ||
-                  "Release submitted. Payout is confirming — not yet marked paid."
-              : json.alreadyConfirmed || !json.transferTriggered
-                ? "Funds release already processed (or zero residual)."
-                : "Residual seller funds released to the sourcer.",
+            "Release confirmed. We are checking the payout before offering any further action.",
           );
+          const refreshed = await load({ silent: true });
+          const stillChoosing =
+            refreshed?.protectedTxnStatus === "DELIVERED" &&
+            !refreshed.gpPayoutProgress?.hideReleaseActions;
+          if (stillChoosing) {
+            setReleaseHold(false);
+            setPayNotice("");
+            setError(json.error || "Could not complete decision");
+          }
+        } else {
+          setError(json.error || "Could not complete decision");
+        }
+      } else {
+        if (decision === "RELEASE_NOW") {
+          if (json.waitingForProceeds || json.ticket?.gpPayoutProgress?.hideReleaseActions) {
+            setReleaseHold(true);
+            setPayNotice("");
+          } else {
+            setReleaseHold(false);
+            setPayNotice(
+              json.pendingProvider
+                ? json.message ||
+                    "Release submitted. Payout is confirming — not yet marked paid."
+                : json.alreadyConfirmed || !json.transferTriggered
+                  ? "Funds release already processed (or zero residual)."
+                  : "Residual seller funds released to the sourcer.",
+            );
+          }
         } else if (decision === "START_INSPECTION") {
           setPayNotice(
             json.alreadyConfirmed
@@ -1093,7 +1124,24 @@ export function PaymentTicketCard({
         void load({ silent: true });
       }
     } catch {
-      setError("Could not complete decision");
+      if (decision === "RELEASE_NOW") {
+        setReleaseHold(true);
+        setError("");
+        setPayNotice(
+          "Release confirmed. We are checking the payout before offering any further action.",
+        );
+        const refreshed = await load({ silent: true }).catch(() => null);
+        const stillChoosing =
+          refreshed?.protectedTxnStatus === "DELIVERED" &&
+          !refreshed.gpPayoutProgress?.hideReleaseActions;
+        if (stillChoosing) {
+          setReleaseHold(false);
+          setPayNotice("");
+          setError("Could not complete decision");
+        }
+      } else {
+        setError("Could not complete decision");
+      }
     } finally {
       actionLockRef.current = false;
       setBusy(false);
@@ -2366,6 +2414,8 @@ export function PaymentTicketCard({
           ) : null}
 
           {canReleaseNow &&
+          !releaseHold &&
+          !ticket.gpPayoutProgress?.hideReleaseActions &&
           !disputeResolved &&
           !inInspection &&
           !canConfirmReceipt &&
@@ -2465,7 +2515,9 @@ export function PaymentTicketCard({
                       onConfirmed={setGpQuoteConfirmed}
                     />
                   ) : null}
-                  {canReleaseNow ? (
+                  {canReleaseNow &&
+                  !releaseHold &&
+                  !ticket.gpPayoutProgress?.hideReleaseActions ? (
                     <button
                       type="button"
                       disabled={busy || (quoteConfirmationRequired && !gpQuoteConfirmed)}
@@ -2632,6 +2684,16 @@ export function PaymentTicketCard({
         </div>
       ) : null}
 
+      {ticket?.gpPayoutProgress ? (
+        <div className="mt-3 space-y-1 text-xs text-white/80" data-testid="gp-payout-progress">
+          <p>{ticket.gpPayoutProgress.headline}</p>
+          <p className="text-white/55">{ticket.gpPayoutProgress.timing}</p>
+        </div>
+      ) : releaseHold ? (
+        <p className="mt-3 text-xs text-white/80" data-testid="gp-payout-progress">
+          {GP_FUNDING_HOLD_COPY}
+        </p>
+      ) : null}
       {error ? <p className="mt-3 text-xs text-amber-300">{error}</p> : null}
       {payNotice && !checkout ? (
         <p className="mt-3 text-xs text-electric">{payNotice}</p>

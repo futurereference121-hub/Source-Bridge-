@@ -1,0 +1,137 @@
+/**
+ * Display copy for Global Payouts states that cannot be opened while
+ * initiation is disabled. No database, no Stripe, no Production session.
+ *
+ * Run: node scripts/test-gp-unavailable-ui-states.mjs
+ */
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+
+if (process.env.SB_GP_UI_STATE_TEST !== "1") {
+  const env = { ...process.env, SB_GP_UI_STATE_TEST: "1", NODE_ENV: "test" };
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--import",
+      pathToFileURL(path.join(here, "gp-sandbox-ticket-loader.mjs")).href,
+      fileURLToPath(import.meta.url),
+    ],
+    { cwd: root, env, stdio: "inherit" },
+  );
+  process.exit(result.status ?? 1);
+}
+
+const assert = (await import("node:assert/strict")).default;
+const { derivePurchaseDisplayState } = await import(
+  "../src/lib/payments/purchase-display-state.ts"
+);
+const { deriveOutboundDisplayState, GP_POSTED_WORDING } = await import(
+  "../src/lib/payments/payout-rail/outbound-display.ts"
+);
+const { deriveGpPayoutUi } = await import("../src/lib/payments/payout-rail/gpPayoutUi.ts");
+const { GP_GBP_FLAT_FEE_EXPLANATION } = await import("../src/lib/payments/gp-pricing.ts");
+
+const base = {
+  status: "DELIVERED",
+  shippedAt: "2026-10-01T00:00:00.000Z",
+  deliveredAt: "2026-10-02T00:00:00.000Z",
+  openDispute: false,
+};
+
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "DISPUTED" }).label,
+  "Under review by Source Bridge",
+);
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "IN_INSPECTION", openDispute: true }).label,
+  "Under review by Source Bridge",
+);
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "CANCELLED" }).label,
+  "Cancelled",
+);
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "IN_INSPECTION", openDispute: false }).label,
+  "Inspection active",
+);
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "READY_TO_RELEASE" }).label,
+  "Ready to release residual",
+);
+
+const returned = deriveOutboundDisplayState("RETURNED");
+assert.equal(returned.buyerLabel, "Payout returned — Source Bridge is reviewing");
+assert.equal(returned.phase, "returned");
+const failed = deriveOutboundDisplayState("FAILED");
+assert.equal(failed.buyerLabel, "Release not completed — funds remain protected");
+const funding = deriveOutboundDisplayState("AWAITING_FA_FUNDS");
+assert.equal(
+  funding.buyerLabel,
+  "Release confirmed. Source Bridge is reviewing the payout. No further action is needed.",
+);
+const review = deriveOutboundDisplayState("PROCESSING", "GP_UNDER_REVIEW");
+assert.equal(review.sellerLabel, "Payout under review");
+assert.equal(review.pendingProvider, true);
+assert.match(GP_POSTED_WORDING, /does not confirm the recipient bank has paid/);
+
+const notStarted = deriveGpPayoutUi({
+  enabled: true,
+  configured: true,
+  hasRecipient: false,
+  status: "",
+  payoutReady: false,
+  payoutMethodReady: false,
+  requirementsDueCount: 0,
+  disabledReason: "",
+});
+assert.equal(notStarted.state, "not_started");
+assert.equal(notStarted.showSetUpPayouts, true);
+assert.equal(notStarted.showRefreshStatus, false);
+
+const attention = deriveGpPayoutUi({
+  enabled: true,
+  configured: true,
+  hasRecipient: true,
+  status: "ACTION_REQUIRED",
+  payoutReady: false,
+  payoutMethodReady: false,
+  requirementsDueCount: 1,
+  disabledReason: "Bank details need attention",
+});
+assert.equal(attention.state, "needs_attention");
+assert.equal(attention.showContinue, true);
+assert.equal(attention.showRefreshStatus, true);
+assert.equal(attention.helpCopy, "Bank details need attention");
+
+const ready = deriveGpPayoutUi({
+  enabled: true,
+  configured: true,
+  hasRecipient: true,
+  status: "READY",
+  payoutReady: true,
+  payoutMethodReady: true,
+  requirementsDueCount: 0,
+  disabledReason: "",
+});
+assert.equal(ready.statusLine, "Payout ready");
+assert.equal(ready.showSetUpPayouts, false);
+assert.equal(ready.showContinue, false);
+
+assert.match(GP_GBP_FLAT_FEE_EXPLANATION, /15% of the entire seller amount below/);
+assert.match(GP_GBP_FLAT_FEE_EXPLANATION, /11% of the entire seller amount at/);
+
+const reviewSrc = fs.readFileSync(
+  path.join(root, "src/components/payments/GpQuoteReview.tsx"),
+  "utf8",
+);
+assert.match(reviewSrc, /action: "prepare" \| "confirm"/);
+assert.doesNotMatch(reviewSrc, /useEffect\(/);
+assert.match(reviewSrc, /Request a fresh estimate before release/);
+
+console.log("gp unavailable ui states: PASS");

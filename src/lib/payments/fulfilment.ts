@@ -6,7 +6,9 @@ import {
   isProtectedPaymentsEnabled,
   isDirectPaymentsEnabled,
   isProcurementAdvancesEnabled,
+  normalizeStripeMode,
 } from "@/lib/payments/flags";
+import { describeGpBuyerPayout } from "@/lib/payments/payout-rail/proceeds-funding";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import {
   canTransition,
@@ -215,7 +217,13 @@ export function mapProtectedTxnSummary(
       name: string;
       slug: string | null;
     } | null;
-    outboundPaymentAttempts?: { status?: string | null; failureCode?: string | null }[];
+    outboundPaymentAttempts?: {
+      status?: string | null;
+      failureCode?: string | null;
+      stripeOutboundPaymentId?: string | null;
+      expectedArrivalAt?: Date | null;
+    }[];
+    gpProceedsFunding?: { status?: string | null; availableOn?: Date | null } | null;
   },
   viewerRole: ProtectedTxnListRole,
   opts?: { procurementFlagOn?: boolean },
@@ -233,6 +241,28 @@ export function mapProtectedTxnSummary(
     finalTransferredMinor: t.finalTransferredMinor,
     refundedMinor: t.refundedMinor,
   });
+  const attempt = t.outboundPaymentAttempts?.[0];
+  const gpPayoutProgress =
+    t.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+      ? describeGpBuyerPayout({
+          releaseAuthorized:
+            t.status === "READY_TO_RELEASE" ||
+            t.status === "RELEASED" ||
+            Boolean(attempt?.status && attempt.status !== "FAILED"),
+          txnStatus: t.status,
+          outboundStatus: attempt?.status,
+          outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
+          failureCode: attempt?.failureCode,
+          fundingStatus: t.gpProceedsFunding?.status,
+          chargeAvailable:
+            t.gpProceedsFunding?.status === "POSTED" ||
+            t.gpProceedsFunding?.status === "FUNDING" ||
+            t.gpProceedsFunding?.status === "SHORT",
+          availableOn: t.gpProceedsFunding?.availableOn ?? null,
+          fundedAt: t.fundedAt,
+          expectedArrival: attempt?.expectedArrivalAt ?? null,
+        })
+      : null;
   const canReleaseProcurement =
     Boolean(opts?.procurementFlagOn) &&
     viewerRole === "buyer" &&
@@ -286,6 +316,7 @@ export function mapProtectedTxnSummary(
     stripeMode: t.stripeMode,
     payoutRail: t.payoutRail,
     globalPayouts: globalPayoutsBuyerDisplay(t),
+    gpPayoutProgress,
     fundedAt: t.fundedAt?.toISOString() ?? null,
     procurementReleasedAt: t.procurementReleasedAt?.toISOString() ?? null,
     shippedAt: t.shippedAt?.toISOString() ?? null,
@@ -356,6 +387,7 @@ export function mapProtectedTxnSummary(
         }),
       canReleaseNow:
         viewerRole === "buyer" &&
+        !gpPayoutProgress?.hideReleaseActions &&
         buyerCanReleaseNow({
           paymentOption: t.paymentOption,
           status: t.status,
@@ -513,8 +545,14 @@ export async function listProtectedOrdersForUser(opts: {
       outboundPaymentAttempts: {
         orderBy: { updatedAt: "desc" },
         take: 1,
-        select: { status: true, failureCode: true },
+        select: {
+          status: true,
+          failureCode: true,
+          stripeOutboundPaymentId: true,
+          expectedArrivalAt: true,
+        },
       },
+      gpProceedsFunding: { select: { status: true, availableOn: true } },
     },
   });
 
@@ -566,8 +604,14 @@ export async function getProtectedOrderForUser(opts: {
       outboundPaymentAttempts: {
         orderBy: { updatedAt: "desc" },
         take: 1,
-        select: { status: true, failureCode: true },
+        select: {
+          status: true,
+          failureCode: true,
+          stripeOutboundPaymentId: true,
+          expectedArrivalAt: true,
+        },
       },
+      gpProceedsFunding: { select: { status: true, availableOn: true } },
     },
   });
   if (!t) {
@@ -702,6 +746,7 @@ type TxnRow = {
   inspectionEndsAt: Date | null;
   releasedAt: Date | null;
   termsHash?: string;
+  stripeMode?: string | null;
 };
 
 async function acknowledgeReceiptAfterShip(opts: {
@@ -956,29 +1001,56 @@ async function releaseNowAfterReceipt(opts: {
     });
   }
 
-  const result = await releaseFinal({
-    protectedTxnId: txn.id,
-    actorUserId: opts.buyerId,
-  });
-
-  const pendingProvider = Boolean(
-    "pendingProvider" in result && result.pendingProvider,
+  const { reconcileGpProceedsFunding, isGpFundingWaitingCode } = await import(
+    "@/lib/payments/payout-rail/proceeds-funding-run"
   );
-
-  return {
-    alreadyConfirmed: Boolean(result.alreadyReleased),
-    decision: "RELEASE_NOW" as const,
-    // pendingProvider means release was submitted but not domain-paid yet
-    transferTriggered: !result.alreadyReleased && !pendingProvider,
-    alreadyReleased: Boolean(result.alreadyReleased),
-    pendingProvider,
-    transferId: result.transferId ?? null,
-    transaction: result.txn,
-    activityVersion:
-      "activityVersion" in result ? result.activityVersion ?? 0 : 0,
-    linkedTicketId:
-      "linkedTicketId" in result ? result.linkedTicketId ?? null : null,
-  };
+  await reconcileGpProceedsFunding({
+    stripeMode: normalizeStripeMode(txn.stripeMode),
+    protectedTxnId: txn.id,
+    resumeAuthorized: false,
+  }).catch(() => undefined);
+  try {
+    const result = await releaseFinal({
+      protectedTxnId: txn.id,
+      actorUserId: opts.buyerId,
+    });
+    const pendingProvider = Boolean(
+      "pendingProvider" in result && result.pendingProvider,
+    );
+    return {
+      alreadyConfirmed: Boolean(result.alreadyReleased),
+      decision: "RELEASE_NOW" as const,
+      transferTriggered: !result.alreadyReleased && !pendingProvider,
+      alreadyReleased: Boolean(result.alreadyReleased),
+      pendingProvider,
+      transferId: result.transferId ?? null,
+      transaction: result.txn,
+      activityVersion:
+        "activityVersion" in result ? result.activityVersion ?? 0 : 0,
+      linkedTicketId:
+        "linkedTicketId" in result ? result.linkedTicketId ?? null : null,
+    };
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+    const fresh = await prisma.protectedTransaction.findUnique({ where: { id: txn.id } });
+    if (fresh?.status === "RELEASED" || fresh?.releasedAt) {
+      return {
+        alreadyConfirmed: true,
+        decision: "RELEASE_NOW" as const,
+        transferTriggered: false,
+        alreadyReleased: true,
+        transaction: fresh,
+      };
+    }
+    if (!isGpFundingWaitingCode(code)) throw err;
+    return {
+      alreadyConfirmed: false,
+      decision: "RELEASE_NOW" as const,
+      transferTriggered: false,
+      waitingForProceeds: true,
+      transaction: fresh || txn,
+    };
+  }
 }
 
 async function reportIssueAfterReceipt(opts: {

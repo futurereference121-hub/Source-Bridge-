@@ -193,6 +193,15 @@ export function isGlobalPayoutsSandboxEnabled(): boolean {
   return isGlobalPayoutsEnabled() && envBool("GLOBAL_PAYOUTS_SANDBOX_ENABLED", true);
 }
 
+/**
+ * Move a Global Payouts charge's available net into the financial account.
+ * Default OFF. Publishing the code does not create a funding payout until
+ * this is set. LIVE still requires live initiation, which stays off.
+ */
+export function isGlobalPayoutsProceedsFundingEnabled(): boolean {
+  return isGlobalPayoutsEnabled() && envBool("GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED", false);
+}
+
 export function paymentFlagsSnapshot() {
   // Lazy import pattern avoided — keep flags pure env reads.
   // Allowlist configured status is safe to expose (not the entries themselves).
@@ -227,6 +236,7 @@ export function paymentFlagsSnapshot() {
     GLOBAL_PAYOUTS_ENABLED: isGlobalPayoutsEnabled(),
     GLOBAL_PAYOUTS_SANDBOX_ENABLED: isGlobalPayoutsSandboxEnabled(),
     GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED: isGlobalPayoutsLiveInitiationEnabled(),
+    GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED: isGlobalPayoutsProceedsFundingEnabled(),
     /** Presence-only: country allowlist configured (empty = no GP countries). */
     GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST_CONFIGURED: gpCountries.length > 0,
     GLOBAL_PAYOUTS_USER_ALLOWLIST_CONFIGURED: gpUsers.length > 0,

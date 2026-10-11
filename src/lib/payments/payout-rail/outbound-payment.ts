@@ -35,6 +35,7 @@ import {
   ensureFinancialAccountFunding,
   readFinancialAccountBalance,
 } from "@/lib/payments/payout-rail/fa-funding";
+import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
 import {
   getGlobalPayoutsFinancialAccountId,
   gpFetch,
@@ -977,12 +978,10 @@ async function executeOutboundRelease(opts: {
       },
     });
     // Preserve entitlement — do not advance domain transferred counters.
-    throw Object.assign(
-      new Error(
-        "Payout is authorized but awaiting Financial Account funds. Entitlement preserved.",
-      ),
-      { status: 409, code: "GP_AWAITING_FA_FUNDS" },
-    );
+    throw Object.assign(new Error(GP_FUNDING_HOLD_COPY), {
+      status: 409,
+      code: "GP_AWAITING_FA_FUNDS",
+    });
   }
 
   if (!canInitiateGlobalPayoutsMoney(txnMode)) {
