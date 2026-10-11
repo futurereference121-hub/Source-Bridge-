@@ -4,7 +4,7 @@
  * Buyer progress for an authorized payout comes from the server status.
  * This label does not promise that funding will continue.
  */
-import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
+import { GP_FUNDING_HOLD_COPY } from "./proceeds-funding.ts";
 
 export type OutboundDisplayPhase =
   | "none"
