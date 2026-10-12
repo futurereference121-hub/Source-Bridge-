@@ -531,14 +531,31 @@ export async function handleStripeWebhookPost(
             "@/lib/payments/payout-rail/proceeds-funding-run"
           );
           handlerResult = await onPlatformBalanceAvailable(verifiedMode);
+          const { isPlatformBankRemainderPayoutEnabled } = await import("@/lib/payments/flags");
+          if (isPlatformBankRemainderPayoutEnabled(verifiedMode)) {
+            const { coordinatePlatformBalance } = await import(
+              "@/lib/payments/payout-rail/platform-balance-run"
+            );
+            await coordinatePlatformBalance({ stripeMode: verifiedMode });
+          }
           break;
         }
         case "payout.paid":
         case "payout.failed":
         case "payout.updated": {
           const payout = event.data.object as {
-            metadata?: { sb_funding_leg?: string } | null;
+            metadata?: { sb_funding_leg?: string; sb_bank_remainder?: string } | null;
           };
+          if (payout.metadata?.sb_bank_remainder) {
+            const { reconcileBankPayoutNotification } = await import(
+              "@/lib/payments/payout-rail/platform-balance-run"
+            );
+            handlerResult = await reconcileBankPayoutNotification({
+              mode: verifiedMode,
+              attemptId: payout.metadata.sb_bank_remainder,
+            });
+            break;
+          }
           const { onPlatformPayoutEvent } = await import(
             "@/lib/payments/payout-rail/proceeds-funding-run"
           );

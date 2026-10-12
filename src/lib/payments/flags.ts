@@ -202,6 +202,30 @@ export function isGlobalPayoutsProceedsFundingEnabled(): boolean {
   return isGlobalPayoutsEnabled() && envBool("GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED", false);
 }
 
+/**
+ * Pay the platform bank only the uncommitted remainder.
+ * Default OFF. TEST and LIVE are separate. LIVE also requires the Live kill switch
+ * and PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED. This does not change the payout schedule.
+ */
+export function isPlatformBankRemainderPayoutEnabled(mode?: StripeMode): boolean {
+  if (!envBool("PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED", false)) return false;
+  const m = normalizeStripeMode(mode ?? getStripeMode());
+  if (m === "LIVE") {
+    return isLivePaymentsEnabled() && envBool("PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED", false);
+  }
+  return true;
+}
+
+/**
+ * Read-only cutover check. Separate from money movement, and separate per mode.
+ * Default OFF. A TEST check cannot turn the LIVE check on.
+ */
+export function isPlatformBalanceReadinessEnabled(mode?: StripeMode): boolean {
+  const m = normalizeStripeMode(mode ?? "TEST");
+  if (m === "LIVE") return envBool("PLATFORM_BALANCE_READINESS_LIVE_ENABLED", false);
+  return envBool("PLATFORM_BALANCE_READINESS_TEST_ENABLED", false);
+}
+
 export function paymentFlagsSnapshot() {
   // Lazy import pattern avoided — keep flags pure env reads.
   // Allowlist configured status is safe to expose (not the entries themselves).
@@ -237,6 +261,10 @@ export function paymentFlagsSnapshot() {
     GLOBAL_PAYOUTS_SANDBOX_ENABLED: isGlobalPayoutsSandboxEnabled(),
     GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED: isGlobalPayoutsLiveInitiationEnabled(),
     GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED: isGlobalPayoutsProceedsFundingEnabled(),
+    PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED: isPlatformBankRemainderPayoutEnabled("TEST"),
+    PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED: isPlatformBankRemainderPayoutEnabled("LIVE"),
+    PLATFORM_BALANCE_READINESS_TEST_ENABLED: isPlatformBalanceReadinessEnabled("TEST"),
+    PLATFORM_BALANCE_READINESS_LIVE_ENABLED: isPlatformBalanceReadinessEnabled("LIVE"),
     /** Presence-only: country allowlist configured (empty = no GP countries). */
     GLOBAL_PAYOUTS_COUNTRY_ALLOWLIST_CONFIGURED: gpCountries.length > 0,
     GLOBAL_PAYOUTS_USER_ALLOWLIST_CONFIGURED: gpUsers.length > 0,

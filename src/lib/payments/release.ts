@@ -23,6 +23,10 @@ import {
 import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
 import {
+  coordinatePlatformSpend,
+  isCoordinationRetryable,
+} from "@/lib/payments/payout-rail/platform-balance-lock";
+import {
   evaluateDurableReleaseAuthorization,
   inspectionExpiryMayRelease,
 } from "@/lib/payments/payout-rail/live-pilot";
@@ -276,9 +280,11 @@ export async function releaseProcurement(opts: {
           ? `${idempotencyKey}_srcfx`
           : idempotencyKey;
 
-    const transfer = await stripe.transfers.create(transferParams, {
-      idempotencyKey: stripeIdempotencyKey,
-    });
+    const transfer = await coordinatePlatformSpend(txnMode, transferCurrency, () =>
+      stripe.transfers.create(transferParams, {
+        idempotencyKey: stripeIdempotencyKey,
+      }),
+    );
 
     const next = nextStatus(status, "RELEASE_PROCUREMENT");
     const updated = await prisma.$transaction(async (tx) => {
@@ -345,6 +351,7 @@ export async function releaseProcurement(opts: {
       linkedTicketId: participantSync.linkedTicketId,
     };
   } catch (err) {
+    if (isCoordinationRetryable(err)) throw err;
     const message = err instanceof Error ? err.message : "Transfer failed";
     await prisma.transferAttempt.update({
       where: { id: attempt.id },
@@ -660,9 +667,11 @@ export async function releaseFinal(opts: {
           ? `${idempotencyKey}_srcfx`
           : idempotencyKey;
 
-    const transfer = await stripe.transfers.create(transferParams, {
-      idempotencyKey: stripeIdempotencyKey,
-    });
+    const transfer = await coordinatePlatformSpend(txnMode, transferCurrency, () =>
+      stripe.transfers.create(transferParams, {
+        idempotencyKey: stripeIdempotencyKey,
+      }),
+    );
 
     const next = isFullResidual
       ? nextStatus(status, action)
@@ -742,6 +751,7 @@ export async function releaseFinal(opts: {
       linkedTicketId: participantSync.linkedTicketId,
     };
   } catch (err) {
+    if (isCoordinationRetryable(err)) throw err;
     const message = err instanceof Error ? err.message : "Transfer failed";
     await prisma.transferAttempt.update({
       where: { id: attempt.id },

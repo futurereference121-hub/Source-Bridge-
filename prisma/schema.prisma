@@ -1389,3 +1389,45 @@ model GpProceedsFundingLeg {
   @@index([stripePayoutId])
   @@index([faCreditId])
 }
+
+/// One row per Stripe mode and currency. Workers take it before funding or bank payouts.
+model PlatformBalanceCoordination {
+  id            String    @id @default(cuid())
+  stripeMode    String
+  currency      String
+  lockToken     String    @default("")
+  fence         Int       @default(0)
+  lockedAt      DateTime?
+  lastStartedAt DateTime?
+  lastSuccessAt DateTime?
+  lastErrorCode String    @default("")
+  readinessCheckedAt DateTime?
+  readinessCode String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([stripeMode, currency])
+}
+
+/// One platform bank payout of the uncommitted remainder. Destination is stored only after the server selects it.
+model PlatformBankPayoutAttempt {
+  id             String    @id @default(cuid())
+  stripeMode     String
+  currency       String
+  sequence       Int
+  amountMinor    Int
+  idempotencyKey String    @unique
+  destinationId  String    @default("")
+  /// PENDING | UNCERTAIN | PAID | FAILED
+  status         String    @default("PENDING")
+  stripePayoutId String    @default("")
+  failureCode    String    @default("")
+  failureMessage String    @default("")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  postedAt       DateTime?
+
+  @@unique([stripeMode, currency, sequence])
+  @@index([stripeMode, currency, status])
+  @@index([stripePayoutId])
+}

@@ -43,6 +43,7 @@ import {
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { getStripe } from "@/lib/payments/stripe/client";
+import { withPlatformBalanceLock, fencedProviderWrite } from "@/lib/payments/payout-rail/platform-balance-lock";
 import {
   isGlobalPayoutsProceedsFundingEnabled,
   normalizeStripeMode,
@@ -131,6 +132,9 @@ export async function reconcileGpProceedsFunding(opts: {
   limit?: number;
   now?: Date;
   protectedTxnId?: string;
+  currency?: string;
+  /** Set when coordinatePlatformBalance already holds this mode and currency. */
+  lockHeld?: boolean;
   /** Buyer click resumes through its own release call. Cron and webhooks resume here. */
   resumeAuthorized?: boolean;
 }): Promise<{ scanned: number; funded: number; resumed: number }> {
@@ -139,6 +143,36 @@ export async function reconcileGpProceedsFunding(opts: {
   }
   const mode = normalizeStripeMode(opts.stripeMode);
   const now = opts.now ?? new Date();
+  if (!opts.lockHeld) {
+    const currencies = opts.currency
+      ? [opts.currency.toUpperCase()]
+      : (
+          await prisma.protectedTransaction.findMany({
+            where: {
+              payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+              stripeMode: mode,
+              fundedAt: { not: null },
+              stripeChargeId: { not: "" },
+              ...(opts.protectedTxnId ? { id: opts.protectedTxnId } : {}),
+            },
+            select: { currency: true },
+            distinct: ["currency"],
+          })
+        ).map((row) => row.currency.toUpperCase());
+    let scanned = 0;
+    let funded = 0;
+    let resumed = 0;
+    for (const currency of currencies) {
+      const locked = await withPlatformBalanceLock(mode, currency, now, async () =>
+        reconcileGpProceedsFunding({ ...opts, currency, lockHeld: true, now }),
+      );
+      if (!locked.acquired) continue;
+      scanned += locked.value.scanned;
+      funded += locked.value.funded;
+      resumed += locked.value.resumed;
+    }
+    return { scanned, funded, resumed };
+  }
   const limit = opts.limit ?? 25;
   const txns = await prisma.protectedTransaction.findMany({
     where: {
@@ -146,6 +180,9 @@ export async function reconcileGpProceedsFunding(opts: {
       stripeMode: mode,
       fundedAt: { not: null },
       stripeChargeId: { not: "" },
+      ...(opts.currency
+        ? { currency: { equals: opts.currency, mode: "insensitive" as const } }
+        : {}),
       status: { notIn: ["REFUNDED", "CANCELLED", "FAILED"] },
       OR: [
         {
@@ -336,19 +373,21 @@ async function sendFundingPayout(opts: {
 }) {
   const stripe = getStripe(opts.mode);
   try {
-    const payout = await stripe.payouts.create(
-      {
-        amount: opts.leg.amountMinor,
-        currency: opts.currency.toLowerCase(),
-        payout_method: opts.financialAccountId,
-        source_type: "card",
-        description: `sb-proceeds ${opts.leg.id}`,
-        metadata: { sb_funding_leg: opts.leg.id, sb_protected_txn: opts.txnId },
-      },
-      {
-        idempotencyKey: opts.leg.idempotencyKey,
-        apiVersion: STRIPE_GP_API_VERSION,
-      },
+    const payout = await fencedProviderWrite(() =>
+      stripe.payouts.create(
+        {
+          amount: opts.leg.amountMinor,
+          currency: opts.currency.toLowerCase(),
+          payout_method: opts.financialAccountId,
+          source_type: "card",
+          description: `sb-proceeds ${opts.leg.id}`,
+          metadata: { sb_funding_leg: opts.leg.id, sb_protected_txn: opts.txnId },
+        },
+        {
+          idempotencyKey: opts.leg.idempotencyKey,
+          apiVersion: STRIPE_GP_API_VERSION,
+        },
+      ),
     );
     await prisma.gpProceedsFundingLeg.update({
       where: { id: opts.leg.id },

@@ -23,6 +23,7 @@ import {
 } from "@/lib/payments/flags";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { gpFundingBlocksRefund } from "@/lib/payments/payout-rail/proceeds-funding-run";
+import { coordinatePlatformSpend } from "@/lib/payments/payout-rail/platform-balance-lock";
 
 export type AdminMoneyResolution =
   | "RESOLVED_SELLER"
@@ -217,19 +218,21 @@ export async function executeAdminProtectedMoneyDecision(
         clientStripeMode: txnMode,
       });
       const stripe = getStripe(txnMode);
-      const refund = await stripe.refunds.create(
-        {
-          payment_intent: working.stripePaymentIntentId,
-          amount: plan.amountMinor,
-          metadata: {
-            protectedTxnId: working.id,
-            adminResolution: input.resolution,
-            idempotencyScope: input.idempotencyScope,
+      const refund = await coordinatePlatformSpend(txnMode, working.currency, () =>
+        stripe.refunds.create(
+          {
+            payment_intent: working.stripePaymentIntentId,
+            amount: plan.amountMinor,
+            metadata: {
+              protectedTxnId: working.id,
+              adminResolution: input.resolution,
+              idempotencyScope: input.idempotencyScope,
+            },
           },
-        },
-        {
-          idempotencyKey: `admin_refund_${input.idempotencyScope}_${plan.amountMinor}`,
-        },
+          {
+            idempotencyKey: `admin_refund_${input.idempotencyScope}_${plan.amountMinor}`,
+          },
+        ),
       );
       const feePortion = input.includePlatformFeeInRefund
         ? Math.min(feeStillOnPlatform, plan.amountMinor)

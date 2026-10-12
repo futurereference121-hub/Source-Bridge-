@@ -2,8 +2,15 @@ import { processInspectionReleases } from "@/lib/payments/release";
 import { expireStaleUnfundedTickets } from "@/lib/payments/tickets";
 import { reconcileStuckOutboundPayments } from "@/lib/payments/payout-rail/reconcile";
 import { reconcileGpProceedsFunding } from "@/lib/payments/payout-rail/proceeds-funding-run";
+import { coordinatePlatformBalance } from "@/lib/payments/payout-rail/platform-balance-run";
+import { runReadOnlyPlatformReadiness } from "@/lib/payments/payout-rail/platform-balance-readiness";
 import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
-import { isGlobalPayoutsEnabled, isGlobalPayoutsProceedsFundingEnabled } from "@/lib/payments/flags";
+import {
+  isGlobalPayoutsEnabled,
+  isGlobalPayoutsProceedsFundingEnabled,
+  isPlatformBalanceReadinessEnabled,
+  isPlatformBankRemainderPayoutEnabled,
+} from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -43,7 +50,37 @@ export async function POST(req: Request) {
       isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST")
         ? await reconcileGpProceedsFunding({ stripeMode: "TEST" })
         : { scanned: 0, funded: 0, resumed: 0 };
-    return Response.json({ ok: true, results, expiry, gpReconcile, gpFunding });
+    const testMoney =
+      isPlatformBankRemainderPayoutEnabled("TEST") ||
+      (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST"));
+    const liveMoney =
+      isPlatformBankRemainderPayoutEnabled("LIVE") ||
+      (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("LIVE"));
+    const platformBalance = {
+      TEST: testMoney
+        ? await coordinatePlatformBalance({ stripeMode: "TEST" })
+        : { skipped: "disabled" as const, currencies: [] },
+      LIVE: liveMoney
+        ? await coordinatePlatformBalance({ stripeMode: "LIVE" })
+        : { skipped: "disabled" as const, currencies: [] },
+    };
+    const platformReadiness = {
+      TEST: isPlatformBalanceReadinessEnabled("TEST")
+        ? await runReadOnlyPlatformReadiness("TEST")
+        : { mode: "TEST" as const, skipped: "readiness_disabled" as const, ready: false, payoutsAllowed: false },
+      LIVE: isPlatformBalanceReadinessEnabled("LIVE")
+        ? await runReadOnlyPlatformReadiness("LIVE")
+        : { mode: "LIVE" as const, skipped: "readiness_disabled" as const, ready: false, payoutsAllowed: false },
+    };
+    return Response.json({
+      ok: true,
+      results,
+      expiry,
+      gpReconcile,
+      gpFunding,
+      platformBalance,
+      platformReadiness,
+    });
   } catch (err) {
     console.error("[payments-release]", err);
     return jsonError("Payments release failed", 500);
