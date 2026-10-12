@@ -36,6 +36,7 @@ const {
   PLATFORM_BALANCE_LOCK_STALE_MS,
   STRIPE_IDEMPOTENCY_WINDOW_MS,
   bankRemainderIdempotencyKey,
+  classifyStripeReadFailure,
   DASHBOARD_SCHEDULE_LIMIT,
   dailyScheduleRollbackDecision,
   evaluateModeReadiness,
@@ -483,6 +484,21 @@ assert.equal(
 );
 assert.match(DASHBOARD_SCHEDULE_LIMIT, /Stripe Dashboard/);
 
+const hidden = classifyStripeReadFailure({
+  statusCode: 403,
+  code: "more_permissions_required",
+  type: "invalid_request_error",
+  requestId: "req_safe123",
+  message: "sk_test_secret ba_bankacct",
+});
+assert.equal(hidden.httpStatus, 403);
+assert.equal(hidden.stripeCode, "more_permissions_required");
+assert.equal(hidden.stripeType, "invalid_request_error");
+assert.equal(hidden.requestId, "req_safe123");
+assert.equal(JSON.stringify(hidden).includes("sk_test"), false);
+assert.equal(JSON.stringify(hidden).includes("ba_"), false);
+assert.equal(classifyStripeReadFailure({ requestId: "not-a-request" }).requestId, null);
+
 const runner = read("src/lib/payments/payout-rail/platform-balance-run.ts");
 const lock = read("src/lib/payments/payout-rail/platform-balance-lock.ts");
 const cron = read("src/app/api/cron/payments-release/route.ts");
@@ -501,7 +517,9 @@ assert.match(fundingRunner, /lockHeld/);
 assert.ok(fundingRunner.indexOf("fencedProviderWrite") < fundingRunner.indexOf("payouts.create"));
 assert.match(fundingRunner, /completedPurchaseBlocksNewFunding|GP_COMPLETED_OUTBOUND_STATUSES/);
 const readiness = read("src/lib/payments/payout-rail/platform-balance-readiness.ts");
-assert.match(readiness, /chargeNetMinor/);
+assert.match(readiness, /accounts\.listExternalAccounts/);
+assert.match(readiness, /classifyStripeReadFailure|providerRead/);
+assert.doesNotMatch(readiness, /catch \{\s*providerReadsOk = false;\s*\}/);
 assert.match(readiness, /recordObservedGpNet/);
 assert.doesNotMatch(readiness, /payouts\.create|prepareQuoteOnly|transfers\.create|refunds\.create|accounts\.update/);
 const readinessRoute = read("src/app/api/admin/platform-balance-readiness/route.ts");

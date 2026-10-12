@@ -14,6 +14,7 @@ import {
   type StripeMode,
 } from "@/lib/payments/flags";
 import {
+  classifyStripeReadFailure,
   evaluateModeReadiness,
   selectVerifiedPlatformBank,
   type ExternalBankAccount,
@@ -63,10 +64,12 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
       code: decision.code,
       scheduleInterval: observed.scheduleInterval,
       destinationReady: observed.destinationReady,
+      destinationCode: observed.destinationCode,
       liabilitiesReadable: observed.liabilitiesReadable,
       fundedPurchaseCount: observed.fundedPurchaseCount,
       scanComplete: observed.scanComplete,
       recordedNets: observed.recordedNets,
+      reads: observed.reads,
     });
   }
   const ready = results.length > 0 && results.every((row) => row.ready);
@@ -119,18 +122,79 @@ async function currenciesForRead(mode: StripeMode): Promise<string[]> {
   return [...currencies];
 }
 
+type ProviderRead = {
+  operation: string;
+  ok: boolean;
+  httpStatus: number | null;
+  stripeCode: string | null;
+  stripeType: string | null;
+  requestId: string | null;
+  apiVersion: string | null;
+};
+
+function apiVersionOf(stripe: object): string | null {
+  try {
+    const reader = stripe as { getApiField?: (key: string) => unknown };
+    const value = reader.getApiField?.("version");
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}\.[A-Za-z0-9]+$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function providerRead(
+  operation: string,
+  apiVersion: string | null,
+  err?: unknown,
+  override?: { ok: boolean; httpStatus?: number | null; stripeCode?: string | null },
+): ProviderRead {
+  const classified = err === undefined
+    ? { httpStatus: 200 as number | null, stripeCode: null, stripeType: null, requestId: null }
+    : classifyStripeReadFailure(err);
+  const outcome: ProviderRead = {
+    operation,
+    ok: override?.ok ?? err === undefined,
+    httpStatus: override?.httpStatus !== undefined ? override.httpStatus : classified.httpStatus,
+    stripeCode: override?.stripeCode !== undefined ? override.stripeCode : classified.stripeCode,
+    stripeType: classified.stripeType,
+    requestId: classified.requestId,
+    apiVersion,
+  };
+  if (!outcome.ok) console.error("[platform-readiness-read]", JSON.stringify(outcome));
+  return outcome;
+}
+
 async function observeCurrency(mode: StripeMode, currency: string) {
+  const reads: ProviderRead[] = [];
   let scheduleInterval: string | null = null;
   let providerReadsOk = true;
   let destinationReady = false;
+  let destinationCode = "BANK_DESTINATION_UNREAD";
+  const stripe = getStripe(mode);
+  const apiVersion = apiVersionOf(stripe);
+  let accountId = "";
   try {
-    const stripe = getStripe(mode);
     const account = await stripe.accounts.retrieve();
+    accountId = account.id || "";
     const interval = account.settings?.payouts?.schedule?.interval;
     scheduleInterval = typeof interval === "string" ? interval : null;
-    if (!scheduleInterval || !account.id) providerReadsOk = false;
-    if (account.id) {
-      const listed = await stripe.accounts.listExternalAccounts(account.id, {
+    if (!accountId || !scheduleInterval) {
+      providerReadsOk = false;
+      reads.push(providerRead("accounts.retrieve", apiVersion, undefined, {
+        ok: false,
+        httpStatus: 200,
+        stripeCode: !accountId ? "account_id_missing" : "schedule_unreadable",
+      }));
+    } else {
+      reads.push(providerRead("accounts.retrieve", apiVersion));
+    }
+  } catch (err) {
+    providerReadsOk = false;
+    reads.push(providerRead("accounts.retrieve", apiVersion, err));
+  }
+  if (accountId) {
+    try {
+      const listed = await stripe.accounts.listExternalAccounts(accountId, {
         object: "bank_account",
         limit: 100,
       });
@@ -152,16 +216,35 @@ async function observeCurrency(mode: StripeMode, currency: string) {
           livemode: bank.livemode === true,
         };
       });
-      destinationReady = selectVerifiedPlatformBank(banks, {
+      const selected = selectVerifiedPlatformBank(banks, {
         currency,
         livemode: mode === "LIVE",
         hasMore: listed.has_more,
-      }).ok;
+      });
+      destinationReady = selected.ok;
+      destinationCode = selected.ok ? "BANK_DESTINATION_READY" : selected.code;
+      reads.push(providerRead("accounts.listExternalAccounts", apiVersion));
+    } catch (err) {
+      providerReadsOk = false;
+      destinationCode = "BANK_DESTINATION_UNREAD";
+      reads.push(providerRead("accounts.listExternalAccounts", apiVersion, err));
     }
+  }
+  try {
     const balance = await stripe.balance.retrieve();
-    if (balance.livemode !== (mode === "LIVE")) providerReadsOk = false;
-  } catch {
+    if (typeof balance.livemode !== "boolean" || balance.livemode !== (mode === "LIVE")) {
+      providerReadsOk = false;
+      reads.push(providerRead("balance.retrieve", apiVersion, undefined, {
+        ok: false,
+        httpStatus: 200,
+        stripeCode: typeof balance.livemode === "boolean" ? "livemode_mismatch" : "livemode_missing",
+      }));
+    } else {
+      reads.push(providerRead("balance.retrieve", apiVersion));
+    }
+  } catch (err) {
     providerReadsOk = false;
+    reads.push(providerRead("balance.retrieve", apiVersion, err));
   }
   const purchases = await prisma.protectedTransaction.findMany({
     where: {
@@ -176,7 +259,12 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     },
   });
   let liabilitiesReadable = purchases.length <= 500;
-  const recordedNets: Array<{ purchaseHash: string; chargeNetMinor: number; recorded: boolean }> = [];
+  const recordedNets: Array<{
+    purchaseHash: string;
+    chargeNetMinor: number;
+    recorded: boolean;
+    read: ProviderRead | null;
+  }> = [];
   if (liabilitiesReadable && providerReadsOk) {
     for (const purchase of purchases) {
       const recorded = await recordObservedGpNet(mode, purchase);
@@ -185,6 +273,7 @@ async function observeCurrency(mode: StripeMode, currency: string) {
           purchaseHash: idHash8(purchase.id),
           chargeNetMinor: recorded.netMinor,
           recorded: recorded.recorded,
+          read: recorded.read,
         });
       }
       if (!recorded.readable) liabilitiesReadable = false;
@@ -198,11 +287,13 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     scheduleInterval,
     providerReadsOk,
     destinationReady,
+    destinationCode,
     liabilitiesReadable,
     unresolvedMovements,
     fundedPurchaseCount: purchases.length,
     scanComplete: purchases.length <= 500,
     recordedNets,
+    reads,
   };
 }
 
@@ -223,25 +314,56 @@ async function recordObservedGpNet(
     sellerServiceFeeMinor: number;
     gpProceedsFunding: { chargeNetMinor: number | null; balanceTransactionId: string | null } | null;
   },
-): Promise<{ readable: boolean; recorded: boolean; netMinor: number }> {
-  if (purchase.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return { readable: true, recorded: false, netMinor: 0 };
+): Promise<{ readable: boolean; recorded: boolean; netMinor: number; read: ProviderRead | null }> {
+  if (purchase.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return { readable: true, recorded: false, netMinor: 0, read: null };
   if (["RELEASED", "REFUNDED", "CANCELLED", "FAILED"].includes(purchase.status)) {
-    return { readable: true, recorded: false, netMinor: purchase.gpProceedsFunding?.chargeNetMinor ?? 0 };
+    return { readable: true, recorded: false, netMinor: purchase.gpProceedsFunding?.chargeNetMinor ?? 0, read: null };
   }
   const stored = purchase.gpProceedsFunding;
   if (stored?.balanceTransactionId && (stored.chargeNetMinor ?? 0) > 0) {
-    return { readable: true, recorded: true, netMinor: stored.chargeNetMinor ?? 0 };
+    return { readable: true, recorded: true, netMinor: stored.chargeNetMinor ?? 0, read: null };
   }
+  const stripe = getStripe(mode);
+  const apiVersion = apiVersionOf(stripe);
   const chargeId = (purchase.stripeChargeId || "").trim();
-  if (!chargeId) return { readable: false, recorded: false, netMinor: 0 };
+  if (!chargeId) {
+    return {
+      readable: false,
+      recorded: false,
+      netMinor: 0,
+      read: providerRead("charges.retrieve", apiVersion, undefined, {
+        ok: false,
+        httpStatus: null,
+        stripeCode: "charge_id_missing",
+      }),
+    };
+  }
   try {
-    const charge = await getStripe(mode).charges.retrieve(chargeId, { expand: ["balance_transaction"] });
+    const charge = await stripe.charges.retrieve(chargeId, { expand: ["balance_transaction"] });
     const balanceTransaction = charge.balance_transaction;
     if (!balanceTransaction || typeof balanceTransaction !== "object" || typeof balanceTransaction.net !== "number") {
-      return { readable: false, recorded: false, netMinor: 0 };
+      return {
+        readable: false,
+        recorded: false,
+        netMinor: 0,
+        read: providerRead("charges.retrieve", apiVersion, undefined, {
+          ok: false,
+          httpStatus: 200,
+          stripeCode: "charge_net_missing",
+        }),
+      };
     }
     if (!("id" in balanceTransaction) || typeof balanceTransaction.id !== "string" || !balanceTransaction.id) {
-      return { readable: false, recorded: false, netMinor: 0 };
+      return {
+        readable: false,
+        recorded: false,
+        netMinor: 0,
+        read: providerRead("charges.retrieve", apiVersion, undefined, {
+          ok: false,
+          httpStatus: 200,
+          stripeCode: "balance_transaction_missing",
+        }),
+      };
     }
     const availableOn =
       "available_on" in balanceTransaction && typeof balanceTransaction.available_on === "number"
@@ -267,9 +389,14 @@ async function recordObservedGpNet(
         availableOn,
       },
     });
-    return { readable: true, recorded: true, netMinor: balanceTransaction.net };
-  } catch {
-    return { readable: false, recorded: false, netMinor: 0 };
+    return { readable: true, recorded: true, netMinor: balanceTransaction.net, read: providerRead("charges.retrieve", apiVersion) };
+  } catch (err) {
+    return {
+      readable: false,
+      recorded: false,
+      netMinor: 0,
+      read: providerRead("charges.retrieve", apiVersion, err),
+    };
   }
 }
 

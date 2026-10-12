@@ -33,10 +33,12 @@ export async function GET() {
         code: row.code,
         scheduleInterval: row.scheduleInterval,
         destinationReady: row.destinationReady,
+        destinationCode: row.destinationCode,
         liabilitiesReadable: row.liabilitiesReadable,
         fundedPurchaseCount: row.fundedPurchaseCount,
         scanComplete: row.scanComplete,
         recordedNets: row.recordedNets,
+        reads: row.reads,
       })),
     });
   } catch (err) {

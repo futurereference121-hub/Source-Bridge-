@@ -68,6 +68,29 @@ export type ExternalBankAccount = {
   livemode: boolean;
 };
 
+/** Safe fields from a Stripe error. Messages, keys, and account details are dropped. */
+export function classifyStripeReadFailure(err: unknown): {
+  httpStatus: number | null;
+  stripeCode: string | null;
+  stripeType: string | null;
+  requestId: string | null;
+} {
+  const row = err && typeof err === "object" ? (err as Record<string, unknown>) : {};
+  const httpStatus =
+    typeof row.statusCode === "number" && row.statusCode >= 100 && row.statusCode <= 599
+      ? row.statusCode
+      : null;
+  const stripeCode =
+    typeof row.code === "string" && /^[a-z0-9_]+$/.test(row.code) ? row.code : null;
+  const stripeType =
+    typeof row.type === "string" && /^[a-z0-9_]+$/.test(row.type) ? row.type : null;
+  const requestId =
+    typeof row.requestId === "string" && /^req_[A-Za-z0-9]+$/.test(row.requestId)
+      ? row.requestId
+      : null;
+  return { httpStatus, stripeCode, stripeType, requestId };
+}
+
 /**
  * The platform bank is the single default bank account Stripe already uses for this currency.
  * No caller-supplied destination is accepted. Cards and financial accounts are not a bank payout.
