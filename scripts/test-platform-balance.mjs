@@ -294,6 +294,36 @@ const bank = selectVerifiedPlatformBank(
   { currency: "GBP", livemode: false, hasMore: false },
 );
 assert.equal(bank.ok && bank.destinationId, "ba_platform");
+const normalExternal = selectVerifiedPlatformBank(
+  [
+    {
+      id: "ba_platform_new",
+      object: "bank_account",
+      currency: "gbp",
+      defaultForCurrency: true,
+      status: "new",
+      livemode: null,
+    },
+  ],
+  { currency: "gbp", livemode: false, hasMore: false },
+);
+assert.equal(normalExternal.ok && normalExternal.destinationId, "ba_platform_new");
+assert.equal(
+  selectVerifiedPlatformBank(
+    [
+      {
+        id: "ba_errored",
+        object: "bank_account",
+        currency: "gbp",
+        defaultForCurrency: true,
+        status: "errored",
+        livemode: null,
+      },
+    ],
+    { currency: "gbp", livemode: false, hasMore: false },
+  ).ok,
+  false,
+);
 assert.equal(
   selectVerifiedPlatformBank(
     [
@@ -310,6 +340,27 @@ assert.equal(
   ).ok,
   false,
 );
+const embedded = balance.readPlatformExternalAccounts({
+  external_accounts: {
+    has_more: false,
+    data: [
+      {
+        id: "ba_embedded",
+        object: "bank_account",
+        currency: "gbp",
+        default_for_currency: true,
+        status: "new",
+        last4: "6789",
+        routing_number: "110000000",
+      },
+    ],
+  },
+});
+assert.equal(embedded.ok, true);
+assert.equal(embedded.ok && embedded.accounts[0].defaultForCurrency, true);
+assert.equal(JSON.stringify(embedded).includes("6789"), false);
+assert.equal(JSON.stringify(embedded).includes("110000000"), false);
+assert.equal(balance.readPlatformExternalAccounts({}).ok, false);
 
 const now = Date.parse("2026-10-12T06:00:00.000Z");
 assert.equal(lockAcquisition({ nowMs: now, lockedAtMs: null }), "acquire");
@@ -511,13 +562,14 @@ assert.match(runner, /CUTOVER_WARMUP/);
 assert.match(runner, /hadPriorSuccess/);
 assert.match(runner, /destination: destination\.destinationId/);
 assert.ok(runner.indexOf("fencedProviderWrite") < runner.indexOf("payouts.create"));
-assert.doesNotMatch(runner, /accounts\.update|payout_method|req\.body|searchParams/);
+assert.doesNotMatch(runner, /accounts\.update|payout_method|req\.body|searchParams|listExternalAccounts/);
 assert.doesNotMatch(runner, /interval:\s*["']manual["']/);
 assert.match(fundingRunner, /lockHeld/);
 assert.ok(fundingRunner.indexOf("fencedProviderWrite") < fundingRunner.indexOf("payouts.create"));
 assert.match(fundingRunner, /completedPurchaseBlocksNewFunding|GP_COMPLETED_OUTBOUND_STATUSES/);
 const readiness = read("src/lib/payments/payout-rail/platform-balance-readiness.ts");
-assert.match(readiness, /accounts\.listExternalAccounts/);
+assert.match(readiness, /readPlatformExternalAccounts/);
+assert.doesNotMatch(readiness, /listExternalAccounts/);
 assert.match(readiness, /classifyStripeReadFailure|providerRead/);
 assert.doesNotMatch(readiness, /catch \{\s*providerReadsOk = false;\s*\}/);
 assert.match(readiness, /recordObservedGpNet/);

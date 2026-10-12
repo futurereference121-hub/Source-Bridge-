@@ -65,7 +65,8 @@ export type ExternalBankAccount = {
   currency: string;
   defaultForCurrency: boolean;
   status: string;
-  livemode: boolean;
+  /** Null when the bank object has no livemode. The secret key already selected the mode. */
+  livemode: boolean | null;
 };
 
 /** Safe fields from a Stripe error. Messages, keys, and account details are dropped. */
@@ -92,8 +93,37 @@ export function classifyStripeReadFailure(err: unknown): {
 }
 
 /**
- * The platform bank is the single default bank account Stripe already uses for this currency.
- * No caller-supplied destination is accepted. Cards and financial accounts are not a bank payout.
+ * Banks embedded on GET /v1/account. This is the platform's own account.
+ * The connected-account list /v1/accounts/{id}/external_accounts is not used.
+ */
+export function readPlatformExternalAccounts(account: {
+  external_accounts?: { data?: readonly unknown[]; has_more?: boolean } | null;
+}):
+  | { ok: true; accounts: ExternalBankAccount[]; hasMore: boolean }
+  | { ok: false; code: "platform_external_accounts_absent" } {
+  const list = account.external_accounts;
+  if (!list || !Array.isArray(list.data)) {
+    return { ok: false, code: "platform_external_accounts_absent" };
+  }
+  const accounts = list.data.map((row) => {
+    const bank = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+    return {
+      id: typeof bank.id === "string" ? bank.id : "",
+      object: typeof bank.object === "string" ? bank.object : "",
+      currency: typeof bank.currency === "string" ? bank.currency : "",
+      defaultForCurrency: bank.default_for_currency === true,
+      status: typeof bank.status === "string" ? bank.status : "",
+      livemode: typeof bank.livemode === "boolean" ? bank.livemode : null,
+    };
+  });
+  return { ok: true, accounts, hasMore: list.has_more === true };
+}
+
+/**
+ * The platform bank is the single default external account Stripe already uses
+ * for this currency. External-account status `new` is the normal payout state.
+ * `errored` and `verification_failed` are not. No caller-supplied destination
+ * is accepted. Cards and financial accounts are not a bank payout.
  */
 export function selectVerifiedPlatformBank(
   accounts: readonly ExternalBankAccount[],
@@ -108,8 +138,8 @@ export function selectVerifiedPlatformBank(
       Boolean(account.id) &&
       account.currency.trim().toLowerCase() === currency &&
       account.defaultForCurrency === true &&
-      account.livemode === opts.livemode &&
-      (status === "verified" || status === "validated")
+      (account.livemode == null || account.livemode === opts.livemode) &&
+      (status === "new" || status === "verified" || status === "validated")
     );
   });
   if (matched.length !== 1) return { ok: false, code: "BANK_DESTINATION_UNVERIFIED" };

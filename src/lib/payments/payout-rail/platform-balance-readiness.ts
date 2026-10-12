@@ -16,8 +16,8 @@ import {
 import {
   classifyStripeReadFailure,
   evaluateModeReadiness,
+  readPlatformExternalAccounts,
   selectVerifiedPlatformBank,
-  type ExternalBankAccount,
 } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { PLATFORM_WEBHOOK_EVENTS } from "@/lib/payments/stripe/webhooks";
@@ -187,48 +187,29 @@ async function observeCurrency(mode: StripeMode, currency: string) {
       }));
     } else {
       reads.push(providerRead("accounts.retrieve", apiVersion));
+      const embedded = readPlatformExternalAccounts(account);
+      if (!embedded.ok) {
+        providerReadsOk = false;
+        destinationCode = "BANK_DESTINATION_UNREAD";
+        reads.push(providerRead("account.external_accounts", apiVersion, undefined, {
+          ok: false,
+          httpStatus: 200,
+          stripeCode: embedded.code,
+        }));
+      } else {
+        const selected = selectVerifiedPlatformBank(embedded.accounts, {
+          currency,
+          livemode: mode === "LIVE",
+          hasMore: embedded.hasMore,
+        });
+        destinationReady = selected.ok;
+        destinationCode = selected.ok ? "BANK_DESTINATION_READY" : selected.code;
+        reads.push(providerRead("account.external_accounts", apiVersion));
+      }
     }
   } catch (err) {
     providerReadsOk = false;
     reads.push(providerRead("accounts.retrieve", apiVersion, err));
-  }
-  if (accountId) {
-    try {
-      const listed = await stripe.accounts.listExternalAccounts(accountId, {
-        object: "bank_account",
-        limit: 100,
-      });
-      const banks: ExternalBankAccount[] = listed.data.map((row) => {
-        const bank = row as {
-          id?: string;
-          object?: string;
-          currency?: string;
-          default_for_currency?: boolean;
-          status?: string;
-          livemode?: boolean;
-        };
-        return {
-          id: bank.id || "",
-          object: bank.object || "",
-          currency: bank.currency || "",
-          defaultForCurrency: bank.default_for_currency === true,
-          status: bank.status || "",
-          livemode: bank.livemode === true,
-        };
-      });
-      const selected = selectVerifiedPlatformBank(banks, {
-        currency,
-        livemode: mode === "LIVE",
-        hasMore: listed.has_more,
-      });
-      destinationReady = selected.ok;
-      destinationCode = selected.ok ? "BANK_DESTINATION_READY" : selected.code;
-      reads.push(providerRead("accounts.listExternalAccounts", apiVersion));
-    } catch (err) {
-      providerReadsOk = false;
-      destinationCode = "BANK_DESTINATION_UNREAD";
-      reads.push(providerRead("accounts.listExternalAccounts", apiVersion, err));
-    }
   }
   try {
     const balance = await stripe.balance.retrieve();

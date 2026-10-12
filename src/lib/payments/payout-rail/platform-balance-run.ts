@@ -14,9 +14,9 @@ import {
   planSafeBankRemainder,
   platformBalanceHealth,
   PLATFORM_BALANCE_RESERVE_SCAN_CAP,
+  readPlatformExternalAccounts,
   reservePurchase,
   selectVerifiedPlatformBank,
-  type ExternalBankAccount,
   type PurchaseLiability,
 } from "@/lib/payments/payout-rail/platform-balance";
 import { decideFundingRequest } from "@/lib/payments/payout-rail/proceeds-funding";
@@ -56,33 +56,12 @@ async function readPlatformBank(
 ): Promise<{ ok: true; destinationId: string } | { ok: false; code: string }> {
   const stripe = getStripe(mode);
   const account = await stripe.accounts.retrieve();
-  if (!account.id) return { ok: false, code: "BANK_DESTINATION_UNVERIFIED" };
-  const listed = await stripe.accounts.listExternalAccounts(account.id, {
-    object: "bank_account",
-    limit: 100,
-  });
-  const accounts: ExternalBankAccount[] = listed.data.map((accountRow) => {
-    const bank = accountRow as {
-      id?: string;
-      object?: string;
-      currency?: string;
-      default_for_currency?: boolean;
-      status?: string;
-      livemode?: boolean;
-    };
-    return {
-      id: bank.id || "",
-      object: bank.object || "",
-      currency: bank.currency || "",
-      defaultForCurrency: bank.default_for_currency === true,
-      status: bank.status || "",
-      livemode: bank.livemode === true,
-    };
-  });
-  return selectVerifiedPlatformBank(accounts, {
+  const embedded = readPlatformExternalAccounts(account);
+  if (!embedded.ok) return { ok: false, code: "BANK_DESTINATION_UNVERIFIED" };
+  return selectVerifiedPlatformBank(embedded.accounts, {
     currency,
     livemode: mode === "LIVE",
-    hasMore: listed.has_more,
+    hasMore: embedded.hasMore,
   });
 }
 
