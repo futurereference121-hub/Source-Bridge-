@@ -120,6 +120,54 @@ export function readPlatformExternalAccounts(account: {
 }
 
 /**
+ * Create Payout for API version 2025-08-27.basil: destination is optional.
+ * When it is omitted, Stripe uses the default external account for the currency.
+ * That routing rule does not prove this account's bank was returned or checked.
+ */
+export const PLATFORM_DEFAULT_DESTINATION_ROUTING = "supported" as const;
+
+export type PlatformBankInformation = "unavailable" | "verified" | "unverified";
+
+export function assessPlatformBank(
+  embedded: ReturnType<typeof readPlatformExternalAccounts>,
+  opts: { currency: string; livemode: boolean },
+): {
+  defaultDestinationRouting: typeof PLATFORM_DEFAULT_DESTINATION_ROUTING;
+  bankConfigurationVerified: boolean;
+  bankInformation: PlatformBankInformation;
+  code: string;
+} {
+  const routing = { defaultDestinationRouting: PLATFORM_DEFAULT_DESTINATION_ROUTING };
+  if (!embedded.ok) {
+    return {
+      ...routing,
+      bankConfigurationVerified: false,
+      bankInformation: "unavailable",
+      code: "BANK_INFORMATION_UNAVAILABLE",
+    };
+  }
+  const selected = selectVerifiedPlatformBank(embedded.accounts, {
+    currency: opts.currency,
+    livemode: opts.livemode,
+    hasMore: embedded.hasMore,
+  });
+  if (!selected.ok) {
+    return {
+      ...routing,
+      bankConfigurationVerified: false,
+      bankInformation: "unverified",
+      code: selected.code,
+    };
+  }
+  return {
+    ...routing,
+    bankConfigurationVerified: true,
+    bankInformation: "verified",
+    code: "BANK_DESTINATION_READY",
+  };
+}
+
+/**
  * The platform bank is the single default external account Stripe already uses
  * for this currency. External-account status `new` is the normal payout state.
  * `errored` and `verification_failed` are not. No caller-supplied destination
@@ -278,8 +326,10 @@ export function planSafeBankRemainder(input: {
   uncertainBankAttempt: boolean;
   /** In-flight provider debits whose result is not in the books yet. Any positive count blocks the payout. */
   unresolvedMovements?: number;
-  /** False when a balance, account, or liability read failed. */
+  /** False when a balance, account, or liability read failed. An omitted bank list is not a failed read. */
   providerReadOk?: boolean;
+  /** Omitted bank data stays unpaid without being treated as a failed provider read. */
+  bankInformation?: "unavailable" | "verified" | "unverified";
   inflightBankMinor: number;
   purchases: readonly PurchaseLiability[];
   scanComplete: boolean;
@@ -295,6 +345,7 @@ export function planSafeBankRemainder(input: {
   if (!input.scanComplete) return none("GP_RESERVE_UNKNOWN");
   if (input.providerReadOk === false) return none("PROVIDER_READ_FAILED");
   if ((input.unresolvedMovements ?? 0) > 0) return none("UNRESOLVED_MOVEMENT");
+  if (input.bankInformation === "unavailable") return none("BANK_INFORMATION_UNAVAILABLE");
   if (!input.destinationReady) return none("BANK_DESTINATION_UNVERIFIED");
   if (input.uncertainBankAttempt) return none("BANK_PAYOUT_UNCERTAIN");
   if (input.availableMinor == null || !whole(input.availableMinor)) return none("BALANCE_UNREAD");
@@ -377,6 +428,7 @@ export function evaluateModeReadiness(input: {
   unresolvedMovements: number;
   priorReadinessPass: boolean;
   moneyMovementEnabled: boolean;
+  bankInformation?: "unavailable" | "verified" | "unverified";
 }): ModeReadiness {
   const blocked = (code: string): ModeReadiness => ({
     mode: input.mode,
@@ -387,6 +439,7 @@ export function evaluateModeReadiness(input: {
   if (!input.providerReadsOk) return blocked("PROVIDER_READ_FAILED");
   if (!input.liabilitiesReadable) return blocked("GP_RESERVE_UNKNOWN");
   if (input.unresolvedMovements > 0) return blocked("UNRESOLVED_MOVEMENT");
+  if (input.bankInformation === "unavailable") return blocked("BANK_INFORMATION_UNAVAILABLE");
   if (!input.destinationReady) return blocked("BANK_DESTINATION_UNVERIFIED");
   if (!input.priorReadinessPass) return blocked("CUTOVER_WARMUP");
   const schedule = automaticBankPayoutBlocksFunding(input.scheduleInterval);

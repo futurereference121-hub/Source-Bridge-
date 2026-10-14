@@ -261,6 +261,14 @@ assert.equal(plan({ scheduleInterval: null }).code, "GP_PAYOUT_SCHEDULE_UNREAD")
 assert.equal(plan({ bankEnabled: false }).code, "BANK_REMAINDER_DISABLED");
 assert.equal(plan({ uncertainBankAttempt: true }).code, "BANK_PAYOUT_UNCERTAIN");
 assert.equal(plan({ destinationReady: false }).code, "BANK_DESTINATION_UNVERIFIED");
+assert.equal(
+  plan({ destinationReady: false, bankInformation: "unavailable", providerReadOk: true }).code,
+  "BANK_INFORMATION_UNAVAILABLE",
+);
+assert.equal(
+  plan({ destinationReady: false, bankInformation: "unavailable", providerReadOk: true }).amountMinor,
+  0,
+);
 assert.equal(plan({ scanComplete: false }).code, "GP_RESERVE_UNKNOWN");
 assert.equal(plan({ inflightBankMinor: 400, availableMinor: 1000 }).amountMinor, 600);
 
@@ -361,6 +369,18 @@ assert.equal(embedded.ok && embedded.accounts[0].defaultForCurrency, true);
 assert.equal(JSON.stringify(embedded).includes("6789"), false);
 assert.equal(JSON.stringify(embedded).includes("110000000"), false);
 assert.equal(balance.readPlatformExternalAccounts({}).ok, false);
+const absentBank = balance.assessPlatformBank(balance.readPlatformExternalAccounts({}), {
+  currency: "gbp",
+  livemode: false,
+});
+assert.equal(absentBank.defaultDestinationRouting, "supported");
+assert.equal(absentBank.bankConfigurationVerified, false);
+assert.equal(absentBank.bankInformation, "unavailable");
+assert.equal(absentBank.code, "BANK_INFORMATION_UNAVAILABLE");
+const confirmedBank = balance.assessPlatformBank(embedded, { currency: "gbp", livemode: false });
+assert.equal(confirmedBank.bankConfigurationVerified, true);
+assert.equal(confirmedBank.bankInformation, "verified");
+assert.equal(confirmedBank.defaultDestinationRouting, "supported");
 
 const now = Date.parse("2026-10-12T06:00:00.000Z");
 assert.equal(lockAcquisition({ nowMs: now, lockedAtMs: null }), "acquire");
@@ -505,6 +525,17 @@ const readinessInput = {
   priorReadinessPass: false,
   moneyMovementEnabled: false,
 };
+const bankUnavailable = evaluateModeReadiness({
+  ...readinessInput,
+  destinationReady: false,
+  bankInformation: "unavailable",
+  priorReadinessPass: true,
+  moneyMovementEnabled: true,
+  scheduleInterval: "manual",
+});
+assert.equal(bankUnavailable.ready, false);
+assert.equal(bankUnavailable.payoutsAllowed, false);
+assert.equal(bankUnavailable.code, "BANK_INFORMATION_UNAVAILABLE");
 const warmup = evaluateModeReadiness(readinessInput);
 assert.equal(warmup.ready, false);
 assert.equal(warmup.payoutsAllowed, false);
@@ -560,7 +591,12 @@ assert.ok(runner.indexOf("reconcileOpenBankAttempts") < runner.indexOf("payouts.
 assert.match(runner, /decideFundingRequest/);
 assert.match(runner, /CUTOVER_WARMUP/);
 assert.match(runner, /hadPriorSuccess/);
-assert.match(runner, /destination: destination\.destinationId/);
+const payoutCreate = runner.slice(runner.indexOf("payouts.create"), runner.indexOf("payouts.create") + 450);
+assert.doesNotMatch(payoutCreate, /destination:/);
+assert.match(payoutCreate, /sb_bank_remainder: attempt\.id/);
+assert.match(runner, /sb_bank_remainder === attempt\.id/);
+assert.match(runner, /payout\.livemode === \(mode === "LIVE"\)/);
+assert.doesNotMatch(runner, /destination ===/);
 assert.ok(runner.indexOf("fencedProviderWrite") < runner.indexOf("payouts.create"));
 assert.doesNotMatch(runner, /accounts\.update|payout_method|req\.body|searchParams|listExternalAccounts/);
 assert.doesNotMatch(runner, /interval:\s*["']manual["']/);
@@ -568,7 +604,9 @@ assert.match(fundingRunner, /lockHeld/);
 assert.ok(fundingRunner.indexOf("fencedProviderWrite") < fundingRunner.indexOf("payouts.create"));
 assert.match(fundingRunner, /completedPurchaseBlocksNewFunding|GP_COMPLETED_OUTBOUND_STATUSES/);
 const readiness = read("src/lib/payments/payout-rail/platform-balance-readiness.ts");
-assert.match(readiness, /readPlatformExternalAccounts/);
+assert.match(readiness, /assessPlatformBank/);
+assert.match(readiness, /Charge nets are independent of bank verification/);
+assert.doesNotMatch(readiness, /platform_external_accounts_absent/);
 assert.doesNotMatch(readiness, /listExternalAccounts/);
 assert.match(readiness, /classifyStripeReadFailure|providerRead/);
 assert.doesNotMatch(readiness, /catch \{\s*providerReadsOk = false;\s*\}/);

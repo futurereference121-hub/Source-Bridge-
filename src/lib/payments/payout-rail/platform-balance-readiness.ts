@@ -14,10 +14,10 @@ import {
   type StripeMode,
 } from "@/lib/payments/flags";
 import {
+  assessPlatformBank,
   classifyStripeReadFailure,
   evaluateModeReadiness,
   readPlatformExternalAccounts,
-  selectVerifiedPlatformBank,
 } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { PLATFORM_WEBHOOK_EVENTS } from "@/lib/payments/stripe/webhooks";
@@ -42,6 +42,7 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
       providerReadsOk: observed.providerReadsOk,
       liabilitiesReadable: observed.liabilitiesReadable,
       unresolvedMovements: observed.unresolvedMovements,
+      bankInformation: observed.bankInformation,
       priorReadinessPass: Boolean(existing?.readinessCheckedAt),
       moneyMovementEnabled,
     });
@@ -65,6 +66,9 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
       scheduleInterval: observed.scheduleInterval,
       destinationReady: observed.destinationReady,
       destinationCode: observed.destinationCode,
+      defaultDestinationRouting: observed.defaultDestinationRouting,
+      bankConfigurationVerified: observed.bankConfigurationVerified,
+      bankInformation: observed.bankInformation,
       liabilitiesReadable: observed.liabilitiesReadable,
       fundedPurchaseCount: observed.fundedPurchaseCount,
       scanComplete: observed.scanComplete,
@@ -169,7 +173,10 @@ async function observeCurrency(mode: StripeMode, currency: string) {
   let scheduleInterval: string | null = null;
   let providerReadsOk = true;
   let destinationReady = false;
-  let destinationCode = "BANK_DESTINATION_UNREAD";
+  let destinationCode = "BANK_INFORMATION_UNAVAILABLE";
+  let bankInformation: "unavailable" | "verified" | "unverified" = "unavailable";
+  let defaultDestinationRouting: "supported" = "supported";
+  let bankConfigurationVerified = false;
   const stripe = getStripe(mode);
   const apiVersion = apiVersionOf(stripe);
   let accountId = "";
@@ -187,25 +194,16 @@ async function observeCurrency(mode: StripeMode, currency: string) {
       }));
     } else {
       reads.push(providerRead("accounts.retrieve", apiVersion));
-      const embedded = readPlatformExternalAccounts(account);
-      if (!embedded.ok) {
-        providerReadsOk = false;
-        destinationCode = "BANK_DESTINATION_UNREAD";
-        reads.push(providerRead("account.external_accounts", apiVersion, undefined, {
-          ok: false,
-          httpStatus: 200,
-          stripeCode: embedded.code,
-        }));
-      } else {
-        const selected = selectVerifiedPlatformBank(embedded.accounts, {
-          currency,
-          livemode: mode === "LIVE",
-          hasMore: embedded.hasMore,
-        });
-        destinationReady = selected.ok;
-        destinationCode = selected.ok ? "BANK_DESTINATION_READY" : selected.code;
-        reads.push(providerRead("account.external_accounts", apiVersion));
-      }
+      const assessment = assessPlatformBank(readPlatformExternalAccounts(account), {
+        currency,
+        livemode: mode === "LIVE",
+      });
+      destinationReady = assessment.bankConfigurationVerified;
+      destinationCode = assessment.code;
+      bankInformation = assessment.bankInformation;
+      defaultDestinationRouting = assessment.defaultDestinationRouting;
+      bankConfigurationVerified = assessment.bankConfigurationVerified;
+      reads.push(providerRead("account.external_accounts", apiVersion));
     }
   } catch (err) {
     providerReadsOk = false;
@@ -246,6 +244,7 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     recorded: boolean;
     read: ProviderRead | null;
   }> = [];
+  // Charge nets are independent of bank verification. An omitted bank list does not skip them.
   if (liabilitiesReadable && providerReadsOk) {
     for (const purchase of purchases) {
       const recorded = await recordObservedGpNet(mode, purchase);
@@ -269,6 +268,9 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     providerReadsOk,
     destinationReady,
     destinationCode,
+    defaultDestinationRouting,
+    bankConfigurationVerified,
+    bankInformation,
     liabilitiesReadable,
     unresolvedMovements,
     fundedPurchaseCount: purchases.length,

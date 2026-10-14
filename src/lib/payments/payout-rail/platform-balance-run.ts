@@ -14,9 +14,9 @@ import {
   planSafeBankRemainder,
   platformBalanceHealth,
   PLATFORM_BALANCE_RESERVE_SCAN_CAP,
+  assessPlatformBank,
   readPlatformExternalAccounts,
   reservePurchase,
-  selectVerifiedPlatformBank,
   type PurchaseLiability,
 } from "@/lib/payments/payout-rail/platform-balance";
 import { decideFundingRequest } from "@/lib/payments/payout-rail/proceeds-funding";
@@ -53,16 +53,21 @@ async function readCardAvailable(mode: StripeMode, currency: string): Promise<nu
 async function readPlatformBank(
   mode: StripeMode,
   currency: string,
-): Promise<{ ok: true; destinationId: string } | { ok: false; code: string }> {
-  const stripe = getStripe(mode);
-  const account = await stripe.accounts.retrieve();
-  const embedded = readPlatformExternalAccounts(account);
-  if (!embedded.ok) return { ok: false, code: "BANK_DESTINATION_UNVERIFIED" };
-  return selectVerifiedPlatformBank(embedded.accounts, {
+): Promise<{
+  verified: boolean;
+  information: "unavailable" | "verified" | "unverified";
+  failed: boolean;
+}> {
+  const account = await getStripe(mode).accounts.retrieve();
+  const assessment = assessPlatformBank(readPlatformExternalAccounts(account), {
     currency,
     livemode: mode === "LIVE",
-    hasMore: embedded.hasMore,
   });
+  return {
+    verified: assessment.bankConfigurationVerified,
+    information: assessment.bankInformation,
+    failed: false,
+  };
 }
 
 async function loadLiabilities(mode: StripeMode, currency: string): Promise<{
@@ -118,18 +123,16 @@ async function loadLiabilities(mode: StripeMode, currency: string): Promise<{
 async function listMatchingBankPayouts(
   mode: StripeMode,
   attempt: { id: string; amountMinor: number; currency: string },
-  destinationId: string,
 ): Promise<string[]> {
   const listed = await getStripe(mode).payouts.list({ limit: 100 });
   return listed.data
     .filter((payout) => {
-      const destination = typeof payout.destination === "string" ? payout.destination : payout.destination?.id;
       return (
+        payout.livemode === (mode === "LIVE") &&
         payout.automatic !== true &&
         payout.metadata?.sb_bank_remainder === attempt.id &&
         payout.amount === attempt.amountMinor &&
-        payout.currency.toLowerCase() === attempt.currency.toLowerCase() &&
-        destination === destinationId
+        payout.currency.toLowerCase() === attempt.currency.toLowerCase()
       );
     })
     .map((payout) => payout.id);
@@ -189,8 +192,8 @@ async function createSafeBankRemainder(opts: {
     readScheduleInterval(opts.mode),
     loadLiabilities(opts.mode, opts.currency),
     readPlatformBank(opts.mode, opts.currency)
-      .then((row) => ({ ...row, failed: false as const }))
-      .catch(() => ({ ok: false as const, code: "BANK_DESTINATION_UNVERIFIED", failed: true as const })),
+      .then((row) => row)
+      .catch(() => ({ verified: false as const, information: "unavailable" as const, failed: true as const })),
     prisma.platformBankPayoutAttempt.findMany({
       where: { stripeMode: opts.mode, currency: opts.currency },
       orderBy: { sequence: "asc" },
@@ -219,7 +222,8 @@ async function createSafeBankRemainder(opts: {
     bankEnabled,
     scheduleInterval: schedule.interval,
     availableMinor,
-    destinationReady: destination.ok,
+    destinationReady: destination.verified,
+    bankInformation: destination.failed ? undefined : destination.information,
     uncertainBankAttempt: uncertain > 0,
     unresolvedMovements: unresolvedFromPurchases,
     providerReadOk: !schedule.failed && !balanceFailed && !destination.failed,
@@ -251,10 +255,10 @@ async function createSafeBankRemainder(opts: {
     coordinationPresent: true,
     healthStalled: false,
     uncertainBankAttempts: uncertain,
-    currencies: destination.ok ? [{ currency: opts.currency, destinationReady: true }] : [],
+    currencies: [{ currency: opts.currency, destinationReady: destination.verified }],
   });
   const cutoverAllowed = cutover.allowed && opts.hadPriorSuccess;
-  if (plan.amountMinor === 0 || !destination.ok) {
+  if (plan.amountMinor === 0 || !destination.verified) {
     return { amountMinor: 0, code: plan.code, cutoverAllowed, rollbackToDailyAllowed: rollback.allowed };
   }
   if (!opts.hadPriorSuccess) {
@@ -269,13 +273,10 @@ async function createSafeBankRemainder(opts: {
     return { amountMinor: 0, code: sequence.code, cutoverAllowed: false, rollbackToDailyAllowed: rollback.allowed };
   }
   let attempt = attempts.find((row) => row.sequence === sequence.sequence) ?? null;
-  if (attempt && (attempt.amountMinor !== plan.amountMinor || (attempt.destinationId && attempt.destinationId !== destination.destinationId))) {
+  if (attempt && attempt.amountMinor !== plan.amountMinor) {
     await prisma.platformBankPayoutAttempt.update({
       where: { id: attempt.id },
-      data: {
-        status: "UNCERTAIN",
-        failureCode: attempt.amountMinor !== plan.amountMinor ? "BANK_PAYOUT_AMOUNT_CHANGED" : "BANK_DESTINATION_CHANGED",
-      },
+      data: { status: "UNCERTAIN", failureCode: "BANK_PAYOUT_AMOUNT_CHANGED" },
     });
     return { amountMinor: 0, code: "BANK_PAYOUT_UNCERTAIN", cutoverAllowed: false, rollbackToDailyAllowed: false };
   }
@@ -288,7 +289,7 @@ async function createSafeBankRemainder(opts: {
           sequence: sequence.sequence,
           amountMinor: plan.amountMinor,
           idempotencyKey: sequence.idempotencyKey,
-          destinationId: destination.destinationId,
+          destinationId: "",
           status: "PENDING",
         },
       });
@@ -308,7 +309,7 @@ async function createSafeBankRemainder(opts: {
   }
   let matching: string[] = [];
   try {
-    matching = await listMatchingBankPayouts(opts.mode, attempt, destination.destinationId);
+    matching = await listMatchingBankPayouts(opts.mode, attempt);
   } catch {
     await prisma.platformBankPayoutAttempt.update({
       where: { id: attempt.id },
@@ -341,16 +342,22 @@ async function createSafeBankRemainder(opts: {
         {
           amount: attempt.amountMinor,
           currency: attempt.currency.toLowerCase(),
-          destination: destination.destinationId,
           source_type: "card",
           metadata: { sb_bank_remainder: attempt.id },
         },
         { idempotencyKey: attempt.idempotencyKey },
       ),
     );
+    const returned = payout.destination;
+    const observedDestination =
+      typeof returned === "string"
+        ? returned
+        : returned && typeof returned === "object" && "id" in returned && typeof returned.id === "string"
+          ? returned.id
+          : "";
     await prisma.platformBankPayoutAttempt.update({
       where: { id: attempt.id },
-      data: { stripePayoutId: payout.id, destinationId: destination.destinationId, failureCode: "" },
+      data: { stripePayoutId: payout.id, destinationId: observedDestination, failureCode: "" },
     });
     return {
       amountMinor: attempt.amountMinor,
