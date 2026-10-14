@@ -175,7 +175,7 @@ async function observeCurrency(mode: StripeMode, currency: string) {
   let destinationReady = false;
   let destinationCode = "BANK_INFORMATION_UNAVAILABLE";
   let bankInformation: "unavailable" | "verified" | "unverified" = "unavailable";
-  let defaultDestinationRouting: "supported" = "supported";
+  let defaultDestinationRouting = "supported" as const;
   let bankConfigurationVerified = false;
   const stripe = getStripe(mode);
   const apiVersion = apiVersionOf(stripe);
