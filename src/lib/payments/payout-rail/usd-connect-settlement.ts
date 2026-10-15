@@ -110,7 +110,10 @@ export function shapeChargeSettlement(input: ChargeSettlementInput): PurchaseSet
       chargeCurrency: chargeCurrency || null,
     };
   }
-  if (transaction.livemode !== false) {
+  // Charge.livemode is the TEST client contract. Balance Transaction in
+  // API version 2025-08-27.basil has no livemode field; only an explicit true
+  // is a LIVE object. An omitted field is not a mode mismatch.
+  if (transaction.livemode === true) {
     return emptyPurchase(input.purchaseHash, currency, failed("mode_mismatch"));
   }
   const grossMinor = minor(transaction.amount);

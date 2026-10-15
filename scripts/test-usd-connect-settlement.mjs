@@ -146,6 +146,56 @@ assert.equal(providerFailure.read.httpStatus, 404);
 assert.equal(providerFailure.grossMinor, null);
 assert.equal(providerFailure.netMinor, null);
 
+const schemaWithoutLivemode = shapeChargeSettlement({
+  purchaseHash: "12121212",
+  purchaseCurrency: "USD",
+  chargeIdPresent: true,
+  charge: {
+    livemode: false,
+    currency: "usd",
+    balanceTransaction: {
+      currency: "gbp",
+      amount: 2010,
+      fee: 90,
+      net: 1920,
+      exchange_rate: 0.79,
+      status: "pending",
+      available_on: Date.parse("2026-10-17T00:00:00.000Z") / 1000,
+    },
+  },
+});
+assert.equal(schemaWithoutLivemode.read.ok, true);
+assert.equal(schemaWithoutLivemode.chargeCurrency, "USD");
+assert.equal(schemaWithoutLivemode.balanceTransactionCurrency, "GBP");
+assert.equal(schemaWithoutLivemode.grossMinor, 2010);
+assert.equal(schemaWithoutLivemode.feeMinor, 90);
+assert.equal(schemaWithoutLivemode.netMinor, 1920);
+assert.equal(schemaWithoutLivemode.exchangeRate, 0.79);
+assert.equal(schemaWithoutLivemode.availabilityStatus, "pending");
+
+const explicitLiveTransaction = shapeChargeSettlement({
+  purchaseHash: "13131313",
+  purchaseCurrency: "USD",
+  chargeIdPresent: true,
+  charge: {
+    livemode: false,
+    currency: "usd",
+    balanceTransaction: {
+      livemode: true,
+      currency: "gbp",
+      amount: 2010,
+      fee: 90,
+      net: 1920,
+      status: "available",
+      available_on: 1,
+    },
+  },
+});
+assert.equal(explicitLiveTransaction.read.stripeCode, "mode_mismatch");
+assert.equal(explicitLiveTransaction.grossMinor, null);
+assert.equal(explicitLiveTransaction.netMinor, null);
+assert.equal(explicitLiveTransaction.chargeCurrency, null);
+
 const liveCharge = shapeChargeSettlement({
   purchaseHash: "eeeeeeee",
   purchaseCurrency: "USD",
