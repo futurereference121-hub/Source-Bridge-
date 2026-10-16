@@ -86,6 +86,8 @@ function settlementFromCharge(charge: {
           available_on?: number;
         })
       : null;
+  // Charge.livemode is the mode contract. Balance Transaction in API version
+  // 2025-08-27.basil has no livemode field, so this read does not inspect one.
   return {
     chargeId: charge.id,
     livemode: charge.livemode,

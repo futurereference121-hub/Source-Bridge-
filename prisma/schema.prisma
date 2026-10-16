@@ -1431,3 +1431,20 @@ model PlatformBankPayoutAttempt {
   @@index([stripeMode, currency, status])
   @@index([stripePayoutId])
 }
+
+/// Admin statement that the Stripe Dashboard shows a default bank.
+/// This is not a Stripe API verification of that bank.
+model PlatformBankDashboardConfirmation {
+  id                String   @id @default(cuid())
+  stripeMode        String
+  currency          String
+  stripeAccountHash String
+  accountSuffix     String
+  evidence          String
+  statement         String
+  confirmedByHash   String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([stripeMode, currency, stripeAccountHash])
+}

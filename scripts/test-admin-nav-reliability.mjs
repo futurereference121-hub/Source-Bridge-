@@ -24,6 +24,8 @@ assert.match(nav, /router\.push/);
 assert.match(nav, /admin-nav/);
 assert.match(nav, /Verification Applicants/);
 assert.match(nav, /Protected Payments/);
+assert.match(nav, /Platform balance/);
+assert.match(nav, /\/admin\/platform-balance/);
 assert.match(nav, /Reviews & Disputes/);
 assert.doesNotMatch(nav, /Protected Purchases/);
 

@@ -26,6 +26,8 @@ export async function GET() {
       quotesCreated: report.quotesCreated,
       payoutsCreated: report.payoutsCreated,
       webhooks: report.webhooks,
+      balance: report.balance,
+      outstandingConnect: report.outstandingConnect,
       currencies: report.currencies.map((row) => ({
         currency: row.currency,
         ready: row.ready,
@@ -37,6 +39,9 @@ export async function GET() {
         defaultDestinationRouting: row.defaultDestinationRouting,
         bankConfigurationVerified: row.bankConfigurationVerified,
         bankInformation: row.bankInformation,
+        dashboardConfirmation: row.dashboardConfirmation,
+        accountSuffix: row.accountSuffix,
+        accountHash8: row.accountHash8,
         liabilitiesReadable: row.liabilitiesReadable,
         fundedPurchaseCount: row.fundedPurchaseCount,
         scanComplete: row.scanComplete,

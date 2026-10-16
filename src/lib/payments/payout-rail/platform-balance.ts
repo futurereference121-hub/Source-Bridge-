@@ -18,6 +18,7 @@ import {
   completedPurchaseBlocksNewFunding,
   STRIPE_IDEMPOTENCY_WINDOW_MS,
 } from "./proceeds-funding.ts";
+import { connectSettlementTransferMinor } from "./connect-settlement-amount.ts";
 
 export const PLATFORM_BALANCE_LOCK_STALE_MS = 15 * 60 * 1000;
 export const PLATFORM_BALANCE_STALL_MS = 30 * 60 * 1000;
@@ -126,6 +127,45 @@ export function readPlatformExternalAccounts(account: {
  */
 export const PLATFORM_DEFAULT_DESTINATION_ROUTING = "supported" as const;
 
+/** Dashboard evidence is not a Stripe API bank verification. */
+export const DASHBOARD_BANK_CONFIRMATION_EVIDENCE = "DASHBOARD" as const;
+export const DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX = "MV9g";
+export const DASHBOARD_BANK_CONFIRMATION_STATEMENT =
+  "Stripe Dashboard Test mode shows one default GBP payments-balance bank for this platform account. No USD bank is shown.";
+
+/** A recorded Dashboard statement counts only for the TEST GBP account. It never clears USD. */
+export function dashboardConfirmationApplies(input: {
+  mode: string;
+  currency: string;
+  dashboardConfirmation?: "recorded" | "absent";
+}): boolean {
+  return (
+    input.dashboardConfirmation === "recorded" &&
+    input.mode === "TEST" &&
+    input.currency.trim().toUpperCase() === "GBP"
+  );
+}
+
+export function dashboardBankConfirmationMatches(input: {
+  stripeMode: string;
+  currency: string;
+  accountSuffix: string;
+  livemode: boolean;
+  evidence: string;
+  recordedAccountHash: string;
+  currentAccountHash: string;
+}): boolean {
+  return (
+    input.stripeMode === "TEST" &&
+    input.currency.trim().toUpperCase() === "GBP" &&
+    input.livemode === false &&
+    input.evidence === DASHBOARD_BANK_CONFIRMATION_EVIDENCE &&
+    input.accountSuffix === DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX &&
+    /^[a-f0-9]{8}$/.test(input.recordedAccountHash) &&
+    input.recordedAccountHash === input.currentAccountHash
+  );
+}
+
 export type PlatformBankInformation = "unavailable" | "verified" | "unverified";
 
 export function assessPlatformBank(
@@ -209,10 +249,23 @@ export type PurchaseLiability = {
   openDispute: boolean;
   /** Null until the charge balance transaction has been read. Zero is a real net. */
   chargeNetMinor: number | null;
+  /**
+   * Currency of the charge's balance transaction. Purchase currency is not a substitute.
+   * Null means the settlement currency has not been stored.
+   */
+  settlementCurrency?: string | null;
+  /** Charge gross in purchase currency, from that charge. Not an exchange rate. */
+  chargeAmountMinor?: number | null;
+  /** Balance-transaction gross in settlement currency, from that same charge. */
+  balanceTransactionAmountMinor?: number | null;
+  /** Set when the outstanding charge could not be reserved. Zero is not a reserve. */
+  settlementBlockCode?: string | null;
   durablyCreditedMinor: number;
   outboundStatuses: readonly string[];
   pendingTransferMinor: number;
   pendingFundingMinor: number;
+  /** First 8 hex characters of the purchase id. Never a raw id. */
+  purchaseHash?: string;
 };
 
 export type PurchaseReserve = {
@@ -226,6 +279,211 @@ export type PurchaseReserve = {
 
 function whole(value: number): boolean {
   return Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Settlement-currency amount of the Connect transfer for this presentment
+ * remainder. It uses the release path's own gross figures and rounding.
+ * It is not an exchange rate and it is not a presentment-currency payment.
+ */
+export function connectReleaseSettlementMinor(input: {
+  presentmentMinor: number;
+  chargeAmountMinor: number | null;
+  balanceTransactionAmountMinor: number | null;
+}): number | null {
+  if (!whole(input.presentmentMinor)) return null;
+  if (input.presentmentMinor === 0) return 0;
+  const chargeAmount = input.chargeAmountMinor;
+  const settledAmount = input.balanceTransactionAmountMinor;
+  if (chargeAmount == null || settledAmount == null || !whole(chargeAmount) || !whole(settledAmount) || chargeAmount <= 0) {
+    return null;
+  }
+  return connectSettlementTransferMinor(input.presentmentMinor, chargeAmount, settledAmount);
+}
+
+/** Available and pending stay separate. A missing amount stays null, not zero. */
+export function listedBalanceAmounts(
+  entries: readonly { currency?: string | null; amount?: number | null }[] | null | undefined,
+): { currency: string; amountMinor: number | null }[] {
+  const amounts = [];
+  for (const entry of entries ?? []) {
+    const currency = typeof entry.currency === "string" ? entry.currency.trim().toUpperCase() : "";
+    if (!/^[A-Z]{3}$/.test(currency)) continue;
+    amounts.push({
+      currency,
+      amountMinor: typeof entry.amount === "number" && Number.isInteger(entry.amount) ? entry.amount : null,
+    });
+  }
+  return amounts;
+}
+
+/** A balance entry counts even when its amount is zero or absent. */
+export function listedBalanceCurrencies(
+  entries: readonly { currency?: string | null; amount?: number | null }[],
+): string[] {
+  const currencies: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry.currency === "string" && entry.currency.trim()) currencies.push(entry.currency);
+  }
+  return currencies;
+}
+
+/** Settlement currencies of open obligations. Purchase price is not a substitute. */
+export function settlementLiabilityCurrencies(
+  purchases: readonly PurchaseLiability[],
+  mode: "TEST" | "LIVE",
+): string[] {
+  const currencies: string[] = [];
+  for (const purchase of purchases) {
+    if (purchase.stripeMode !== mode || purchase.settlementBlockCode) continue;
+    const reserved = reservePurchase(purchase);
+    const open =
+      reserved.gpMinor > 0 ||
+      reserved.connectMinor > 0 ||
+      reserved.refundMinor > 0 ||
+      purchase.pendingTransferMinor > 0 ||
+      purchase.pendingFundingMinor > 0;
+    if (!open) continue;
+    const settlement = (purchase.settlementCurrency ?? "").trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(settlement)) {
+      currencies.push(settlement);
+      continue;
+    }
+    if (purchase.payoutRail === "STRIPE_GLOBAL_PAYOUTS") {
+      const currency = purchase.currency.trim().toUpperCase();
+      if (/^[A-Z]{3}$/.test(currency)) currencies.push(currency);
+    }
+  }
+  return currencies;
+}
+
+export type OutstandingConnectReserve = {
+  purchaseHash: string;
+  purchaseCurrency: string;
+  settlementCurrency: string | null;
+  presentmentRemainderMinor: number | null;
+  reserveCurrency: string | null;
+  reserveMinor: number | null;
+  reserveCode: string | null;
+  readOk: boolean;
+  readCode: string | null;
+};
+
+/** Outstanding Connect reserves. Hashes only. An unknown reserve is null, not zero. */
+export function outstandingConnectReserves(
+  purchases: readonly PurchaseLiability[],
+  mode: "TEST" | "LIVE",
+): OutstandingConnectReserve[] {
+  const rows: OutstandingConnectReserve[] = [];
+  for (const purchase of purchases) {
+    if (purchase.stripeMode !== mode || purchase.payoutRail !== "STRIPE_CONNECT") continue;
+    const reserved = reservePurchase(purchase);
+    const outstanding =
+      purchase.pendingTransferMinor > 0 ||
+      purchase.pendingFundingMinor > 0 ||
+      Boolean(purchase.settlementBlockCode) ||
+      (!reserved.blockedCode && (reserved.connectMinor > 0 || reserved.refundMinor > 0));
+    if (!outstanding) continue;
+    const purchaseHash = (purchase.purchaseHash ?? "").trim().toLowerCase();
+    const settlement = (purchase.settlementCurrency ?? "").trim().toUpperCase();
+    const settlementCurrency = /^[A-Z]{3}$/.test(settlement) ? settlement : null;
+    let reserveMinor: number | null = null;
+    let reserveCode: string | null = purchase.settlementBlockCode || reserved.blockedCode || null;
+    if (!reserveCode && settlementCurrency) {
+      if (purchase.currency.trim().toUpperCase() === settlementCurrency) {
+        reserveMinor = reserved.connectMinor + reserved.refundMinor;
+      } else {
+        const cross = classifyCrossCurrencyReserve(purchase, settlementCurrency);
+        if (cross.code) reserveCode = cross.code;
+        else reserveMinor = cross.minor;
+      }
+    } else if (!reserveCode) {
+      reserveCode = "SETTLEMENT_CURRENCY_UNKNOWN";
+    }
+    if (purchase.pendingTransferMinor > 0 || purchase.pendingFundingMinor > 0) {
+      reserveCode = "UNRESOLVED_MOVEMENT";
+      reserveMinor = null;
+    }
+    rows.push({
+      purchaseHash: /^[a-f0-9]{8}$/.test(purchaseHash) ? purchaseHash : "",
+      purchaseCurrency: purchase.currency.trim().toUpperCase(),
+      settlementCurrency,
+      presentmentRemainderMinor: reserved.blockedCode ? null : reserved.connectMinor,
+      reserveCurrency: reserveMinor == null ? null : settlementCurrency,
+      reserveMinor,
+      reserveCode,
+      readOk: !purchase.settlementBlockCode && settlementCurrency != null,
+      readCode: purchase.settlementBlockCode || null,
+    });
+  }
+  return rows;
+}
+
+/** Bank currencies come from settlement balances and known settlement currencies. */
+export function bankCurrencies(input: {
+  balanceCurrencies: readonly string[];
+  settlementCurrencies?: readonly string[];
+  openAttemptCurrencies?: readonly string[];
+}): string[] {
+  const currencies = new Set<string>();
+  for (const value of [
+    ...input.balanceCurrencies,
+    ...(input.settlementCurrencies ?? []),
+    ...(input.openAttemptCurrencies ?? []),
+  ]) {
+    const currency = value.trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(currency)) currencies.add(currency);
+  }
+  return [...currencies];
+}
+
+/**
+ * A purchase priced in another currency is not subtracted from this bank currency.
+ * Outstanding seller or refund amounts block until the charge's own settlement
+ * gross can price them. Purchase currency alone does not invent a bank.
+ */
+export function classifyCrossCurrencyReserve(
+  purchase: PurchaseLiability,
+  bankCurrency: string,
+): { code: string | null; minor: number } {
+  const purchaseCurrency = purchase.currency.trim().toUpperCase();
+  const bank = bankCurrency.trim().toUpperCase();
+  if (purchase.settlementBlockCode) return { code: purchase.settlementBlockCode, minor: 0 };
+  if (purchaseCurrency === bank) return { code: null, minor: 0 };
+  const reserved = reservePurchase(purchase);
+  if (reserved.blockedCode) return { code: reserved.blockedCode, minor: 0 };
+  const openSeller = reserved.connectMinor > 0;
+  const openRefund = reserved.refundMinor > 0;
+  const openGp = reserved.gpMinor > 0;
+  if (!openSeller && !openRefund && !openGp) return { code: null, minor: 0 };
+  const settlement = (purchase.settlementCurrency ?? "").trim().toUpperCase();
+  if (!settlement) return { code: "SETTLEMENT_CURRENCY_UNKNOWN", minor: 0 };
+  if (settlement !== bank) return { code: null, minor: 0 };
+  if (openRefund || openGp) return { code: "SETTLEMENT_RESERVE_UNRESOLVED", minor: 0 };
+  const converted = connectReleaseSettlementMinor({
+    presentmentMinor: reserved.connectMinor,
+    chargeAmountMinor: purchase.chargeAmountMinor ?? null,
+    balanceTransactionAmountMinor: purchase.balanceTransactionAmountMinor ?? null,
+  });
+  if (converted == null) return { code: "SETTLEMENT_RESERVE_UNRESOLVED", minor: 0 };
+  return { code: null, minor: converted };
+}
+
+/** First cross-currency obligation that cannot be reserved against this bank currency. */
+export function settlementBlockForCurrency(
+  purchases: readonly PurchaseLiability[],
+  bankCurrency: string,
+  mode: "TEST" | "LIVE",
+): string | null {
+  for (const purchase of purchases) {
+    if (purchase.stripeMode !== mode) continue;
+    if (purchase.settlementBlockCode) return purchase.settlementBlockCode;
+    if (purchase.currency.trim().toUpperCase() === bankCurrency.trim().toUpperCase()) continue;
+    if (purchase.pendingTransferMinor > 0 || purchase.pendingFundingMinor > 0) return "UNRESOLVED_MOVEMENT";
+    const cross = classifyCrossCurrencyReserve(purchase, bankCurrency);
+    if (cross.code) return cross.code;
+  }
+  return null;
 }
 
 /**
@@ -330,6 +588,8 @@ export function planSafeBankRemainder(input: {
   providerReadOk?: boolean;
   /** Omitted bank data stays unpaid without being treated as a failed provider read. */
   bankInformation?: "unavailable" | "verified" | "unverified";
+  /** Dashboard confirmation for this exact account. It is not API verification. */
+  dashboardConfirmation?: "recorded" | "absent";
   inflightBankMinor: number;
   purchases: readonly PurchaseLiability[];
   scanComplete: boolean;
@@ -345,11 +605,6 @@ export function planSafeBankRemainder(input: {
   if (!input.scanComplete) return none("GP_RESERVE_UNKNOWN");
   if (input.providerReadOk === false) return none("PROVIDER_READ_FAILED");
   if ((input.unresolvedMovements ?? 0) > 0) return none("UNRESOLVED_MOVEMENT");
-  if (input.bankInformation === "unavailable") return none("BANK_INFORMATION_UNAVAILABLE");
-  if (!input.destinationReady) return none("BANK_DESTINATION_UNVERIFIED");
-  if (input.uncertainBankAttempt) return none("BANK_PAYOUT_UNCERTAIN");
-  if (input.availableMinor == null || !whole(input.availableMinor)) return none("BALANCE_UNREAD");
-  if (!whole(input.inflightBankMinor)) return none("GP_RESERVE_UNKNOWN");
 
   let gp = 0;
   let connect = 0;
@@ -359,7 +614,16 @@ export function planSafeBankRemainder(input: {
   const currency = input.currency.trim().toUpperCase();
   for (const purchase of input.purchases) {
     if (purchase.stripeMode !== input.mode) continue;
-    if (purchase.currency.trim().toUpperCase() !== currency) return none("GP_RESERVE_UNKNOWN");
+    if (purchase.settlementBlockCode) return none(purchase.settlementBlockCode);
+    if (purchase.currency.trim().toUpperCase() !== currency) {
+      if (purchase.pendingTransferMinor > 0 || purchase.pendingFundingMinor > 0) {
+        return none("UNRESOLVED_MOVEMENT");
+      }
+      const cross = classifyCrossCurrencyReserve(purchase, currency);
+      if (cross.code) return none(cross.code);
+      connect += cross.minor;
+      continue;
+    }
     if (purchase.pendingTransferMinor > 0 || purchase.pendingFundingMinor > 0) {
       return none("UNRESOLVED_MOVEMENT");
     }
@@ -371,6 +635,15 @@ export function planSafeBankRemainder(input: {
     inflightTransfer += reserved.inflightTransferMinor;
     inflightFunding += reserved.inflightFundingMinor;
   }
+  if (input.bankInformation === "unavailable" && !dashboardConfirmationApplies(input)) {
+    return none("BANK_INFORMATION_UNAVAILABLE");
+  }
+  if (input.bankInformation !== "unavailable" && !input.destinationReady) {
+    return none("BANK_DESTINATION_UNVERIFIED");
+  }
+  if (input.uncertainBankAttempt) return none("BANK_PAYOUT_UNCERTAIN");
+  if (input.availableMinor == null || !whole(input.availableMinor)) return none("BALANCE_UNREAD");
+  if (!whole(input.inflightBankMinor)) return none("GP_RESERVE_UNKNOWN");
   const extraInflight =
     input.inflightBankMinor +
     Math.max(0, inflightTransfer - connect) +
@@ -429,6 +702,10 @@ export function evaluateModeReadiness(input: {
   priorReadinessPass: boolean;
   moneyMovementEnabled: boolean;
   bankInformation?: "unavailable" | "verified" | "unverified";
+  dashboardConfirmation?: "recorded" | "absent";
+  currency?: string;
+  /** Set when an open obligation cannot be reserved in this bank currency. */
+  settlementCode?: string | null;
 }): ModeReadiness {
   const blocked = (code: string): ModeReadiness => ({
     mode: input.mode,
@@ -439,8 +716,20 @@ export function evaluateModeReadiness(input: {
   if (!input.providerReadsOk) return blocked("PROVIDER_READ_FAILED");
   if (!input.liabilitiesReadable) return blocked("GP_RESERVE_UNKNOWN");
   if (input.unresolvedMovements > 0) return blocked("UNRESOLVED_MOVEMENT");
-  if (input.bankInformation === "unavailable") return blocked("BANK_INFORMATION_UNAVAILABLE");
-  if (!input.destinationReady) return blocked("BANK_DESTINATION_UNVERIFIED");
+  if (input.settlementCode) return blocked(input.settlementCode);
+  if (
+    input.bankInformation === "unavailable" &&
+    !dashboardConfirmationApplies({
+      mode: input.mode,
+      currency: input.currency ?? "",
+      dashboardConfirmation: input.dashboardConfirmation,
+    })
+  ) {
+    return blocked("BANK_INFORMATION_UNAVAILABLE");
+  }
+  if (input.bankInformation !== "unavailable" && !input.destinationReady) {
+    return blocked("BANK_DESTINATION_UNVERIFIED");
+  }
   if (!input.priorReadinessPass) return blocked("CUTOVER_WARMUP");
   const schedule = automaticBankPayoutBlocksFunding(input.scheduleInterval);
   return {

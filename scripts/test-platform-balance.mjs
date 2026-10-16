@@ -29,6 +29,7 @@ if (process.env.SB_PLATFORM_BALANCE_TEST !== "1") {
 }
 
 const balance = await import(pathToFileURL(path.join(root, "src/lib/payments/payout-rail/platform-balance.ts")).href);
+const settlementAmount = await import(pathToFileURL(path.join(root, "src/lib/payments/payout-rail/connect-settlement-amount.ts")).href);
 const funding = await import(pathToFileURL(path.join(root, "src/lib/payments/payout-rail/proceeds-funding.ts")).href);
 const flags = await import(pathToFileURL(path.join(root, "src/lib/payments/flags.ts")).href);
 
@@ -50,7 +51,15 @@ const {
   resumeWorkerAfterTakeover,
   selectVerifiedPlatformBank,
   sharedScheduleCutover,
+  bankCurrencies,
+  connectReleaseSettlementMinor,
+  listedBalanceAmounts,
+  listedBalanceCurrencies,
+  outstandingConnectReserves,
+  settlementBlockForCurrency,
+  settlementLiabilityCurrencies,
 } = balance;
+const { applyOutstandingChargeSettlement, connectSettlementTransferMinor, shapeOutstandingChargeSettlement } = settlementAmount;
 const { decideFundingRequest, completedPurchaseBlocksNewFunding, fundingScanIncludesPurchase } = funding;
 const {
   isPlatformBankRemainderPayoutEnabled,
@@ -536,6 +545,355 @@ const bankUnavailable = evaluateModeReadiness({
 assert.equal(bankUnavailable.ready, false);
 assert.equal(bankUnavailable.payoutsAllowed, false);
 assert.equal(bankUnavailable.code, "BANK_INFORMATION_UNAVAILABLE");
+const gbpDashboard = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+});
+assert.equal(gbpDashboard.ready, false);
+assert.equal(gbpDashboard.payoutsAllowed, false);
+assert.equal(gbpDashboard.code, "CUTOVER_WARMUP");
+const gbpAfterWarmup = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+  scheduleInterval: "daily",
+  moneyMovementEnabled: true,
+});
+assert.equal(gbpAfterWarmup.ready, true);
+assert.equal(gbpAfterWarmup.payoutsAllowed, false);
+assert.equal(gbpAfterWarmup.code, "READINESS_DAILY_SCHEDULE");
+const usdStillBlocked = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "USD",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(usdStillBlocked.ready, false);
+assert.equal(usdStillBlocked.code, "BANK_INFORMATION_UNAVAILABLE");
+const confirmedProviderFailure = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  providerReadsOk: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(confirmedProviderFailure.code, "PROVIDER_READ_FAILED");
+const confirmedMovement = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  unresolvedMovements: 1,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(confirmedMovement.code, "UNRESOLVED_MOVEMENT");
+const confirmedApiBank = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unverified",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(confirmedApiBank.code, "BANK_DESTINATION_UNVERIFIED");
+const settlementBeatsConfirmation = evaluateModeReadiness({
+  ...readinessInput,
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+  settlementCode: "SETTLEMENT_RESERVE_UNRESOLVED",
+});
+assert.equal(settlementBeatsConfirmation.ready, false);
+assert.equal(settlementBeatsConfirmation.payoutsAllowed, false);
+assert.equal(settlementBeatsConfirmation.code, "SETTLEMENT_RESERVE_UNRESOLVED");
+assert.deepEqual(bankCurrencies({ balanceCurrencies: ["gbp", "gbp"] }), ["GBP"]);
+assert.equal(bankCurrencies({ balanceCurrencies: ["gbp"] }).includes("USD"), false);
+const openSeller = connectPurchase({
+  currency: "USD",
+  sellerEntitlementMinor: 2500,
+  totalChargeMinor: 2550,
+  protectionFeeMinor: 50,
+});
+const unknownSettlement = plan({
+  availableMinor: 100000,
+  purchases: [openSeller, connectPurchase({
+    currency: "USD",
+    status: "FUNDED",
+    sellerEntitlementMinor: 6500,
+    totalChargeMinor: 6630,
+    protectionFeeMinor: 130,
+  }), connectPurchase({
+    currency: "USD",
+    status: "DELIVERED",
+    sellerEntitlementMinor: 5000,
+    totalChargeMinor: 5100,
+    protectionFeeMinor: 100,
+  })],
+});
+assert.equal(openSeller.sellerEntitlementMinor, 2500);
+assert.equal(unknownSettlement.amountMinor, 0);
+assert.equal(unknownSettlement.code, "SETTLEMENT_CURRENCY_UNKNOWN");
+assert.equal(unknownSettlement.reservedMinor, 0);
+const missingGross = plan({
+  purchases: [connectPurchase({
+    currency: "USD",
+    sellerEntitlementMinor: 2500,
+    settlementCurrency: "GBP",
+    chargeAmountMinor: null,
+    balanceTransactionAmountMinor: null,
+  })],
+});
+assert.equal(missingGross.amountMinor, 0);
+assert.equal(missingGross.code, "SETTLEMENT_RESERVE_UNRESOLVED");
+const seller2500 = connectReleaseSettlementMinor({
+  presentmentMinor: 2500,
+  chargeAmountMinor: 2550,
+  balanceTransactionAmountMinor: 2000,
+});
+const seller6500 = connectReleaseSettlementMinor({
+  presentmentMinor: 6500,
+  chargeAmountMinor: 6630,
+  balanceTransactionAmountMinor: 5200,
+});
+const seller5000 = connectReleaseSettlementMinor({
+  presentmentMinor: 5000,
+  chargeAmountMinor: 5100,
+  balanceTransactionAmountMinor: 4000,
+});
+assert.equal(seller2500, 1960);
+assert.equal(seller6500, 5098);
+assert.equal(seller5000, 3921);
+assert.notEqual(seller2500, Math.round(2500 * 0.79));
+const chargeGross = 2550;
+const settledGross = 2014;
+const presentment = 2500;
+const releaseDebit = Math.max(1, Math.floor((presentment * settledGross) / chargeGross));
+assert.equal(connectSettlementTransferMinor(presentment, chargeGross, settledGross), releaseDebit);
+assert.equal(connectReleaseSettlementMinor({
+  presentmentMinor: presentment,
+  chargeAmountMinor: chargeGross,
+  balanceTransactionAmountMinor: settledGross,
+}), releaseDebit);
+const procurementDebit = connectSettlementTransferMinor(1000, chargeGross, settledGross);
+const finalDebit = connectSettlementTransferMinor(1500, chargeGross, settledGross);
+assert.ok(releaseDebit >= procurementDebit + finalDebit);
+const readFacts = shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  charge: {
+    id: "ch_fixture",
+    livemode: false,
+    currency: "usd",
+    amount: chargeGross,
+    balanceTransaction: {
+      currency: "gbp",
+      amount: settledGross,
+      net: 1900,
+      exchange_rate: 0.79,
+    },
+  },
+});
+assert.equal(readFacts.ok, true);
+assert.equal(readFacts.ok && readFacts.balanceTransactionNetMinor, 1900);
+const readPurchase = applyOutstandingChargeSettlement(connectPurchase({
+  currency: "USD",
+  sellerEntitlementMinor: presentment,
+  totalChargeMinor: chargeGross,
+  protectionFeeMinor: 50,
+}), readFacts);
+assert.equal(readPurchase.sellerEntitlementMinor, presentment);
+const readPlan = plan({ availableMinor: 20000, purchases: [readPurchase] });
+assert.equal(readPlan.reservedMinor, releaseDebit);
+assert.equal(readPlan.amountMinor, 20000 - releaseDebit);
+assert.notEqual(readPlan.reservedMinor, 1900);
+assert.notEqual(readPlan.reservedMinor, Math.round(presentment * 0.79));
+const held = plan({
+  availableMinor: 3878,
+  purchases: [gpPurchase({ chargeNetMinor: 3878 }), readPurchase],
+});
+assert.equal(held.amountMinor, 0);
+assert.ok(held.reservedMinor > 3878);
+assert.equal(held.code, "BANK_REMAINDER_NONE");
+const failedRead = shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  failure: { stripeCode: "rate_limit" },
+});
+const failedPlan = plan({
+  availableMinor: 100000,
+  purchases: [applyOutstandingChargeSettlement(connectPurchase({
+    currency: "USD",
+    sellerEntitlementMinor: presentment,
+  }), failedRead)],
+});
+assert.equal(failedPlan.amountMinor, 0);
+assert.equal(failedPlan.code, "SETTLEMENT_READ_FAILED");
+assert.equal(shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: false,
+  charge: { id: "ch_fixture", livemode: false, currency: "usd", amount: chargeGross, balanceTransaction: { currency: "gbp", amount: settledGross, net: 1900 } },
+}).code, "SETTLEMENT_OWNERSHIP_UNVERIFIED");
+assert.equal(shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  charge: { id: "ch_other", livemode: false, currency: "usd", amount: chargeGross, balanceTransaction: { currency: "gbp", amount: settledGross, net: 1900 } },
+}).code, "SETTLEMENT_OWNERSHIP_UNVERIFIED");
+assert.equal(shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  charge: { id: "ch_fixture", livemode: true, currency: "usd", amount: chargeGross, balanceTransaction: { currency: "gbp", amount: settledGross, net: 1900 } },
+}).code, "SETTLEMENT_MODE_MISMATCH");
+assert.equal(shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  charge: { id: "ch_fixture", livemode: false, currency: "usd", amount: chargeGross, balanceTransaction: { livemode: true, currency: "gbp", amount: settledGross, net: 1900 } },
+}).code, "SETTLEMENT_MODE_MISMATCH");
+assert.equal(shapeOutstandingChargeSettlement({
+  mode: "TEST",
+  purchaseCurrency: "USD",
+  requestedChargeId: "ch_fixture",
+  platformOwned: true,
+  charge: { id: "ch_fixture", livemode: false, currency: "usd", amount: chargeGross, balanceTransaction: { currency: "gbp", amount: settledGross } },
+}).code, "SETTLEMENT_RESERVE_UNRESOLVED");
+assert.deepEqual(listedBalanceCurrencies([{ currency: "gbp", amount: 0 }]), ["gbp"]);
+assert.deepEqual(bankCurrencies({
+  balanceCurrencies: [],
+  settlementCurrencies: settlementLiabilityCurrencies([readPurchase], "TEST"),
+}), ["GBP"]);
+assert.equal(bankCurrencies({
+  balanceCurrencies: listedBalanceCurrencies([{ currency: "usd", amount: 0 }]),
+  settlementCurrencies: settlementLiabilityCurrencies([readPurchase], "TEST"),
+}).includes("GBP"), true);
+const priced = plan({
+  availableMinor: 20000,
+  purchases: [
+    connectPurchase({
+      currency: "USD",
+      sellerEntitlementMinor: 2500,
+      totalChargeMinor: 2550,
+      protectionFeeMinor: 50,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 2550,
+      balanceTransactionAmountMinor: 2000,
+    }),
+    connectPurchase({
+      currency: "USD",
+      sellerEntitlementMinor: 6500,
+      totalChargeMinor: 6630,
+      protectionFeeMinor: 130,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 6630,
+      balanceTransactionAmountMinor: 5200,
+    }),
+    connectPurchase({
+      currency: "USD",
+      status: "DELIVERED",
+      sellerEntitlementMinor: 5000,
+      totalChargeMinor: 5100,
+      protectionFeeMinor: 100,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 5100,
+      balanceTransactionAmountMinor: 4000,
+    }),
+  ],
+});
+assert.equal(priced.reservedMinor, 1960 + 5098 + 3921);
+assert.equal(priced.amountMinor, 20000 - priced.reservedMinor);
+assert.equal(priced.code, "BANK_REMAINDER_PAY");
+assert.notEqual(priced.reservedMinor, 2500 + 6500 + 5000);
+const releasedUsd = plan({
+  purchases: [connectPurchase({
+    currency: "USD",
+    status: "RELEASED",
+    sellerEntitlementMinor: 30000,
+    transferredMinor: 30000,
+  })],
+});
+assert.equal(releasedUsd.code, "BANK_REMAINDER_PAY");
+assert.equal(releasedUsd.reservedMinor, 0);
+const refundedUsd = plan({
+  purchases: [connectPurchase({
+    currency: "USD",
+    status: "REFUNDED",
+    sellerEntitlementMinor: 4000,
+    refundedMinor: 4140,
+    totalChargeMinor: 4140,
+  })],
+});
+assert.equal(refundedUsd.code, "BANK_REMAINDER_PAY");
+const disputedUsd = plan({
+  purchases: [connectPurchase({
+    currency: "USD",
+    status: "DISPUTED",
+    openDispute: true,
+    settlementCurrency: "GBP",
+    chargeAmountMinor: 2550,
+    balanceTransactionAmountMinor: 2000,
+  })],
+});
+assert.equal(disputedUsd.amountMinor, 0);
+assert.equal(disputedUsd.code, "SETTLEMENT_RESERVE_UNRESOLVED");
+const pendingNet = plan({
+  availableMinor: 0,
+  purchases: [gpPurchase({ chargeNetMinor: 3878 })],
+});
+assert.equal(pendingNet.amountMinor, 0);
+assert.equal(pendingNet.reservedMinor, 3878);
+assert.equal(pendingNet.code, "BANK_REMAINDER_NONE");
+const unrelated = plan({
+  availableMinor: 3878,
+  purchases: [gpPurchase({ chargeNetMinor: 3878 }), openSeller],
+});
+assert.equal(unrelated.amountMinor, 0);
+assert.equal(unrelated.code, "SETTLEMENT_CURRENCY_UNKNOWN");
+assert.equal(settlementBlockForCurrency([openSeller], "GBP", "TEST"), "SETTLEMENT_CURRENCY_UNKNOWN");
+const confirmedDoesNotClearReserve = plan({
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  purchases: [openSeller],
+});
+assert.equal(confirmedDoesNotClearReserve.amountMinor, 0);
+assert.equal(confirmedDoesNotClearReserve.code, "SETTLEMENT_CURRENCY_UNKNOWN");
+const usdRecordedPlan = plan({
+  currency: "USD",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+});
+assert.equal(usdRecordedPlan.amountMinor, 0);
+assert.equal(usdRecordedPlan.code, "BANK_INFORMATION_UNAVAILABLE");
+const gbpDailyConfirmed = plan({
+  scheduleInterval: "daily",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+});
+assert.equal(gbpDailyConfirmed.amountMinor, 0);
+assert.equal(gbpDailyConfirmed.code, "GP_AUTOMATIC_BANK_PAYOUT");
 const warmup = evaluateModeReadiness(readinessInput);
 assert.equal(warmup.ready, false);
 assert.equal(warmup.payoutsAllowed, false);
@@ -611,10 +969,32 @@ assert.doesNotMatch(readiness, /listExternalAccounts/);
 assert.match(readiness, /classifyStripeReadFailure|providerRead/);
 assert.doesNotMatch(readiness, /catch \{\s*providerReadsOk = false;\s*\}/);
 assert.match(readiness, /recordObservedGpNet/);
+assert.match(readiness, /stored\?\.balanceTransactionId && \(stored\.chargeNetMinor \?\? 0\) > 0/);
+assert.match(readiness, /balance\.pending/);
+const currenciesFn = readiness.slice(
+  readiness.indexOf("async function currenciesForRead"),
+  readiness.indexOf("type ProviderRead"),
+);
+assert.doesNotMatch(currenciesFn, /protectedTransaction/);
+assert.match(runner, /balance\.pending/);
+const discoverFn = runner.slice(runner.indexOf("async function discoverCurrencies"), runner.indexOf("export async function coordinatePlatformBalance"));
+assert.doesNotMatch(discoverFn, /protectedTransaction/);
+const settlementFn = fundingRunner.slice(
+  fundingRunner.indexOf("function settlementFromCharge"),
+  fundingRunner.indexOf("async function platformRoom"),
+);
+assert.match(settlementFn, /livemode: charge\.livemode/);
+assert.doesNotMatch(settlementFn, /livemode\?:/);
 assert.doesNotMatch(readiness, /payouts\.create|prepareQuoteOnly|transfers\.create|refunds\.create|accounts\.update/);
 const readinessRoute = read("src/app/api/admin/platform-balance-readiness/route.ts");
 assert.match(readinessRoute, /runReadOnlyPlatformReadiness\("TEST"\)/);
+assert.match(readinessRoute, /balance: report\.balance/);
+assert.match(readinessRoute, /outstandingConnect: report\.outstandingConnect/);
 assert.doesNotMatch(readinessRoute, /processInspectionReleases|coordinatePlatformBalance|runReadOnlyPlatformReadiness\("LIVE"\)/);
+assert.match(readiness, /outstandingConnectReserves/);
+assert.match(readiness, /listedBalanceAmounts/);
+assert.match(readiness, /available: balance\.available/);
+assert.match(readiness, /pending: balance\.pending/);
 assert.match(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "TEST" \}\)/);
 assert.match(cron, /coordinatePlatformBalance\(\{ stripeMode: "TEST" \}\)/);
 assert.doesNotMatch(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "LIVE" \}\)/);
@@ -629,6 +1009,57 @@ assert.match(read("src/lib/payments/admin-protected-decision.ts"), /refunds\.cre
 assert.match(read("src/lib/payments/flags.ts"), /PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED", false/);
 assert.match(read("src/lib/payments/flags.ts"), /PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED", false/);
 assert.match(read("src/lib/payments/stripe/webhooks.ts"), /sb_bank_remainder/);
+const releaseSource = read("src/lib/payments/release.ts");
+assert.equal(releaseSource.split("connectSettlementTransferMinor").length - 1, 3);
+assert.doesNotMatch(releaseSource, /Math\.floor\(\(amount \* bt\.amount\)/);
+const chargeReader = read("src/lib/payments/payout-rail/outstanding-charge-settlement.ts");
+assert.match(chargeReader, /expand: \["balance_transaction"\]/);
+assert.doesNotMatch(chargeReader, /stripeAccount|prisma|payouts\.create|charges\.update/);
+const liabilityLoad = runner.slice(runner.indexOf("export async function loadPlatformLiabilities"), runner.indexOf("async function listMatchingBankPayouts"));
+assert.match(liabilityLoad, /retrieveOutstandingChargeSettlement/);
+assert.doesNotMatch(liabilityLoad, /protectedTransaction\.update|gpProceedsFunding\.upsert/);
 assert.doesNotMatch(read("prisma/migrations/20261012130000_platform_balance_coordination/migration.sql"), /DROP TABLE/);
+assert.doesNotMatch(read("prisma/migrations/20261014140000_platform_bank_dashboard_confirmation/migration.sql"), /DROP TABLE/);
+const confirmationRoute = read("src/app/api/admin/platform-bank-dashboard-confirmation/route.ts");
+assert.match(confirmationRoute, /requireAdmin/);
+assert.match(confirmationRoute, /getStripe\("TEST"\)/);
+assert.doesNotMatch(confirmationRoute, /getStripe\("LIVE"\)/);
+assert.match(confirmationRoute, /currency === "USD"/);
+assert.match(confirmationRoute, /bankConfigurationVerified: false/);
+assert.doesNotMatch(confirmationRoute, /payouts\.create|accounts\.update|ready:\s*true/);
+const confirmPage = read("src/app/admin/platform-balance/page.tsx");
+const confirmButton = read("src/app/admin/platform-balance/confirm-gbp-bank-button.tsx");
+assert.match(confirmPage, /ConfirmGbpBankButton/);
+assert.match(confirmPage, /Opening this page does not record/);
+assert.doesNotMatch(confirmPage, /fetch\(|platform-bank-dashboard-confirmation/);
+assert.match(confirmButton, /Record TEST GBP Dashboard confirmation/);
+assert.match(confirmButton, /\/api\/admin\/platform-bank-dashboard-confirmation/);
+assert.match(confirmButton, /currency: "GBP"/);
+assert.doesNotMatch(confirmButton, /payouts\.create|quotesCreated|ready:\s*true|accounts\.update/);
+assert.match(read("src/app/admin/_components/AdminNav.tsx"), /\/admin\/platform-balance/);
+const reserveRows = outstandingConnectReserves([
+  {
+    ...connectPurchase({
+      currency: "USD",
+      sellerEntitlementMinor: 2500,
+      totalChargeMinor: 2550,
+      protectionFeeMinor: 50,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 2550,
+      balanceTransactionAmountMinor: 2014,
+      purchaseHash: "abcd1234",
+    }),
+  },
+], "TEST");
+assert.equal(reserveRows.length, 1);
+assert.equal(reserveRows[0].purchaseHash, "abcd1234");
+assert.equal(reserveRows[0].settlementCurrency, "GBP");
+assert.equal(reserveRows[0].reserveMinor, connectSettlementTransferMinor(2500, 2550, 2014));
+assert.equal(reserveRows[0].readOk, true);
+assert.equal(reserveRows[0].readCode, null);
+assert.deepEqual(listedBalanceAmounts([{ currency: "gbp", amount: 0 }, { currency: "gbp", amount: 3878 }]), [
+  { currency: "GBP", amountMinor: 0 },
+  { currency: "GBP", amountMinor: 3878 },
+]);
 
 console.log("platform balance tests passed");

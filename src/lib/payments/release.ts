@@ -35,6 +35,7 @@ import {
   releaseProcurementViaGlobalPayouts,
 } from "@/lib/payments/payout-rail/outbound-payment";
 import { assertNoGpBlockingAttempt } from "@/lib/payments/payout-rail/dual-rail";
+import { connectSettlementTransferMinor } from "@/lib/payments/payout-rail/connect-settlement-amount";
 
 /**
  * Release engine — Separate Charges and Transfers.
@@ -236,10 +237,7 @@ export async function releaseProcurement(opts: {
           );
         }
         transferCurrency = settleCurrency;
-        transferAmountMinor = Math.max(
-          1,
-          Math.floor((amount * bt.amount) / charge.amount),
-        );
+        transferAmountMinor = connectSettlementTransferMinor(amount, charge.amount, bt.amount);
       }
     }
 
@@ -622,10 +620,7 @@ export async function releaseFinal(opts: {
         }
         // Pro-rate seller presentment share into settlement currency.
         transferCurrency = settleCurrency;
-        transferAmountMinor = Math.max(
-          1,
-          Math.floor((amount * bt.amount) / charge.amount),
-        );
+        transferAmountMinor = connectSettlementTransferMinor(amount, charge.amount, bt.amount);
       }
     }
 

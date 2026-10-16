@@ -17,10 +17,18 @@ import {
   assessPlatformBank,
   readPlatformExternalAccounts,
   reservePurchase,
+  classifyCrossCurrencyReserve,
+  bankCurrencies,
+  listedBalanceCurrencies,
+  settlementLiabilityCurrencies,
   type PurchaseLiability,
 } from "@/lib/payments/payout-rail/platform-balance";
+import { idHash8 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
+import { applyOutstandingChargeSettlement } from "@/lib/payments/payout-rail/connect-settlement-amount";
+import { retrieveOutstandingChargeSettlement } from "@/lib/payments/payout-rail/outstanding-charge-settlement";
 import { decideFundingRequest } from "@/lib/payments/payout-rail/proceeds-funding";
 import { reconcileGpProceedsFunding } from "@/lib/payments/payout-rail/proceeds-funding-run";
+import { dashboardConfirmationForAccount, retrievedAccountLivemode } from "@/lib/payments/payout-rail/platform-bank-confirmation";
 import { getStripe } from "@/lib/payments/stripe/client";
 import {
   isGlobalPayoutsProceedsFundingEnabled,
@@ -45,6 +53,7 @@ async function readScheduleInterval(mode: StripeMode): Promise<{ interval: strin
 async function readCardAvailable(mode: StripeMode, currency: string): Promise<number | null> {
   const balance = await getStripe(mode).balance.retrieve();
   if (balance.livemode !== (mode === "LIVE")) return null;
+  // Pending is not available. A pending charge net cannot fund another obligation.
   const row = balance.available.find((entry) => entry.currency === currency.toLowerCase());
   const card = row && "source_types" in row ? row.source_types?.card : undefined;
   return typeof card === "number" ? card : null;
@@ -57,27 +66,37 @@ async function readPlatformBank(
   verified: boolean;
   information: "unavailable" | "verified" | "unverified";
   failed: boolean;
+  dashboardConfirmation: "recorded" | "absent";
 }> {
   const account = await getStripe(mode).accounts.retrieve();
   const assessment = assessPlatformBank(readPlatformExternalAccounts(account), {
     currency,
     livemode: mode === "LIVE",
   });
+  const livemode = retrievedAccountLivemode(account);
+  const dashboardConfirmation = livemode === null
+    ? "absent"
+    : await dashboardConfirmationForAccount({
+        stripeMode: mode,
+        currency,
+        accountId: account.id || "",
+        livemode,
+      });
   return {
     verified: assessment.bankConfigurationVerified,
     information: assessment.bankInformation,
     failed: false,
+    dashboardConfirmation,
   };
 }
 
-async function loadLiabilities(mode: StripeMode, currency: string): Promise<{
+export async function loadPlatformLiabilities(mode: StripeMode): Promise<{
   purchases: PurchaseLiability[];
   scanComplete: boolean;
 }> {
   const rows = await prisma.protectedTransaction.findMany({
     where: {
       stripeMode: mode,
-      currency: { equals: currency, mode: "insensitive" },
       fundedAt: { not: null },
     },
     take: PLATFORM_BALANCE_RESERVE_SCAN_CAP + 1,
@@ -90,7 +109,8 @@ async function loadLiabilities(mode: StripeMode, currency: string): Promise<{
     },
   });
   const scanComplete = rows.length <= PLATFORM_BALANCE_RESERVE_SCAN_CAP;
-  const purchases: PurchaseLiability[] = rows.slice(0, PLATFORM_BALANCE_RESERVE_SCAN_CAP).map((row) => {
+  const limited = rows.slice(0, PLATFORM_BALANCE_RESERVE_SCAN_CAP);
+  const purchases: PurchaseLiability[] = limited.map((row) => {
     const funding = row.gpProceedsFunding;
     const netKnown = Boolean(funding?.balanceTransactionId) || (funding?.chargeNetMinor ?? 0) > 0;
     const credited =
@@ -111,12 +131,35 @@ async function loadLiabilities(mode: StripeMode, currency: string): Promise<{
       refundedMinor: row.refundedMinor,
       openDispute: row.disputes.length > 0,
       chargeNetMinor: netKnown ? (funding?.chargeNetMinor ?? null) : null,
+      settlementCurrency: null,
+      chargeAmountMinor: null,
+      balanceTransactionAmountMinor: null,
       durablyCreditedMinor: credited,
       outboundStatuses: row.outboundPaymentAttempts.map((attempt) => attempt.status),
       pendingTransferMinor: row.transferAttempts.reduce((sum, attempt) => sum + attempt.amountMinor, 0),
       pendingFundingMinor: pendingFunding,
+      purchaseHash: idHash8(row.id),
     };
   });
+  for (let index = 0; index < purchases.length; index += 1) {
+    const purchase = purchases[index];
+    if (purchase.payoutRail !== "STRIPE_CONNECT") continue;
+    const reserved = reservePurchase(purchase);
+    const outstanding =
+      purchase.pendingTransferMinor > 0 ||
+      purchase.pendingFundingMinor > 0 ||
+      (!reserved.blockedCode && (reserved.connectMinor > 0 || reserved.refundMinor > 0));
+    if (!outstanding) continue;
+    const chargeId = (limited[index]?.stripeChargeId || "").trim();
+    const facts = chargeId
+      ? await retrieveOutstandingChargeSettlement({
+          mode,
+          chargeId,
+          purchaseCurrency: purchase.currency,
+        })
+      : { ok: false as const, code: "SETTLEMENT_READ_FAILED" };
+    purchases[index] = applyOutstandingChargeSettlement(purchase, facts);
+  }
   return { purchases, scanComplete };
 }
 
@@ -186,14 +229,20 @@ async function createSafeBankRemainder(opts: {
   now: Date;
   scanComplete: boolean;
   hadPriorSuccess: boolean;
+  liabilities?: { purchases: PurchaseLiability[]; scanComplete: boolean };
 }): Promise<{ amountMinor: number; code: string; cutoverAllowed: boolean; rollbackToDailyAllowed: boolean }> {
   const bankEnabled = isPlatformBankRemainderPayoutEnabled(opts.mode);
   const [schedule, liabilities, destination, attempts] = await Promise.all([
     readScheduleInterval(opts.mode),
-    loadLiabilities(opts.mode, opts.currency),
+    opts.liabilities ? Promise.resolve(opts.liabilities) : loadPlatformLiabilities(opts.mode),
     readPlatformBank(opts.mode, opts.currency)
       .then((row) => row)
-      .catch(() => ({ verified: false as const, information: "unavailable" as const, failed: true as const })),
+      .catch(() => ({
+        verified: false as const,
+        information: "unavailable" as const,
+        failed: true as const,
+        dashboardConfirmation: "absent" as const,
+      })),
     prisma.platformBankPayoutAttempt.findMany({
       where: { stripeMode: opts.mode, currency: opts.currency },
       orderBy: { sequence: "asc" },
@@ -224,6 +273,7 @@ async function createSafeBankRemainder(opts: {
     availableMinor,
     destinationReady: destination.verified,
     bankInformation: destination.failed ? undefined : destination.information,
+    dashboardConfirmation: destination.dashboardConfirmation,
     uncertainBankAttempt: uncertain > 0,
     unresolvedMovements: unresolvedFromPurchases,
     providerReadOk: !schedule.failed && !balanceFailed && !destination.failed,
@@ -234,6 +284,17 @@ async function createSafeBankRemainder(opts: {
   const reserved = { gp: 0, connect: 0, refund: 0, inflight: 0 };
   let reserveUnreadable = false;
   for (const purchase of liabilities.purchases) {
+    if (purchase.stripeMode !== opts.mode) continue;
+    if (purchase.currency.trim().toUpperCase() !== opts.currency.trim().toUpperCase()) {
+      if (purchase.pendingTransferMinor > 0 || purchase.pendingFundingMinor > 0) {
+        reserveUnreadable = true;
+        continue;
+      }
+      const cross = classifyCrossCurrencyReserve(purchase, opts.currency);
+      if (cross.code) reserveUnreadable = true;
+      else reserved.connect += cross.minor;
+      continue;
+    }
     const row = reservePurchase(purchase);
     if (row.blockedCode) reserveUnreadable = true;
     reserved.gp += row.gpMinor;
@@ -258,7 +319,8 @@ async function createSafeBankRemainder(opts: {
     currencies: [{ currency: opts.currency, destinationReady: destination.verified }],
   });
   const cutoverAllowed = cutover.allowed && opts.hadPriorSuccess;
-  if (plan.amountMinor === 0 || !destination.verified) {
+  const bankKnown = destination.verified || destination.dashboardConfirmation === "recorded";
+  if (plan.amountMinor === 0 || !bankKnown) {
     return { amountMinor: 0, code: plan.code, cutoverAllowed, rollbackToDailyAllowed: rollback.allowed };
   }
   if (!opts.hadPriorSuccess) {
@@ -374,41 +436,41 @@ async function createSafeBankRemainder(opts: {
   }
 }
 
-async function discoverCurrencies(mode: StripeMode, bankOn: boolean): Promise<{
+async function discoverCurrencies(
+  mode: StripeMode,
+  settlementCurrencies: readonly string[],
+): Promise<{
   currencies: string[];
   scanComplete: boolean;
 }> {
-  const rows = await prisma.protectedTransaction.findMany({
-    where: { stripeMode: mode, fundedAt: { not: null } },
-    select: { currency: true },
-    distinct: ["currency"],
-    take: PLATFORM_BALANCE_RESERVE_SCAN_CAP + 1,
-  });
   const attempts = await prisma.platformBankPayoutAttempt.findMany({
     where: { stripeMode: mode, status: { in: [...OPEN_BANK] } },
     select: { currency: true },
     distinct: ["currency"],
   });
-  const currencies = new Set<string>([
-    ...rows.map((row) => row.currency.toUpperCase()),
-    ...attempts.map((row) => row.currency.toUpperCase()),
-  ]);
-  if (bankOn) {
-    try {
-      const balance = await getStripe(mode).balance.retrieve();
-      if (balance.livemode === (mode === "LIVE")) {
-        for (const entry of balance.available) {
-          if ((entry.source_types?.card ?? 0) > 0) currencies.add(entry.currency.toUpperCase());
-        }
-      }
-    } catch {
-      return { currencies: [...currencies], scanComplete: false };
+  const openAttemptCurrencies = attempts.map((row) => row.currency);
+  try {
+    const balance = await getStripe(mode).balance.retrieve();
+    if (balance.livemode !== (mode === "LIVE")) {
+      return {
+        currencies: bankCurrencies({ balanceCurrencies: [], settlementCurrencies, openAttemptCurrencies }),
+        scanComplete: false,
+      };
     }
+    return {
+      currencies: bankCurrencies({
+        balanceCurrencies: listedBalanceCurrencies([...balance.available, ...balance.pending]),
+        settlementCurrencies,
+        openAttemptCurrencies,
+      }),
+      scanComplete: true,
+    };
+  } catch {
+    return {
+      currencies: bankCurrencies({ balanceCurrencies: [], settlementCurrencies, openAttemptCurrencies }),
+      scanComplete: false,
+    };
   }
-  return {
-    currencies: [...currencies],
-    scanComplete: rows.length <= PLATFORM_BALANCE_RESERVE_SCAN_CAP,
-  };
 }
 
 export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; now?: Date }): Promise<{
@@ -436,7 +498,8 @@ export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; 
   if (!fundingOn && !bankOn && open === 0) {
     return { ok: true, skipped: "disabled", mode, fundingOn, bankOn, currencies: [] };
   }
-  const discovered = await discoverCurrencies(mode, bankOn);
+  const liabilities = await loadPlatformLiabilities(mode);
+  const discovered = await discoverCurrencies(mode, settlementLiabilityCurrencies(liabilities.purchases, mode));
   const currencies = discovered.currencies;
   const results = [];
   for (const currency of currencies) {
@@ -461,6 +524,7 @@ export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; 
             now,
             scanComplete: discovered.scanComplete,
             hadPriorSuccess: report.hadPriorSuccess,
+            liabilities,
           })
         : { amountMinor: 0, code: "BANK_REMAINDER_DISABLED", cutoverAllowed: false, rollbackToDailyAllowed: false };
       report.code = bank.code;

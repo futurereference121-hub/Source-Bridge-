@@ -15,19 +15,29 @@ import {
 } from "@/lib/payments/flags";
 import {
   assessPlatformBank,
+  bankCurrencies,
   classifyStripeReadFailure,
   evaluateModeReadiness,
+  listedBalanceAmounts,
+  listedBalanceCurrencies,
+  outstandingConnectReserves,
   readPlatformExternalAccounts,
+  settlementBlockForCurrency,
+  settlementLiabilityCurrencies,
 } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { PLATFORM_WEBHOOK_EVENTS } from "@/lib/payments/stripe/webhooks";
+import { dashboardConfirmationForAccount, retrievedAccountLivemode, stripeAccountIdentity } from "@/lib/payments/payout-rail/platform-bank-confirmation";
+import { loadPlatformLiabilities } from "@/lib/payments/payout-rail/platform-balance-run";
 
 export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
   const mode = normalizeStripeMode(stripeMode);
   const moneyMovementEnabled =
     isPlatformBankRemainderPayoutEnabled(mode) ||
     (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney(mode));
-  const currencies = await currenciesForRead(mode);
+  const liabilities = await loadPlatformLiabilities(mode);
+  const balance = await currenciesForRead(mode, settlementLiabilityCurrencies(liabilities.purchases, mode));
+  const currencies = balance.currencies;
   const results = [];
   for (const currency of currencies) {
     const existing = await prisma.platformBalanceCoordination.findUnique({
@@ -37,12 +47,17 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
     const observed = await observeCurrency(mode, currency);
     const decision = evaluateModeReadiness({
       mode,
+      currency,
       scheduleInterval: observed.scheduleInterval,
       destinationReady: observed.destinationReady,
       providerReadsOk: observed.providerReadsOk,
-      liabilitiesReadable: observed.liabilitiesReadable,
+      liabilitiesReadable: observed.liabilitiesReadable && liabilities.scanComplete,
       unresolvedMovements: observed.unresolvedMovements,
       bankInformation: observed.bankInformation,
+      dashboardConfirmation: observed.dashboardConfirmation,
+      settlementCode: liabilities.scanComplete
+        ? settlementBlockForCurrency(liabilities.purchases, currency, mode)
+        : "GP_RESERVE_UNKNOWN",
       priorReadinessPass: Boolean(existing?.readinessCheckedAt),
       moneyMovementEnabled,
     });
@@ -69,6 +84,9 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
       defaultDestinationRouting: observed.defaultDestinationRouting,
       bankConfigurationVerified: observed.bankConfigurationVerified,
       bankInformation: observed.bankInformation,
+      dashboardConfirmation: observed.dashboardConfirmation,
+      accountSuffix: observed.accountSuffix,
+      accountHash8: observed.accountHash8,
       liabilitiesReadable: observed.liabilitiesReadable,
       fundedPurchaseCount: observed.fundedPurchaseCount,
       scanComplete: observed.scanComplete,
@@ -86,6 +104,12 @@ export async function runReadOnlyPlatformReadiness(stripeMode: StripeMode) {
     quotesCreated: 0 as const,
     payoutsCreated: 0 as const,
     webhooks,
+    balance: {
+      ok: balance.ok,
+      available: balance.available,
+      pending: balance.pending,
+    },
+    outstandingConnect: outstandingConnectReserves(liabilities.purchases, mode),
     currencies: results,
   };
 }
@@ -114,16 +138,37 @@ async function readWebhookCoverage(mode: StripeMode): Promise<{ covered: string[
   }
 }
 
-async function currenciesForRead(mode: StripeMode): Promise<string[]> {
-  const rows = await prisma.protectedTransaction.findMany({
-    where: { stripeMode: mode, fundedAt: { not: null } },
+async function currenciesForRead(
+  mode: StripeMode,
+  settlementCurrencies: readonly string[],
+): Promise<{
+  currencies: string[];
+  ok: boolean;
+  available: { currency: string; amountMinor: number | null }[] | null;
+  pending: { currency: string; amountMinor: number | null }[] | null;
+}> {
+  const attempts = await prisma.platformBankPayoutAttempt.findMany({
+    where: { stripeMode: mode, status: { in: ["PENDING", "UNCERTAIN"] } },
     select: { currency: true },
     distinct: ["currency"],
-    take: 20,
   });
-  const currencies = new Set(rows.map((row) => row.currency.toUpperCase()));
-  if (currencies.size === 0) currencies.add("GBP");
-  return [...currencies];
+  const openAttemptCurrencies = attempts.map((row) => row.currency);
+  const currenciesFor = (balanceCurrencies: readonly string[]) =>
+    bankCurrencies({ balanceCurrencies, settlementCurrencies, openAttemptCurrencies });
+  try {
+    const balance = await getStripe(mode).balance.retrieve();
+    if (typeof balance.livemode !== "boolean" || balance.livemode !== (mode === "LIVE")) {
+      return { currencies: currenciesFor([]), ok: false, available: null, pending: null };
+    }
+    return {
+      currencies: currenciesFor(listedBalanceCurrencies([...balance.available, ...balance.pending])),
+      ok: true,
+      available: listedBalanceAmounts(balance.available),
+      pending: listedBalanceAmounts(balance.pending),
+    };
+  } catch {
+    return { currencies: currenciesFor([]), ok: false, available: null, pending: null };
+  }
 }
 
 type ProviderRead = {
@@ -177,12 +222,17 @@ async function observeCurrency(mode: StripeMode, currency: string) {
   let bankInformation: "unavailable" | "verified" | "unverified" = "unavailable";
   let defaultDestinationRouting = "supported" as const;
   let bankConfigurationVerified = false;
+  let dashboardConfirmation: "recorded" | "absent" = "absent";
+  let accountSuffix = "";
+  let accountHash8 = "";
+  let accountLivemode: boolean | null = null;
   const stripe = getStripe(mode);
   const apiVersion = apiVersionOf(stripe);
   let accountId = "";
   try {
     const account = await stripe.accounts.retrieve();
     accountId = account.id || "";
+    accountLivemode = retrievedAccountLivemode(account);
     const interval = account.settings?.payouts?.schedule?.interval;
     scheduleInterval = typeof interval === "string" ? interval : null;
     if (!accountId || !scheduleInterval) {
@@ -208,6 +258,17 @@ async function observeCurrency(mode: StripeMode, currency: string) {
   } catch (err) {
     providerReadsOk = false;
     reads.push(providerRead("accounts.retrieve", apiVersion, err));
+  }
+  if (accountId && accountLivemode !== null) {
+    const identity = stripeAccountIdentity(accountId);
+    accountSuffix = identity.suffix;
+    accountHash8 = identity.hash8;
+    dashboardConfirmation = await dashboardConfirmationForAccount({
+      stripeMode: mode,
+      currency,
+      accountId,
+      livemode: accountLivemode,
+    });
   }
   try {
     const balance = await stripe.balance.retrieve();
@@ -271,6 +332,9 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     defaultDestinationRouting,
     bankConfigurationVerified,
     bankInformation,
+    dashboardConfirmation,
+    accountSuffix,
+    accountHash8,
     liabilitiesReadable,
     unresolvedMovements,
     fundedPurchaseCount: purchases.length,
