@@ -68,20 +68,28 @@ async function readPlatformBank(
   failed: boolean;
   dashboardConfirmation: "recorded" | "absent";
 }> {
-  const account = await getStripe(mode).accounts.retrieve();
+  const stripe = getStripe(mode);
+  const account = await stripe.accounts.retrieve();
   const assessment = assessPlatformBank(readPlatformExternalAccounts(account), {
     currency,
     livemode: mode === "LIVE",
   });
-  const livemode = retrievedAccountLivemode(account);
-  const dashboardConfirmation = livemode === null
-    ? "absent"
-    : await dashboardConfirmationForAccount({
-        stripeMode: mode,
-        currency,
-        accountId: account.id || "",
-        livemode,
-      });
+  let modeEvidenceLivemode: boolean | null = null;
+  try {
+    const balance = await stripe.balance.retrieve();
+    if (typeof balance.livemode === "boolean" && balance.livemode === (mode === "LIVE")) {
+      modeEvidenceLivemode = balance.livemode;
+    }
+  } catch {
+    modeEvidenceLivemode = null;
+  }
+  const dashboardConfirmation = await dashboardConfirmationForAccount({
+    stripeMode: mode,
+    currency,
+    accountId: account.id || "",
+    accountLivemode: retrievedAccountLivemode(account),
+    modeEvidenceLivemode,
+  });
   return {
     verified: assessment.bankConfigurationVerified,
     information: assessment.bankInformation,

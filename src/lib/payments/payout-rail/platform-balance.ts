@@ -19,6 +19,7 @@ import {
   STRIPE_IDEMPOTENCY_WINDOW_MS,
 } from "./proceeds-funding.ts";
 import { connectSettlementTransferMinor } from "./connect-settlement-amount.ts";
+import { idHash8 } from "./proceeds-preflight-shape.ts";
 
 export const PLATFORM_BALANCE_LOCK_STALE_MS = 15 * 60 * 1000;
 export const PLATFORM_BALANCE_STALL_MS = 30 * 60 * 1000;
@@ -164,6 +165,32 @@ export function dashboardBankConfirmationMatches(input: {
     /^[a-f0-9]{8}$/.test(input.recordedAccountHash) &&
     input.recordedAccountHash === input.currentAccountHash
   );
+}
+
+/**
+ * TEST platform confirmation identity.
+ * Mode comes from the selected TEST client plus a mode-bearing object (Balance).
+ * Account identity is checked separately. A missing Account.livemode is allowed.
+ */
+export function assessTestPlatformAccount(input: {
+  stripeMode: string;
+  accountId: string;
+  accountLivemode: boolean | null;
+  modeEvidenceLivemode: boolean | null;
+  expectedSuffix?: string;
+}):
+  | { ok: true; suffix: string; hash8: string }
+  | { ok: false; code: string } {
+  if (input.stripeMode !== "TEST") return { ok: false, code: "TEST_MODE_REQUIRED" };
+  if (input.modeEvidenceLivemode !== false) return { ok: false, code: "TEST_MODE_EVIDENCE_MISSING" };
+  if (input.accountLivemode === true) return { ok: false, code: "LIVE_ACCOUNT_OBJECT" };
+  const id = input.accountId.trim();
+  if (!id) return { ok: false, code: "ACCOUNT_ID_MISSING" };
+  const suffix = id.slice(-4);
+  const hash8 = idHash8(id);
+  const expected = input.expectedSuffix ?? DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX;
+  if (suffix !== expected) return { ok: false, code: "ACCOUNT_IDENTITY_MISMATCH" };
+  return { ok: true, suffix, hash8 };
 }
 
 export type PlatformBankInformation = "unavailable" | "verified" | "unverified";

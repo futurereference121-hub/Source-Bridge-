@@ -226,6 +226,7 @@ async function observeCurrency(mode: StripeMode, currency: string) {
   let accountSuffix = "";
   let accountHash8 = "";
   let accountLivemode: boolean | null = null;
+  let modeEvidenceLivemode: boolean | null = null;
   const stripe = getStripe(mode);
   const apiVersion = apiVersionOf(stripe);
   let accountId = "";
@@ -233,6 +234,13 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     const account = await stripe.accounts.retrieve();
     accountId = account.id || "";
     accountLivemode = retrievedAccountLivemode(account);
+    // Account identity does not depend on Account.livemode. The pinned Account
+    // object may omit that field; Balance supplies the mode-bearing evidence.
+    if (accountId) {
+      const identity = stripeAccountIdentity(accountId);
+      accountSuffix = identity.suffix;
+      accountHash8 = identity.hash8;
+    }
     const interval = account.settings?.payouts?.schedule?.interval;
     scheduleInterval = typeof interval === "string" ? interval : null;
     if (!accountId || !scheduleInterval) {
@@ -259,17 +267,6 @@ async function observeCurrency(mode: StripeMode, currency: string) {
     providerReadsOk = false;
     reads.push(providerRead("accounts.retrieve", apiVersion, err));
   }
-  if (accountId && accountLivemode !== null) {
-    const identity = stripeAccountIdentity(accountId);
-    accountSuffix = identity.suffix;
-    accountHash8 = identity.hash8;
-    dashboardConfirmation = await dashboardConfirmationForAccount({
-      stripeMode: mode,
-      currency,
-      accountId,
-      livemode: accountLivemode,
-    });
-  }
   try {
     const balance = await stripe.balance.retrieve();
     if (typeof balance.livemode !== "boolean" || balance.livemode !== (mode === "LIVE")) {
@@ -280,11 +277,21 @@ async function observeCurrency(mode: StripeMode, currency: string) {
         stripeCode: typeof balance.livemode === "boolean" ? "livemode_mismatch" : "livemode_missing",
       }));
     } else {
+      modeEvidenceLivemode = balance.livemode;
       reads.push(providerRead("balance.retrieve", apiVersion));
     }
   } catch (err) {
     providerReadsOk = false;
     reads.push(providerRead("balance.retrieve", apiVersion, err));
+  }
+  if (accountId) {
+    dashboardConfirmation = await dashboardConfirmationForAccount({
+      stripeMode: mode,
+      currency,
+      accountId,
+      accountLivemode,
+      modeEvidenceLivemode,
+    });
   }
   const purchases = await prisma.protectedTransaction.findMany({
     where: {

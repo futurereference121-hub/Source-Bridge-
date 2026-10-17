@@ -1,12 +1,16 @@
 import { prisma } from "@/lib/db";
-import { idHash8 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
 import {
-  DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
   DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+  assessTestPlatformAccount,
   dashboardBankConfirmationMatches,
 } from "@/lib/payments/payout-rail/platform-balance";
+import { idHash8 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
 import type { StripeMode } from "@/lib/payments/flags";
 
+/**
+ * Account.livemode is not a reliable TEST contract for API 2025-08-27.basil.
+ * An omitted field is not LIVE. An explicit true is LIVE and must be rejected.
+ */
 export function retrievedAccountLivemode(account: object): boolean | null {
   const value = (account as { livemode?: unknown }).livemode;
   return value === true ? true : value === false ? false : null;
@@ -27,19 +31,25 @@ export async function dashboardConfirmationForAccount(opts: {
   stripeMode: StripeMode;
   currency: string;
   accountId: string;
-  livemode: boolean;
+  /** Mode-bearing evidence such as Balance.livemode. Account.livemode is not required. */
+  modeEvidenceLivemode: boolean | null;
+  accountLivemode?: boolean | null;
 }): Promise<"recorded" | "absent"> {
   const currency = opts.currency.trim().toUpperCase();
-  const identity = stripeAccountIdentity(opts.accountId);
-  if (opts.stripeMode !== "TEST" || currency !== "GBP" || opts.livemode !== false) return "absent";
-  if (identity.suffix !== DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX || !identity.hash8) return "absent";
+  const assessed = assessTestPlatformAccount({
+    stripeMode: opts.stripeMode,
+    accountId: opts.accountId,
+    accountLivemode: opts.accountLivemode ?? null,
+    modeEvidenceLivemode: opts.modeEvidenceLivemode,
+  });
+  if (!assessed.ok || currency !== "GBP") return "absent";
   try {
     const row = await prisma.platformBankDashboardConfirmation.findUnique({
       where: {
         stripeMode_currency_stripeAccountHash: {
           stripeMode: "TEST",
           currency: "GBP",
-          stripeAccountHash: identity.hash8,
+          stripeAccountHash: assessed.hash8,
         },
       },
     });
@@ -51,7 +61,7 @@ export async function dashboardConfirmationForAccount(opts: {
       livemode: false,
       evidence: row.evidence,
       recordedAccountHash: row.stripeAccountHash,
-      currentAccountHash: identity.hash8,
+      currentAccountHash: assessed.hash8,
     })
       ? "recorded"
       : "absent";
@@ -61,4 +71,4 @@ export async function dashboardConfirmationForAccount(opts: {
   }
 }
 
-export { DASHBOARD_BANK_CONFIRMATION_EVIDENCE };
+export { DASHBOARD_BANK_CONFIRMATION_EVIDENCE, assessTestPlatformAccount };

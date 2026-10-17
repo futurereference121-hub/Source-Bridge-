@@ -3,11 +3,11 @@ import { idHash8 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
 import { isPlatformBalanceReadinessEnabled } from "@/lib/payments/flags";
 import { prisma } from "@/lib/db";
 import {
-  DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
   DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
   DASHBOARD_BANK_CONFIRMATION_STATEMENT,
+  assessTestPlatformAccount,
 } from "@/lib/payments/payout-rail/platform-balance";
-import { stripeAccountIdentity, retrievedAccountLivemode } from "@/lib/payments/payout-rail/platform-bank-confirmation";
+import { retrievedAccountLivemode } from "@/lib/payments/payout-rail/platform-bank-confirmation";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { jsonError } from "@/lib/validation";
 
@@ -17,6 +17,8 @@ export const dynamic = "force-dynamic";
 /**
  * Record an admin Dashboard confirmation for the TEST platform GBP bank.
  * The account id is read from Stripe. The client cannot name an account.
+ * TEST mode is established by the TEST client and Balance.livemode.
+ * Account.livemode is not required by the pinned Account schema.
  * This does not verify the bank through the Stripe API and does not pay out.
  */
 export async function POST(request: Request) {
@@ -34,11 +36,20 @@ export async function POST(request: Request) {
     if (evidence !== DASHBOARD_BANK_CONFIRMATION_EVIDENCE) return jsonError("Dashboard evidence is required", 409);
     if (statement !== DASHBOARD_BANK_CONFIRMATION_STATEMENT) return jsonError("Confirmation statement does not match", 409);
 
-    const account = await getStripe("TEST").accounts.retrieve();
-    if (retrievedAccountLivemode(account) !== false || !account.id) return jsonError("TEST account was not retrieved", 409);
-    const identity = stripeAccountIdentity(account.id);
-    if (identity.suffix !== DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX) {
-      return jsonError("TEST account does not match the confirmed Dashboard account", 409);
+    const stripe = getStripe("TEST");
+    const account = await stripe.accounts.retrieve();
+    const balance = await stripe.balance.retrieve();
+    const assessed = assessTestPlatformAccount({
+      stripeMode: "TEST",
+      accountId: account.id || "",
+      accountLivemode: retrievedAccountLivemode(account),
+      modeEvidenceLivemode: typeof balance.livemode === "boolean" ? balance.livemode : null,
+    });
+    if (!assessed.ok) {
+      if (assessed.code === "ACCOUNT_IDENTITY_MISMATCH") {
+        return jsonError("TEST account does not match the confirmed Dashboard account", 409);
+      }
+      return jsonError("TEST account was not retrieved", 409);
     }
 
     await prisma.platformBankDashboardConfirmation.upsert({
@@ -46,20 +57,20 @@ export async function POST(request: Request) {
         stripeMode_currency_stripeAccountHash: {
           stripeMode: "TEST",
           currency: "GBP",
-          stripeAccountHash: identity.hash8,
+          stripeAccountHash: assessed.hash8,
         },
       },
       create: {
         stripeMode: "TEST",
         currency: "GBP",
-        stripeAccountHash: identity.hash8,
-        accountSuffix: identity.suffix,
+        stripeAccountHash: assessed.hash8,
+        accountSuffix: assessed.suffix,
         evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
         statement: DASHBOARD_BANK_CONFIRMATION_STATEMENT,
         confirmedByHash: idHash8(admin.id),
       },
       update: {
-        accountSuffix: identity.suffix,
+        accountSuffix: assessed.suffix,
         evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
         statement: DASHBOARD_BANK_CONFIRMATION_STATEMENT,
         confirmedByHash: idHash8(admin.id),
@@ -72,8 +83,8 @@ export async function POST(request: Request) {
       stripeMode: "TEST" as const,
       currency: "GBP" as const,
       evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
-      accountSuffix: identity.suffix,
-      accountHash8: identity.hash8,
+      accountSuffix: assessed.suffix,
+      accountHash8: assessed.hash8,
       bankConfigurationVerified: false,
     });
   } catch (err) {

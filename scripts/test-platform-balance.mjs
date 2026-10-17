@@ -58,6 +58,7 @@ const {
   outstandingConnectReserves,
   settlementBlockForCurrency,
   settlementLiabilityCurrencies,
+  assessTestPlatformAccount,
 } = balance;
 const { applyOutstandingChargeSettlement, connectSettlementTransferMinor, shapeOutstandingChargeSettlement } = settlementAmount;
 const { decideFundingRequest, completedPurchaseBlocksNewFunding, fundingScanIncludesPurchase } = funding;
@@ -1026,7 +1027,68 @@ assert.match(confirmationRoute, /getStripe\("TEST"\)/);
 assert.doesNotMatch(confirmationRoute, /getStripe\("LIVE"\)/);
 assert.match(confirmationRoute, /currency === "USD"/);
 assert.match(confirmationRoute, /bankConfigurationVerified: false/);
+assert.match(confirmationRoute, /assessTestPlatformAccount/);
+assert.match(confirmationRoute, /balance\.retrieve/);
+assert.doesNotMatch(confirmationRoute, /retrievedAccountLivemode\(account\) !== false/);
 assert.doesNotMatch(confirmationRoute, /payouts\.create|accounts\.update|ready:\s*true/);
+const confirmationModule = read("src/lib/payments/payout-rail/platform-bank-confirmation.ts");
+assert.match(confirmationModule, /modeEvidenceLivemode/);
+assert.match(confirmationModule, /Account\.livemode is not a reliable TEST contract/);
+assert.match(confirmationModule, /An omitted field is not LIVE/);
+const noLivemodeOk = assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: null,
+  modeEvidenceLivemode: false,
+});
+assert.equal(noLivemodeOk.ok, true);
+assert.equal(noLivemodeOk.ok && noLivemodeOk.suffix, "MV9g");
+assert.match(noLivemodeOk.ok ? noLivemodeOk.hash8 : "", /^[a-f0-9]{8}$/);
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: false,
+  modeEvidenceLivemode: false,
+}).ok, true);
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_wrong_XXXX",
+  accountLivemode: null,
+  modeEvidenceLivemode: false,
+}).code, "ACCOUNT_IDENTITY_MISMATCH");
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: true,
+  modeEvidenceLivemode: false,
+}).code, "LIVE_ACCOUNT_OBJECT");
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: null,
+  modeEvidenceLivemode: true,
+}).code, "TEST_MODE_EVIDENCE_MISSING");
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: null,
+  modeEvidenceLivemode: null,
+}).code, "TEST_MODE_EVIDENCE_MISSING");
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "LIVE",
+  accountId: "acct_test_platform_MV9g",
+  accountLivemode: null,
+  modeEvidenceLivemode: false,
+}).code, "TEST_MODE_REQUIRED");
+assert.equal(assessTestPlatformAccount({
+  stripeMode: "TEST",
+  accountId: "",
+  accountLivemode: null,
+  modeEvidenceLivemode: false,
+}).code, "ACCOUNT_ID_MISSING");
+assert.match(readiness, /modeEvidenceLivemode/);
+assert.match(readiness, /Account identity does not depend on Account\.livemode/);
+assert.doesNotMatch(readiness, /accountId && accountLivemode !== null/);
 const confirmPage = read("src/app/admin/platform-balance/page.tsx");
 const confirmButton = read("src/app/admin/platform-balance/confirm-gbp-bank-button.tsx");
 assert.match(confirmPage, /ConfirmGbpBankButton/);
