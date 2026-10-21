@@ -446,6 +446,25 @@ export function outstandingConnectReserves(
   return rows;
 }
 
+/**
+ * Connect seller/dispute holds that must stay out of GP proceeds funding
+ * for this bank currency. An unreadable hold is a code, not zero.
+ */
+export function connectReserveForCurrency(
+  purchases: readonly PurchaseLiability[],
+  mode: "TEST" | "LIVE",
+  currency: string,
+): { reservedMinor: number; code: string | null } {
+  const bank = currency.trim().toUpperCase();
+  let reservedMinor = 0;
+  for (const row of outstandingConnectReserves(purchases, mode)) {
+    if (row.reserveCode) return { reservedMinor: 0, code: row.reserveCode };
+    if (row.reserveMinor == null) return { reservedMinor: 0, code: "GP_RESERVE_UNKNOWN" };
+    if (row.reserveCurrency === bank) reservedMinor += row.reserveMinor;
+  }
+  return { reservedMinor, code: null };
+}
+
 /** Bank currencies come from settlement balances and known settlement currencies. */
 export function bankCurrencies(input: {
   balanceCurrencies: readonly string[];

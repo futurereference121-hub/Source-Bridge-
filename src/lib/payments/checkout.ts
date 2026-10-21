@@ -503,7 +503,19 @@ export async function markTxnFundedFromWebhook(opts: {
   const txn = await prisma.protectedTransaction.findFirst({
     where: { stripePaymentIntentId: opts.paymentIntentId },
   });
-  if (!txn) return { handled: false, reason: "txn_not_found" };
+  if (!txn) {
+    const tombstone = await prisma.financialAuditEvent.findFirst({
+      where: {
+        action: "TEST_CONNECT_PURCHASE_REMOVED",
+        metaJson: { contains: `"paymentIntentId":"${opts.paymentIntentId}"` },
+      },
+      select: { id: true },
+    });
+    if (tombstone) {
+      return { handled: true, reason: "removed_test_connect_tombstone" };
+    }
+    return { handled: false, reason: "txn_not_found" };
+  }
 
   assertStripeModeCompatible(txn.stripeMode);
 

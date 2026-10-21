@@ -80,6 +80,12 @@ assert.match(
   /markTxnFundedFromWebhook/,
   "webhook still confirms via the same fund helper (idempotent)",
 );
+assert.match(
+  checkout,
+  /TEST_CONNECT_PURCHASE_REMOVED/,
+  "late TEST webhooks must not recreate deleted Connect purchases",
+);
+assert.match(checkout, /removed_test_connect_tombstone/);
 
 const notify = read("src/lib/payment-notifications.ts");
 assert.match(

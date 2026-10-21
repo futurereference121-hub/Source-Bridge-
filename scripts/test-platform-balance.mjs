@@ -56,6 +56,7 @@ const {
   listedBalanceAmounts,
   listedBalanceCurrencies,
   outstandingConnectReserves,
+  connectReserveForCurrency,
   settlementBlockForCurrency,
   settlementLiabilityCurrencies,
   assessTestPlatformAccount,
@@ -986,6 +987,9 @@ const settlementFn = fundingRunner.slice(
 );
 assert.match(settlementFn, /livemode: charge\.livemode/);
 assert.doesNotMatch(settlementFn, /livemode\?:/);
+assert.match(fundingRunner, /connectReserveForCurrency/);
+assert.match(fundingRunner, /loadPlatformLiabilities/);
+assert.match(fundingRunner, /connectReserveCode/);
 assert.doesNotMatch(readiness, /payouts\.create|prepareQuoteOnly|transfers\.create|refunds\.create|accounts\.update/);
 const readinessRoute = read("src/app/api/admin/platform-balance-readiness/route.ts");
 assert.match(readinessRoute, /runReadOnlyPlatformReadiness\("TEST"\)/);
@@ -1119,6 +1123,38 @@ assert.equal(reserveRows[0].settlementCurrency, "GBP");
 assert.equal(reserveRows[0].reserveMinor, connectSettlementTransferMinor(2500, 2550, 2014));
 assert.equal(reserveRows[0].readOk, true);
 assert.equal(reserveRows[0].readCode, null);
+const gbpConnectHold = connectReserveForCurrency([
+  {
+    ...connectPurchase({
+      currency: "USD",
+      sellerEntitlementMinor: 2500,
+      totalChargeMinor: 2550,
+      protectionFeeMinor: 50,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 2550,
+      balanceTransactionAmountMinor: 2014,
+      purchaseHash: "abcd1234",
+    }),
+  },
+], "TEST", "GBP");
+assert.equal(gbpConnectHold.code, null);
+assert.equal(gbpConnectHold.reservedMinor, connectSettlementTransferMinor(2500, 2550, 2014));
+const gbpIgnoresUsdBank = connectReserveForCurrency([
+  {
+    ...connectPurchase({
+      currency: "USD",
+      sellerEntitlementMinor: 2500,
+      totalChargeMinor: 2550,
+      protectionFeeMinor: 50,
+      settlementCurrency: "GBP",
+      chargeAmountMinor: 2550,
+      balanceTransactionAmountMinor: 2014,
+      purchaseHash: "abcd1234",
+    }),
+  },
+], "TEST", "USD");
+assert.equal(gbpIgnoresUsdBank.code, null);
+assert.equal(gbpIgnoresUsdBank.reservedMinor, 0);
 assert.deepEqual(listedBalanceAmounts([{ currency: "gbp", amount: 0 }, { currency: "gbp", amount: 3878 }]), [
   { currency: "GBP", amountMinor: 0 },
   { currency: "GBP", amountMinor: 3878 },

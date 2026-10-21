@@ -42,6 +42,7 @@ import {
   type ChargeSettlementInput,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
+import { connectReserveForCurrency } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { withPlatformBalanceLock, fencedProviderWrite } from "@/lib/payments/payout-rail/platform-balance-lock";
 import {
@@ -123,9 +124,20 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
       _sum: { amountMinor: true },
     }),
   ]);
+  const { loadPlatformLiabilities } = await import("@/lib/payments/payout-rail/platform-balance-run");
+  const liabilities = await loadPlatformLiabilities(mode);
+  const connect = connectReserveForCurrency(liabilities.purchases, mode, currency);
+  if (connect.code) {
+    return {
+      platformAvailableMinor: card,
+      reservedMinor: Number.MAX_SAFE_INTEGER,
+      connectReserveCode: connect.code,
+    };
+  }
   return {
     platformAvailableMinor: card,
-    reservedMinor: (transfers._sum.amountMinor ?? 0) + (legs._sum.amountMinor ?? 0),
+    reservedMinor: (transfers._sum.amountMinor ?? 0) + (legs._sum.amountMinor ?? 0) + connect.reservedMinor,
+    connectReserveCode: null as string | null,
   };
 }
 
@@ -784,6 +796,13 @@ async function fundOne(opts: {
     return false;
   }
   const room = await platformRoom(opts.mode, opts.txn.currency, opts.funding.id);
+  if (room.connectReserveCode) {
+    await prisma.gpProceedsFunding.update({
+      where: { id: opts.funding.id },
+      data: { status: "BLOCKED", failureCode: room.connectReserveCode },
+    });
+    return false;
+  }
   const decision = allocateGpProceedsFunding({
     payoutRail: opts.txn.payoutRail,
     stripeMode: opts.mode,
