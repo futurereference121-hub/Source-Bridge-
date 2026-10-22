@@ -13,6 +13,7 @@ import {
   nextBankRemainderAttempt,
   planSafeBankRemainder,
   platformBalanceHealth,
+  workerWarmupEvidence,
   PLATFORM_BALANCE_RESERVE_SCAN_CAP,
   assessPlatformBank,
   readPlatformExternalAccounts,
@@ -590,14 +591,34 @@ export async function platformBalanceMonitor(mode: StripeMode, now = new Date())
   const enabled =
     isPlatformBankRemainderPayoutEnabled(mode) ||
     (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney(mode));
-  return rows.map((row) => ({
-    currency: row.currency,
-    ...platformBalanceHealth({
+  const open = await prisma.platformBankPayoutAttempt.count({
+    where: { stripeMode: mode, status: { in: [...OPEN_BANK] } },
+  });
+  const coordinateSkip = !enabled && open === 0 ? ("disabled" as const) : null;
+  return rows.map((row) => {
+    const lastSuccessAtMs = row.lastSuccessAt ? row.lastSuccessAt.getTime() : null;
+    const warmup = workerWarmupEvidence({
+      lastSuccessAtMs,
+      lastStartedAtMs: row.lastStartedAt ? row.lastStartedAt.getTime() : null,
+    });
+    const health = platformBalanceHealth({
       nowMs: now.getTime(),
       enabled,
       lockedAtMs: row.lockedAt ? row.lockedAt.getTime() : null,
-      lastSuccessAtMs: row.lastSuccessAt ? row.lastSuccessAt.getTime() : null,
-    }),
-    lastErrorCode: row.lastErrorCode,
-  }));
+      lastSuccessAtMs,
+    });
+    return {
+      currency: row.currency,
+      stalled: health.stalled,
+      code: health.code,
+      lastErrorCode: row.lastErrorCode || null,
+      lastSuccessAt: warmup.lastSuccessAt,
+      lastStartedAt: warmup.lastStartedAt,
+      readinessCheckedAt: row.readinessCheckedAt ? row.readinessCheckedAt.toISOString() : null,
+      readinessCode: row.readinessCode || null,
+      workerWarmupCompleted: warmup.completed,
+      workerEnabled: enabled,
+      coordinateSkip,
+    };
+  });
 }

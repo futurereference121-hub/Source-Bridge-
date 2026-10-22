@@ -61,6 +61,26 @@ export function platformBalanceHealth(opts: {
   return { stalled: false, code: "" };
 }
 
+/** Worker warmup is lastSuccessAt from a completed coordination lock, not readiness. */
+export function workerWarmupEvidence(opts: {
+  lastSuccessAtMs: number | null;
+  lastStartedAtMs: number | null;
+}): {
+  completed: boolean;
+  lastSuccessAt: string | null;
+  lastStartedAt: string | null;
+} {
+  return {
+    completed: opts.lastSuccessAtMs != null,
+    lastSuccessAt: opts.lastSuccessAtMs != null ? new Date(opts.lastSuccessAtMs).toISOString() : null,
+    lastStartedAt: opts.lastStartedAtMs != null ? new Date(opts.lastStartedAtMs).toISOString() : null,
+  };
+}
+
+export function readinessPassedCode(code: string | null | undefined): boolean {
+  return code === "READINESS_DAILY_SCHEDULE" || code === "READINESS_READY";
+}
+
 export type ExternalBankAccount = {
   id: string;
   object: string;
