@@ -74,8 +74,10 @@ const {
   dashboardBankConfirmationMatches,
   DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
   DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
+  DASHBOARD_BANK_CONFIRMATION_ACCOUNT_HASH8,
   DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
   DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  payoutScheduleIsolationFromAccountHashes,
 } = balance;
 const { applyOutstandingChargeSettlement, connectSettlementTransferMinor, shapeOutstandingChargeSettlement } = settlementAmount;
 const { decideFundingRequest, completedPurchaseBlocksNewFunding, fundingScanIncludesPurchase } = funding;
@@ -1039,18 +1041,44 @@ assert.equal(paying.code, "READINESS_READY");
 const liveCold = evaluateModeReadiness({ ...readinessInput, mode: "LIVE" });
 assert.equal(sharedScheduleCutover({ test: readyWhileDaily, live: liveCold }).allowed, false);
 assert.equal(sharedScheduleCutover({ test: readyWhileDaily, live: liveCold }).code, "LIVE_NOT_READY");
-assert.equal(PLATFORM_PAYOUT_SCHEDULE_ISOLATION, "SHARED_TEST_MODE_SANDBOX");
+assert.equal(DASHBOARD_BANK_CONFIRMATION_ACCOUNT_HASH8, "70f9bcea");
+assert.equal(DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8, "3a9b400a");
+assert.equal(
+  payoutScheduleIsolationFromAccountHashes("70f9bcea", "3a9b400a"),
+  "DISTINCT_PLATFORM_ACCOUNTS",
+);
+assert.equal(
+  payoutScheduleIsolationFromAccountHashes("3a9b400a", "3a9b400a"),
+  "SHARED_TEST_MODE_SANDBOX",
+);
+assert.equal(PLATFORM_PAYOUT_SCHEDULE_ISOLATION, "DISTINCT_PLATFORM_ACCOUNTS");
 assert.equal(
   sharedScheduleCutover({ test: { ready: true }, live: { ready: true } }).code,
   "SHARED_CUTOVER_READY",
 );
 assert.equal(
-  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).allowed,
+  sharedScheduleCutover({
+    test: { ready: true },
+    live: { ready: true },
+    isolation: "DISTINCT_PLATFORM_ACCOUNTS",
+  }).code,
+  "DISTINCT_ACCOUNT_SCHEDULES",
+);
+assert.equal(
+  testOnlyManualScheduleDecision("SHARED_TEST_MODE_SANDBOX").allowed,
   false,
 );
 assert.equal(
-  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).code,
+  testOnlyManualScheduleDecision("SHARED_TEST_MODE_SANDBOX").code,
   "SHARED_SCHEDULE_WITH_LIVE",
+);
+assert.equal(
+  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).allowed,
+  true,
+);
+assert.equal(
+  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).code,
+  "DISTINCT_ACCOUNT_SCHEDULE",
 );
 assert.equal(
   dualModeManualScheduleActivation({
@@ -1067,6 +1095,26 @@ assert.equal(
     isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
     testReady: true,
     liveReady: true,
+    liveBankRemainderEnabled: true,
+    liveBankRemainderHealthy: true,
+  }).code,
+  "DISTINCT_ACCOUNT_SCHEDULES",
+);
+assert.equal(
+  dualModeManualScheduleActivation({
+    isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+    testReady: true,
+    liveReady: true,
+    liveBankRemainderEnabled: true,
+    liveBankRemainderHealthy: true,
+  }).allowed,
+  false,
+);
+assert.equal(
+  dualModeManualScheduleActivation({
+    isolation: "SHARED_TEST_MODE_SANDBOX",
+    testReady: true,
+    liveReady: true,
     liveBankRemainderEnabled: false,
     liveBankRemainderHealthy: false,
   }).code,
@@ -1074,7 +1122,7 @@ assert.equal(
 );
 assert.equal(
   dualModeManualScheduleActivation({
-    isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+    isolation: "SHARED_TEST_MODE_SANDBOX",
     testReady: true,
     liveReady: true,
     liveBankRemainderEnabled: true,
@@ -1219,6 +1267,7 @@ assert.match(monitorRoute, /platformBalanceMonitor\("LIVE"/);
 assert.match(monitorRoute, /payoutsAllowed: false/);
 assert.match(monitorRoute, /manualScheduleActivation: dualModeManualScheduleActivation/);
 assert.match(monitorRoute, /sharedScheduleCutover/);
+assert.match(monitorRoute, /isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION/);
 assert.match(monitorRoute, /moneyWorkerHealthy/);
 assert.doesNotMatch(monitorRoute, /workerWarmupCompleted \|\| !row.lastSuccessAt/);
 assert.doesNotMatch(monitorRoute, /payouts\.create|accounts\.update|interval:\s*["']manual["']/);
@@ -1236,6 +1285,9 @@ assert.match(lock, /recordAs === "money" \? \{ lastStartedAt: now \}/);
 assert.match(runner, /lastWarmupAtMs: coordination\?\.lastWarmupAt/);
 assert.match(runner, /lastWarmupAtMs: row.lastWarmupAt/);
 assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /AWAITING_FIRST_RUN/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /DISTINCT_PLATFORM_ACCOUNTS/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /70f9bcea/);
+assert.doesNotMatch(read("src/lib/payments/payout-rail/platform-balance.ts"), /availableMinor: -21100/);
 assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /Number\.isInteger\(input\.availableMinor\)/);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/platform-balance.ts"), /!whole\(input\.availableMinor\)/);
 assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /availableMinor <= reservedMinor/);
@@ -1559,14 +1611,14 @@ const liveNegativeKeepsReserve = plan({
   mode: "LIVE",
   currency: "GBP",
   scheduleInterval: "manual",
-  availableMinor: -21100,
+  availableMinor: -211,
   destinationReady: false,
   bankInformation: "unavailable",
   dashboardConfirmation: "recorded",
-  purchases: [connectPurchase({ stripeMode: "LIVE", currency: "GBP", sellerEntitlementMinor: 3600 })],
+  purchases: [connectPurchase({ stripeMode: "LIVE", currency: "GBP", sellerEntitlementMinor: 36 })],
 });
 assert.equal(liveNegativeKeepsReserve.amountMinor, 0);
-assert.equal(liveNegativeKeepsReserve.reservedMinor, 3600);
+assert.equal(liveNegativeKeepsReserve.reservedMinor, 36);
 assert.equal(liveNegativeKeepsReserve.code, "BANK_REMAINDER_NONE");
 assert.notEqual(liveNegativeKeepsReserve.code, "BALANCE_UNREAD");
 assert.notEqual(liveNegativeKeepsReserve.code, "BANK_REMAINDER_PAY");
@@ -1575,7 +1627,7 @@ assert.equal(plan({ scheduleInterval: "manual", availableMinor: 1.5 }).code, "BA
 assert.equal(
   plan({
     scheduleInterval: "manual",
-    availableMinor: -21100,
+    availableMinor: -211,
     providerReadOk: false,
   }).code,
   "PROVIDER_READ_FAILED",

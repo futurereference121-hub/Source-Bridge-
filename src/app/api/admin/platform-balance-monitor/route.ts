@@ -52,6 +52,7 @@ export async function GET() {
       sharedScheduleCutover: sharedScheduleCutover({
         test: { ready: testReady },
         live: { ready: liveReady },
+        isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
       }),
       manualScheduleActivation: dualModeManualScheduleActivation({
         isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,

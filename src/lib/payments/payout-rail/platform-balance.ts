@@ -227,6 +227,7 @@ export const PLATFORM_DEFAULT_DESTINATION_ROUTING = "supported" as const;
 /** Dashboard evidence is not a Stripe API bank verification. */
 export const DASHBOARD_BANK_CONFIRMATION_EVIDENCE = "DASHBOARD" as const;
 export const DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX = "MV9g";
+export const DASHBOARD_BANK_CONFIRMATION_ACCOUNT_HASH8 = "70f9bcea";
 export const DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX = "SOps";
 export const DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8 = "3a9b400a";
 export const DASHBOARD_BANK_CONFIRMATION_STATEMENT =
@@ -872,14 +873,33 @@ export async function resumeWorkerAfterTakeover<T>(opts: {
 export const DASHBOARD_SCHEDULE_LIMIT =
   "Application checks cannot stop a payout-schedule change made in the Stripe Dashboard.";
 
+export type PayoutScheduleIsolation =
+  | "SHARED_TEST_MODE_SANDBOX"
+  | "ISOLATED_SANDBOX"
+  | "DISTINCT_PLATFORM_ACCOUNTS";
+
 /**
- * Stripe's built-in test-mode sandbox shares Dashboard settings with live mode.
- * https://docs.stripe.com/testing-use-cases
- * A TEST API key does not isolate the platform payout schedule. Changing it
- * for TEST also changes LIVE. General (created) sandboxes isolate settings;
- * this runtime uses the production account's test-mode sandbox.
+ * TEST `…MV9g` / `70f9bcea` and LIVE `…SOps` / `3a9b400a` are different
+ * platform accounts. Their payout schedules are independent. A Dashboard
+ * save on one account does not change the other.
  */
-export const PLATFORM_PAYOUT_SCHEDULE_ISOLATION = "SHARED_TEST_MODE_SANDBOX" as const;
+export function payoutScheduleIsolationFromAccountHashes(
+  testAccountHash8: string | null | undefined,
+  liveAccountHash8: string | null | undefined,
+): PayoutScheduleIsolation {
+  const test = String(testAccountHash8 || "").trim().toLowerCase();
+  const live = String(liveAccountHash8 || "").trim().toLowerCase();
+  if (/^[a-f0-9]{8}$/.test(test) && /^[a-f0-9]{8}$/.test(live)) {
+    return test === live ? "SHARED_TEST_MODE_SANDBOX" : "DISTINCT_PLATFORM_ACCOUNTS";
+  }
+  return "DISTINCT_PLATFORM_ACCOUNTS";
+}
+
+export const PLATFORM_PAYOUT_SCHEDULE_ISOLATION: PayoutScheduleIsolation =
+  payoutScheduleIsolationFromAccountHashes(
+    DASHBOARD_BANK_CONFIRMATION_ACCOUNT_HASH8,
+    DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  );
 
 export type ModeReadiness = {
   mode: "TEST" | "LIVE";
@@ -943,26 +963,33 @@ export function readinessHeartbeatForMode(
   return rows.some((row) => row.stripeMode === mode && Boolean(row.readinessCheckedAt));
 }
 
-/** The shared schedule can change only when both modes have their own ready heartbeat. */
+/** A shared schedule can change only when both modes have their own ready heartbeat. Distinct accounts have no shared schedule. */
 export function sharedScheduleCutover(opts: {
   test: { ready: boolean };
   live: { ready: boolean };
+  isolation?: PayoutScheduleIsolation;
 }): { allowed: boolean; code: string } {
   if (!opts.test.ready) return { allowed: false, code: "TEST_NOT_READY" };
   if (!opts.live.ready) return { allowed: false, code: "LIVE_NOT_READY" };
+  if (opts.isolation === "DISTINCT_PLATFORM_ACCOUNTS") {
+    return { allowed: false, code: "DISTINCT_ACCOUNT_SCHEDULES" };
+  }
   return { allowed: true, code: "SHARED_CUTOVER_READY" };
 }
 
 /**
- * A TEST-only Dashboard schedule change is not a valid GP TEST step on this
- * account. The built-in test-mode sandbox shares payout settings with LIVE.
- * Isolated general sandboxes are a different Stripe product and are not this runtime.
+ * A TEST-only Dashboard schedule change is valid only when that save cannot
+ * edit the LIVE account's schedule. Shared test-mode sandbox settings still
+ * couple TEST and LIVE. Distinct platform accounts do not.
  */
 export function testOnlyManualScheduleDecision(
-  isolation: typeof PLATFORM_PAYOUT_SCHEDULE_ISOLATION | "ISOLATED_SANDBOX" = PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+  isolation: PayoutScheduleIsolation = PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
 ): { allowed: boolean; code: string } {
   if (isolation === "SHARED_TEST_MODE_SANDBOX") {
     return { allowed: false, code: "SHARED_SCHEDULE_WITH_LIVE" };
+  }
+  if (isolation === "DISTINCT_PLATFORM_ACCOUNTS") {
+    return { allowed: true, code: "DISTINCT_ACCOUNT_SCHEDULE" };
   }
   return { allowed: true, code: "ISOLATED_SCHEDULE" };
 }
@@ -970,20 +997,27 @@ export function testOnlyManualScheduleDecision(
 /**
  * Remaining activation for automatic TEST FA funding plus automatic LIVE
  * platform bank payouts. This function does not change the schedule and does
- * not enable money-movement flags.
+ * not enable money-movement flags. Distinct accounts keep independent
+ * schedule and readiness checks; there is no combined Dashboard save.
  */
 export function dualModeManualScheduleActivation(opts: {
-  isolation: typeof PLATFORM_PAYOUT_SCHEDULE_ISOLATION | "ISOLATED_SANDBOX";
+  isolation: PayoutScheduleIsolation;
   testReady: boolean;
   liveReady: boolean;
   liveBankRemainderEnabled: boolean;
   liveBankRemainderHealthy: boolean;
 }): { allowed: boolean; code: string } {
+  if (opts.isolation === "DISTINCT_PLATFORM_ACCOUNTS") {
+    if (!opts.testReady) return { allowed: false, code: "TEST_NOT_READY" };
+    if (!opts.liveReady) return { allowed: false, code: "LIVE_NOT_READY" };
+    return { allowed: false, code: "DISTINCT_ACCOUNT_SCHEDULES" };
+  }
   const testOnly = testOnlyManualScheduleDecision(opts.isolation);
   if (!testOnly.allowed) {
     const shared = sharedScheduleCutover({
       test: { ready: opts.testReady },
       live: { ready: opts.liveReady },
+      isolation: opts.isolation,
     });
     if (!shared.allowed) return shared;
     if (!opts.liveBankRemainderEnabled) {
