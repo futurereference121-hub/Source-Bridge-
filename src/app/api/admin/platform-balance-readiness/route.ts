@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { isPlatformBalanceReadinessEnabled } from "@/lib/payments/flags";
 import { runReadOnlyPlatformReadiness } from "@/lib/payments/payout-rail/platform-balance-readiness";
+import { PLATFORM_PAYOUT_SCHEDULE_ISOLATION } from "@/lib/payments/payout-rail/platform-balance";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
@@ -20,6 +21,7 @@ export async function GET() {
     return Response.json({
       ok: true,
       mode: "TEST" as const,
+      payoutScheduleIsolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
       ready: report.ready,
       payoutsAllowed: false as const,
       moneyMovementEnabled: report.moneyMovementEnabled,

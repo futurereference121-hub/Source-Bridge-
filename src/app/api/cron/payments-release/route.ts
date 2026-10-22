@@ -9,13 +9,12 @@ import {
   isGlobalPayoutsEnabled,
   isGlobalPayoutsProceedsFundingEnabled,
   isPlatformBalanceReadinessEnabled,
-  isPlatformBankRemainderPayoutEnabled,
 } from "@/lib/payments/flags";
 import { jsonError } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /**
  * Cron: complete expired inspection windows and release final transfers.
@@ -50,19 +49,9 @@ export async function POST(req: Request) {
       isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST")
         ? await reconcileGpProceedsFunding({ stripeMode: "TEST" })
         : { scanned: 0, funded: 0, resumed: 0 };
-    const testMoney =
-      isPlatformBankRemainderPayoutEnabled("TEST") ||
-      (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST"));
-    const liveMoney =
-      isPlatformBankRemainderPayoutEnabled("LIVE") ||
-      (isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("LIVE"));
     const platformBalance = {
-      TEST: testMoney
-        ? await coordinatePlatformBalance({ stripeMode: "TEST" })
-        : { skipped: "disabled" as const, currencies: [] },
-      LIVE: liveMoney
-        ? await coordinatePlatformBalance({ stripeMode: "LIVE" })
-        : { skipped: "disabled" as const, currencies: [] },
+      TEST: await coordinatePlatformBalance({ stripeMode: "TEST" }),
+      LIVE: await coordinatePlatformBalance({ stripeMode: "LIVE" }),
     };
     const platformReadiness = {
       TEST: isPlatformBalanceReadinessEnabled("TEST")

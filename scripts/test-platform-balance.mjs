@@ -39,6 +39,7 @@ const {
   bankRemainderIdempotencyKey,
   classifyStripeReadFailure,
   DASHBOARD_SCHEDULE_LIMIT,
+  PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
   dailyScheduleRollbackDecision,
   evaluateModeReadiness,
   lockAcquisition,
@@ -51,6 +52,8 @@ const {
   resumeWorkerAfterTakeover,
   selectVerifiedPlatformBank,
   sharedScheduleCutover,
+  testOnlyManualScheduleDecision,
+  dualModeManualScheduleActivation,
   bankCurrencies,
   connectReleaseSettlementMinor,
   listedBalanceAmounts,
@@ -916,6 +919,74 @@ assert.equal(paying.code, "READINESS_READY");
 const liveCold = evaluateModeReadiness({ ...readinessInput, mode: "LIVE" });
 assert.equal(sharedScheduleCutover({ test: readyWhileDaily, live: liveCold }).allowed, false);
 assert.equal(sharedScheduleCutover({ test: readyWhileDaily, live: liveCold }).code, "LIVE_NOT_READY");
+assert.equal(PLATFORM_PAYOUT_SCHEDULE_ISOLATION, "SHARED_TEST_MODE_SANDBOX");
+assert.equal(
+  sharedScheduleCutover({ test: { ready: true }, live: { ready: true } }).code,
+  "SHARED_CUTOVER_READY",
+);
+assert.equal(
+  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).allowed,
+  false,
+);
+assert.equal(
+  testOnlyManualScheduleDecision(PLATFORM_PAYOUT_SCHEDULE_ISOLATION).code,
+  "SHARED_SCHEDULE_WITH_LIVE",
+);
+assert.equal(
+  dualModeManualScheduleActivation({
+    isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+    testReady: true,
+    liveReady: false,
+    liveBankRemainderEnabled: false,
+    liveBankRemainderHealthy: false,
+  }).code,
+  "LIVE_NOT_READY",
+);
+assert.equal(
+  dualModeManualScheduleActivation({
+    isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+    testReady: true,
+    liveReady: true,
+    liveBankRemainderEnabled: false,
+    liveBankRemainderHealthy: false,
+  }).code,
+  "LIVE_BANK_REMAINDER_DISABLED",
+);
+assert.equal(
+  dualModeManualScheduleActivation({
+    isolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+    testReady: true,
+    liveReady: true,
+    liveBankRemainderEnabled: true,
+    liveBankRemainderHealthy: true,
+  }).code,
+  "SHARED_MANUAL_CUTOVER_READY",
+);
+assert.equal(testOnlyManualScheduleDecision("ISOLATED_SANDBOX").allowed, true);
+const liveIgnoresTestConnect = plan({
+  mode: "LIVE",
+  scheduleInterval: "manual",
+  availableMinor: 10000,
+  purchases: [connectPurchase({ stripeMode: "TEST", sellerEntitlementMinor: 8000 })],
+});
+assert.equal(liveIgnoresTestConnect.code, "BANK_REMAINDER_PAY");
+assert.equal(liveIgnoresTestConnect.amountMinor, 10000);
+const liveHoldsLiveConnect = plan({
+  mode: "LIVE",
+  scheduleInterval: "manual",
+  availableMinor: 10000,
+  purchases: [connectPurchase({ stripeMode: "LIVE", sellerEntitlementMinor: 3500 })],
+});
+assert.equal(liveHoldsLiveConnect.amountMinor, 6500);
+assert.equal(liveHoldsLiveConnect.reservedMinor, 3500);
+const dailyBlocksLiveRemainder = plan({
+  mode: "LIVE",
+  scheduleInterval: "daily",
+  availableMinor: 10000,
+  purchases: [],
+});
+assert.equal(dailyBlocksLiveRemainder.amountMinor, 0);
+assert.equal(dailyBlocksLiveRemainder.code, "GP_AUTOMATIC_BANK_PAYOUT");
 assert.equal(
   readinessHeartbeatForMode([{ stripeMode: "TEST", readinessCheckedAt: "2026-10-12T00:00:00.000Z" }], "LIVE"),
   false,
@@ -956,6 +1027,8 @@ assert.doesNotMatch(payoutCreate, /destination:/);
 assert.match(payoutCreate, /sb_bank_remainder: attempt\.id/);
 assert.match(runner, /sb_bank_remainder === attempt\.id/);
 assert.match(runner, /payout\.livemode === \(mode === "LIVE"\)/);
+assert.match(runner, /payout\.livemode !== \(opts\.mode === "LIVE"\)/);
+assert.match(runner, /BANK_PAYOUT_MODE_MISMATCH/);
 assert.doesNotMatch(runner, /destination ===/);
 assert.ok(runner.indexOf("fencedProviderWrite") < runner.indexOf("payouts.create"));
 assert.doesNotMatch(runner, /accounts\.update|payout_method|req\.body|searchParams|listExternalAccounts/);
@@ -996,19 +1069,35 @@ assert.match(readinessRoute, /runReadOnlyPlatformReadiness\("TEST"\)/);
 assert.match(readinessRoute, /balance: report\.balance/);
 assert.match(readinessRoute, /outstandingConnect: report\.outstandingConnect/);
 assert.doesNotMatch(readinessRoute, /processInspectionReleases|coordinatePlatformBalance|runReadOnlyPlatformReadiness\("LIVE"\)/);
+assert.match(readinessRoute, /payoutScheduleIsolation: PLATFORM_PAYOUT_SCHEDULE_ISOLATION/);
+assert.doesNotMatch(fundingRunner, /interval:\s*["']manual["']/);
+assert.doesNotMatch(fundingRunner, /accounts\.update/);
 assert.match(readiness, /outstandingConnectReserves/);
 assert.match(readiness, /listedBalanceAmounts/);
 assert.match(readiness, /available: balance\.available/);
 assert.match(readiness, /pending: balance\.pending/);
 assert.match(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "TEST" \}\)/);
 assert.match(cron, /coordinatePlatformBalance\(\{ stripeMode: "TEST" \}\)/);
+assert.match(cron, /coordinatePlatformBalance\(\{ stripeMode: "LIVE" \}\)/);
 assert.doesNotMatch(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "LIVE" \}\)/);
+assert.doesNotMatch(cron, /testMoney|liveMoney/);
 assert.match(cron, /isPlatformBalanceReadinessEnabled\("TEST"\)/);
 assert.match(cron, /isPlatformBalanceReadinessEnabled\("LIVE"\)/);
 assert.match(cron, /runReadOnlyPlatformReadiness\("TEST"\)/);
 assert.match(cron, /runReadOnlyPlatformReadiness\("LIVE"\)/);
-const liveMoneyCall = cron.indexOf('coordinatePlatformBalance({ stripeMode: "LIVE" })');
-assert.ok(liveMoneyCall > cron.indexOf("liveMoney"));
+assert.match(cron, /maxDuration = 120/);
+const liveCoord = cron.indexOf('coordinatePlatformBalance({ stripeMode: "LIVE" })');
+const testCoord = cron.indexOf('coordinatePlatformBalance({ stripeMode: "TEST" })');
+assert.ok(testCoord >= 0 && liveCoord > testCoord);
+const liveReadinessRoute = read("src/app/api/admin/platform-balance-readiness-live/route.ts");
+assert.match(liveReadinessRoute, /runReadOnlyPlatformReadiness\("LIVE"\)/);
+assert.match(liveReadinessRoute, /payoutsAllowed: false/);
+assert.doesNotMatch(liveReadinessRoute, /runReadOnlyPlatformReadiness\("TEST"\)|payouts\.create|accounts\.update/);
+const monitorRoute = read("src/app/api/admin/platform-balance-monitor/route.ts");
+assert.match(monitorRoute, /platformBalanceMonitor\("TEST"\)/);
+assert.match(monitorRoute, /platformBalanceMonitor\("LIVE"\)/);
+assert.match(monitorRoute, /payoutsAllowed: false/);
+assert.doesNotMatch(monitorRoute, /payouts\.create|accounts\.update/);
 assert.match(read("src/lib/payments/release.ts"), /isCoordinationRetryable\(err\)\) throw err/);
 assert.match(read("src/lib/payments/admin-protected-decision.ts"), /refunds\.create/);
 assert.match(read("src/lib/payments/flags.ts"), /PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED", false/);

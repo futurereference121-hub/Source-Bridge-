@@ -418,6 +418,13 @@ async function createSafeBankRemainder(opts: {
         { idempotencyKey: attempt.idempotencyKey },
       ),
     );
+    if (payout.livemode !== (opts.mode === "LIVE")) {
+      await prisma.platformBankPayoutAttempt.update({
+        where: { id: attempt.id },
+        data: { status: "UNCERTAIN", failureCode: "BANK_PAYOUT_MODE_MISMATCH" },
+      });
+      return { amountMinor: 0, code: "BANK_PAYOUT_MODE_MISMATCH", cutoverAllowed: false, rollbackToDailyAllowed: false };
+    }
     const returned = payout.destination;
     const observedDestination =
       typeof returned === "string"

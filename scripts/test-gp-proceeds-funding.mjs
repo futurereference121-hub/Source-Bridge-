@@ -182,6 +182,7 @@ assert.match(webhook, /metadata\?\.sb_funding_leg|sb_funding_leg/);
 const cron = read("src/app/api/cron/payments-release/route.ts");
 assert.match(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "TEST" \}\)/);
 assert.match(cron, /isGlobalPayoutsProceedsFundingEnabled\(\)/);
+assert.match(cron, /coordinatePlatformBalance\(\{ stripeMode: "LIVE" \}\)/);
 assert.doesNotMatch(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "LIVE" \}\)/);
 assert.match(read("src/lib/payments/flags.ts"), /GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED", false/);
 const migration = read("prisma/migrations/20261010170000_gp_proceeds_funding/migration.sql");

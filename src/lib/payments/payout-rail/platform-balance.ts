@@ -731,6 +731,15 @@ export async function resumeWorkerAfterTakeover<T>(opts: {
 export const DASHBOARD_SCHEDULE_LIMIT =
   "Application checks cannot stop a payout-schedule change made in the Stripe Dashboard.";
 
+/**
+ * Stripe's built-in test-mode sandbox shares Dashboard settings with live mode.
+ * https://docs.stripe.com/testing-use-cases
+ * A TEST API key does not isolate the platform payout schedule. Changing it
+ * for TEST also changes LIVE. General (created) sandboxes isolate settings;
+ * this runtime uses the production account's test-mode sandbox.
+ */
+export const PLATFORM_PAYOUT_SCHEDULE_ISOLATION = "SHARED_TEST_MODE_SANDBOX" as const;
+
 export type ModeReadiness = {
   mode: "TEST" | "LIVE";
   ready: boolean;
@@ -801,6 +810,51 @@ export function sharedScheduleCutover(opts: {
   if (!opts.test.ready) return { allowed: false, code: "TEST_NOT_READY" };
   if (!opts.live.ready) return { allowed: false, code: "LIVE_NOT_READY" };
   return { allowed: true, code: "SHARED_CUTOVER_READY" };
+}
+
+/**
+ * A TEST-only Dashboard schedule change is not a valid GP TEST step on this
+ * account. The built-in test-mode sandbox shares payout settings with LIVE.
+ * Isolated general sandboxes are a different Stripe product and are not this runtime.
+ */
+export function testOnlyManualScheduleDecision(
+  isolation: typeof PLATFORM_PAYOUT_SCHEDULE_ISOLATION | "ISOLATED_SANDBOX" = PLATFORM_PAYOUT_SCHEDULE_ISOLATION,
+): { allowed: boolean; code: string } {
+  if (isolation === "SHARED_TEST_MODE_SANDBOX") {
+    return { allowed: false, code: "SHARED_SCHEDULE_WITH_LIVE" };
+  }
+  return { allowed: true, code: "ISOLATED_SCHEDULE" };
+}
+
+/**
+ * Remaining activation for automatic TEST FA funding plus automatic LIVE
+ * platform bank payouts. This function does not change the schedule and does
+ * not enable money-movement flags.
+ */
+export function dualModeManualScheduleActivation(opts: {
+  isolation: typeof PLATFORM_PAYOUT_SCHEDULE_ISOLATION | "ISOLATED_SANDBOX";
+  testReady: boolean;
+  liveReady: boolean;
+  liveBankRemainderEnabled: boolean;
+  liveBankRemainderHealthy: boolean;
+}): { allowed: boolean; code: string } {
+  const testOnly = testOnlyManualScheduleDecision(opts.isolation);
+  if (!testOnly.allowed) {
+    const shared = sharedScheduleCutover({
+      test: { ready: opts.testReady },
+      live: { ready: opts.liveReady },
+    });
+    if (!shared.allowed) return shared;
+    if (!opts.liveBankRemainderEnabled) {
+      return { allowed: false, code: "LIVE_BANK_REMAINDER_DISABLED" };
+    }
+    if (!opts.liveBankRemainderHealthy) {
+      return { allowed: false, code: "LIVE_BANK_REMAINDER_UNHEALTHY" };
+    }
+    return { allowed: true, code: "SHARED_MANUAL_CUTOVER_READY" };
+  }
+  if (!opts.testReady) return { allowed: false, code: "TEST_NOT_READY" };
+  return { allowed: true, code: "ISOLATED_TEST_CUTOVER_READY" };
 }
 
 export function nextBankRemainderAttempt(opts: {
