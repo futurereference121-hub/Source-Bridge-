@@ -3,6 +3,7 @@
  * Run: node scripts/test-platform-balance.mjs
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -63,6 +64,13 @@ const {
   settlementBlockForCurrency,
   settlementLiabilityCurrencies,
   assessTestPlatformAccount,
+  assessLivePlatformAccount,
+  dashboardConfirmationApplies,
+  dashboardBankConfirmationMatches,
+  DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+  DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
+  DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
+  DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
 } = balance;
 const { applyOutstandingChargeSettlement, connectSettlementTransferMinor, shapeOutstandingChargeSettlement } = settlementAmount;
 const { decideFundingRequest, completedPurchaseBlocksNewFunding, fundingScanIncludesPurchase } = funding;
@@ -1117,11 +1125,15 @@ assert.doesNotMatch(read("prisma/migrations/20261014140000_platform_bank_dashboa
 const confirmationRoute = read("src/app/api/admin/platform-bank-dashboard-confirmation/route.ts");
 assert.match(confirmationRoute, /requireAdmin/);
 assert.match(confirmationRoute, /getStripe\("TEST"\)/);
-assert.doesNotMatch(confirmationRoute, /getStripe\("LIVE"\)/);
+assert.match(confirmationRoute, /getStripe\("LIVE"\)/);
+assert.match(confirmationRoute, /isPlatformBalanceReadinessEnabled\(stripeMode\)/);
 assert.match(confirmationRoute, /currency === "USD"/);
 assert.match(confirmationRoute, /bankConfigurationVerified: false/);
 assert.match(confirmationRoute, /assessTestPlatformAccount/);
+assert.match(confirmationRoute, /assessLivePlatformAccount/);
 assert.match(confirmationRoute, /balance\.retrieve/);
+assert.match(confirmationRoute, /balance\.livemode/);
+assert.doesNotMatch(confirmationRoute, /body\.accountId|body\.accountHash|body\.suffix|body\.accountSuffix/);
 assert.doesNotMatch(confirmationRoute, /retrievedAccountLivemode\(account\) !== false/);
 assert.doesNotMatch(confirmationRoute, /payouts\.create|accounts\.update|ready:\s*true/);
 const confirmationModule = read("src/lib/payments/payout-rail/platform-bank-confirmation.ts");
@@ -1179,18 +1191,261 @@ assert.equal(assessTestPlatformAccount({
   accountLivemode: null,
   modeEvidenceLivemode: false,
 }).code, "ACCOUNT_ID_MISSING");
+const liveFixtureId = "acct_live_platform_SOps";
+const liveFixtureHash = createHash("sha256").update(liveFixtureId).digest("hex").slice(0, 8);
+assert.equal(DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX, "SOps");
+assert.equal(DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8, "3a9b400a");
+const liveOk = assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: true,
+  modeEvidenceLivemode: true,
+  expectedHash8: liveFixtureHash,
+});
+assert.equal(liveOk.ok, true);
+assert.equal(liveOk.ok && liveOk.suffix, "SOps");
+assert.equal(liveOk.ok && liveOk.hash8, liveFixtureHash);
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: null,
+  modeEvidenceLivemode: true,
+  expectedHash8: liveFixtureHash,
+}).ok, true);
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "TEST",
+  accountId: liveFixtureId,
+  accountLivemode: true,
+  modeEvidenceLivemode: true,
+  expectedHash8: liveFixtureHash,
+}).code, "LIVE_MODE_REQUIRED");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: true,
+  modeEvidenceLivemode: false,
+  expectedHash8: liveFixtureHash,
+}).code, "LIVE_MODE_EVIDENCE_MISSING");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: true,
+  modeEvidenceLivemode: null,
+  expectedHash8: liveFixtureHash,
+}).code, "LIVE_MODE_EVIDENCE_MISSING");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: false,
+  modeEvidenceLivemode: true,
+  expectedHash8: liveFixtureHash,
+}).code, "TEST_ACCOUNT_OBJECT");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: "acct_wrong_XXXX",
+  accountLivemode: true,
+  modeEvidenceLivemode: true,
+}).code, "ACCOUNT_IDENTITY_MISMATCH");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: liveFixtureId,
+  accountLivemode: true,
+  modeEvidenceLivemode: true,
+}).code, "ACCOUNT_IDENTITY_MISMATCH");
+assert.equal(assessLivePlatformAccount({
+  stripeMode: "LIVE",
+  accountId: "",
+  accountLivemode: true,
+  modeEvidenceLivemode: true,
+}).code, "ACCOUNT_ID_MISSING");
+assert.equal(
+  dashboardConfirmationApplies({ mode: "TEST", currency: "GBP", dashboardConfirmation: "recorded" }),
+  true,
+);
+assert.equal(
+  dashboardConfirmationApplies({ mode: "LIVE", currency: "GBP", dashboardConfirmation: "recorded" }),
+  true,
+);
+assert.equal(
+  dashboardConfirmationApplies({ mode: "LIVE", currency: "USD", dashboardConfirmation: "recorded" }),
+  false,
+);
+assert.equal(
+  dashboardConfirmationApplies({ mode: "LIVE", currency: "GBP", dashboardConfirmation: "absent" }),
+  false,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "TEST",
+    currency: "GBP",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
+    livemode: false,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: "aaaaaaaa",
+    currentAccountHash: "aaaaaaaa",
+  }),
+  true,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "LIVE",
+    currency: "GBP",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
+    livemode: true,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+    currentAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  }),
+  true,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "LIVE",
+    currency: "GBP",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
+    livemode: false,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+    currentAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  }),
+  false,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "TEST",
+    currency: "GBP",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
+    livemode: true,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+    currentAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  }),
+  false,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "LIVE",
+    currency: "GBP",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX,
+    livemode: true,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+    currentAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  }),
+  false,
+);
+assert.equal(
+  dashboardBankConfirmationMatches({
+    stripeMode: "LIVE",
+    currency: "USD",
+    accountSuffix: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX,
+    livemode: true,
+    evidence: DASHBOARD_BANK_CONFIRMATION_EVIDENCE,
+    recordedAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+    currentAccountHash: DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8,
+  }),
+  false,
+);
+const liveGbpDashboard = evaluateModeReadiness({
+  ...readinessInput,
+  mode: "LIVE",
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+  scheduleInterval: "daily",
+  moneyMovementEnabled: true,
+});
+assert.equal(liveGbpDashboard.ready, true);
+assert.equal(liveGbpDashboard.payoutsAllowed, false);
+assert.equal(liveGbpDashboard.code, "READINESS_DAILY_SCHEDULE");
+const liveUsdStillBlocked = evaluateModeReadiness({
+  ...readinessInput,
+  mode: "LIVE",
+  currency: "USD",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(liveUsdStillBlocked.code, "BANK_INFORMATION_UNAVAILABLE");
+const liveConfirmedProviderFailure = evaluateModeReadiness({
+  ...readinessInput,
+  mode: "LIVE",
+  currency: "GBP",
+  providerReadsOk: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(liveConfirmedProviderFailure.code, "PROVIDER_READ_FAILED");
+const liveConfirmedApiBank = evaluateModeReadiness({
+  ...readinessInput,
+  mode: "LIVE",
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unverified",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+});
+assert.equal(liveConfirmedApiBank.code, "BANK_DESTINATION_UNVERIFIED");
+const liveSettlementBeatsConfirmation = evaluateModeReadiness({
+  ...readinessInput,
+  mode: "LIVE",
+  currency: "GBP",
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  priorReadinessPass: true,
+  settlementCode: "SETTLEMENT_RESERVE_UNRESOLVED",
+});
+assert.equal(liveSettlementBeatsConfirmation.code, "SETTLEMENT_RESERVE_UNRESOLVED");
+const liveNegativeKeepsReserve = plan({
+  mode: "LIVE",
+  currency: "GBP",
+  scheduleInterval: "manual",
+  availableMinor: -21100,
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  purchases: [connectPurchase({ stripeMode: "LIVE", currency: "GBP", sellerEntitlementMinor: 3600 })],
+});
+assert.equal(liveNegativeKeepsReserve.amountMinor, 0);
+assert.notEqual(liveNegativeKeepsReserve.code, "BANK_REMAINDER_PAY");
+const liveConfirmedNoPayWhileDaily = plan({
+  mode: "LIVE",
+  currency: "GBP",
+  scheduleInterval: "daily",
+  availableMinor: 10000,
+  destinationReady: false,
+  bankInformation: "unavailable",
+  dashboardConfirmation: "recorded",
+  purchases: [connectPurchase({ stripeMode: "LIVE", currency: "GBP", sellerEntitlementMinor: 3600 })],
+});
+assert.equal(liveConfirmedNoPayWhileDaily.amountMinor, 0);
+assert.equal(liveConfirmedNoPayWhileDaily.code, "GP_AUTOMATIC_BANK_PAYOUT");
 assert.match(readiness, /modeEvidenceLivemode/);
 assert.match(readiness, /Account identity does not depend on Account\.livemode/);
 assert.doesNotMatch(readiness, /accountId && accountLivemode !== null/);
 const confirmPage = read("src/app/admin/platform-balance/page.tsx");
 const confirmButton = read("src/app/admin/platform-balance/confirm-gbp-bank-button.tsx");
+const liveConfirmButton = read("src/app/admin/platform-balance/confirm-live-gbp-bank-button.tsx");
 assert.match(confirmPage, /ConfirmGbpBankButton/);
+assert.match(confirmPage, /ConfirmLiveGbpBankButton/);
 assert.match(confirmPage, /Opening this page does not record/);
 assert.doesNotMatch(confirmPage, /fetch\(|platform-bank-dashboard-confirmation/);
 assert.match(confirmButton, /Record TEST GBP Dashboard confirmation/);
 assert.match(confirmButton, /\/api\/admin\/platform-bank-dashboard-confirmation/);
 assert.match(confirmButton, /currency: "GBP"/);
-assert.doesNotMatch(confirmButton, /payouts\.create|quotesCreated|ready:\s*true|accounts\.update/);
+assert.doesNotMatch(confirmButton, /stripeMode: "LIVE"|payouts\.create|quotesCreated|ready:\s*true|accounts\.update/);
+assert.match(liveConfirmButton, /Record LIVE GBP Dashboard confirmation/);
+assert.match(liveConfirmButton, /stripeMode: "LIVE"/);
+assert.match(liveConfirmButton, /currency: "GBP"/);
+assert.doesNotMatch(liveConfirmButton, /accountId|payouts\.create|quotesCreated|ready:\s*true|accounts\.update/);
+assert.match(confirmationModule, /assessLivePlatformAccount/);
+assert.match(confirmationModule, /stripeMode: mode/);
+assert.doesNotMatch(confirmationModule, /stripeMode: "TEST",\s*currency: "GBP"/);
 assert.match(read("src/app/admin/_components/AdminNav.tsx"), /\/admin\/platform-balance/);
 const reserveRows = outstandingConnectReserves([
   {

@@ -131,10 +131,14 @@ export const PLATFORM_DEFAULT_DESTINATION_ROUTING = "supported" as const;
 /** Dashboard evidence is not a Stripe API bank verification. */
 export const DASHBOARD_BANK_CONFIRMATION_EVIDENCE = "DASHBOARD" as const;
 export const DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX = "MV9g";
+export const DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX = "SOps";
+export const DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8 = "3a9b400a";
 export const DASHBOARD_BANK_CONFIRMATION_STATEMENT =
   "Stripe Dashboard Test mode shows one default GBP payments-balance bank for this platform account. No USD bank is shown.";
+export const DASHBOARD_BANK_CONFIRMATION_LIVE_STATEMENT =
+  "Stripe Dashboard Live mode shows one default GBP payments-balance bank (WISE PAYMENTS LTD) for this platform account. This is Dashboard evidence only, not Stripe API verification.";
 
-/** A recorded Dashboard statement counts only for the TEST GBP account. It never clears USD. */
+/** A recorded Dashboard statement counts only for that mode's GBP account. It never clears USD. */
 export function dashboardConfirmationApplies(input: {
   mode: string;
   currency: string;
@@ -142,7 +146,7 @@ export function dashboardConfirmationApplies(input: {
 }): boolean {
   return (
     input.dashboardConfirmation === "recorded" &&
-    input.mode === "TEST" &&
+    (input.mode === "TEST" || input.mode === "LIVE") &&
     input.currency.trim().toUpperCase() === "GBP"
   );
 }
@@ -156,15 +160,21 @@ export function dashboardBankConfirmationMatches(input: {
   recordedAccountHash: string;
   currentAccountHash: string;
 }): boolean {
-  return (
-    input.stripeMode === "TEST" &&
-    input.currency.trim().toUpperCase() === "GBP" &&
-    input.livemode === false &&
-    input.evidence === DASHBOARD_BANK_CONFIRMATION_EVIDENCE &&
-    input.accountSuffix === DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX &&
-    /^[a-f0-9]{8}$/.test(input.recordedAccountHash) &&
-    input.recordedAccountHash === input.currentAccountHash
-  );
+  if (input.currency.trim().toUpperCase() !== "GBP") return false;
+  if (input.evidence !== DASHBOARD_BANK_CONFIRMATION_EVIDENCE) return false;
+  if (!/^[a-f0-9]{8}$/.test(input.recordedAccountHash)) return false;
+  if (input.recordedAccountHash !== input.currentAccountHash) return false;
+  if (input.stripeMode === "TEST") {
+    return input.livemode === false && input.accountSuffix === DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX;
+  }
+  if (input.stripeMode === "LIVE") {
+    return (
+      input.livemode === true &&
+      input.accountSuffix === DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX &&
+      input.recordedAccountHash === DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8
+    );
+  }
+  return false;
 }
 
 /**
@@ -190,6 +200,36 @@ export function assessTestPlatformAccount(input: {
   const hash8 = idHash8(id);
   const expected = input.expectedSuffix ?? DASHBOARD_BANK_CONFIRMATION_ACCOUNT_SUFFIX;
   if (suffix !== expected) return { ok: false, code: "ACCOUNT_IDENTITY_MISMATCH" };
+  return { ok: true, suffix, hash8 };
+}
+
+/**
+ * LIVE platform confirmation identity.
+ * Mode comes from the selected LIVE client plus Balance.livemode === true.
+ * Account identity is the retrieved LIVE account, not a client-supplied id.
+ */
+export function assessLivePlatformAccount(input: {
+  stripeMode: string;
+  accountId: string;
+  accountLivemode: boolean | null;
+  modeEvidenceLivemode: boolean | null;
+  expectedSuffix?: string;
+  expectedHash8?: string;
+}):
+  | { ok: true; suffix: string; hash8: string }
+  | { ok: false; code: string } {
+  if (input.stripeMode !== "LIVE") return { ok: false, code: "LIVE_MODE_REQUIRED" };
+  if (input.modeEvidenceLivemode !== true) return { ok: false, code: "LIVE_MODE_EVIDENCE_MISSING" };
+  if (input.accountLivemode === false) return { ok: false, code: "TEST_ACCOUNT_OBJECT" };
+  const id = input.accountId.trim();
+  if (!id) return { ok: false, code: "ACCOUNT_ID_MISSING" };
+  const suffix = id.slice(-4);
+  const hash8 = idHash8(id);
+  const expectedSuffix = input.expectedSuffix ?? DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_SUFFIX;
+  const expectedHash = input.expectedHash8 ?? DASHBOARD_BANK_CONFIRMATION_LIVE_ACCOUNT_HASH8;
+  if (suffix !== expectedSuffix || hash8 !== expectedHash) {
+    return { ok: false, code: "ACCOUNT_IDENTITY_MISMATCH" };
+  }
   return { ok: true, suffix, hash8 };
 }
 
