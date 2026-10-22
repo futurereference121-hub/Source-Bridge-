@@ -824,16 +824,21 @@ export function planSafeBankRemainder(input: {
     return none("BANK_DESTINATION_UNVERIFIED");
   }
   if (input.uncertainBankAttempt) return none("BANK_PAYOUT_UNCERTAIN");
-  if (input.availableMinor == null || !whole(input.availableMinor)) return none("BALANCE_UNREAD");
+  // A signed integer, including a negative available balance, is a successful
+  // Stripe read. Null or a non-integer is unread. Do not treat a known debit
+  // as unread or drop Connect/GP reserves.
+  if (input.availableMinor == null || !Number.isInteger(input.availableMinor)) {
+    return none("BALANCE_UNREAD");
+  }
   if (!whole(input.inflightBankMinor)) return none("GP_RESERVE_UNKNOWN");
   const extraInflight =
     input.inflightBankMinor +
     Math.max(0, inflightTransfer - connect) +
     Math.max(0, inflightFunding - gp);
   const reservedMinor = gp + connect + refund + extraInflight;
-  if (reservedMinor > input.availableMinor) return none("BANK_REMAINDER_NONE", reservedMinor);
+  if (input.availableMinor <= reservedMinor) return none("BANK_REMAINDER_NONE", reservedMinor);
   const amountMinor = input.availableMinor - reservedMinor;
-  if (amountMinor === 0) return none("BANK_REMAINDER_NONE", reservedMinor);
+  if (amountMinor <= 0) return none("BANK_REMAINDER_NONE", reservedMinor);
   return { amountMinor, reservedMinor, code: "BANK_REMAINDER_PAY" };
 }
 

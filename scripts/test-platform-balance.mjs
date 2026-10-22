@@ -1236,6 +1236,9 @@ assert.match(lock, /recordAs === "money" \? \{ lastStartedAt: now \}/);
 assert.match(runner, /lastWarmupAtMs: coordination\?\.lastWarmupAt/);
 assert.match(runner, /lastWarmupAtMs: row.lastWarmupAt/);
 assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /AWAITING_FIRST_RUN/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /Number\.isInteger\(input\.availableMinor\)/);
+assert.doesNotMatch(read("src/lib/payments/payout-rail/platform-balance.ts"), /!whole\(input\.availableMinor\)/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /availableMinor <= reservedMinor/);
 assert.match(warmupModule, /planSafeBankRemainder/);
 assert.match(warmupModule, /loadPlatformLiabilities/);
 assert.match(warmupModule, /accounts\.retrieve/);
@@ -1563,7 +1566,20 @@ const liveNegativeKeepsReserve = plan({
   purchases: [connectPurchase({ stripeMode: "LIVE", currency: "GBP", sellerEntitlementMinor: 3600 })],
 });
 assert.equal(liveNegativeKeepsReserve.amountMinor, 0);
+assert.equal(liveNegativeKeepsReserve.reservedMinor, 3600);
+assert.equal(liveNegativeKeepsReserve.code, "BANK_REMAINDER_NONE");
+assert.notEqual(liveNegativeKeepsReserve.code, "BALANCE_UNREAD");
 assert.notEqual(liveNegativeKeepsReserve.code, "BANK_REMAINDER_PAY");
+assert.equal(plan({ scheduleInterval: "manual", availableMinor: null }).code, "BALANCE_UNREAD");
+assert.equal(plan({ scheduleInterval: "manual", availableMinor: 1.5 }).code, "BALANCE_UNREAD");
+assert.equal(
+  plan({
+    scheduleInterval: "manual",
+    availableMinor: -21100,
+    providerReadOk: false,
+  }).code,
+  "PROVIDER_READ_FAILED",
+);
 const liveConfirmedNoPayWhileDaily = plan({
   mode: "LIVE",
   currency: "GBP",
