@@ -48,6 +48,7 @@ const {
   nextBankRemainderAttempt,
   planSafeBankRemainder,
   platformBalanceHealth,
+  moneyWorkerHasStarted,
   coordinationWarmupEvidence,
   moneyWorkerEvidence,
   lockCompletionWrite,
@@ -445,6 +446,60 @@ assert.equal(
     lastSuccessAtMs: null,
   }).code,
   "",
+);
+assert.equal(
+  moneyWorkerHasStarted({ lastStartedAtMs: null, lastWarmupAtMs: now }),
+  false,
+);
+assert.equal(
+  moneyWorkerHasStarted({ lastStartedAtMs: now - 1000, lastWarmupAtMs: now }),
+  false,
+);
+assert.equal(
+  moneyWorkerHasStarted({ lastStartedAtMs: now, lastWarmupAtMs: now - 1000 }),
+  true,
+);
+assert.equal(
+  platformBalanceHealth({
+    nowMs: now,
+    enabled: true,
+    lockedAtMs: null,
+    lastSuccessAtMs: null,
+  }).stalled,
+  false,
+);
+assert.equal(
+  platformBalanceHealth({
+    nowMs: now,
+    enabled: true,
+    lockedAtMs: null,
+    lastSuccessAtMs: null,
+    lastStartedAtMs: now - 1000,
+    lastWarmupAtMs: now,
+  }).code,
+  "AWAITING_FIRST_RUN",
+);
+assert.equal(
+  platformBalanceHealth({
+    nowMs: now,
+    enabled: true,
+    lockedAtMs: null,
+    lastSuccessAtMs: null,
+    lastStartedAtMs: now,
+    lastWarmupAtMs: now - 1000,
+  }).stalled,
+  true,
+);
+assert.equal(
+  platformBalanceHealth({
+    nowMs: now,
+    enabled: true,
+    lockedAtMs: null,
+    lastSuccessAtMs: null,
+    lastStartedAtMs: now,
+    lastWarmupAtMs: now - 1000,
+  }).code,
+  "PLATFORM_BALANCE_STALLED",
 );
 assert.equal(coordinationWarmupEvidence({ lastWarmupAtMs: null }).completed, false);
 assert.equal(coordinationWarmupEvidence({ lastWarmupAtMs: null }).lastWarmupAt, null);
@@ -1176,6 +1231,11 @@ assert.doesNotMatch(runner, /lastSuccessAt: true/);
 assert.doesNotMatch(runner, /workerWarmupEvidence/);
 const warmupModule = read("src/lib/payments/payout-rail/platform-balance-warmup.ts");
 assert.match(warmupModule, /report.recordAs = "warmup"/);
+assert.match(warmupModule, /recordAs: "warmup"/);
+assert.match(lock, /recordAs === "money" \? \{ lastStartedAt: now \}/);
+assert.match(runner, /lastWarmupAtMs: coordination\?\.lastWarmupAt/);
+assert.match(runner, /lastWarmupAtMs: row.lastWarmupAt/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance.ts"), /AWAITING_FIRST_RUN/);
 assert.match(warmupModule, /planSafeBankRemainder/);
 assert.match(warmupModule, /loadPlatformLiabilities/);
 assert.match(warmupModule, /accounts\.retrieve/);

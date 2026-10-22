@@ -99,9 +99,11 @@ export async function withPlatformBalanceLock<T>(
   currency: string,
   now: Date,
   fn: (report: PlatformBalanceLockReport) => Promise<T>,
+  opts?: { recordAs?: "money" | "warmup" },
 ): Promise<{ acquired: true; value: T } | { acquired: false; code: string }> {
   const stripeMode = mode === "LIVE" ? "LIVE" : "TEST";
   const normalizedCurrency = currency.trim().toUpperCase();
+  const recordAs = opts?.recordAs === "warmup" ? "warmup" : "money";
   const held = await prisma.$transaction(async (tx) => {
     await tx.platformBalanceCoordination.upsert({
       where: { stripeMode_currency: { stripeMode, currency: normalizedCurrency } },
@@ -125,7 +127,12 @@ export async function withPlatformBalanceLock<T>(
     const token = randomUUID();
     const updated = await tx.platformBalanceCoordination.update({
       where: { id: row.id },
-      data: { lockToken: token, lockedAt: now, lastStartedAt: now, fence: { increment: 1 } },
+      data: {
+        lockToken: token,
+        lockedAt: now,
+        fence: { increment: 1 },
+        ...(recordAs === "money" ? { lastStartedAt: now } : {}),
+      },
       select: { fence: true },
     });
     return {
@@ -143,7 +150,7 @@ export async function withPlatformBalanceLock<T>(
     hadPriorSuccess: held.hadPriorSuccess,
     token: held.token,
     fence: held.fence,
-    recordAs: "money",
+    recordAs,
   };
   const heldLock: HeldLock = {
     token: held.token,

@@ -44,17 +44,38 @@ export function lockAcquisition(opts: {
   return "busy";
 }
 
+export function moneyWorkerHasStarted(opts: {
+  lastStartedAtMs: number | null;
+  lastWarmupAtMs: number | null;
+}): boolean {
+  if (opts.lastStartedAtMs == null) return false;
+  if (opts.lastWarmupAtMs == null) return true;
+  return opts.lastStartedAtMs > opts.lastWarmupAtMs;
+}
+
 export function platformBalanceHealth(opts: {
   nowMs: number;
   enabled: boolean;
   lockedAtMs: number | null;
   lastSuccessAtMs: number | null;
+  lastStartedAtMs?: number | null;
+  lastWarmupAtMs?: number | null;
 }): { stalled: boolean; code: string } {
   const lockedAt = opts.lockedAtMs;
   if (lockedAt != null && opts.nowMs - lockedAt >= PLATFORM_BALANCE_LOCK_STALE_MS) {
     return { stalled: true, code: "PLATFORM_BALANCE_STALE_LOCK" };
   }
   if (!opts.enabled) return { stalled: false, code: "" };
+  if (opts.lastSuccessAtMs != null && opts.nowMs - opts.lastSuccessAtMs < PLATFORM_BALANCE_STALL_MS) {
+    return { stalled: false, code: "" };
+  }
+  const moneyStarted = moneyWorkerHasStarted({
+    lastStartedAtMs: opts.lastStartedAtMs ?? null,
+    lastWarmupAtMs: opts.lastWarmupAtMs ?? null,
+  });
+  if (!moneyStarted) {
+    return { stalled: false, code: "AWAITING_FIRST_RUN" };
+  }
   if (opts.lastSuccessAtMs == null || opts.nowMs - opts.lastSuccessAtMs >= PLATFORM_BALANCE_STALL_MS) {
     return { stalled: true, code: "PLATFORM_BALANCE_STALLED" };
   }

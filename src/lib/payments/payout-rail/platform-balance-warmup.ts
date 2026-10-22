@@ -83,7 +83,11 @@ export async function runPlatformBalanceWarmup(stripeMode: StripeMode): Promise<
     reservedMinor: number;
   }> = [];
   for (const currency of currencies) {
-    const locked = await withPlatformBalanceLock(mode, currency, now, async (report) => {
+    const locked = await withPlatformBalanceLock(
+      mode,
+      currency,
+      now,
+      async (report) => {
       report.recordAs = "warmup";
       const stripe = getStripe(mode);
       let scheduleInterval: string | null = null;
@@ -136,7 +140,9 @@ export async function runPlatformBalanceWarmup(stripeMode: StripeMode): Promise<
         scheduleInterval,
         reservedMinor: plan.reservedMinor,
       };
-    });
+    },
+      { recordAs: "warmup" },
+    );
     if (!locked.acquired) {
       results.push({
         currency,

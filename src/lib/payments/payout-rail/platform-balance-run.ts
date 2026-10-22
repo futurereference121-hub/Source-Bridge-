@@ -528,6 +528,8 @@ export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; 
       enabled: bankOn || fundingOn,
       lockedAtMs: coordination?.lockedAt ? coordination.lockedAt.getTime() : null,
       lastSuccessAtMs: coordination?.lastSuccessAt ? coordination.lastSuccessAt.getTime() : null,
+      lastStartedAtMs: coordination?.lastStartedAt ? coordination.lastStartedAt.getTime() : null,
+      lastWarmupAtMs: coordination?.lastWarmupAt ? coordination.lastWarmupAt.getTime() : null,
     });
     const locked = await withPlatformBalanceLock(mode, currency, now, async (report) => {
       await reconcileOpenBankAttempts(mode, currency);
@@ -611,6 +613,8 @@ export async function platformBalanceMonitor(mode: StripeMode, now = new Date())
       enabled,
       lockedAtMs: row.lockedAt ? row.lockedAt.getTime() : null,
       lastSuccessAtMs,
+      lastStartedAtMs: row.lastStartedAt ? row.lastStartedAt.getTime() : null,
+      lastWarmupAtMs: row.lastWarmupAt ? row.lastWarmupAt.getTime() : null,
     });
     return {
       currency: row.currency,
