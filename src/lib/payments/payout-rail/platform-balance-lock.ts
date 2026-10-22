@@ -15,6 +15,7 @@ import {
 } from "@/lib/payments/flags";
 import {
   lockAcquisition,
+  lockCompletionWrite,
   PLATFORM_BALANCE_LOCK_STALE_MS,
   resumeWorkerAfterTakeover,
   type LockOwner,
@@ -85,11 +86,19 @@ export async function coordinatePlatformSpend<T>(
   return locked.value;
 }
 
+export type PlatformBalanceLockReport = {
+  code: string;
+  hadPriorSuccess: boolean;
+  token: string;
+  fence: number;
+  recordAs: "money" | "warmup";
+};
+
 export async function withPlatformBalanceLock<T>(
   mode: string,
   currency: string,
   now: Date,
-  fn: (report: { code: string; hadPriorSuccess: boolean; token: string; fence: number }) => Promise<T>,
+  fn: (report: PlatformBalanceLockReport) => Promise<T>,
 ): Promise<{ acquired: true; value: T } | { acquired: false; code: string }> {
   const stripeMode = mode === "LIVE" ? "LIVE" : "TEST";
   const normalizedCurrency = currency.trim().toUpperCase();
@@ -129,7 +138,13 @@ export async function withPlatformBalanceLock<T>(
   });
   if (!held.acquired) return held;
 
-  const report = { code: "", hadPriorSuccess: held.hadPriorSuccess, token: held.token, fence: held.fence };
+  const report: PlatformBalanceLockReport = {
+    code: "",
+    hadPriorSuccess: held.hadPriorSuccess,
+    token: held.token,
+    fence: held.fence,
+    recordAs: "money",
+  };
   const heldLock: HeldLock = {
     token: held.token,
     fence: held.fence,
@@ -147,13 +162,11 @@ export async function withPlatformBalanceLock<T>(
   } finally {
     await prisma.platformBalanceCoordination.updateMany({
       where: { id: held.id, lockToken: held.token },
-      data: {
-        lockToken: "",
-        lockedAt: null,
-        ...(succeeded
-          ? { lastSuccessAt: new Date(), lastErrorCode: report.code }
-          : { lastErrorCode: report.code || "PLATFORM_BALANCE_FAILED" }),
-      },
+      data: lockCompletionWrite({
+        succeeded,
+        recordAs: report.recordAs,
+        code: report.code,
+      }),
     });
   }
 }

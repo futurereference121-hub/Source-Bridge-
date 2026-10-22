@@ -52,6 +52,7 @@ const {
   completedPurchaseBlocksNewFunding,
   decideFundingRequest,
   describeGpBuyerPayout,
+  fundingPayoutCreateGate,
   fundingScanIncludesPurchase,
   fundingIdempotencyKey,
   fundingPayoutMatchesLeg,
@@ -141,6 +142,20 @@ while (sendCursor >= 0) {
   sendCursor = sendAt + 1;
 }
 assert.match(runner, /posted < principal \+ fees/);
+assert.match(runner, /fundingPayoutCreateGate/);
+const sendFn = runner.slice(
+  runner.indexOf("async function sendFundingPayout"),
+  runner.indexOf("async function prepareFundingQuote"),
+);
+assert.ok(sendFn.indexOf("accounts.retrieve") < sendFn.indexOf("payouts.create"));
+assert.ok(sendFn.indexOf("fundingPayoutCreateGate") < sendFn.indexOf("payouts.create"));
+assert.ok(sendFn.indexOf("fencedProviderWrite") < sendFn.indexOf("payouts.create"));
+assert.match(sendFn, /idempotencyKey: opts.leg.idempotencyKey/);
+assert.match(sendFn, /status: "BLOCKED"/);
+assert.match(sendFn, /kind: "block"/);
+assert.doesNotMatch(sendFn, /idempotencyKey:\s*`/);
+assert.ok(fundBody.indexOf('action === "attach"') < fundBody.indexOf("sendFundingPayout"));
+assert.ok(fundBody.indexOf("confirmLegs") < fundBody.indexOf("sendFundingPayout"));
 
 const historical = {
   purchaseHash: "50bf732e",
@@ -639,8 +654,46 @@ assert.equal(
   false,
 );
 assert.equal(automaticBankPayoutBlocksFunding("daily").blocked, true);
+assert.equal(automaticBankPayoutBlocksFunding("weekly").blocked, true);
+assert.equal(automaticBankPayoutBlocksFunding("monthly").blocked, true);
 assert.equal(automaticBankPayoutBlocksFunding("").code, "GP_PAYOUT_SCHEDULE_UNREAD");
 assert.equal(automaticBankPayoutBlocksFunding("manual").blocked, false);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: true, scheduleInterval: "daily" }).action,
+  "reconcile",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: "daily" }).action,
+  "block",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: "daily" }).code,
+  "GP_AUTOMATIC_BANK_PAYOUT",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: "weekly" }).code,
+  "GP_AUTOMATIC_BANK_PAYOUT",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: "monthly" }).code,
+  "GP_AUTOMATIC_BANK_PAYOUT",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: null }).code,
+  "GP_PAYOUT_SCHEDULE_UNREAD",
+);
+assert.equal(
+  fundingPayoutCreateGate({
+    alreadySubmitted: false,
+    scheduleInterval: "manual",
+    scheduleReadFailed: true,
+  }).code,
+  "GP_PAYOUT_SCHEDULE_UNREAD",
+);
+assert.equal(
+  fundingPayoutCreateGate({ alreadySubmitted: false, scheduleInterval: "manual" }).action,
+  "create",
+);
 
 const fundingProgress = describeGpBuyerPayout({
   releaseAuthorized: true,

@@ -1400,6 +1400,8 @@ model PlatformBalanceCoordination {
   lockedAt      DateTime?
   lastStartedAt DateTime?
   lastSuccessAt DateTime?
+  lastWarmupAt DateTime?
+  lastWarmupCode String    @default("")
   lastErrorCode String    @default("")
   readinessCheckedAt DateTime?
   readinessCode String    @default("")

@@ -61,8 +61,24 @@ export function platformBalanceHealth(opts: {
   return { stalled: false, code: "" };
 }
 
-/** Worker warmup is lastSuccessAt from a completed coordination lock, not readiness. */
-export function workerWarmupEvidence(opts: {
+/** Dedicated warmup evidence. Never treat lastSuccessAt as warmup. */
+export function coordinationWarmupEvidence(opts: {
+  lastWarmupAtMs: number | null;
+  lastWarmupCode?: string | null;
+}): {
+  completed: boolean;
+  lastWarmupAt: string | null;
+  lastWarmupCode: string | null;
+} {
+  return {
+    completed: opts.lastWarmupAtMs != null,
+    lastWarmupAt: opts.lastWarmupAtMs != null ? new Date(opts.lastWarmupAtMs).toISOString() : null,
+    lastWarmupCode: opts.lastWarmupCode || null,
+  };
+}
+
+/** Money-worker evidence from a completed funding/remainder lock, not warmup. */
+export function moneyWorkerEvidence(opts: {
   lastSuccessAtMs: number | null;
   lastStartedAtMs: number | null;
 }): {
@@ -74,6 +90,45 @@ export function workerWarmupEvidence(opts: {
     completed: opts.lastSuccessAtMs != null,
     lastSuccessAt: opts.lastSuccessAtMs != null ? new Date(opts.lastSuccessAtMs).toISOString() : null,
     lastStartedAt: opts.lastStartedAtMs != null ? new Date(opts.lastStartedAtMs).toISOString() : null,
+  };
+}
+
+/** Fields written when a coordination lock finishes. Warmup must not set lastSuccessAt. */
+export function lockCompletionWrite(opts: {
+  succeeded: boolean;
+  recordAs: "money" | "warmup";
+  code: string;
+  now?: Date;
+}): {
+  lockToken: string;
+  lockedAt: null;
+  lastErrorCode: string;
+  lastSuccessAt?: Date;
+  lastWarmupAt?: Date;
+  lastWarmupCode?: string;
+} {
+  if (!opts.succeeded) {
+    return {
+      lockToken: "",
+      lockedAt: null,
+      lastErrorCode: opts.code || "PLATFORM_BALANCE_FAILED",
+    };
+  }
+  const now = opts.now ?? new Date();
+  if (opts.recordAs === "warmup") {
+    return {
+      lockToken: "",
+      lockedAt: null,
+      lastErrorCode: opts.code,
+      lastWarmupAt: now,
+      lastWarmupCode: opts.code,
+    };
+  }
+  return {
+    lockToken: "",
+    lockedAt: null,
+    lastErrorCode: opts.code,
+    lastSuccessAt: now,
   };
 }
 

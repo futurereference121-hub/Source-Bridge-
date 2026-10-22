@@ -7,6 +7,7 @@ import {
 } from "@/lib/payments/payout-rail/platform-balance";
 import ConfirmGbpBankButton from "./confirm-gbp-bank-button";
 import ConfirmLiveGbpBankButton from "./confirm-live-gbp-bank-button";
+import PlatformBalanceWarmupButton from "./warmup-button";
 
 export default async function PlatformBalanceAdminPage() {
   const user = await getSessionUser();
@@ -21,6 +22,17 @@ export default async function PlatformBalanceAdminPage() {
         Opening this page does not record a confirmation, change the daily payout schedule,
         or enable funding or payouts. TEST and LIVE confirmations are stored separately.
       </p>
+      <section className="mt-10">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-electric">
+          Coordination warmup
+        </p>
+        <p className="mt-6 max-w-2xl rounded-xl border border-white/10 bg-white/5 p-5 text-sm leading-6">
+          Warmup takes the TEST and LIVE locks, reads Stripe, and calculates liabilities.
+          It does not create quotes, funding payouts, seller outbound, bank payouts,
+          transfers, or refunds. Evidence is lastWarmupAt, not lastSuccessAt.
+        </p>
+        <PlatformBalanceWarmupButton />
+      </section>
       <section className="mt-10">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-electric">
           Test mode

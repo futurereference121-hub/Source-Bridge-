@@ -448,6 +448,23 @@ export function automaticBankPayoutBlocksFunding(interval: string | null | undef
   return { blocked: true, code: value ? "GP_AUTOMATIC_BANK_PAYOUT" : "GP_PAYOUT_SCHEDULE_UNREAD" };
 }
 
+/**
+ * Every funding payouts.create, including pending-leg retries, must pass this
+ * gate. An already-submitted payout may be reconciled without creating again.
+ * Daily, weekly, monthly, missing, and failed schedule reads all block create.
+ */
+export function fundingPayoutCreateGate(opts: {
+  alreadySubmitted: boolean;
+  scheduleInterval: string | null | undefined;
+  scheduleReadFailed?: boolean;
+}): { action: "reconcile" | "create" | "block"; code: string } {
+  if (opts.alreadySubmitted) return { action: "reconcile", code: "" };
+  if (opts.scheduleReadFailed) return { action: "block", code: "GP_PAYOUT_SCHEDULE_UNREAD" };
+  const schedule = automaticBankPayoutBlocksFunding(opts.scheduleInterval);
+  if (schedule.blocked) return { action: "block", code: schedule.code };
+  return { action: "create", code: "" };
+}
+
 function utcDate(value: Date): Date {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
 }

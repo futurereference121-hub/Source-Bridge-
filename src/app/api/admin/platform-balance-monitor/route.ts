@@ -19,12 +19,12 @@ function modeReady(
   return rows.some((row) => Boolean(row.readinessCheckedAt) && readinessPassedCode(row.readinessCode));
 }
 
-function workerHealthy(
-  rows: Array<{ workerWarmupCompleted: boolean; lastSuccessAt: string | null }>,
+function moneyWorkerHealthy(
+  rows: Array<{ moneyWorkerCompleted: boolean; lastSuccessAt: string | null }>,
   nowMs: number,
 ): boolean {
   return rows.some((row) => {
-    if (!row.workerWarmupCompleted || !row.lastSuccessAt) return false;
+    if (!row.moneyWorkerCompleted || !row.lastSuccessAt) return false;
     const successMs = Date.parse(row.lastSuccessAt);
     return Number.isFinite(successMs) && nowMs - successMs < PLATFORM_BALANCE_STALL_MS;
   });
@@ -58,7 +58,7 @@ export async function GET() {
         testReady,
         liveReady,
         liveBankRemainderEnabled: isPlatformBankRemainderPayoutEnabled("LIVE"),
-        liveBankRemainderHealthy: workerHealthy(live, nowMs),
+        liveBankRemainderHealthy: moneyWorkerHealthy(live, nowMs),
       }),
       TEST: test,
       LIVE: live,

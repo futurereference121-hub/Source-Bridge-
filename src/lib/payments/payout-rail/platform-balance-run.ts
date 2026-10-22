@@ -13,7 +13,8 @@ import {
   nextBankRemainderAttempt,
   planSafeBankRemainder,
   platformBalanceHealth,
-  workerWarmupEvidence,
+  coordinationWarmupEvidence,
+  moneyWorkerEvidence,
   PLATFORM_BALANCE_RESERVE_SCAN_CAP,
   assessPlatformBank,
   readPlatformExternalAccounts,
@@ -597,9 +598,13 @@ export async function platformBalanceMonitor(mode: StripeMode, now = new Date())
   const coordinateSkip = !enabled && open === 0 ? ("disabled" as const) : null;
   return rows.map((row) => {
     const lastSuccessAtMs = row.lastSuccessAt ? row.lastSuccessAt.getTime() : null;
-    const warmup = workerWarmupEvidence({
+    const money = moneyWorkerEvidence({
       lastSuccessAtMs,
       lastStartedAtMs: row.lastStartedAt ? row.lastStartedAt.getTime() : null,
+    });
+    const warmup = coordinationWarmupEvidence({
+      lastWarmupAtMs: row.lastWarmupAt ? row.lastWarmupAt.getTime() : null,
+      lastWarmupCode: row.lastWarmupCode,
     });
     const health = platformBalanceHealth({
       nowMs: now.getTime(),
@@ -612,8 +617,11 @@ export async function platformBalanceMonitor(mode: StripeMode, now = new Date())
       stalled: health.stalled,
       code: health.code,
       lastErrorCode: row.lastErrorCode || null,
-      lastSuccessAt: warmup.lastSuccessAt,
-      lastStartedAt: warmup.lastStartedAt,
+      lastSuccessAt: money.lastSuccessAt,
+      lastStartedAt: money.lastStartedAt,
+      moneyWorkerCompleted: money.completed,
+      lastWarmupAt: warmup.lastWarmupAt,
+      lastWarmupCode: warmup.lastWarmupCode,
       readinessCheckedAt: row.readinessCheckedAt ? row.readinessCheckedAt.toISOString() : null,
       readinessCode: row.readinessCode || null,
       workerWarmupCompleted: warmup.completed,

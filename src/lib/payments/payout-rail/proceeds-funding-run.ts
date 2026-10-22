@@ -32,6 +32,7 @@ import {
   completedPurchaseBlocksNewFunding,
   decideFundingRequest,
   describeGpBuyerPayout,
+  fundingPayoutCreateGate,
   fundingPayoutMatchesLeg,
   GP_COMPLETED_OUTBOUND_STATUSES,
   GP_FUNDING_WAITING_CODES,
@@ -387,8 +388,27 @@ async function sendFundingPayout(opts: {
 }) {
   const stripe = getStripe(opts.mode);
   try {
-    const payout = await fencedProviderWrite(() =>
-      stripe.payouts.create(
+    const submitted = await fencedProviderWrite(async () => {
+      let interval: string | null = null;
+      let scheduleReadFailed = false;
+      try {
+        const account = await stripe.accounts.retrieve();
+        const value = account.settings?.payouts?.schedule?.interval;
+        if (typeof value !== "string") scheduleReadFailed = true;
+        else interval = value;
+      } catch {
+        interval = null;
+        scheduleReadFailed = true;
+      }
+      const gate = fundingPayoutCreateGate({
+        alreadySubmitted: false,
+        scheduleInterval: interval,
+        scheduleReadFailed,
+      });
+      if (gate.action !== "create") {
+        return { kind: "block" as const, code: gate.code };
+      }
+      const payout = await stripe.payouts.create(
         {
           amount: opts.leg.amountMinor,
           currency: opts.currency.toLowerCase(),
@@ -401,8 +421,17 @@ async function sendFundingPayout(opts: {
           idempotencyKey: opts.leg.idempotencyKey,
           apiVersion: STRIPE_GP_API_VERSION,
         },
-      ),
-    );
+      );
+      return { kind: "created" as const, payout };
+    });
+    if (submitted.kind === "block") {
+      await prisma.gpProceedsFunding.update({
+        where: { id: opts.fundingId },
+        data: { status: "BLOCKED", failureCode: submitted.code },
+      });
+      return false;
+    }
+    const payout = submitted.payout;
     await prisma.gpProceedsFundingLeg.update({
       where: { id: opts.leg.id },
       data: { stripePayoutId: payout.id, stripePayoutStatus: payout.status, failureCode: "" },

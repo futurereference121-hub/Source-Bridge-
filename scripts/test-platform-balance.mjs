@@ -48,7 +48,9 @@ const {
   nextBankRemainderAttempt,
   planSafeBankRemainder,
   platformBalanceHealth,
-  workerWarmupEvidence,
+  coordinationWarmupEvidence,
+  moneyWorkerEvidence,
+  lockCompletionWrite,
   readinessPassedCode,
   readinessHeartbeatForMode,
   reservePurchase,
@@ -444,16 +446,37 @@ assert.equal(
   }).code,
   "",
 );
-assert.equal(workerWarmupEvidence({ lastSuccessAtMs: null, lastStartedAtMs: null }).completed, false);
-assert.equal(workerWarmupEvidence({ lastSuccessAtMs: null, lastStartedAtMs: null }).lastSuccessAt, null);
+assert.equal(coordinationWarmupEvidence({ lastWarmupAtMs: null }).completed, false);
+assert.equal(coordinationWarmupEvidence({ lastWarmupAtMs: null }).lastWarmupAt, null);
+assert.equal(coordinationWarmupEvidence({ lastWarmupAtMs: now, lastWarmupCode: "WARMUP_OK" }).completed, true);
 assert.equal(
-  workerWarmupEvidence({ lastSuccessAtMs: now, lastStartedAtMs: now - 1000 }).completed,
-  true,
-);
-assert.equal(
-  workerWarmupEvidence({ lastSuccessAtMs: now, lastStartedAtMs: now - 1000 }).lastSuccessAt,
+  coordinationWarmupEvidence({ lastWarmupAtMs: now, lastWarmupCode: "WARMUP_OK" }).lastWarmupAt,
   "2026-10-12T06:00:00.000Z",
 );
+assert.equal(moneyWorkerEvidence({ lastSuccessAtMs: null, lastStartedAtMs: null }).completed, false);
+assert.equal(moneyWorkerEvidence({ lastSuccessAtMs: null, lastStartedAtMs: null }).lastSuccessAt, null);
+assert.equal(moneyWorkerEvidence({ lastSuccessAtMs: now, lastStartedAtMs: now - 1000 }).completed, true);
+assert.equal(
+  moneyWorkerEvidence({ lastSuccessAtMs: now, lastStartedAtMs: now - 1000 }).lastSuccessAt,
+  "2026-10-12T06:00:00.000Z",
+);
+const warmupWrite = lockCompletionWrite({
+  succeeded: true,
+  recordAs: "warmup",
+  code: "WARMUP_OK",
+  now: new Date(now),
+});
+assert.equal(Boolean(warmupWrite.lastWarmupAt), true);
+assert.equal(warmupWrite.lastWarmupCode, "WARMUP_OK");
+assert.equal("lastSuccessAt" in warmupWrite, false);
+const moneyWrite = lockCompletionWrite({
+  succeeded: true,
+  recordAs: "money",
+  code: "BANK_REMAINDER_DISABLED",
+  now: new Date(now),
+});
+assert.equal(Boolean(moneyWrite.lastSuccessAt), true);
+assert.equal("lastWarmupAt" in moneyWrite, false);
 assert.equal(readinessPassedCode("READINESS_DAILY_SCHEDULE"), true);
 assert.equal(readinessPassedCode("READINESS_READY"), true);
 assert.equal(readinessPassedCode("CUTOVER_WARMUP"), false);
@@ -1141,12 +1164,39 @@ assert.match(monitorRoute, /platformBalanceMonitor\("LIVE"/);
 assert.match(monitorRoute, /payoutsAllowed: false/);
 assert.match(monitorRoute, /manualScheduleActivation: dualModeManualScheduleActivation/);
 assert.match(monitorRoute, /sharedScheduleCutover/);
-assert.match(monitorRoute, /workerHealthy/);
+assert.match(monitorRoute, /moneyWorkerHealthy/);
+assert.doesNotMatch(monitorRoute, /workerWarmupCompleted \|\| !row.lastSuccessAt/);
 assert.doesNotMatch(monitorRoute, /payouts\.create|accounts\.update|interval:\s*["']manual["']/);
-assert.match(runner, /workerWarmupCompleted/);
-assert.match(runner, /lastSuccessAt: warmup.lastSuccessAt/);
+assert.match(runner, /workerWarmupCompleted: warmup.completed/);
+assert.match(runner, /moneyWorkerCompleted: money.completed/);
+assert.match(runner, /lastWarmupAt: warmup.lastWarmupAt/);
+assert.match(runner, /lastSuccessAt: money.lastSuccessAt/);
 assert.match(runner, /coordinateSkip/);
 assert.doesNotMatch(runner, /lastSuccessAt: true/);
+assert.doesNotMatch(runner, /workerWarmupEvidence/);
+const warmupModule = read("src/lib/payments/payout-rail/platform-balance-warmup.ts");
+assert.match(warmupModule, /report.recordAs = "warmup"/);
+assert.match(warmupModule, /planSafeBankRemainder/);
+assert.match(warmupModule, /loadPlatformLiabilities/);
+assert.match(warmupModule, /accounts\.retrieve/);
+assert.match(warmupModule, /balance\.retrieve/);
+assert.match(warmupModule, /bankEnabled: false/);
+assert.match(warmupModule, /money_worker_enabled/);
+assert.doesNotMatch(
+  warmupModule,
+  /payouts\.create|transfers\.create|refunds\.create|outbound_payments|outbound_payment_quotes|accounts\.update|sendFundingPayout|createSafeBankRemainder|reconcileGpProceedsFunding|releaseFinal|prepareQuoteOnly|fencedProviderWrite|moneyMutation/,
+);
+const warmupRoute = read("src/app/api/admin/platform-balance-warmup/route.ts");
+assert.match(warmupRoute, /requireAdmin/);
+assert.match(warmupRoute, /runPlatformBalanceWarmup\("TEST"\)/);
+assert.match(warmupRoute, /runPlatformBalanceWarmup\("LIVE"\)/);
+assert.match(warmupRoute, /payoutsAllowed: false/);
+assert.doesNotMatch(warmupRoute, /payouts\.create|accounts\.update|interval:\s*["']manual["']/);
+assert.match(read("src/lib/payments/payout-rail/platform-balance-lock.ts"), /lockCompletionWrite/);
+assert.match(read("prisma/migrations/20261022120000_platform_balance_warmup/migration.sql"), /lastWarmupAt/);
+assert.doesNotMatch(read("prisma/migrations/20261022120000_platform_balance_warmup/migration.sql"), /DROP TABLE/);
+assert.match(read("src/app/admin/platform-balance/page.tsx"), /PlatformBalanceWarmupButton/);
+assert.match(read("src/app/admin/platform-balance/warmup-button.tsx"), /platform-balance-warmup/);
 assert.match(read("src/lib/payments/release.ts"), /isCoordinationRetryable\(err\)\) throw err/);
 assert.match(read("src/lib/payments/admin-protected-decision.ts"), /refunds\.create/);
 assert.match(read("src/lib/payments/flags.ts"), /PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED", false/);
