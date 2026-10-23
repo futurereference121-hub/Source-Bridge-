@@ -33,6 +33,7 @@ function feeLine(label: string, amount: number, currency: string) {
 
 /**
  * Shared desktop and mobile review before a Global Payouts release.
+ * LIVE confirmation is a Source Bridge app policy, not a Stripe requirement.
  * Preparation and confirmation never create the payout themselves.
  */
 export function GpQuoteReview(props: {

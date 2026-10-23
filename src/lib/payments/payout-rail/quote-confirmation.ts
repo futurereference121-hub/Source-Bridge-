@@ -1,17 +1,17 @@
 /**
  * Buyer-present LIVE release still requires quote confirmation in the existing
- * review control. That policy is unchanged: the current actor must be the buyer
- * who confirmed the stored quote.
+ * review control. That is a Source Bridge app policy, not a Stripe requirement.
+ * Stripe does not require a separate buyer confirmation of a replacement
+ * OutboundPaymentQuote. After FX lock expiry, Stripe's published guidance is to
+ * request another quote. LIVE still keeps this product gate. TEST skips it.
+ * A missing mode keeps the confirmation gate.
  *
  * Inspection expiry and an authorized retry have no buyer session. They use a
  * recorded buyer action (Start Inspection, or the original release action on
  * retry) plus a valid matching unexpired quote. The worker is not written into
- * confirmedByUserId. Refreshing an expired quote before submission is a
- * separate correction; Stripe has not disclosed that a background worker may
- * submit that replacement without another buyer confirmation.
- *
- * TEST uses the buyer's existing release action, or a recorded inspection window.
- * A missing mode keeps the confirmation gate. No extra approval screen.
+ * confirmedByUserId. A pre-submission replacement quote may be requested
+ * without a second buyer confirmation; LIVE still requires the stored quote
+ * that is later submitted to satisfy this app-policy gate.
  */
 export function gpQuoteConfirmationRequired(
   stripeMode: string | null | undefined,

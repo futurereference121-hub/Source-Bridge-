@@ -10,6 +10,7 @@ import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
 import {
   getStripeMode,
   isDirectPaymentsEnabled,
+  isGlobalPayoutsProceedsFundingEnabled,
   isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
@@ -19,6 +20,7 @@ import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import {
   describeGpBuyerPayout,
+  scheduleBlocksBuyerFunding,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
@@ -992,7 +994,7 @@ async function gpProgressForTransactions(
   const [fundings, attempts] = await Promise.all([
     prisma.gpProceedsFunding.findMany({
       where: { protectedTxnId: { in: ids } },
-      select: { protectedTxnId: true, status: true, availableOn: true },
+      select: { protectedTxnId: true, status: true, availableOn: true, failureCode: true },
     }),
     prisma.outboundPaymentAttempt.findMany({
       where: { protectedTxnId: { in: ids } },
@@ -1027,10 +1029,13 @@ async function gpProgressForTransactions(
       outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
       failureCode: attempt?.failureCode,
       fundingStatus: funding?.status,
+      proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
+      configurationBlocked: scheduleBlocksBuyerFunding(funding?.failureCode),
       chargeAvailable:
         funding?.status === "POSTED" ||
         funding?.status === "FUNDING" ||
-        funding?.status === "SHORT",
+        funding?.status === "SHORT" ||
+        (funding?.availableOn != null && funding.availableOn.getTime() <= Date.now()),
       availableOn: funding?.availableOn ?? null,
       fundedAt: row.fundedAt,
       expectedArrival: attempt?.expectedArrivalAt ?? null,

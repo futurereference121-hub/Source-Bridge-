@@ -25,7 +25,7 @@ export const GP_SCHEDULE_BLOCK_CODES = [
 ] as const;
 
 export const GP_RELEASE_WAITING_COPY =
-  "Release confirmed. Your sourcer\u2019s international payout will be sent automatically once your payment clears. No further action is needed.";
+  "Release confirmed. Your sourcer\u2019s international payout will be sent automatically once your payment is available. No further action is needed.";
 
 /** Funding is off, or the payout schedule blocks it. No internal account terms. */
 export const GP_FUNDING_HOLD_COPY =
@@ -33,7 +33,7 @@ export const GP_FUNDING_HOLD_COPY =
 
 /** Charge is available and the financial-account funding payout has not been sent. */
 export const GP_FUNDING_PROGRESS_COPY =
-  "Release confirmed. Your payment has cleared. Source Bridge is funding your sourcer\u2019s international payout automatically. No further action is needed.";
+  "Release confirmed. Your payment is available. Source Bridge is funding your sourcer\u2019s international payout automatically. No further action is needed.";
 
 /** Funding payout is in progress after the charge became available. */
 export const GP_FUNDING_PROCESSING_COPY =
@@ -98,6 +98,8 @@ export type ChargeSettlementInput = {
   balanceStatus: string;
   availableOn: Date | null;
   sourceType?: string | null;
+  /** Balance-transaction payout id when Stripe has already paid this net out. */
+  payoutId?: string | null;
 };
 
 export type ChargeSettlement =
@@ -108,6 +110,7 @@ export type ChargeSettlement =
       netMinor: number;
       available: boolean;
       availableOn: Date | null;
+      paidOutPayoutId: string | null;
     }
   | { ok: false; code: string };
 
@@ -136,6 +139,8 @@ export type AllocateFundingInput = {
   txnStatus: string;
   openDispute: boolean;
   now: Date;
+  /** This purchase's own funding-leg payout ids. A bank payout is not one of these. */
+  ownFundingPayoutIds?: readonly string[];
 };
 
 export type AllocateFundingResult =
@@ -168,6 +173,8 @@ export function assessChargeSettlement(
   }
   if (input.refundedMinor > 0) return { ok: false, code: "GP_CHARGE_REFUNDED" };
   const status = input.balanceStatus.trim().toLowerCase();
+  const paidOutPayoutId =
+    typeof input.payoutId === "string" && input.payoutId.trim() ? input.payoutId.trim() : null;
   return {
     ok: true,
     chargeId: input.chargeId,
@@ -175,6 +182,7 @@ export function assessChargeSettlement(
     netMinor: input.netMinor,
     available: status === "available",
     availableOn: input.availableOn,
+    paidOutPayoutId,
   };
 }
 
@@ -218,6 +226,13 @@ export function allocateGpProceedsFunding(input: AllocateFundingInput): Allocate
   if (input.charge.availableOn && input.charge.availableOn.getTime() > input.now.getTime()) {
     return { action: "wait", status: "AWAITING_SETTLEMENT", code: "GP_CHARGE_AVAILABLE_ON" };
   }
+  const paidOut = input.charge.ok ? input.charge.paidOutPayoutId : null;
+  if (paidOut) {
+    const own = new Set((input.ownFundingPayoutIds ?? []).filter(Boolean));
+    if (!own.has(paidOut)) {
+      return { action: "wait", status: "SHORT", code: "GP_CHARGE_PAID_OUT" };
+    }
+  }
   const outstanding = required - input.postedMinor;
   const chargeRoom = input.charge.netMinor - input.postedMinor;
   const platformRoom =
@@ -226,6 +241,65 @@ export function allocateGpProceedsFunding(input: AllocateFundingInput): Allocate
     return { action: "wait", status: "SHORT", code: "GP_FUNDING_ROOM" };
   }
   return { action: "fund", amountMinor: outstanding, code: "GP_PROCEEDS_FUND" };
+}
+
+/**
+ * Other Global Payouts purchases whose charges are already available must keep
+ * their unpaid nets out of this purchase's platform room. Pending settlement
+ * is skipped because those nets are not in the available card balance yet.
+ * A charge already paid out to a non-own payout is skipped so it cannot be
+ * ghost-reserved against another purchase's leftover available net.
+ * Pending funding legs are subtracted here so they are not reserved twice.
+ */
+export type OtherGpFundingRow = {
+  chargeNetMinor: number | null;
+  status: string;
+  failureCode: string;
+  availableOn: Date | null;
+  txnStatus: string;
+  outboundStatuses: readonly string[];
+  postedMinor: number;
+  pendingMinor: number;
+};
+
+export function otherGpAvailableUnpaidMinor(
+  rows: readonly OtherGpFundingRow[],
+  now: Date,
+  unreadableOtherCount = 0,
+): { minor: number; code: string | null } {
+  if (!Number.isInteger(unreadableOtherCount) || unreadableOtherCount < 0) {
+    return { minor: 0, code: "GP_RESERVE_UNKNOWN" };
+  }
+  if (unreadableOtherCount > 0) return { minor: 0, code: "GP_RESERVE_UNKNOWN" };
+  let minor = 0;
+  for (const row of rows) {
+    const completed = completedPurchaseBlocksNewFunding({
+      txnStatus: row.txnStatus,
+      outboundStatuses: row.outboundStatuses,
+    });
+    if (completed && row.pendingMinor === 0) continue;
+    if (row.failureCode === "GP_CHARGE_PAID_OUT") continue;
+    const awaiting =
+      row.status === "AWAITING_SETTLEMENT" ||
+      row.failureCode === "GP_CHARGE_PENDING" ||
+      (row.availableOn != null && row.availableOn.getTime() > now.getTime());
+    if (awaiting) continue;
+    if (
+      row.chargeNetMinor == null ||
+      !Number.isInteger(row.chargeNetMinor) ||
+      row.chargeNetMinor < 0 ||
+      !Number.isInteger(row.postedMinor) ||
+      row.postedMinor < 0 ||
+      !Number.isInteger(row.pendingMinor) ||
+      row.pendingMinor < 0
+    ) {
+      return { minor: 0, code: "GP_RESERVE_UNKNOWN" };
+    }
+    const unpaid = row.chargeNetMinor - row.postedMinor - row.pendingMinor;
+    if (!Number.isInteger(unpaid) || unpaid < 0) return { minor: 0, code: "GP_RESERVE_UNKNOWN" };
+    if (unpaid > 0) minor += unpaid;
+  }
+  return { minor, code: null };
 }
 
 export function nextFundingLegSequence(
@@ -627,8 +701,8 @@ export function describeGpBuyerPayout(opts: {
     phase: "waiting_funding",
     headline: processing ? GP_FUNDING_PROCESSING_COPY : GP_FUNDING_PROGRESS_COPY,
     timing: processing
-      ? "Your payment has cleared. Source Bridge is moving the cleared amount into the international payout balance. This is not a promise that the sourcer is paid within three days of release."
-      : "Your payment has cleared. The international payout starts automatically once that balance is ready. This is not a promise that the sourcer is paid within three days of release.",
+      ? "Your payment is available. Source Bridge is moving the available amount into the international payout balance. This is not a promise that the sourcer is paid within three days of release."
+      : "Your payment is available. The international payout starts automatically once that balance is ready. This is not a promise that the sourcer is paid within three days of release.",
     hideReleaseActions: true,
   };
 }

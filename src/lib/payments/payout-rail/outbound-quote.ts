@@ -841,7 +841,9 @@ export async function executeQuotedPayout(opts: {
   actorUserId?: string | null;
   /**
    * Recorded buyer action for inspection expiry or an authorized retry.
-   * Absent on a buyer-present release, which still uses quote confirmation.
+   * Absent on a buyer-present LIVE release, which still uses the app-policy
+   * quote confirmation gate. Stripe does not require a second confirmation of
+   * a replacement quote.
    */
   backgroundRelease?: BackgroundReleaseAuthorization | null;
   allowQuoteRefresh?: boolean;

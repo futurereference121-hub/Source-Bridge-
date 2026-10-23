@@ -603,7 +603,12 @@ ok(
   "reconciliation stays available while initiation is off",
   globalPayoutsReconciliationAllowed({ masterEnabled: true, liveInitiationEnabled: false }) === true,
 );
-ok("LIVE still requires buyer quote confirmation in the product", gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === true);
+ok("LIVE still requires buyer quote confirmation as app policy", gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === true);
+ok(
+  "LIVE confirmation comments no longer treat Stripe as requiring a second buyer confirm",
+  !fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/quote-confirmation.ts"), "utf8").includes("Stripe has not disclosed") &&
+    fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/quote-confirmation.ts"), "utf8").includes("app policy"),
+);
 ok("TEST still skips quote confirmation", gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS") === false);
 
 const outboundSrc = fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/outbound-payment.ts"), "utf8");

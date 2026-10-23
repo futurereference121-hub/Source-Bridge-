@@ -38,6 +38,7 @@ import {
   GP_FUNDING_WAITING_CODES,
   matchFundingCredit,
   nextFundingLegSequence,
+  otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
   scheduleBlocksBuyerFunding,
   type ChargeSettlementInput,
@@ -86,10 +87,18 @@ function settlementFromCharge(charge: {
           currency?: string;
           status?: string;
           available_on?: number;
+          payout?: unknown;
         })
       : null;
   // Charge.livemode is the mode contract. Balance Transaction in API version
   // 2025-08-27.basil has no livemode field, so this read does not inspect one.
+  const payout = bt?.payout;
+  const payoutId =
+    typeof payout === "string"
+      ? payout
+      : payout && typeof payout === "object" && "id" in payout && typeof payout.id === "string"
+        ? payout.id
+        : null;
   return {
     chargeId: charge.id,
     livemode: charge.livemode,
@@ -99,6 +108,7 @@ function settlementFromCharge(charge: {
     netMinor: typeof bt?.net === "number" ? bt.net : -1,
     balanceStatus: bt?.status || "unknown",
     availableOn: typeof bt?.available_on === "number" ? new Date(bt.available_on * 1000) : null,
+    payoutId,
   };
 }
 
@@ -135,9 +145,65 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
       connectReserveCode: connect.code,
     };
   }
+  const [otherFundings, unreadableOthers] = await Promise.all([
+    prisma.gpProceedsFunding.findMany({
+      where: {
+        stripeMode: mode,
+        currency: currency.toUpperCase(),
+        id: { not: exceptFundingId },
+        protectedTxn: { payoutRail: "STRIPE_GLOBAL_PAYOUTS" },
+      },
+      select: {
+        chargeNetMinor: true,
+        status: true,
+        failureCode: true,
+        availableOn: true,
+        protectedTxn: {
+          select: {
+            status: true,
+            outboundPaymentAttempts: { select: { status: true } },
+          },
+        },
+        legs: { select: { status: true, amountMinor: true } },
+      },
+    }),
+    prisma.protectedTransaction.count({
+      where: {
+        stripeMode: mode,
+        payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+        fundedAt: { not: null },
+        stripeChargeId: { not: "" },
+        currency: { equals: currency, mode: "insensitive" },
+        status: { notIn: ["REFUNDED", "CANCELLED", "FAILED", "RELEASED"] },
+        gpProceedsFunding: null,
+      },
+    }),
+  ]);
+  const otherGp = otherGpAvailableUnpaidMinor(
+    otherFundings.map((row) => ({
+      chargeNetMinor: row.chargeNetMinor,
+      status: row.status,
+      failureCode: row.failureCode,
+      availableOn: row.availableOn,
+      txnStatus: row.protectedTxn.status,
+      outboundStatuses: row.protectedTxn.outboundPaymentAttempts.map((attempt) => attempt.status),
+      postedMinor: row.legs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0),
+      pendingMinor: row.legs.filter((leg) => leg.status === "PENDING").reduce((sum, leg) => sum + leg.amountMinor, 0),
+    })),
+    new Date(),
+    unreadableOthers,
+  );
+  if (otherGp.code) {
+    return {
+      platformAvailableMinor: card,
+      reservedMinor: Number.MAX_SAFE_INTEGER,
+      connectReserveCode: otherGp.code,
+    };
+  }
   return {
     platformAvailableMinor: card,
-    reservedMinor: (transfers._sum.amountMinor ?? 0) + (legs._sum.amountMinor ?? 0) + connect.reservedMinor,
+    reservedMinor:
+      (transfers._sum.amountMinor ?? 0) + (legs._sum.amountMinor ?? 0) + connect.reservedMinor + otherGp.minor,
     connectReserveCode: null as string | null,
   };
 }
@@ -720,6 +786,14 @@ async function fundOne(opts: {
     });
     return false;
   }
+  const ownFundingPayoutIds = freshLegs.map((leg) => leg.stripePayoutId).filter(Boolean);
+  if (settlement.paidOutPayoutId && !ownFundingPayoutIds.includes(settlement.paidOutPayoutId)) {
+    await prisma.gpProceedsFunding.update({
+      where: { id: opts.funding.id },
+      data: { status: "SHORT", failureCode: "GP_CHARGE_PAID_OUT" },
+    });
+    return false;
+  }
   if (!(await buyerReleaseMayFund(opts.txn, opts.now))) return false;
   const attempt = await prisma.outboundPaymentAttempt.findFirst({
     where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
@@ -848,6 +922,7 @@ async function fundOne(opts: {
     txnStatus: opts.txn.status,
     openDispute: opts.openDispute,
     now: opts.now,
+    ownFundingPayoutIds,
   });
   if (decision.action !== "fund" || decision.amountMinor !== quotePlan.amountMinor) {
     const failureCode =

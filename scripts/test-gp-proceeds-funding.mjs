@@ -59,6 +59,7 @@ const {
   isSimulatedFundingCredit,
   matchFundingCredit,
   nextFundingLegSequence,
+  otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
 } = funding;
 const { gpQuoteConfirmationRequired } = quoteConfirmation;
@@ -130,9 +131,31 @@ assert.match(runner, /FOR UPDATE/);
 assert.match(runner, /GP_FUNDING_ALREADY_COMPLETED/);
 assert.match(runner, /newFundingAllowedNow/);
 assert.match(runner, /GP_COMPLETED_OUTBOUND_STATUSES/);
+assert.match(runner, /otherGpAvailableUnpaidMinor/);
+assert.match(runner, /ownFundingPayoutIds/);
+assert.match(runner, /GP_CHARGE_PAID_OUT/);
+assert.match(runner, /withPlatformBalanceLock/);
+assert.match(runner, /fencedProviderWrite/);
+assert.match(runner, /payoutId/);
+const reconcileBody = runner.slice(runner.indexOf("export async function reconcileGpProceedsFunding"));
+assert.ok(reconcileBody.indexOf("if (!opts.lockHeld)") < reconcileBody.indexOf("withPlatformBalanceLock"));
+assert.doesNotMatch(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /Stripe has not disclosed/);
+assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /app policy/);
+assert.doesNotMatch(read("src/lib/payments/payout-rail/live-pilot.ts"), /Stripe has not disclosed/);
+assert.match(read("src/lib/payments/payout-rail/live-pilot.ts"), /Stripe does not require/);
+assert.match(read("src/lib/payments/tickets.ts"), /proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled\(\)/);
+assert.match(read("src/lib/payments/fulfilment.ts"), /proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled\(\)/);
+assert.match(GP_RELEASE_WAITING_COPY, /is available/);
+assert.doesNotMatch(GP_RELEASE_WAITING_COPY, /clears|cleared/);
+assert.match(GP_FUNDING_PROGRESS_COPY, /is available/);
+assert.doesNotMatch(GP_FUNDING_PROGRESS_COPY, /cleared/);
 const fundBody = runner.slice(runner.indexOf("async function fundOne"), runner.indexOf("async function confirmLegs"));
 assert.ok(fundBody.indexOf("pendingLegs.length") < fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED"));
 assert.ok(fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED") < fundBody.indexOf("prepareFundingQuote"));
+assert.ok(
+  fundBody.indexOf("settlement.paidOutPayoutId") >= 0 &&
+    fundBody.indexOf("settlement.paidOutPayoutId") < fundBody.indexOf("prepareFundingQuote"),
+);
 let sendCursor = 0;
 while (sendCursor >= 0) {
   const sendAt = fundBody.indexOf("sendFundingPayout", sendCursor);
@@ -306,6 +329,163 @@ const crowded = allocateGpProceedsFunding(
 );
 assert.equal(crowded.action, "wait");
 assert.equal(crowded.code, "GP_FUNDING_ROOM");
+
+const nowForReserve = new Date("2026-10-23T08:10:00.000Z");
+const newAvailable = {
+  chargeNetMinor: 3904,
+  status: "SHORT",
+  failureCode: "GP_FUNDING_ROOM",
+  availableOn: new Date("2026-10-23T08:08:57.000Z"),
+  txnStatus: "FUNDED",
+  outboundStatuses: [],
+  postedMinor: 0,
+  pendingMinor: 0,
+};
+const delayedPending = {
+  chargeNetMinor: 3878,
+  status: "AWAITING_SETTLEMENT",
+  failureCode: "GP_CHARGE_PENDING",
+  availableOn: new Date("2026-10-29T00:00:00.000Z"),
+  txnStatus: "READY_TO_RELEASE",
+  outboundStatuses: ["AWAITING_FA_FUNDS"],
+  postedMinor: 0,
+  pendingMinor: 0,
+};
+assert.equal(otherGpAvailableUnpaidMinor([newAvailable, delayedPending], nowForReserve).minor, 3904);
+assert.equal(otherGpAvailableUnpaidMinor([newAvailable, delayedPending], nowForReserve).code, null);
+const oldConsumingNew = allocateGpProceedsFunding(
+  input({
+    charge: charge({ netMinor: 3878 }),
+    platformAvailableMinor: 3904,
+    reservedMinor: otherGpAvailableUnpaidMinor([newAvailable, delayedPending], nowForReserve).minor,
+    payoutFeeMinor: 138,
+  }),
+);
+assert.equal(oldConsumingNew.action, "wait");
+assert.equal(oldConsumingNew.code, "GP_FUNDING_ROOM");
+assert.equal(otherGpAvailableUnpaidMinor([delayedPending], nowForReserve).minor, 0);
+assert.equal(otherGpAvailableUnpaidMinor([], nowForReserve, 1).code, "GP_RESERVE_UNKNOWN");
+const completedInflight = otherGpAvailableUnpaidMinor(
+  [
+    {
+      chargeNetMinor: 3878,
+      status: "FUNDING",
+      failureCode: "",
+      availableOn: new Date("2026-10-17T00:00:00.000Z"),
+      txnStatus: "RELEASED",
+      outboundStatuses: ["SUCCEEDED"],
+      postedMinor: 0,
+      pendingMinor: 3638,
+    },
+  ],
+  nowForReserve,
+);
+assert.equal(completedInflight.minor, 240);
+const alreadyFundedPosted = otherGpAvailableUnpaidMinor(
+  [
+    {
+      chargeNetMinor: 3878,
+      status: "POSTED",
+      failureCode: "",
+      availableOn: new Date("2026-10-17T00:00:00.000Z"),
+      txnStatus: "RELEASED",
+      outboundStatuses: ["SUCCEEDED"],
+      postedMinor: 3638,
+      pendingMinor: 0,
+    },
+  ],
+  nowForReserve,
+);
+assert.equal(alreadyFundedPosted.minor, 0);
+const pendingLegReserve = otherGpAvailableUnpaidMinor(
+  [
+    {
+      ...newAvailable,
+      status: "FUNDING",
+      failureCode: "",
+      pendingMinor: 3638,
+    },
+  ],
+  nowForReserve,
+);
+assert.equal(pendingLegReserve.minor, 266);
+const uncertainPending = otherGpAvailableUnpaidMinor(
+  [
+    {
+      ...newAvailable,
+      status: "FUNDING",
+      failureCode: "GP_FUNDING_OUTCOME_UNCERTAIN",
+      pendingMinor: 3638,
+    },
+  ],
+  nowForReserve,
+);
+assert.equal(uncertainPending.minor, 266);
+const uncertainNoLeg = otherGpAvailableUnpaidMinor(
+  [
+    {
+      ...newAvailable,
+      status: "FUNDING",
+      failureCode: "GP_FUNDING_OUTCOME_UNCERTAIN",
+      pendingMinor: 0,
+    },
+  ],
+  nowForReserve,
+);
+assert.equal(uncertainNoLeg.minor, 3904);
+const sweptSibling = {
+  chargeNetMinor: 3878,
+  status: "SHORT",
+  failureCode: "GP_CHARGE_PAID_OUT",
+  availableOn: new Date("2026-10-17T00:00:00.000Z"),
+  txnStatus: "READY_TO_RELEASE",
+  outboundStatuses: [],
+  postedMinor: 0,
+  pendingMinor: 0,
+};
+assert.equal(otherGpAvailableUnpaidMinor([sweptSibling, newAvailable], nowForReserve).minor, 3904);
+const sweptCharge = charge({ payoutId: "po_bank_hist", netMinor: 3878 });
+assert.equal(sweptCharge.ok && sweptCharge.paidOutPayoutId, "po_bank_hist");
+const sweptConsumingNew = allocateGpProceedsFunding(
+  input({
+    charge: sweptCharge,
+    platformAvailableMinor: 3904,
+    reservedMinor: 0,
+    payoutFeeMinor: 138,
+  }),
+);
+assert.equal(sweptConsumingNew.action, "wait");
+assert.equal(sweptConsumingNew.code, "GP_CHARGE_PAID_OUT");
+const ownFundingPayout = allocateGpProceedsFunding(
+  input({
+    charge: charge({ payoutId: "po_own_fa", netMinor: 3904 }),
+    ownFundingPayoutIds: ["po_own_fa"],
+    platformAvailableMinor: 3904,
+    payoutFeeMinor: 138,
+  }),
+);
+assert.equal(ownFundingPayout.action, "fund");
+assert.equal(ownFundingPayout.amountMinor, 3638);
+assert.equal(
+  classifyStoredQuote({
+    quoteConfirmationRequired: true,
+    quoteId: "q_live",
+    expiresAt: "2026-10-23T08:15:17.000Z",
+    confirmedByUserId: "buyer",
+    nowMs: Date.parse("2026-10-23T08:16:00.000Z"),
+  }),
+  "confirmation_required",
+);
+assert.equal(
+  classifyStoredQuote({
+    quoteConfirmationRequired: false,
+    quoteId: "q_test",
+    expiresAt: "2026-10-23T09:36:16.000Z",
+    confirmedByUserId: "",
+    nowMs: Date.parse("2026-10-23T09:37:00.000Z"),
+  }),
+  "expired",
+);
 
 assert.equal(
   allocateGpProceedsFunding(input({ initiationAllowed: false, stripeMode: "LIVE", charge: assessChargeSettlement({

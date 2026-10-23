@@ -420,10 +420,10 @@ export type BackgroundReleaseAuthorization = {
  * The worker user id must be empty. confirmedByUserId is not written here.
  *
  * Stripe API 2026-08-26.preview locks an OutboundPaymentQuote FX rate for five
- * minutes (fx_quote.lock_expires_at / lock_status). The published guidance is
- * to request another quote after that lock expires. Stripe has not disclosed
- * that a marketplace may submit the replacement from a background worker
- * without a second buyer confirmation. That disclosure remains unresolved.
+ * minutes (fx_quote.lock_expires_at / lock_status). Stripe's published guidance
+ * is to request another quote after that lock expires. Stripe does not require
+ * a second buyer confirmation of that replacement. LIVE still requires buyer
+ * quote confirmation because Source Bridge's app policy does.
  */
 export function evaluateDurableReleaseAuthorization(opts: {
   workerActorUserId?: string | null;

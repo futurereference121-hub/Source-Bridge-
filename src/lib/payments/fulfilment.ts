@@ -6,9 +6,13 @@ import {
   isProtectedPaymentsEnabled,
   isDirectPaymentsEnabled,
   isProcurementAdvancesEnabled,
+  isGlobalPayoutsProceedsFundingEnabled,
   normalizeStripeMode,
 } from "@/lib/payments/flags";
-import { describeGpBuyerPayout } from "@/lib/payments/payout-rail/proceeds-funding";
+import {
+  describeGpBuyerPayout,
+  scheduleBlocksBuyerFunding,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import {
   canTransition,
@@ -223,7 +227,7 @@ export function mapProtectedTxnSummary(
       stripeOutboundPaymentId?: string | null;
       expectedArrivalAt?: Date | null;
     }[];
-    gpProceedsFunding?: { status?: string | null; availableOn?: Date | null } | null;
+    gpProceedsFunding?: { status?: string | null; availableOn?: Date | null; failureCode?: string | null } | null;
   },
   viewerRole: ProtectedTxnListRole,
   opts?: { procurementFlagOn?: boolean },
@@ -254,10 +258,14 @@ export function mapProtectedTxnSummary(
           outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
           failureCode: attempt?.failureCode,
           fundingStatus: t.gpProceedsFunding?.status,
+          proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
+          configurationBlocked: scheduleBlocksBuyerFunding(t.gpProceedsFunding?.failureCode),
           chargeAvailable:
             t.gpProceedsFunding?.status === "POSTED" ||
             t.gpProceedsFunding?.status === "FUNDING" ||
-            t.gpProceedsFunding?.status === "SHORT",
+            t.gpProceedsFunding?.status === "SHORT" ||
+            (t.gpProceedsFunding?.availableOn != null &&
+              t.gpProceedsFunding.availableOn.getTime() <= Date.now()),
           availableOn: t.gpProceedsFunding?.availableOn ?? null,
           fundedAt: t.fundedAt,
           expectedArrival: attempt?.expectedArrivalAt ?? null,
@@ -552,7 +560,7 @@ export async function listProtectedOrdersForUser(opts: {
           expectedArrivalAt: true,
         },
       },
-      gpProceedsFunding: { select: { status: true, availableOn: true } },
+      gpProceedsFunding: { select: { status: true, availableOn: true, failureCode: true } },
     },
   });
 
@@ -611,7 +619,7 @@ export async function getProtectedOrderForUser(opts: {
           expectedArrivalAt: true,
         },
       },
-      gpProceedsFunding: { select: { status: true, availableOn: true } },
+      gpProceedsFunding: { select: { status: true, availableOn: true, failureCode: true } },
     },
   });
   if (!t) {
