@@ -1215,6 +1215,8 @@ assert.match(recoveryRun, /selectDamagedTestPurchase/);
 assert.match(recoveryRun, /matchFundingCredit/);
 assert.match(recoveryRun, /received_credits/);
 assert.match(recoveryRun, /redactReceivedCreditInventory/);
+assert.match(recoveryRun, /creditListHttpStatus/);
+assert.match(recoveryRun, /siblingFailureCode/);
 assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
 const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
 assert.match(outbound, /proceedsFundingAllowsOutbound/);

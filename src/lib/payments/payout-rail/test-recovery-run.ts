@@ -34,6 +34,10 @@ export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   fundingStatus: string | null;
   failureCode: string | null;
   siblingFundingStatus: string | null;
+  siblingFailureCode: string | null;
+  siblingPostedLegMinor: number;
+  siblingPostedHaveCredit: boolean;
+  creditListHttpStatus: number | null;
   cardAvailableGbpMinor: number | null;
   pendingGbpMinor: number | null;
   financialAccountAvailableGbpMinor: number | null;
@@ -137,6 +141,7 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
       select: {
         status: true,
         protectedTxnId: true,
+        failureCode: true,
         legs: { select: { status: true, amountMinor: true, stripePayoutId: true, faCreditId: true } },
       },
     }),
@@ -220,6 +225,7 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
   });
 
   let creditInventory: ReturnType<typeof redactReceivedCreditInventory> | null = null;
+  let creditListHttpStatus: number | null = null;
   let siblingPayoutStatus: string | null = null;
   let siblingMatchFound = false;
   const siblingLeg = (siblingRow?.legs ?? []).find(
@@ -230,7 +236,9 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
   );
   try {
     stripeCalled = true;
-    const credits = await listTestReceivedCredits();
+    const listed = await listTestReceivedCredits();
+    creditListHttpStatus = listed.httpStatus;
+    const credits = listed.credits;
     const claimed = (
       await prisma.gpProceedsFundingLeg.findMany({
         where: { faCreditId: { not: "" } },
@@ -272,6 +280,15 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     fundingStatus: funding?.status ?? null,
     failureCode: funding?.failureCode || null,
     siblingFundingStatus: siblingRow?.status ?? null,
+    siblingFailureCode: siblingRow?.failureCode || null,
+    siblingPostedLegMinor: (siblingRow?.legs ?? [])
+      .filter((leg) => leg.status === "POSTED")
+      .reduce((sum, leg) => sum + leg.amountMinor, 0),
+    siblingPostedHaveCredit: (() => {
+      const posted = (siblingRow?.legs ?? []).filter((leg) => leg.status === "POSTED");
+      return posted.length > 0 && posted.every((leg) => Boolean(leg.faCreditId));
+    })(),
+    creditListHttpStatus,
     cardAvailableGbpMinor,
     pendingGbpMinor,
     financialAccountAvailableGbpMinor,
@@ -281,18 +298,23 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
   };
 }
 
-async function listTestReceivedCredits(): Promise<Record<string, unknown>[]> {
+async function listTestReceivedCredits(): Promise<{
+  credits: Record<string, unknown>[];
+  httpStatus: number | null;
+}> {
   const credits: Record<string, unknown>[] = [];
   let path = "/v2/money_management/received_credits?limit=100";
+  let httpStatus: number | null = null;
   for (let page = 0; page < 10 && path; page += 1) {
     const listed = await gpFetch({ mode: "TEST", method: "GET", path });
+    httpStatus = listed.status;
     if (!listed.ok || !Array.isArray(listed.body.data)) break;
     credits.push(...(listed.body.data as Record<string, unknown>[]));
     const next = typeof listed.body.next_page_url === "string" ? listed.body.next_page_url : "";
     path = next ? next.replace("https://api.stripe.com", "") : "";
     if (!listed.body.has_more && !next) path = "";
   }
-  return credits;
+  return { credits, httpStatus };
 }
 
 export async function confirmTestSiblingFundingLeg(): Promise<{
@@ -365,7 +387,8 @@ export async function confirmTestSiblingFundingLeg(): Promise<{
   if (payout.livemode) {
     throw Object.assign(new Error("TEST recovery refused a live payout"), { status: 409 });
   }
-  const credits = await listTestReceivedCredits();
+  const listed = await listTestReceivedCredits();
+  const credits = listed.credits;
   const claimed = (
     await prisma.gpProceedsFundingLeg.findMany({
       where: { faCreditId: { not: "" } },
