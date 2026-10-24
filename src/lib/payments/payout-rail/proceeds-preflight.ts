@@ -14,6 +14,10 @@ import {
   type ApprovedPurchaseRow,
   type ChargeReadFacts,
 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
+import {
+  assessChargePayoutMembership,
+  balanceTransactionObjectHasPayoutProperty,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { PLATFORM_WEBHOOK_EVENTS } from "@/lib/payments/stripe/webhooks";
 
@@ -29,6 +33,21 @@ export type ProceedsPreflightReport = {
   purchaseHash: "597151ee" | null;
   stripeCalled: boolean;
   charge: ChargeReadFacts | null;
+  balanceTransaction: {
+    apiVersion: string | null;
+    object: string | null;
+    keys: string[];
+    payoutPropertyPresent: boolean;
+    type: string | null;
+    status: string | null;
+  } | null;
+  automaticPayoutMembership: {
+    filterAutomaticOnly: true;
+    automaticPayoutsListed: number;
+    unreadAutomaticPayouts: number;
+    chargeBtInNonOwnAutomaticPayout: boolean | null;
+    membershipState: "paid_out" | "unread" | "clear" | null;
+  } | null;
   financialAccountAvailableGbpMinor: number | null;
   payoutScheduleInterval: string | null;
   webhooks: { covered: string[]; missing: string[] } | null;
@@ -50,6 +69,8 @@ function reportFrom(opts: {
   purchaseHash: "597151ee" | null;
   stripeCalled: boolean;
   charge: ChargeReadFacts | null;
+  balanceTransaction?: ProceedsPreflightReport["balanceTransaction"];
+  automaticPayoutMembership?: ProceedsPreflightReport["automaticPayoutMembership"];
   financialAccountAvailableGbpMinor: number | null;
   payoutScheduleInterval: string | null;
   webhooks: { covered: string[]; missing: string[] } | null;
@@ -68,6 +89,8 @@ function reportFrom(opts: {
     purchaseHash: opts.purchaseHash,
     stripeCalled: opts.stripeCalled,
     charge: opts.charge,
+    balanceTransaction: opts.balanceTransaction ?? null,
+    automaticPayoutMembership: opts.automaticPayoutMembership ?? null,
     financialAccountAvailableGbpMinor: opts.financialAccountAvailableGbpMinor,
     payoutScheduleInterval: opts.payoutScheduleInterval,
     webhooks: opts.webhooks,
@@ -120,6 +143,8 @@ export async function runApprovedTestPreflight(): Promise<ProceedsPreflightRepor
   const stripe = getStripe("TEST");
   let stripeCalled = false;
   let charge: ChargeReadFacts | null = null;
+  let balanceTransaction: ProceedsPreflightReport["balanceTransaction"] = null;
+  let automaticPayoutMembership: ProceedsPreflightReport["automaticPayoutMembership"] = null;
   let availableGbpMinor: number | null = null;
   let interval: string | null = null;
   let webhooks: { covered: string[]; missing: string[] } | null = null;
@@ -152,6 +177,69 @@ export async function runApprovedTestPreflight(): Promise<ProceedsPreflightRepor
     } else {
       charge = shaped.facts;
       reads.push({ name: "charge", status: "verified" });
+      if (bt) {
+        const keys = Object.keys(bt).sort();
+        const versionReader = stripe as { getApiField?: (key: string) => unknown };
+        const apiVersion = versionReader.getApiField?.("version");
+        balanceTransaction = {
+          apiVersion: typeof apiVersion === "string" ? apiVersion : null,
+          object: "object" in bt && typeof bt.object === "string" ? bt.object : null,
+          keys,
+          payoutPropertyPresent: balanceTransactionObjectHasPayoutProperty(keys),
+          type: "type" in bt && typeof bt.type === "string" ? bt.type : null,
+          status: "status" in bt && typeof bt.status === "string" ? bt.status : null,
+        };
+        const btId = "id" in bt && typeof bt.id === "string" ? bt.id : "";
+        const funding = await prisma.gpProceedsFunding.findUnique({
+          where: { protectedTxnId: purchase.id },
+          select: { legs: { select: { stripePayoutId: true } } },
+        });
+        const ownFundingPayoutIds = (funding?.legs ?? []).map((leg) => leg.stripePayoutId).filter(Boolean);
+        const payoutLists = [];
+        try {
+          const listed = await stripe.payouts.list({ limit: 100 });
+          for (const payout of listed.data) {
+            if ((payout.currency || "").toLowerCase() !== "gbp") continue;
+            if (!payout.automatic) continue;
+            if (!["paid", "pending", "in_transit"].includes(String(payout.status || ""))) continue;
+            try {
+              const bts = await stripe.balanceTransactions.list({ payout: payout.id, limit: 100 });
+              payoutLists.push({
+                payoutId: payout.id,
+                automatic: true as const,
+                listed: true,
+                balanceTransactionIds: bts.data.map((row) => row.id),
+              });
+            } catch {
+              payoutLists.push({
+                payoutId: payout.id,
+                automatic: true as const,
+                listed: false,
+                balanceTransactionIds: [],
+              });
+            }
+          }
+        } catch {
+          payoutLists.push({
+            payoutId: "",
+            automatic: true as const,
+            listed: false,
+            balanceTransactionIds: [],
+          });
+        }
+        const membership = assessChargePayoutMembership({
+          balanceTransactionId: btId,
+          ownFundingPayoutIds,
+          payoutLists,
+        });
+        automaticPayoutMembership = {
+          filterAutomaticOnly: true,
+          automaticPayoutsListed: payoutLists.filter((row) => row.listed).length,
+          unreadAutomaticPayouts: payoutLists.filter((row) => !row.listed).length,
+          chargeBtInNonOwnAutomaticPayout: membership.state === "paid_out",
+          membershipState: membership.state,
+        };
+      }
     }
   } catch (err) {
     reads.push({ name: "charge", status: permissionFailure(err) });
@@ -216,6 +304,8 @@ export async function runApprovedTestPreflight(): Promise<ProceedsPreflightRepor
     purchaseHash: "597151ee",
     stripeCalled,
     charge,
+    balanceTransaction,
+    automaticPayoutMembership,
     financialAccountAvailableGbpMinor: availableGbpMinor,
     payoutScheduleInterval: interval,
     webhooks,

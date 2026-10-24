@@ -26,6 +26,7 @@ import {
 import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
   allocateGpProceedsFunding,
+  assessChargePayoutMembership,
   assessChargeSettlement,
   automaticBankPayoutBlocksFunding,
   classifyStoredQuote,
@@ -43,6 +44,7 @@ import {
   scheduleBlocksBuyerFunding,
   type ChargeSettlementInput,
   type GpBuyerPayoutProgress,
+  type ListedPayoutBalanceTransactions,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { connectReserveForCurrency } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
@@ -87,18 +89,12 @@ function settlementFromCharge(charge: {
           currency?: string;
           status?: string;
           available_on?: number;
-          payout?: unknown;
         })
       : null;
   // Charge.livemode is the mode contract. Balance Transaction in API version
   // 2025-08-27.basil has no livemode field, so this read does not inspect one.
-  const payout = bt?.payout;
-  const payoutId =
-    typeof payout === "string"
-      ? payout
-      : payout && typeof payout === "object" && "id" in payout && typeof payout.id === "string"
-        ? payout.id
-        : null;
+  // That same version has no payout property on the object. Membership uses
+  // balanceTransactions.list({ payout }) for automatic payouts only.
   return {
     chargeId: charge.id,
     livemode: charge.livemode,
@@ -108,8 +104,45 @@ function settlementFromCharge(charge: {
     netMinor: typeof bt?.net === "number" ? bt.net : -1,
     balanceStatus: bt?.status || "unknown",
     availableOn: typeof bt?.available_on === "number" ? new Date(bt.available_on * 1000) : null,
-    payoutId,
+    balanceTransactionId: typeof bt?.id === "string" ? bt.id : "",
   };
+}
+
+async function listAutomaticPayoutBalanceTransactions(
+  mode: StripeMode,
+  currency: string,
+): Promise<ListedPayoutBalanceTransactions[]> {
+  const stripe = getStripe(mode);
+  let payouts: { id: string; automatic?: boolean | null; currency?: string | null; status?: string | null }[];
+  try {
+    const listed = await stripe.payouts.list({ limit: 100 });
+    payouts = listed.data;
+  } catch {
+    return [{ payoutId: "", automatic: true, listed: false, balanceTransactionIds: [] }];
+  }
+  const rows: ListedPayoutBalanceTransactions[] = [];
+  for (const payout of payouts) {
+    if ((payout.currency || "").toLowerCase() !== currency.toLowerCase()) continue;
+    if (!payout.automatic) continue;
+    if (!["paid", "pending", "in_transit"].includes(String(payout.status || ""))) continue;
+    try {
+      const bts = await stripe.balanceTransactions.list({ payout: payout.id, limit: 100 });
+      rows.push({
+        payoutId: payout.id,
+        automatic: true,
+        listed: true,
+        balanceTransactionIds: bts.data.map((row) => row.id),
+      });
+    } catch {
+      rows.push({
+        payoutId: payout.id,
+        automatic: true,
+        listed: false,
+        balanceTransactionIds: [],
+      });
+    }
+  }
+  return rows;
 }
 
 async function platformRoom(mode: StripeMode, currency: string, exceptFundingId: string) {
@@ -787,10 +820,15 @@ async function fundOne(opts: {
     return false;
   }
   const ownFundingPayoutIds = freshLegs.map((leg) => leg.stripePayoutId).filter(Boolean);
-  if (settlement.paidOutPayoutId && !ownFundingPayoutIds.includes(settlement.paidOutPayoutId)) {
+  const chargePayoutMembership = assessChargePayoutMembership({
+    balanceTransactionId: settlement.balanceTransactionId,
+    ownFundingPayoutIds,
+    payoutLists: await listAutomaticPayoutBalanceTransactions(opts.mode, opts.txn.currency),
+  });
+  if (chargePayoutMembership.state !== "clear") {
     await prisma.gpProceedsFunding.update({
       where: { id: opts.funding.id },
-      data: { status: "SHORT", failureCode: "GP_CHARGE_PAID_OUT" },
+      data: { status: "SHORT", failureCode: chargePayoutMembership.code },
     });
     return false;
   }
@@ -922,7 +960,7 @@ async function fundOne(opts: {
     txnStatus: opts.txn.status,
     openDispute: opts.openDispute,
     now: opts.now,
-    ownFundingPayoutIds,
+    chargePayoutMembership,
   });
   if (decision.action !== "fund" || decision.amountMinor !== quotePlan.amountMinor) {
     const failureCode =

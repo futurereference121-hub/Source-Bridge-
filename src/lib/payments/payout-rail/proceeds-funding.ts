@@ -98,8 +98,7 @@ export type ChargeSettlementInput = {
   balanceStatus: string;
   availableOn: Date | null;
   sourceType?: string | null;
-  /** Balance-transaction payout id when Stripe has already paid this net out. */
-  payoutId?: string | null;
+  balanceTransactionId?: string | null;
 };
 
 export type ChargeSettlement =
@@ -110,9 +109,53 @@ export type ChargeSettlement =
       netMinor: number;
       available: boolean;
       availableOn: Date | null;
-      paidOutPayoutId: string | null;
+      balanceTransactionId: string;
     }
   | { ok: false; code: string };
+
+/**
+ * API 2025-08-27.basil Balance Transaction objects have no `payout` property.
+ * `payout` is only a list filter, and only for automatic Stripe payouts.
+ * An absent object field is not evidence that the charge is still in the pool.
+ */
+export type ListedPayoutBalanceTransactions = {
+  payoutId: string;
+  automatic: boolean;
+  listed: boolean;
+  balanceTransactionIds: readonly string[];
+};
+
+export type ChargePayoutMembership =
+  | { state: "paid_out"; code: "GP_CHARGE_PAID_OUT" }
+  | { state: "unread"; code: "GP_CHARGE_PAYOUT_UNREAD" }
+  | { state: "clear" };
+
+export function balanceTransactionObjectHasPayoutProperty(keys: readonly string[]): boolean {
+  return keys.includes("payout");
+}
+
+export function assessChargePayoutMembership(opts: {
+  balanceTransactionId: string;
+  ownFundingPayoutIds?: readonly string[];
+  payoutLists: readonly ListedPayoutBalanceTransactions[];
+}): ChargePayoutMembership {
+  const btId = String(opts.balanceTransactionId || "").trim();
+  if (!btId) return { state: "unread", code: "GP_CHARGE_PAYOUT_UNREAD" };
+  const own = new Set((opts.ownFundingPayoutIds ?? []).filter(Boolean));
+  let unread = false;
+  for (const row of opts.payoutLists) {
+    if (!row.automatic) continue;
+    if (!row.listed) {
+      unread = true;
+      continue;
+    }
+    if (!row.balanceTransactionIds.includes(btId)) continue;
+    if (own.has(row.payoutId)) continue;
+    return { state: "paid_out", code: "GP_CHARGE_PAID_OUT" };
+  }
+  if (unread) return { state: "unread", code: "GP_CHARGE_PAYOUT_UNREAD" };
+  return { state: "clear" };
+}
 
 export type FundingLegView = {
   sequence: number;
@@ -139,8 +182,11 @@ export type AllocateFundingInput = {
   txnStatus: string;
   openDispute: boolean;
   now: Date;
-  /** This purchase's own funding-leg payout ids. A bank payout is not one of these. */
-  ownFundingPayoutIds?: readonly string[];
+  /**
+   * Membership of this charge BT in automatic payout lists.
+   * Omitted or unread must not be treated as “not paid out.”
+   */
+  chargePayoutMembership?: ChargePayoutMembership | null;
 };
 
 export type AllocateFundingResult =
@@ -173,8 +219,6 @@ export function assessChargeSettlement(
   }
   if (input.refundedMinor > 0) return { ok: false, code: "GP_CHARGE_REFUNDED" };
   const status = input.balanceStatus.trim().toLowerCase();
-  const paidOutPayoutId =
-    typeof input.payoutId === "string" && input.payoutId.trim() ? input.payoutId.trim() : null;
   return {
     ok: true,
     chargeId: input.chargeId,
@@ -182,7 +226,8 @@ export function assessChargeSettlement(
     netMinor: input.netMinor,
     available: status === "available",
     availableOn: input.availableOn,
-    paidOutPayoutId,
+    balanceTransactionId:
+      typeof input.balanceTransactionId === "string" ? input.balanceTransactionId.trim() : "",
   };
 }
 
@@ -226,12 +271,15 @@ export function allocateGpProceedsFunding(input: AllocateFundingInput): Allocate
   if (input.charge.availableOn && input.charge.availableOn.getTime() > input.now.getTime()) {
     return { action: "wait", status: "AWAITING_SETTLEMENT", code: "GP_CHARGE_AVAILABLE_ON" };
   }
-  const paidOut = input.charge.ok ? input.charge.paidOutPayoutId : null;
-  if (paidOut) {
-    const own = new Set((input.ownFundingPayoutIds ?? []).filter(Boolean));
-    if (!own.has(paidOut)) {
-      return { action: "wait", status: "SHORT", code: "GP_CHARGE_PAID_OUT" };
-    }
+  const membership = input.chargePayoutMembership ?? {
+    state: "unread" as const,
+    code: "GP_CHARGE_PAYOUT_UNREAD",
+  };
+  if (membership.state === "paid_out") {
+    return { action: "wait", status: "SHORT", code: "GP_CHARGE_PAID_OUT" };
+  }
+  if (membership.state === "unread") {
+    return { action: "wait", status: "SHORT", code: membership.code };
   }
   const outstanding = required - input.postedMinor;
   const chargeRoom = input.charge.netMinor - input.postedMinor;

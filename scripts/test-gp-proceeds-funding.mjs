@@ -61,6 +61,8 @@ const {
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
+  assessChargePayoutMembership,
+  balanceTransactionObjectHasPayoutProperty,
 } = funding;
 const { gpQuoteConfirmationRequired } = quoteConfirmation;
 
@@ -108,6 +110,7 @@ function input(overrides = {}) {
     txnStatus: "FUNDED",
     openDispute: false,
     now,
+    chargePayoutMembership: { state: "clear" },
     ...overrides,
   };
 }
@@ -132,13 +135,22 @@ assert.match(runner, /GP_FUNDING_ALREADY_COMPLETED/);
 assert.match(runner, /newFundingAllowedNow/);
 assert.match(runner, /GP_COMPLETED_OUTBOUND_STATUSES/);
 assert.match(runner, /otherGpAvailableUnpaidMinor/);
-assert.match(runner, /ownFundingPayoutIds/);
-assert.match(runner, /GP_CHARGE_PAID_OUT/);
+assert.match(runner, /assessChargePayoutMembership/);
+assert.match(runner, /listAutomaticPayoutBalanceTransactions/);
+assert.match(runner, /balanceTransactions\.list/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /GP_CHARGE_PAID_OUT/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /GP_CHARGE_PAYOUT_UNREAD/);
 assert.match(runner, /withPlatformBalanceLock/);
 assert.match(runner, /fencedProviderWrite/);
-assert.match(runner, /payoutId/);
+assert.doesNotMatch(runner, /bt\?\.payout|paidOutPayoutId/);
 const reconcileBody = runner.slice(runner.indexOf("export async function reconcileGpProceedsFunding"));
 assert.ok(reconcileBody.indexOf("if (!opts.lockHeld)") < reconcileBody.indexOf("withPlatformBalanceLock"));
+const btTypes = read("node_modules/stripe/types/BalanceTransactions.d.ts");
+assert.match(btTypes, /interface BalanceTransaction \{/);
+assert.doesNotMatch(btTypes, /payout\?:/);
+assert.match(read("node_modules/stripe/types/BalanceTransactionsResource.d.ts"), /For automatic Stripe payouts only/);
+assert.equal(balanceTransactionObjectHasPayoutProperty(["id", "net", "status", "available_on", "type"]), false);
+assert.equal(balanceTransactionObjectHasPayoutProperty(["id", "payout"]), true);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /Stripe has not disclosed/);
 assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /app policy/);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/live-pilot.ts"), /Stripe has not disclosed/);
@@ -153,8 +165,8 @@ const fundBody = runner.slice(runner.indexOf("async function fundOne"), runner.i
 assert.ok(fundBody.indexOf("pendingLegs.length") < fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED"));
 assert.ok(fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED") < fundBody.indexOf("prepareFundingQuote"));
 assert.ok(
-  fundBody.indexOf("settlement.paidOutPayoutId") >= 0 &&
-    fundBody.indexOf("settlement.paidOutPayoutId") < fundBody.indexOf("prepareFundingQuote"),
+  fundBody.indexOf("assessChargePayoutMembership") >= 0 &&
+    fundBody.indexOf("assessChargePayoutMembership") < fundBody.indexOf("prepareFundingQuote"),
 );
 let sendCursor = 0;
 while (sendCursor >= 0) {
@@ -444,28 +456,91 @@ const sweptSibling = {
   pendingMinor: 0,
 };
 assert.equal(otherGpAvailableUnpaidMinor([sweptSibling, newAvailable], nowForReserve).minor, 3904);
-const sweptCharge = charge({ payoutId: "po_bank_hist", netMinor: 3878 });
-assert.equal(sweptCharge.ok && sweptCharge.paidOutPayoutId, "po_bank_hist");
-const sweptConsumingNew = allocateGpProceedsFunding(
+const absentObjectField = assessChargePayoutMembership({
+  balanceTransactionId: "txn_charge_new",
+  payoutLists: [
+    {
+      payoutId: "po_auto_hist",
+      automatic: true,
+      listed: true,
+      balanceTransactionIds: ["txn_other"],
+    },
+  ],
+});
+assert.equal(absentObjectField.state, "clear");
+const unreadMeansUnknown = allocateGpProceedsFunding(
   input({
-    charge: sweptCharge,
+    charge: charge({ netMinor: 3878 }),
     platformAvailableMinor: 3904,
     reservedMinor: 0,
     payoutFeeMinor: 138,
+    chargePayoutMembership: null,
+  }),
+);
+assert.equal(unreadMeansUnknown.action, "wait");
+assert.equal(unreadMeansUnknown.code, "GP_CHARGE_PAYOUT_UNREAD");
+const sweptByAutomatic = assessChargePayoutMembership({
+  balanceTransactionId: "txn_old",
+  ownFundingPayoutIds: ["po_own_fa"],
+  payoutLists: [
+    {
+      payoutId: "po_auto_bank",
+      automatic: true,
+      listed: true,
+      balanceTransactionIds: ["txn_old"],
+    },
+  ],
+});
+assert.equal(sweptByAutomatic.state, "paid_out");
+const sweptConsumingNew = allocateGpProceedsFunding(
+  input({
+    charge: charge({ netMinor: 3878 }),
+    platformAvailableMinor: 3904,
+    reservedMinor: 0,
+    payoutFeeMinor: 138,
+    chargePayoutMembership: sweptByAutomatic,
   }),
 );
 assert.equal(sweptConsumingNew.action, "wait");
 assert.equal(sweptConsumingNew.code, "GP_CHARGE_PAID_OUT");
 const ownFundingPayout = allocateGpProceedsFunding(
   input({
-    charge: charge({ payoutId: "po_own_fa", netMinor: 3904 }),
-    ownFundingPayoutIds: ["po_own_fa"],
+    charge: charge({ netMinor: 3904 }),
     platformAvailableMinor: 3904,
     payoutFeeMinor: 138,
+    chargePayoutMembership: assessChargePayoutMembership({
+      balanceTransactionId: "txn_new",
+      ownFundingPayoutIds: ["po_own_fa"],
+      payoutLists: [
+        {
+          payoutId: "po_own_fa",
+          automatic: true,
+          listed: true,
+          balanceTransactionIds: ["txn_new"],
+        },
+      ],
+    }),
   }),
 );
 assert.equal(ownFundingPayout.action, "fund");
 assert.equal(ownFundingPayout.amountMinor, 3638);
+const unreadAutomaticList = assessChargePayoutMembership({
+  balanceTransactionId: "txn_new",
+  payoutLists: [{ payoutId: "po_auto", automatic: true, listed: false, balanceTransactionIds: [] }],
+});
+assert.equal(unreadAutomaticList.state, "unread");
+const manualPayoutIsNotListEvidence = assessChargePayoutMembership({
+  balanceTransactionId: "txn_new",
+  payoutLists: [
+    {
+      payoutId: "po_manual_fa",
+      automatic: false,
+      listed: true,
+      balanceTransactionIds: ["txn_new"],
+    },
+  ],
+});
+assert.equal(manualPayoutIsNotListEvidence.state, "clear");
 assert.equal(
   classifyStoredQuote({
     quoteConfirmationRequired: true,
@@ -912,6 +987,9 @@ assert.match(preflightRoute, /requireAdmin/);
 assert.match(preflightRoute, /export async function GET/);
 assert.doesNotMatch(preflightRoute, /export async function POST/);
 assert.match(preflight, /charges\.retrieve/);
+assert.match(preflight, /payoutPropertyPresent/);
+assert.match(preflight, /filterAutomaticOnly/);
+assert.match(preflight, /balanceTransactions\.list/);
 assert.match(preflight, /readFinancialAccountBalance\("TEST", "gbp"\)/);
 assert.match(preflight, /accounts\.retrieve\(\)/);
 assert.match(preflight, /webhookEndpoints\.list/);
