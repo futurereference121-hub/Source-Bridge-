@@ -538,6 +538,32 @@ export function proceedsFundingAllowsOutbound(opts: {
 }
 
 /**
+ * After a purchase is already released, do not open new funding. If posted
+ * credited legs already cover the required amount, the row is POSTED. Do not
+ * mark BLOCKED over completed evidence.
+ */
+export function fundingRowAfterCompletedPurchase(opts: {
+  postedMinor: number;
+  pendingMinor: number;
+  requiredMinor: number;
+  postedLegsHaveCredit: boolean;
+}):
+  | { status: "POSTED"; failureCode: "" }
+  | { status: "BLOCKED"; failureCode: "GP_FUNDING_ALREADY_COMPLETED" }
+  | { status: "unchanged" } {
+  if (opts.pendingMinor > 0) return { status: "unchanged" };
+  if (
+    Number.isInteger(opts.requiredMinor) &&
+    opts.requiredMinor > 0 &&
+    opts.postedMinor >= opts.requiredMinor &&
+    opts.postedLegsHaveCredit
+  ) {
+    return { status: "POSTED", failureCode: "" };
+  }
+  return { status: "BLOCKED", failureCode: "GP_FUNDING_ALREADY_COMPLETED" };
+}
+
+/**
  * Confirm a ReceivedCredit only when Stripe's pinned v2 object says this
  * credit came from this funding payout (`type=balance_transfer` and the
  * originating payout id). Amount, description, and leg id are not

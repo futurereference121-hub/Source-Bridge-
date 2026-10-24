@@ -59,6 +59,7 @@ const {
   isSimulatedFundingCredit,
   matchFundingCredit,
   proceedsFundingAllowsOutbound,
+  fundingRowAfterCompletedPurchase,
   redactReceivedCreditInventory,
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
@@ -771,6 +772,46 @@ assert.equal(
   }).ok,
   true,
 );
+assert.equal(
+  fundingRowAfterCompletedPurchase({
+    postedMinor: 3638,
+    pendingMinor: 0,
+    requiredMinor: 3638,
+    postedLegsHaveCredit: true,
+  }).status,
+  "POSTED",
+);
+assert.equal(
+  fundingRowAfterCompletedPurchase({
+    postedMinor: 0,
+    pendingMinor: 0,
+    requiredMinor: 3638,
+    postedLegsHaveCredit: false,
+  }).failureCode,
+  "GP_FUNDING_ALREADY_COMPLETED",
+);
+assert.equal(
+  fundingRowAfterCompletedPurchase({
+    postedMinor: 3638,
+    pendingMinor: 3638,
+    requiredMinor: 3638,
+    postedLegsHaveCredit: false,
+  }).status,
+  "unchanged",
+);
+const creditsClient = read("src/lib/payments/payout-rail/received-credits.ts");
+assert.match(creditsClient, /2026-08-26\.preview/);
+assert.match(creditsClient, /RECEIVED_CREDITS_LIST_PATH/);
+assert.doesNotMatch(creditsClient, /limit=100/);
+assert.match(creditsClient, /opts\.limit <= 10/);
+assert.match(creditsClient, /receivedCreditsListPath\(\)/);
+assert.match(creditsClient, /receivedCreditRetrievePath/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding-run.ts"), /listReceivedCredits/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding-run.ts"), /fundingRowAfterCompletedPurchase/);
+assert.doesNotMatch(
+  read("src/lib/payments/payout-rail/proceeds-funding-run.ts"),
+  /received_credits\?limit=/,
+);
 
 assert.equal(
   describeGpBuyerPayout({
@@ -1213,7 +1254,9 @@ assert.doesNotMatch(recoveryRoute, /payouts\.create|topups\.create|charges\.crea
 const recoveryRun = read("src/lib/payments/payout-rail/test-recovery-run.ts");
 assert.match(recoveryRun, /selectDamagedTestPurchase/);
 assert.match(recoveryRun, /matchFundingCredit/);
-assert.match(recoveryRun, /received_credits/);
+assert.match(recoveryRun, /listReceivedCredits/);
+assert.match(recoveryRun, /retrieveReceivedCredit/);
+assert.match(recoveryRun, /storedCreditVerified/);
 assert.match(recoveryRun, /redactReceivedCreditInventory/);
 assert.match(recoveryRun, /creditListHttpStatus/);
 assert.match(recoveryRun, /siblingFailureCode/);

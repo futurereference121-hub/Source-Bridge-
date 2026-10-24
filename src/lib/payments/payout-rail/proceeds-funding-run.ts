@@ -37,6 +37,7 @@ import {
   fundingPayoutMatchesLeg,
   GP_COMPLETED_OUTBOUND_STATUSES,
   GP_FUNDING_WAITING_CODES,
+  fundingRowAfterCompletedPurchase,
   matchFundingCredit,
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
@@ -48,6 +49,7 @@ import {
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { connectReserveForCurrency } from "@/lib/payments/payout-rail/platform-balance";
 import { getStripe } from "@/lib/payments/stripe/client";
+import { listReceivedCredits } from "@/lib/payments/payout-rail/received-credits";
 import { withPlatformBalanceLock, fencedProviderWrite } from "@/lib/payments/payout-rail/platform-balance-lock";
 import {
   isGlobalPayoutsProceedsFundingEnabled,
@@ -774,10 +776,20 @@ async function fundOne(opts: {
     return false;
   }
   if (!(await newFundingAllowedNow(opts.txn.id))) {
-    await prisma.gpProceedsFunding.update({
-      where: { id: opts.funding.id },
-      data: { status: "BLOCKED", failureCode: "GP_FUNDING_ALREADY_COMPLETED" },
+    const postedLegs = freshLegs.filter((leg) => leg.status === "POSTED");
+    const resolved = fundingRowAfterCompletedPurchase({
+      postedMinor,
+      pendingMinor: 0,
+      requiredMinor: opts.principal + opts.fees,
+      postedLegsHaveCredit:
+        postedLegs.length > 0 && postedLegs.every((leg) => Boolean(leg.faCreditId)),
     });
+    if (resolved.status !== "unchanged") {
+      await prisma.gpProceedsFunding.update({
+        where: { id: opts.funding.id },
+        data: { status: resolved.status, failureCode: resolved.failureCode },
+      });
+    }
     return false;
   }
   const stripe = getStripe(opts.mode);
@@ -1050,12 +1062,8 @@ async function confirmLegs(
   const pending = legs.filter((leg) => leg.status === "PENDING" && leg.stripePayoutId);
   if (pending.length === 0) return;
   const stripe = getStripe(mode);
-  const listed = await gpFetch({
-    mode,
-    method: "GET",
-    path: "/v2/money_management/received_credits?limit=20",
-  });
-  const credits = listed.ok && Array.isArray(listed.body.data) ? (listed.body.data as Record<string, unknown>[]) : [];
+  const listed = await listReceivedCredits(mode);
+  const credits = listed.credits;
   const claimed = (
     await prisma.gpProceedsFundingLeg.findMany({
       where: { faCreditId: { not: "" } },

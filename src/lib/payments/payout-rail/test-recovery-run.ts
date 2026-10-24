@@ -10,11 +10,13 @@ import { getStripe } from "@/lib/payments/stripe/client";
 import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-funding";
 import {
   assessChargePayoutMembership,
+  fundingRowAfterCompletedPurchase,
   matchFundingCredit,
   redactReceivedCreditInventory,
   type ChargePayoutMembership,
 } from "@/lib/payments/payout-rail/proceeds-funding";
-import { getGlobalPayoutsFinancialAccountId, gpFetch } from "@/lib/payments/payout-rail/gp-client";
+import { getGlobalPayoutsFinancialAccountId } from "@/lib/payments/payout-rail/gp-client";
+import { listReceivedCredits, retrieveReceivedCredit } from "@/lib/payments/payout-rail/received-credits";
 import {
   idHash8,
   last5,
@@ -38,6 +40,12 @@ export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   siblingPostedLegMinor: number;
   siblingPostedHaveCredit: boolean;
   creditListHttpStatus: number | null;
+  creditListErrorCode: string | null;
+  storedCreditRetrieved: boolean;
+  storedCreditHttpStatus: number | null;
+  storedCreditVerified: boolean;
+  storedCreditSuffix: string;
+  storedTransferKeys: string[];
   cardAvailableGbpMinor: number | null;
   pendingGbpMinor: number | null;
   financialAccountAvailableGbpMinor: number | null;
@@ -226,19 +234,32 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
 
   let creditInventory: ReturnType<typeof redactReceivedCreditInventory> | null = null;
   let creditListHttpStatus: number | null = null;
+  let creditListErrorCode: string | null = null;
   let siblingPayoutStatus: string | null = null;
   let siblingMatchFound = false;
-  const siblingLeg = (siblingRow?.legs ?? []).find(
+  let storedCreditRetrieved = false;
+  let storedCreditHttpStatus: number | null = null;
+  let storedCreditVerified = false;
+  let storedCreditSuffix = "";
+  let storedTransferKeys: string[] = [];
+  const siblingPendingLeg = (siblingRow?.legs ?? []).find(
     (leg) =>
       leg.status === "PENDING" &&
       leg.amountMinor === DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor &&
       leg.stripePayoutId,
   );
+  const siblingPostedLeg = (siblingRow?.legs ?? []).find(
+    (leg) =>
+      leg.status === "POSTED" &&
+      leg.amountMinor === DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor &&
+      leg.faCreditId &&
+      leg.stripePayoutId,
+  );
   try {
     stripeCalled = true;
-    const listed = await listTestReceivedCredits();
+    const listed = await listReceivedCredits("TEST");
     creditListHttpStatus = listed.httpStatus;
-    const credits = listed.credits;
+    creditListErrorCode = listed.errorCode;
     const claimed = (
       await prisma.gpProceedsFundingLeg.findMany({
         where: { faCreditId: { not: "" } },
@@ -246,27 +267,51 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
       })
     ).map((row) => row.faCreditId);
     creditInventory = redactReceivedCreditInventory({
-      credits,
+      credits: listed.credits,
       financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
       amountMinor: DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor,
       claimedCreditIds: claimed,
     });
-    if (siblingLeg?.stripePayoutId) {
-      const payout = await getStripe("TEST").payouts.retrieve(siblingLeg.stripePayoutId);
+    const inspectLeg = siblingPendingLeg || siblingPostedLeg;
+    if (inspectLeg?.stripePayoutId) {
+      const payout = await getStripe("TEST").payouts.retrieve(inspectLeg.stripePayoutId);
       if (!payout.livemode) {
         siblingPayoutStatus = payout.status;
         siblingMatchFound = Boolean(
           matchFundingCredit({
             payoutId: payout.id,
             financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
-            amountMinor: siblingLeg.amountMinor,
+            amountMinor: inspectLeg.amountMinor,
             currency: DAMAGED_GP_TEST_PURCHASE.currency,
             payoutStatus: payout.status,
             livemode: false,
-            credits,
-            claimedCreditIds: claimed,
+            credits: listed.credits,
+            claimedCreditIds: inspectLeg.status === "POSTED" ? [] : claimed,
           }),
         );
+        if (siblingPostedLeg?.faCreditId) {
+          const retrieved = await retrieveReceivedCredit("TEST", siblingPostedLeg.faCreditId);
+          storedCreditHttpStatus = retrieved.httpStatus;
+          storedCreditRetrieved = Boolean(retrieved.credit);
+          if (retrieved.credit) {
+            const transfer = retrieved.credit.balance_transfer;
+            storedTransferKeys =
+              transfer && typeof transfer === "object" ? Object.keys(transfer).sort() : [];
+            storedCreditSuffix = last5(String(retrieved.credit.id || ""));
+            storedCreditVerified = Boolean(
+              matchFundingCredit({
+                payoutId: payout.id,
+                financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
+                amountMinor: siblingPostedLeg.amountMinor,
+                currency: DAMAGED_GP_TEST_PURCHASE.currency,
+                payoutStatus: payout.status,
+                livemode: false,
+                credits: [retrieved.credit],
+                claimedCreditIds: [],
+              }),
+            );
+          }
+        }
       }
     }
   } catch {
@@ -289,6 +334,12 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
       return posted.length > 0 && posted.every((leg) => Boolean(leg.faCreditId));
     })(),
     creditListHttpStatus,
+    creditListErrorCode,
+    storedCreditRetrieved,
+    storedCreditHttpStatus,
+    storedCreditVerified,
+    storedCreditSuffix,
+    storedTransferKeys,
     cardAvailableGbpMinor,
     pendingGbpMinor,
     financialAccountAvailableGbpMinor,
@@ -296,25 +347,6 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     siblingPayoutStatus,
     siblingMatchFound,
   };
-}
-
-async function listTestReceivedCredits(): Promise<{
-  credits: Record<string, unknown>[];
-  httpStatus: number | null;
-}> {
-  const credits: Record<string, unknown>[] = [];
-  let path = "/v2/money_management/received_credits?limit=100";
-  let httpStatus: number | null = null;
-  for (let page = 0; page < 10 && path; page += 1) {
-    const listed = await gpFetch({ mode: "TEST", method: "GET", path });
-    httpStatus = listed.status;
-    if (!listed.ok || !Array.isArray(listed.body.data)) break;
-    credits.push(...(listed.body.data as Record<string, unknown>[]));
-    const next = typeof listed.body.next_page_url === "string" ? listed.body.next_page_url : "";
-    path = next ? next.replace("https://api.stripe.com", "") : "";
-    if (!listed.body.has_more && !next) path = "";
-  }
-  return { credits, httpStatus };
 }
 
 export async function confirmTestSiblingFundingLeg(): Promise<{
@@ -367,19 +399,75 @@ export async function confirmTestSiblingFundingLeg(): Promise<{
       row.stripePayoutId,
   );
   if (!leg?.stripePayoutId) {
+    const posted = sibling.legs.find(
+      (row) =>
+        row.status === "POSTED" &&
+        row.amountMinor === DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor &&
+        row.faCreditId &&
+        row.stripePayoutId,
+    );
+    if (!posted?.stripePayoutId || !posted.faCreditId) {
+      return {
+        ok: true,
+        purchaseHash: "597151ee",
+        wrote: false,
+        payoutStatus: null,
+        payoutPaidAloneInsufficient: false,
+        matchFound: false,
+        creditSuffix: "",
+        fundingStatus: sibling.status,
+        fundingStatusAfter: sibling.status,
+        siblingPendingLegMinorAfter: sibling.legs
+          .filter((row) => row.status === "PENDING")
+          .reduce((sum, row) => sum + row.amountMinor, 0),
+      };
+    }
+    const payout = await getStripe("TEST").payouts.retrieve(posted.stripePayoutId);
+    if (payout.livemode) {
+      throw Object.assign(new Error("TEST recovery refused a live payout"), { status: 409 });
+    }
+    const retrieved = await retrieveReceivedCredit("TEST", posted.faCreditId);
+    const match = retrieved.credit
+      ? matchFundingCredit({
+          payoutId: payout.id,
+          financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
+          amountMinor: posted.amountMinor,
+          currency: posted.currency,
+          payoutStatus: payout.status,
+          livemode: false,
+          credits: [retrieved.credit],
+          claimedCreditIds: [],
+        })
+      : null;
+    const requiredMinor = sibling.principalMinor + sibling.payoutFeeMinor;
+    const postedMinor = sibling.legs
+      .filter((row) => row.status === "POSTED")
+      .reduce((sum, row) => sum + row.amountMinor, 0);
+    const resolved = match
+      ? fundingRowAfterCompletedPurchase({
+          postedMinor,
+          pendingMinor: 0,
+          requiredMinor,
+          postedLegsHaveCredit: true,
+        })
+      : { status: "unchanged" as const };
+    if (resolved.status === "POSTED" && sibling.status !== "POSTED") {
+      await prisma.gpProceedsFunding.update({
+        where: { id: sibling.id },
+        data: { status: "POSTED", failureCode: "" },
+      });
+    }
     return {
       ok: true,
       purchaseHash: "597151ee",
-      wrote: false,
-      payoutStatus: null,
-      payoutPaidAloneInsufficient: false,
-      matchFound: false,
-      creditSuffix: "",
+      wrote: resolved.status === "POSTED" && sibling.status !== "POSTED",
+      payoutStatus: payout.status,
+      payoutPaidAloneInsufficient: payout.status === "paid" && !match,
+      matchFound: Boolean(match),
+      creditSuffix: match ? last5(match.creditId) : "",
       fundingStatus: sibling.status,
-      fundingStatusAfter: sibling.status,
-      siblingPendingLegMinorAfter: sibling.legs
-        .filter((row) => row.status === "PENDING")
-        .reduce((sum, row) => sum + row.amountMinor, 0),
+      fundingStatusAfter: resolved.status === "POSTED" ? "POSTED" : sibling.status,
+      siblingPendingLegMinorAfter: 0,
     };
   }
 
@@ -387,7 +475,7 @@ export async function confirmTestSiblingFundingLeg(): Promise<{
   if (payout.livemode) {
     throw Object.assign(new Error("TEST recovery refused a live payout"), { status: 409 });
   }
-  const listed = await listTestReceivedCredits();
+  const listed = await listReceivedCredits("TEST");
   const credits = listed.credits;
   const claimed = (
     await prisma.gpProceedsFundingLeg.findMany({
