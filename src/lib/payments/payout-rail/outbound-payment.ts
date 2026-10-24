@@ -10,6 +10,7 @@ import { appendLedgerEntry, recordAuditEvent } from "@/lib/payments/ledger";
 import {
   assertStripeModeCompatible,
   isGlobalPayoutsEnabled,
+  isGlobalPayoutsProceedsFundingEnabled,
   isPaymentsEnabled,
   normalizeStripeMode,
 } from "@/lib/payments/flags";
@@ -35,7 +36,10 @@ import {
   ensureFinancialAccountFunding,
   readFinancialAccountBalance,
 } from "@/lib/payments/payout-rail/fa-funding";
-import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
+import {
+  GP_FUNDING_HOLD_COPY,
+  proceedsFundingAllowsOutbound,
+} from "@/lib/payments/payout-rail/proceeds-funding";
 import {
   getGlobalPayoutsFinancialAccountId,
   gpFetch,
@@ -939,6 +943,46 @@ async function executeOutboundRelease(opts: {
     throw Object.assign(new Error("Payout fees cannot be reserved in the source currency."), {
       status: 409,
       code: releaseCover.code,
+    });
+  }
+  const proceedsRow = await prisma.gpProceedsFunding.findUnique({
+    where: { protectedTxnId: txn.id },
+    select: {
+      status: true,
+      legs: { select: { status: true, amountMinor: true, faCreditId: true } },
+    },
+  });
+  const postedLegs = (proceedsRow?.legs ?? []).filter((leg) => leg.status === "POSTED");
+  const purchaseFunding = proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
+    funding: proceedsRow
+      ? {
+          status: proceedsRow.status,
+          postedMinor: postedLegs.reduce((sum, leg) => sum + leg.amountMinor, 0),
+          pendingMinor: (proceedsRow.legs ?? [])
+            .filter((leg) => leg.status === "PENDING")
+            .reduce((sum, leg) => sum + leg.amountMinor, 0),
+          postedLegsHaveCredit: postedLegs.length > 0 && postedLegs.every((leg) => Boolean(leg.faCreditId)),
+        }
+      : null,
+    requiredMinor: releaseCover.requiredCoverMinor,
+  });
+  if (!purchaseFunding.ok) {
+    const faId = getGlobalPayoutsFinancialAccountId(txnMode);
+    await prisma.outboundPaymentAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: "AWAITING_FA_FUNDS",
+        stripeFinancialAccountId: faId,
+        failureCode: "GP_PURCHASE_FUNDING_UNCONFIRMED",
+        failureMessage: "This purchase's funding credit is not confirmed. Pooled financial-account balance is not enough.",
+        lastAttemptAt: new Date(),
+      },
+    });
+    throw Object.assign(new Error(GP_FUNDING_HOLD_COPY), {
+      status: 409,
+      code: "GP_AWAITING_FA_FUNDS",
     });
   }
   const funding = await ensureFinancialAccountFunding({

@@ -58,6 +58,8 @@ const {
   fundingPayoutMatchesLeg,
   isSimulatedFundingCredit,
   matchFundingCredit,
+  proceedsFundingAllowsOutbound,
+  redactReceivedCreditInventory,
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
@@ -649,6 +651,126 @@ assert.equal(
   null,
 );
 assert.equal(matchCredit({ payoutStatus: "pending" }), null);
+assert.equal(
+  matchCredit({
+    credits: [receivedCredit({ balance_transfer: { type: "payout", payout: "po_1" } })],
+  }).creditId,
+  "rc_real",
+);
+assert.equal(
+  matchCredit({
+    credits: [
+      receivedCredit({
+        balance_transfer: { type: "payout", payout: "po_1", payout_v1: "po_1" },
+      }),
+    ],
+  }).creditId,
+  "rc_real",
+);
+assert.equal(
+  matchCredit({
+    credits: [
+      receivedCredit({
+        balance_transfer: { type: "payout", payout: "po_1", payout_v1: "po_other" },
+      }),
+    ],
+  }),
+  null,
+);
+assert.equal(
+  matchCredit({
+    credits: [
+      receivedCredit({
+        id: "rc_amount_only",
+        description: "po_1",
+        balance_transfer: { type: "payout" },
+      }),
+    ],
+  }),
+  null,
+);
+const inventory = redactReceivedCreditInventory({
+  credits: [
+    receivedCredit({ balance_transfer: { type: "payout", payout: "po_1" } }),
+    receivedCredit({ id: "rc_legacy", balance_transfer: { type: "payout_v1", payout_v1: "po_2" } }),
+  ],
+  financialAccountId: "fa_test",
+  amountMinor: 3500,
+});
+assert.equal(inventory.listed, 2);
+assert.equal(inventory.hasPayoutField, true);
+assert.equal(inventory.hasPayoutV1Field, true);
+assert.deepEqual(inventory.transferKeys, ["payout", "payout_v1", "type"]);
+assert.equal(inventory.amountMatches, 2);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_CONNECT",
+    proceedsFundingEnabled: true,
+    funding: null,
+    requiredMinor: 3638,
+  }).ok,
+  true,
+);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: false,
+    funding: null,
+    requiredMinor: 3638,
+  }).ok,
+  true,
+);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: true,
+    funding: null,
+    requiredMinor: 3638,
+  }).ok,
+  false,
+);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: true,
+    funding: {
+      status: "FUNDING",
+      postedMinor: 0,
+      pendingMinor: 3638,
+      postedLegsHaveCredit: false,
+    },
+    requiredMinor: 3638,
+  }).code,
+  "GP_PURCHASE_FUNDING_UNCONFIRMED",
+);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: true,
+    funding: {
+      status: "POSTED",
+      postedMinor: 3638,
+      pendingMinor: 0,
+      postedLegsHaveCredit: false,
+    },
+    requiredMinor: 3638,
+  }).ok,
+  false,
+);
+assert.equal(
+  proceedsFundingAllowsOutbound({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    proceedsFundingEnabled: true,
+    funding: {
+      status: "POSTED",
+      postedMinor: 3638,
+      pendingMinor: 0,
+      postedLegsHaveCredit: true,
+    },
+    requiredMinor: 3638,
+  }).ok,
+  true,
+);
 
 assert.equal(
   describeGpBuyerPayout({
@@ -1092,7 +1214,13 @@ const recoveryRun = read("src/lib/payments/payout-rail/test-recovery-run.ts");
 assert.match(recoveryRun, /selectDamagedTestPurchase/);
 assert.match(recoveryRun, /matchFundingCredit/);
 assert.match(recoveryRun, /received_credits/);
+assert.match(recoveryRun, /redactReceivedCreditInventory/);
 assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
+const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
+assert.match(outbound, /proceedsFundingAllowsOutbound/);
+assert.match(outbound, /GP_PURCHASE_FUNDING_UNCONFIRMED/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /balanceTransferPayoutId/);
+assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /rec\.payout/);
 assert.match(read("src/lib/payments/flags.ts"), /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/);
 
 console.log("gp proceeds funding: ok");

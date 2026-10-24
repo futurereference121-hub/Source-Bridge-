@@ -11,6 +11,7 @@ import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-fundi
 import {
   assessChargePayoutMembership,
   matchFundingCredit,
+  redactReceivedCreditInventory,
   type ChargePayoutMembership,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { getGlobalPayoutsFinancialAccountId, gpFetch } from "@/lib/payments/payout-rail/gp-client";
@@ -36,6 +37,9 @@ export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   cardAvailableGbpMinor: number | null;
   pendingGbpMinor: number | null;
   financialAccountAvailableGbpMinor: number | null;
+  creditInventory: ReturnType<typeof redactReceivedCreditInventory> | null;
+  siblingPayoutStatus: string | null;
+  siblingMatchFound: boolean;
 };
 
 function membershipState(membership: ChargePayoutMembership): RecoveryMembership {
@@ -133,7 +137,7 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
       select: {
         status: true,
         protectedTxnId: true,
-        legs: { select: { status: true, amountMinor: true } },
+        legs: { select: { status: true, amountMinor: true, stripePayoutId: true, faCreditId: true } },
       },
     }),
   ]);
@@ -215,6 +219,52 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     liveInitiationEnabled: false,
   });
 
+  let creditInventory: ReturnType<typeof redactReceivedCreditInventory> | null = null;
+  let siblingPayoutStatus: string | null = null;
+  let siblingMatchFound = false;
+  const siblingLeg = (siblingRow?.legs ?? []).find(
+    (leg) =>
+      leg.status === "PENDING" &&
+      leg.amountMinor === DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor &&
+      leg.stripePayoutId,
+  );
+  try {
+    stripeCalled = true;
+    const credits = await listTestReceivedCredits();
+    const claimed = (
+      await prisma.gpProceedsFundingLeg.findMany({
+        where: { faCreditId: { not: "" } },
+        select: { faCreditId: true },
+      })
+    ).map((row) => row.faCreditId);
+    creditInventory = redactReceivedCreditInventory({
+      credits,
+      financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
+      amountMinor: DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor,
+      claimedCreditIds: claimed,
+    });
+    if (siblingLeg?.stripePayoutId) {
+      const payout = await getStripe("TEST").payouts.retrieve(siblingLeg.stripePayoutId);
+      if (!payout.livemode) {
+        siblingPayoutStatus = payout.status;
+        siblingMatchFound = Boolean(
+          matchFundingCredit({
+            payoutId: payout.id,
+            financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
+            amountMinor: siblingLeg.amountMinor,
+            currency: DAMAGED_GP_TEST_PURCHASE.currency,
+            payoutStatus: payout.status,
+            livemode: false,
+            credits,
+            claimedCreditIds: claimed,
+          }),
+        );
+      }
+    }
+  } catch {
+    creditInventory = creditInventory ?? null;
+  }
+
   return {
     ...plan,
     ok: true,
@@ -225,6 +275,9 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     cardAvailableGbpMinor,
     pendingGbpMinor,
     financialAccountAvailableGbpMinor,
+    creditInventory,
+    siblingPayoutStatus,
+    siblingMatchFound,
   };
 }
 

@@ -413,17 +413,134 @@ export function isSimulatedFundingCredit(credit: CreditLike): boolean {
   return blob.includes("simulated") || blob.includes("test_helper") || blob.includes("received_credit_test_helper");
 }
 
-function balanceTransferPayoutId(credit: CreditLike): string {
+function stringField(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+/**
+ * Pinned GP version is 2026-08-26.preview, after Stripe's 2026-07-29.preview
+ * changelog removed `payout_v1` and added `payout`. Read the field the
+ * response actually has. If both exist they must be the same id. Amount,
+ * description, and type-enum aliases are not origin evidence.
+ */
+export function balanceTransferPayoutId(credit: CreditLike): string {
   const transfer = credit.balance_transfer;
   if (!transfer || typeof transfer !== "object") return "";
-  const payoutId = (transfer as { payout_v1?: unknown }).payout_v1;
-  return typeof payoutId === "string" ? payoutId : "";
+  const rec = transfer as { payout?: unknown; payout_v1?: unknown };
+  const current = stringField(rec.payout);
+  const legacy = stringField(rec.payout_v1);
+  if (current && legacy && current !== legacy) return "";
+  return current || legacy;
+}
+
+export function redactReceivedCreditInventory(opts: {
+  credits: CreditLike[];
+  financialAccountId: string;
+  amountMinor: number;
+  claimedCreditIds?: readonly string[];
+}): {
+  listed: number;
+  creditKeys: string[];
+  transferKeys: string[];
+  types: Record<string, number>;
+  statuses: Record<string, number>;
+  hasPayoutField: boolean;
+  hasPayoutV1Field: boolean;
+  payoutFieldCount: number;
+  payoutV1FieldCount: number;
+  succeededBalanceTransfers: number;
+  amountMatches: number;
+  faMatches: number;
+  livemodeFalse: number;
+  claimedSkipped: number;
+} {
+  const claimed = new Set((opts.claimedCreditIds ?? []).filter(Boolean));
+  const types: Record<string, number> = {};
+  const statuses: Record<string, number> = {};
+  const creditKeys = new Set<string>();
+  const transferKeys = new Set<string>();
+  let payoutFieldCount = 0;
+  let payoutV1FieldCount = 0;
+  let succeededBalanceTransfers = 0;
+  let amountMatches = 0;
+  let faMatches = 0;
+  let livemodeFalse = 0;
+  let claimedSkipped = 0;
+  for (const credit of opts.credits) {
+    for (const key of Object.keys(credit)) creditKeys.add(key);
+    const transfer = credit.balance_transfer;
+    if (transfer && typeof transfer === "object") {
+      const rec = transfer as { payout?: unknown; payout_v1?: unknown };
+      for (const key of Object.keys(rec)) transferKeys.add(key);
+      if (stringField(rec.payout)) payoutFieldCount += 1;
+      if (stringField(rec.payout_v1)) payoutV1FieldCount += 1;
+    }
+    const type = typeof credit.type === "string" ? credit.type : "unknown";
+    const status = typeof credit.status === "string" ? credit.status : "unknown";
+    types[type] = (types[type] || 0) + 1;
+    statuses[status] = (statuses[status] || 0) + 1;
+    if (typeof credit.id === "string" && claimed.has(credit.id)) claimedSkipped += 1;
+    if (credit.type === "balance_transfer" && credit.status === "succeeded") {
+      succeededBalanceTransfers += 1;
+    }
+    if (credit.livemode === false) livemodeFalse += 1;
+    if (credit.financial_account === opts.financialAccountId) faMatches += 1;
+    const amount = creditAmount(credit);
+    if (amount?.value === opts.amountMinor) amountMatches += 1;
+  }
+  return {
+    listed: opts.credits.length,
+    creditKeys: [...creditKeys].sort(),
+    transferKeys: [...transferKeys].sort(),
+    types,
+    statuses,
+    hasPayoutField: transferKeys.has("payout"),
+    hasPayoutV1Field: transferKeys.has("payout_v1"),
+    payoutFieldCount,
+    payoutV1FieldCount,
+    succeededBalanceTransfers,
+    amountMatches,
+    faMatches,
+    livemodeFalse,
+    claimedSkipped,
+  };
+}
+
+/**
+ * Seller outbound may not treat a pooled FA balance as this purchase's
+ * funding. Confirmation is a POSTED proceeds row whose posted legs cover
+ * the required amount and each carry the matched ReceivedCredit id.
+ */
+export function proceedsFundingAllowsOutbound(opts: {
+  payoutRail: string;
+  proceedsFundingEnabled: boolean;
+  funding: {
+    status: string;
+    postedMinor: number;
+    pendingMinor: number;
+    postedLegsHaveCredit: boolean;
+  } | null;
+  requiredMinor: number;
+}): { ok: true } | { ok: false; code: "GP_PURCHASE_FUNDING_UNCONFIRMED" } {
+  if (opts.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return { ok: true };
+  if (!opts.funding && !opts.proceedsFundingEnabled) return { ok: true };
+  if (
+    opts.funding?.status === "POSTED" &&
+    opts.funding.pendingMinor === 0 &&
+    Number.isInteger(opts.requiredMinor) &&
+    opts.requiredMinor > 0 &&
+    opts.funding.postedMinor >= opts.requiredMinor &&
+    opts.funding.postedLegsHaveCredit
+  ) {
+    return { ok: true };
+  }
+  return { ok: false, code: "GP_PURCHASE_FUNDING_UNCONFIRMED" };
 }
 
 /**
  * Confirm a ReceivedCredit only when Stripe's pinned v2 object says this
- * credit came from this funding payout (`type=balance_transfer` and
- * `balance_transfer.payout_v1`). Amount, description, and leg id are not
+ * credit came from this funding payout (`type=balance_transfer` and the
+ * originating payout id). Amount, description, and leg id are not
  * evidence of origin. Zero or several matching credits stay unresolved.
  */
 export function matchFundingCredit(opts: {
