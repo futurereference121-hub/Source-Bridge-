@@ -45,18 +45,39 @@ export type ApprovedPurchaseRow = {
   status: string;
 };
 
-export function selectApprovedTestPurchase<T extends ApprovedPurchaseRow>(rows: readonly T[]): T | null {
+export const DAMAGED_GP_TEST_PURCHASE_REF = {
+  txnHash: "b8444fb7",
+  buyerHash: "705e5c58",
+  sourcerHash: "87a7abb2",
+  stripeMode: "TEST",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  currency: "GBP",
+  totalChargeMinor: 4025,
+} as const;
+
+function selectHashedTestPurchase<T extends ApprovedPurchaseRow>(
+  rows: readonly T[],
+  ref: typeof APPROVED_GP_TEST_PURCHASE | typeof DAMAGED_GP_TEST_PURCHASE_REF,
+): T | null {
   const matches = rows.filter(
     (row) =>
-      row.stripeMode === APPROVED_GP_TEST_PURCHASE.stripeMode &&
-      row.payoutRail === APPROVED_GP_TEST_PURCHASE.payoutRail &&
-      row.currency.toUpperCase() === APPROVED_GP_TEST_PURCHASE.currency &&
-      row.totalChargeMinor === APPROVED_GP_TEST_PURCHASE.totalChargeMinor &&
-      idHash8(row.id) === APPROVED_GP_TEST_PURCHASE.txnHash &&
-      idHash8(row.buyerId) === APPROVED_GP_TEST_PURCHASE.buyerHash &&
-      idHash8(row.sellerId) === APPROVED_GP_TEST_PURCHASE.sourcerHash,
+      row.stripeMode === ref.stripeMode &&
+      row.payoutRail === ref.payoutRail &&
+      row.currency.toUpperCase() === ref.currency &&
+      row.totalChargeMinor === ref.totalChargeMinor &&
+      idHash8(row.id) === ref.txnHash &&
+      idHash8(row.buyerId) === ref.buyerHash &&
+      idHash8(row.sellerId) === ref.sourcerHash,
   );
   return matches.length === 1 ? matches[0] : null;
+}
+
+export function selectApprovedTestPurchase<T extends ApprovedPurchaseRow>(rows: readonly T[]): T | null {
+  return selectHashedTestPurchase(rows, APPROVED_GP_TEST_PURCHASE);
+}
+
+export function selectDamagedTestPurchase<T extends ApprovedPurchaseRow>(rows: readonly T[]): T | null {
+  return selectHashedTestPurchase(rows, DAMAGED_GP_TEST_PURCHASE_REF);
 }
 
 export function webhookEventCoverage(

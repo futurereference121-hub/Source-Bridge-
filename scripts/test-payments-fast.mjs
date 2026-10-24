@@ -62,6 +62,7 @@ runNodeTestScripts(
     "scripts/test-gp-live-background-auth.mjs",
     "scripts/test-gp-fa-balance.mjs",
     "scripts/test-gp-proceeds-funding.mjs",
+    "scripts/test-runtime-diagnostic.mjs",
     "scripts/test-platform-balance.mjs",
     "scripts/test-usd-connect-settlement.mjs",
     "scripts/test-gp-gbp-pricing.mjs",

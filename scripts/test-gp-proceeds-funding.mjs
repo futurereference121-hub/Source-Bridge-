@@ -1027,5 +1027,69 @@ const liveCharge = shape.safeChargeFacts({
 });
 assert.equal(liveCharge.blocked, "mode_mismatch");
 assert.equal("facts" in liveCharge, false);
+assert.equal(shape.DAMAGED_GP_TEST_PURCHASE_REF.txnHash, "b8444fb7");
+assert.equal(
+  shape.selectDamagedTestPurchase([
+    {
+      id: "other",
+      buyerId: "buyer",
+      sellerId: "sourcer",
+      stripeChargeId: "ch_other",
+      stripeMode: "TEST",
+      payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+      currency: "GBP",
+      totalChargeMinor: 4025,
+      status: "READY_TO_RELEASE",
+    },
+  ]),
+  null,
+);
+
+const recovery = await import(
+  pathToFileURL(path.join(root, "src/lib/payments/payout-rail/test-recovery-preview.ts")).href
+);
+const blockedBySiblingPending = recovery.planDamagedGpTestRecovery({
+  membershipState: "clear",
+  postedMinor: 0,
+  pendingMinor: 0,
+  leftoverAvailableMinor: 266,
+  siblingPendingLegMinor: 3638,
+});
+assert.equal(blockedBySiblingPending.requiredMinor, 3638);
+assert.equal(blockedBySiblingPending.minimumRestoreMinor, 3372);
+assert.equal(blockedBySiblingPending.restoreCardMinor, 3638);
+assert.equal(blockedBySiblingPending.canOwnChargeFundAfterRestore, false);
+assert.deepEqual(blockedBySiblingPending.recommended, ["reconcile_sibling_pending_leg", "restore_test_card_room"]);
+const afterReconcile = recovery.planDamagedGpTestRecovery({
+  membershipState: "clear",
+  postedMinor: 0,
+  pendingMinor: 0,
+  leftoverAvailableMinor: 266,
+  siblingPendingLegMinor: 0,
+});
+assert.equal(afterReconcile.minimumRestoreMinor, 3372);
+assert.equal(afterReconcile.restoreCardMinor, 3638);
+assert.equal(afterReconcile.canOwnChargeFundAfterRestore, true);
+assert.equal(afterReconcile.options.find((row) => row.id === "restore_test_card_room").ownChargeProof, false);
+const paidOut = recovery.planDamagedGpTestRecovery({
+  membershipState: "paid_out",
+  postedMinor: 0,
+  pendingMinor: 0,
+  leftoverAvailableMinor: 266,
+  siblingPendingLegMinor: 0,
+});
+assert.equal(paidOut.canOwnChargeFundAfterRestore, false);
+assert.equal(paidOut.options.find((row) => row.id === "substitute_fa_credit").supported, true);
+assert.equal(paidOut.options.find((row) => row.id === "leave_short_keep_obligation").supported, true);
+
+const recoveryRoute = read("src/app/api/admin/gp-test-recovery-preview/route.ts");
+assert.match(recoveryRoute, /requireAdmin/);
+assert.match(recoveryRoute, /export async function GET/);
+assert.doesNotMatch(recoveryRoute, /export async function POST/);
+assert.doesNotMatch(recoveryRoute, /payouts\.create|topups\.create|charges\.create/);
+const recoveryRun = read("src/lib/payments/payout-rail/test-recovery-run.ts");
+assert.match(recoveryRun, /selectDamagedTestPurchase/);
+assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
+assert.match(read("src/lib/payments/flags.ts"), /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/);
 
 console.log("gp proceeds funding: ok");
