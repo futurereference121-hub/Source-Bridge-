@@ -1085,10 +1085,13 @@ assert.equal(paidOut.options.find((row) => row.id === "leave_short_keep_obligati
 const recoveryRoute = read("src/app/api/admin/gp-test-recovery-preview/route.ts");
 assert.match(recoveryRoute, /requireAdmin/);
 assert.match(recoveryRoute, /export async function GET/);
-assert.doesNotMatch(recoveryRoute, /export async function POST/);
+assert.match(recoveryRoute, /confirm_sibling_leg/);
+assert.match(recoveryRoute, /confirmTestSiblingFundingLeg/);
 assert.doesNotMatch(recoveryRoute, /payouts\.create|topups\.create|charges\.create/);
 const recoveryRun = read("src/lib/payments/payout-rail/test-recovery-run.ts");
 assert.match(recoveryRun, /selectDamagedTestPurchase/);
+assert.match(recoveryRun, /matchFundingCredit/);
+assert.match(recoveryRun, /received_credits/);
 assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
 assert.match(read("src/lib/payments/flags.ts"), /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/);
 

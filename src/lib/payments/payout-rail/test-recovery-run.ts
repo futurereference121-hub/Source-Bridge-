@@ -1,6 +1,7 @@
 /**
- * Admin-only TEST reads for the damaged GP purchase recovery plan.
- * GET path only. No top-up, payout, quote, refund, or schedule change.
+ * Admin-only TEST recovery reads, plus retrieve-only sibling-leg confirm.
+ * Confirm persists POSTED only after matchFundingCredit finds one ReceivedCredit.
+ * No top-up, funding payout, quote, refund, or schedule change.
  */
 
 import { prisma } from "@/lib/db";
@@ -9,10 +10,13 @@ import { getStripe } from "@/lib/payments/stripe/client";
 import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-funding";
 import {
   assessChargePayoutMembership,
+  matchFundingCredit,
   type ChargePayoutMembership,
 } from "@/lib/payments/payout-rail/proceeds-funding";
+import { getGlobalPayoutsFinancialAccountId, gpFetch } from "@/lib/payments/payout-rail/gp-client";
 import {
   idHash8,
+  last5,
   selectDamagedTestPurchase,
   type ApprovedPurchaseRow,
 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
@@ -221,5 +225,162 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     cardAvailableGbpMinor,
     pendingGbpMinor,
     financialAccountAvailableGbpMinor,
+  };
+}
+
+async function listTestReceivedCredits(): Promise<Record<string, unknown>[]> {
+  const credits: Record<string, unknown>[] = [];
+  let path = "/v2/money_management/received_credits?limit=100";
+  for (let page = 0; page < 10 && path; page += 1) {
+    const listed = await gpFetch({ mode: "TEST", method: "GET", path });
+    if (!listed.ok || !Array.isArray(listed.body.data)) break;
+    credits.push(...(listed.body.data as Record<string, unknown>[]));
+    const next = typeof listed.body.next_page_url === "string" ? listed.body.next_page_url : "";
+    path = next ? next.replace("https://api.stripe.com", "") : "";
+    if (!listed.body.has_more && !next) path = "";
+  }
+  return credits;
+}
+
+export async function confirmTestSiblingFundingLeg(): Promise<{
+  ok: true;
+  purchaseHash: "597151ee";
+  wrote: boolean;
+  payoutStatus: string | null;
+  payoutPaidAloneInsufficient: boolean;
+  matchFound: boolean;
+  creditSuffix: string;
+  fundingStatus: string | null;
+  fundingStatusAfter: string | null;
+  siblingPendingLegMinorAfter: number;
+}> {
+  if (isGlobalPayoutsLiveInitiationEnabled()) {
+    throw Object.assign(new Error("LIVE GP initiation must stay off"), {
+      status: 409,
+      code: "GP_LIVE_INITIATION_ON",
+    });
+  }
+  const rows = await prisma.gpProceedsFunding.findMany({
+    where: { stripeMode: "TEST", currency: "GBP" },
+    select: {
+      id: true,
+      status: true,
+      principalMinor: true,
+      payoutFeeMinor: true,
+      protectedTxnId: true,
+      legs: {
+        select: {
+          id: true,
+          status: true,
+          amountMinor: true,
+          currency: true,
+          stripePayoutId: true,
+          stripePayoutStatus: true,
+          faCreditId: true,
+        },
+      },
+    },
+  });
+  const sibling = rows.find((row) => idHash8(row.protectedTxnId) === DAMAGED_GP_TEST_PURCHASE.siblingHash);
+  if (!sibling) {
+    throw Object.assign(new Error("Sibling TEST purchase was not found"), { status: 404 });
+  }
+  const leg = sibling.legs.find(
+    (row) =>
+      row.status === "PENDING" &&
+      row.amountMinor === DAMAGED_GP_TEST_PURCHASE.siblingConsumedMinor &&
+      row.stripePayoutId,
+  );
+  if (!leg?.stripePayoutId) {
+    return {
+      ok: true,
+      purchaseHash: "597151ee",
+      wrote: false,
+      payoutStatus: null,
+      payoutPaidAloneInsufficient: false,
+      matchFound: false,
+      creditSuffix: "",
+      fundingStatus: sibling.status,
+      fundingStatusAfter: sibling.status,
+      siblingPendingLegMinorAfter: sibling.legs
+        .filter((row) => row.status === "PENDING")
+        .reduce((sum, row) => sum + row.amountMinor, 0),
+    };
+  }
+
+  const payout = await getStripe("TEST").payouts.retrieve(leg.stripePayoutId);
+  if (payout.livemode) {
+    throw Object.assign(new Error("TEST recovery refused a live payout"), { status: 409 });
+  }
+  const credits = await listTestReceivedCredits();
+  const claimed = (
+    await prisma.gpProceedsFundingLeg.findMany({
+      where: { faCreditId: { not: "" } },
+      select: { faCreditId: true },
+    })
+  ).map((row) => row.faCreditId);
+  const match = matchFundingCredit({
+    payoutId: payout.id,
+    financialAccountId: getGlobalPayoutsFinancialAccountId("TEST"),
+    amountMinor: leg.amountMinor,
+    currency: leg.currency,
+    payoutStatus: payout.status,
+    livemode: false,
+    credits,
+    claimedCreditIds: claimed,
+  });
+  if (!match) {
+    return {
+      ok: true,
+      purchaseHash: "597151ee",
+      wrote: false,
+      payoutStatus: payout.status,
+      payoutPaidAloneInsufficient: payout.status === "paid",
+      matchFound: false,
+      creditSuffix: "",
+      fundingStatus: sibling.status,
+      fundingStatusAfter: sibling.status,
+      siblingPendingLegMinorAfter: sibling.legs
+        .filter((row) => row.status === "PENDING")
+        .reduce((sum, row) => sum + row.amountMinor, 0),
+    };
+  }
+
+  await prisma.gpProceedsFundingLeg.update({
+    where: { id: leg.id },
+    data: {
+      status: "POSTED",
+      stripePayoutStatus: payout.status,
+      faCreditId: match.creditId,
+      postedAt: new Date(),
+    },
+  });
+  const requiredMinor = sibling.principalMinor + sibling.payoutFeeMinor;
+  const postedMinor = sibling.legs
+    .filter((row) => row.status === "POSTED" || row.id === leg.id)
+    .reduce((sum, row) => sum + row.amountMinor, 0);
+  if (postedMinor >= requiredMinor && requiredMinor > 0) {
+    await prisma.gpProceedsFunding.update({
+      where: { id: sibling.id },
+      data: { status: "POSTED", failureCode: "" },
+    });
+  }
+  const fresh = await prisma.gpProceedsFunding.findUnique({
+    where: { id: sibling.id },
+    select: { status: true, legs: { select: { status: true, amountMinor: true } } },
+  });
+  return {
+    ok: true,
+    purchaseHash: "597151ee",
+    wrote: true,
+    payoutStatus: payout.status,
+    payoutPaidAloneInsufficient: false,
+    matchFound: true,
+    creditSuffix: last5(match.creditId),
+    fundingStatus: sibling.status,
+    fundingStatusAfter: fresh?.status ?? sibling.status,
+    siblingPendingLegMinorAfter: (fresh?.legs ?? [])
+      .filter((row) => row.status === "PENDING")
+      .reduce((sum, row) => sum + row.amountMinor, 0),
   };
 }
