@@ -20,17 +20,22 @@ import {
   userMatchesPaymentsAllowlist,
 } from "@/lib/payments/allowlist";
 import {
+  isGpTestProcurementTrustOverrideEnabled,
   isInstantPaymentsEnabled,
   isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import {
+  applyTestProcurementTrustOverride,
   procurementAvailabilityCopy,
   procurementAvailabilityReason,
 } from "@/lib/payments/eligibility";
 import { gpGbpEntitlementFloorMinor } from "@/lib/payments/gp-pricing";
-import { sandboxTicketCurrencyPolicy } from "@/lib/payments/payout-rail/sandbox-pair";
+import {
+  isApprovedSandboxSourcer,
+  sandboxTicketCurrencyPolicy,
+} from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   conversationActivityAt,
   getConversationActivityVersion,
@@ -229,10 +234,23 @@ export async function GET(_req: Request, { params }: Params) {
           globallyOn: config.procurementAdvancesGloballyOn,
           minTrustLevel: config.procurementMinTrustLevel,
           sellers: sellers.map((seller) => {
+            const otherId = ids.find((id) => id !== seller.id) || "";
+            const pairPolicy = otherId
+              ? sandboxTicketCurrencyPolicy(otherId, seller.id)
+              : null;
+            const stripeMode =
+              pairPolicy && pairPolicy.sellerId === seller.id ? "TEST" : null;
+            const effectiveTrust = applyTestProcurementTrustOverride({
+              storedTrustLevel: seller.trustLevel,
+              minTrustLevel: config.procurementMinTrustLevel,
+              stripeMode,
+              sellerIsApprovedTestSourcer: isApprovedSandboxSourcer(seller.id),
+              overrideEnabled: isGpTestProcurementTrustOverrideEnabled(),
+            });
             const reason = procurementAvailabilityReason({
               globallyEnabled: config.procurementAdvancesGloballyOn,
               featureFlagOn: flagOn,
-              seller,
+              seller: { ...seller, trustLevel: effectiveTrust },
               minTrustLevel: config.procurementMinTrustLevel,
               paymentOption: "PROTECTED",
             });
@@ -241,6 +259,7 @@ export async function GET(_req: Request, { params }: Params) {
               trustLevel: seller.trustLevel,
               available: reason == null,
               reason,
+              overridden: effectiveTrust !== seller.trustLevel,
               message: procurementAvailabilityCopy(
                 reason,
                 config.procurementMinTrustLevel,

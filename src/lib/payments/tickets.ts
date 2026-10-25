@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { procurementAdvanceAmount } from "@/lib/payments/fees";
 import {
+  applyTestProcurementTrustOverride,
   assertEligiblePaymentParty,
   assertNotSelfTrade,
   isProcurementEligible,
@@ -12,11 +13,15 @@ import {
   getStripeMode,
   isDirectPaymentsEnabled,
   isGlobalPayoutsProceedsFundingEnabled,
+  isGpTestProcurementTrustOverrideEnabled,
   isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
 import { recordAuditEvent } from "@/lib/payments/ledger";
-import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
+import {
+  assertSandboxCommercialTerms,
+  isApprovedSandboxSourcer,
+} from "@/lib/payments/payout-rail/sandbox-pair";
 import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import {
@@ -1482,10 +1487,20 @@ async function resolveAmounts(
     existingPricingPolicy: commercial.existingPricingPolicy,
   });
   const agreed = Boolean(input.procurementAdvanceAgreed);
+  const eligibilitySeller = {
+    ...seller,
+    trustLevel: applyTestProcurementTrustOverride({
+      storedTrustLevel: seller.trustLevel,
+      minTrustLevel: quoted.config.procurementMinTrustLevel,
+      stripeMode: quoted.stripeMode,
+      sellerIsApprovedTestSourcer: isApprovedSandboxSourcer(seller.id),
+      overrideEnabled: isGpTestProcurementTrustOverrideEnabled(),
+    }),
+  };
   const eligibilityInput = {
     globallyEnabled: quoted.config.procurementAdvancesGloballyOn,
     featureFlagOn: isProcurementAdvancesEnabled(),
-    seller,
+    seller: eligibilitySeller,
     minTrustLevel: quoted.config.procurementMinTrustLevel,
     paymentOption,
     agreed,

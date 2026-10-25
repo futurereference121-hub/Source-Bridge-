@@ -81,6 +81,33 @@ export type ProcurementEligibilityInput = {
   agreed: boolean;
 };
 
+/**
+ * Recorded original luckyday trust for the TEST GP procurement pass.
+ * Restore by disabling GP_TEST_PROCUREMENT_TRUST_OVERRIDE — do not write this.
+ */
+export const TEST_GP_PROCUREMENT_TRUST_ORIGINAL = 0;
+
+/**
+ * Raise effective trust for TEST tickets only. LIVE and non-sandbox sellers
+ * keep the stored User.trustLevel.
+ */
+export function applyTestProcurementTrustOverride(opts: {
+  storedTrustLevel: number;
+  minTrustLevel: number;
+  stripeMode?: "TEST" | "LIVE" | null;
+  sellerIsApprovedTestSourcer: boolean;
+  overrideEnabled: boolean;
+}): number {
+  if (
+    opts.overrideEnabled &&
+    opts.stripeMode === "TEST" &&
+    opts.sellerIsApprovedTestSourcer
+  ) {
+    return Math.max(opts.storedTrustLevel, opts.minTrustLevel);
+  }
+  return opts.storedTrustLevel;
+}
+
 export function procurementAvailabilityReason(
   input: Omit<ProcurementEligibilityInput, "agreed">,
 ): string | null {

@@ -194,6 +194,15 @@ export function isGlobalPayoutsSandboxEnabled(): boolean {
 }
 
 /**
+ * Temporary TEST-only procurement trust override for the approved GP sandbox
+ * sourcer. Does not write User.trustLevel and never applies to LIVE tickets.
+ * Default on so the current TEST procurement pass can run; set false to restore.
+ */
+export function isGpTestProcurementTrustOverrideEnabled(): boolean {
+  return envBool("GP_TEST_PROCUREMENT_TRUST_OVERRIDE", true);
+}
+
+/**
  * Move a Global Payouts charge's available net into the financial account.
  * Default OFF. Publishing the code does not create a funding payout until
  * this is set. LIVE still requires live initiation, which stays off.
@@ -259,6 +268,7 @@ export function paymentFlagsSnapshot() {
     /** Global Payouts master — default false; Connect-only when off. */
     GLOBAL_PAYOUTS_ENABLED: isGlobalPayoutsEnabled(),
     GLOBAL_PAYOUTS_SANDBOX_ENABLED: isGlobalPayoutsSandboxEnabled(),
+    GP_TEST_PROCUREMENT_TRUST_OVERRIDE: isGpTestProcurementTrustOverrideEnabled(),
     GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED: isGlobalPayoutsLiveInitiationEnabled(),
     GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED: isGlobalPayoutsProceedsFundingEnabled(),
     PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED: isPlatformBankRemainderPayoutEnabled("TEST"),

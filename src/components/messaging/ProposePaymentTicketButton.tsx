@@ -81,6 +81,7 @@ export type PaymentsProposalAccess = {
       trustLevel: number;
       available: boolean;
       reason?: string | null;
+      overridden?: boolean;
       message?: string | null;
     }[];
   } | null;
@@ -416,6 +417,7 @@ export function ProposePaymentTicketButton({
       available,
       minTrustLevel,
       trustLevel: row?.trustLevel ?? 0,
+      overridden: Boolean(row?.overridden),
       message: row?.message || null,
     };
   })();
@@ -900,6 +902,9 @@ export function ProposePaymentTicketButton({
               ? ` (currently ${sellerProcurement.trustLevel})`
               : ""}
             .
+            {sellerProcurement.overridden
+              ? " Temporarily eligible for this TEST Global Payouts ticket only."
+              : ""}
             {sellerProcurement.message ? ` ${sellerProcurement.message}` : ""}
             {!procurementFlag && isEdit
               ? " (Procurement advances currently disabled.)"

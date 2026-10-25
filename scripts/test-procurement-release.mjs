@@ -430,6 +430,70 @@ assert.doesNotMatch(fundingRun, /resumeAuthorizedProcurement/);
 assert.doesNotMatch(fundingRun, /releaseProcurement/);
 assert.match(eligibilitySrc, /procurementAvailabilityReason/);
 assert.match(eligibilitySrc, /if \(!input.agreed\) return null/);
+assert.match(eligibilitySrc, /applyTestProcurementTrustOverride/);
+assert.match(eligibilitySrc, /TEST_GP_PROCUREMENT_TRUST_ORIGINAL = 0/);
+assert.match(ticketsSrc, /applyTestProcurementTrustOverride/);
+assert.match(ticketsSrc, /quoted.stripeMode/);
+const conversationSrc = readFileSync(
+  join(root, "src/app/api/conversations/[id]/route.ts"),
+  "utf8",
+);
+assert.match(conversationSrc, /applyTestProcurementTrustOverride/);
+assert.match(conversationSrc, /pairPolicy.sellerId === seller.id \? "TEST" : null/);
+assert.doesNotMatch(ticketsSrc, /trustLevel:\s*2/);
+assert.match(
+  readFileSync(join(root, "src/lib/payments/flags.ts"), "utf8"),
+  /envBool\("GP_TEST_PROCUREMENT_TRUST_OVERRIDE", true\)/,
+);
+{
+  function applyTestProcurementTrustOverride(opts) {
+    if (opts.overrideEnabled && opts.stripeMode === "TEST" && opts.sellerIsApprovedTestSourcer) {
+      return Math.max(opts.storedTrustLevel, opts.minTrustLevel);
+    }
+    return opts.storedTrustLevel;
+  }
+  assert.equal(
+    applyTestProcurementTrustOverride({
+      storedTrustLevel: 0,
+      minTrustLevel: 2,
+      stripeMode: "TEST",
+      sellerIsApprovedTestSourcer: true,
+      overrideEnabled: true,
+    }),
+    2,
+  );
+  assert.equal(
+    applyTestProcurementTrustOverride({
+      storedTrustLevel: 0,
+      minTrustLevel: 2,
+      stripeMode: "LIVE",
+      sellerIsApprovedTestSourcer: true,
+      overrideEnabled: true,
+    }),
+    0,
+    "LIVE must not receive the TEST trust override",
+  );
+  assert.equal(
+    applyTestProcurementTrustOverride({
+      storedTrustLevel: 0,
+      minTrustLevel: 2,
+      stripeMode: "TEST",
+      sellerIsApprovedTestSourcer: false,
+      overrideEnabled: true,
+    }),
+    0,
+  );
+  assert.equal(
+    applyTestProcurementTrustOverride({
+      storedTrustLevel: 0,
+      minTrustLevel: 2,
+      stripeMode: "TEST",
+      sellerIsApprovedTestSourcer: true,
+      overrideEnabled: false,
+    }),
+    0,
+  );
+}
 const proposeSrc = readFileSync(
   join(root, "src/components/messaging/ProposePaymentTicketButton.tsx"),
   "utf8",
