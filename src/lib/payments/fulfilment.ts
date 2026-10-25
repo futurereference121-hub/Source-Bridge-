@@ -1067,12 +1067,20 @@ async function releaseNowAfterReceipt(opts: {
     const pendingProvider = Boolean(
       "pendingProvider" in result && result.pendingProvider,
     );
+    const attempt = await prisma.outboundPaymentAttempt.findFirst({
+      where: { protectedTxnId: txn.id },
+      orderBy: { updatedAt: "desc" },
+      select: { failureCode: true },
+    });
+    const waitingForProceeds =
+      pendingProvider && isGpFundingWaitingCode(String(attempt?.failureCode || ""));
     return {
       alreadyConfirmed: Boolean(result.alreadyReleased),
       decision: "RELEASE_NOW" as const,
       transferTriggered: !result.alreadyReleased && !pendingProvider,
       alreadyReleased: Boolean(result.alreadyReleased),
       pendingProvider,
+      waitingForProceeds,
       transferId: result.transferId ?? null,
       transaction: result.txn,
       activityVersion:
