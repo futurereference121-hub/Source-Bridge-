@@ -56,6 +56,8 @@ const {
   describeGpBuyerPayout,
   fundingPayoutCreateGate,
   fundingScanIncludesPurchase,
+  GP_TEST_REPAIR_ABANDONED,
+  isTestRepairAbandoned,
   fundingIdempotencyKey,
   fundingPayoutMatchesLeg,
   isSimulatedFundingCredit,
@@ -470,6 +472,59 @@ const sweptSibling = {
   pendingMinor: 0,
 };
 assert.equal(otherGpAvailableUnpaidMinor([sweptSibling, newAvailable], nowForReserve).minor, 3904);
+assert.equal(GP_TEST_REPAIR_ABANDONED, "GP_TEST_REPAIR_ABANDONED");
+assert.equal(isTestRepairAbandoned({ stripeMode: "TEST", failureCode: GP_TEST_REPAIR_ABANDONED }), true);
+assert.equal(isTestRepairAbandoned({ stripeMode: "LIVE", failureCode: GP_TEST_REPAIR_ABANDONED }), false);
+assert.equal(isTestRepairAbandoned({ stripeMode: "TEST", failureCode: "GP_FUNDING_ROOM" }), false);
+const abandonedTest = {
+  ...newAvailable,
+  status: "BLOCKED",
+  failureCode: GP_TEST_REPAIR_ABANDONED,
+  stripeMode: "TEST",
+};
+const ordinaryUnpaid = { ...newAvailable, stripeMode: "TEST" };
+const liveMislabel = {
+  ...newAvailable,
+  failureCode: GP_TEST_REPAIR_ABANDONED,
+  stripeMode: "LIVE",
+};
+assert.equal(otherGpAvailableUnpaidMinor([abandonedTest], nowForReserve).minor, 0);
+assert.equal(otherGpAvailableUnpaidMinor([ordinaryUnpaid], nowForReserve).minor, 3904);
+assert.equal(otherGpAvailableUnpaidMinor([abandonedTest, ordinaryUnpaid], nowForReserve).minor, 3904);
+assert.equal(otherGpAvailableUnpaidMinor([liveMislabel], nowForReserve).minor, 3904);
+assert.equal(
+  fundingScanIncludesPurchase({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["AWAITING_FA_FUNDS"],
+    hasPendingFundingLeg: false,
+    stripeMode: "TEST",
+    failureCode: GP_TEST_REPAIR_ABANDONED,
+  }),
+  false,
+);
+assert.equal(
+  fundingScanIncludesPurchase({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["AWAITING_FA_FUNDS"],
+    hasPendingFundingLeg: false,
+    stripeMode: "LIVE",
+    failureCode: GP_TEST_REPAIR_ABANDONED,
+  }),
+  true,
+);
+assert.equal(
+  fundingScanIncludesPurchase({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["AWAITING_FA_FUNDS"],
+    hasPendingFundingLeg: true,
+    stripeMode: "TEST",
+    failureCode: GP_TEST_REPAIR_ABANDONED,
+  }),
+  true,
+);
+assert.match(runner, /stripeMode: "TEST"/);
+assert.match(runner, /isTestRepairAbandoned/);
+assert.match(runner, /GP_TEST_REPAIR_ABANDONED/);
 const absentObjectField = assessChargePayoutMembership({
   balanceTransactionId: "txn_charge_new",
   payoutLists: [
@@ -1315,6 +1370,8 @@ assert.match(recoveryRoute, /requireAdmin/);
 assert.match(recoveryRoute, /export async function GET/);
 assert.match(recoveryRoute, /confirm_sibling_leg/);
 assert.match(recoveryRoute, /confirmTestSiblingFundingLeg/);
+assert.match(recoveryRoute, /abandon_damaged_test_funding/);
+assert.match(recoveryRoute, /abandonDamagedTestFundingRow/);
 assert.doesNotMatch(recoveryRoute, /payouts\.create|topups\.create|charges\.create/);
 const recoveryRun = read("src/lib/payments/payout-rail/test-recovery-run.ts");
 assert.match(recoveryRun, /selectDamagedTestPurchase/);
@@ -1325,6 +1382,9 @@ assert.match(recoveryRun, /storedCreditVerified/);
 assert.match(recoveryRun, /redactReceivedCreditInventory/);
 assert.match(recoveryRun, /creditListHttpStatus/);
 assert.match(recoveryRun, /siblingFailureCode/);
+assert.match(recoveryRun, /abandonDamagedTestFundingRow/);
+assert.match(recoveryRun, /withPlatformBalanceLock/);
+assert.match(recoveryRun, /GP_TEST_REPAIR_ABANDONED/);
 assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
 
 assert.equal(recovery.TEST_REPAIR_TOPUP_CAP_MINOR, 3372);

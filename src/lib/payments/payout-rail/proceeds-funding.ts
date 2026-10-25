@@ -140,12 +140,27 @@ export function completedPurchaseBlocksNewFunding(opts: {
   return opts.outboundStatuses.some((status) => done.has(String(status || "").toUpperCase()));
 }
 
+export const GP_TEST_REPAIR_ABANDONED = "GP_TEST_REPAIR_ABANDONED";
+
+export function isTestRepairAbandoned(opts: {
+  stripeMode?: string | null;
+  failureCode?: string | null;
+}): boolean {
+  return (
+    String(opts.stripeMode || "").toUpperCase() === "TEST" &&
+    String(opts.failureCode || "") === GP_TEST_REPAIR_ABANDONED
+  );
+}
+
 export function fundingScanIncludesPurchase(opts: {
   txnStatus: string;
   outboundStatuses: readonly string[];
   hasPendingFundingLeg: boolean;
+  stripeMode?: string | null;
+  failureCode?: string | null;
 }): boolean {
   if (opts.hasPendingFundingLeg) return true;
+  if (isTestRepairAbandoned(opts)) return false;
   return !completedPurchaseBlocksNewFunding(opts);
 }
 
@@ -380,6 +395,7 @@ export type OtherGpFundingRow = {
   outboundStatuses: readonly string[];
   postedMinor: number;
   pendingMinor: number;
+  stripeMode?: string | null;
 };
 
 export function otherGpAvailableUnpaidMinor(
@@ -399,6 +415,7 @@ export function otherGpAvailableUnpaidMinor(
     });
     if (completed && row.pendingMinor === 0) continue;
     if (row.failureCode === "GP_CHARGE_PAID_OUT") continue;
+    if (isTestRepairAbandoned({ stripeMode: row.stripeMode, failureCode: row.failureCode })) continue;
     const awaiting =
       row.status === "AWAITING_SETTLEMENT" ||
       row.failureCode === "GP_CHARGE_PENDING" ||

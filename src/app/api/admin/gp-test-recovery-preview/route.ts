@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import {
+  abandonDamagedTestFundingRow,
   confirmTestSiblingFundingLeg,
   runDamagedTestRecoveryPreview,
 } from "@/lib/payments/payout-rail/test-recovery-run";
@@ -36,10 +37,13 @@ export async function POST(req: NextRequest) {
       action?: unknown;
       confirmed?: unknown;
     };
-    if (body.action !== "confirm_sibling_leg" || body.confirmed !== true) {
-      return jsonError("confirm_sibling_leg confirmation required", 400);
+    if (body.action === "confirm_sibling_leg" && body.confirmed === true) {
+      return Response.json(await confirmTestSiblingFundingLeg());
     }
-    return Response.json(await confirmTestSiblingFundingLeg());
+    if (body.action === "abandon_damaged_test_funding" && body.confirmed === true) {
+      return Response.json(await abandonDamagedTestFundingRow());
+    }
+    return jsonError("confirmed TEST recovery action required", 400);
   } catch (err) {
     const status = err && typeof err === "object" && "status" in err ? Number(err.status) : 500;
     if (status === 401) return jsonError("Unauthorized", 401);

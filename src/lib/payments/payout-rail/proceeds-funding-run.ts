@@ -37,6 +37,8 @@ import {
   fundingPayoutMatchesLeg,
   GP_COMPLETED_OUTBOUND_STATUSES,
   GP_FUNDING_WAITING_CODES,
+  GP_TEST_REPAIR_ABANDONED,
+  isTestRepairAbandoned,
   fundingRowAfterCompletedPurchase,
   matchFundingCredit,
   nextFundingLegSequence,
@@ -224,6 +226,7 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
       outboundStatuses: row.protectedTxn.outboundPaymentAttempts.map((attempt) => attempt.status),
       postedMinor: row.legs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0),
       pendingMinor: row.legs.filter((leg) => leg.status === "PENDING").reduce((sum, leg) => sum + leg.amountMinor, 0),
+      stripeMode: mode,
     })),
     new Date(),
     unreadableOthers,
@@ -300,6 +303,19 @@ export async function reconcileGpProceedsFunding(opts: {
         ? { currency: { equals: opts.currency, mode: "insensitive" as const } }
         : {}),
       status: { notIn: ["REFUNDED", "CANCELLED", "FAILED"] },
+      NOT: {
+        AND: [
+          { stripeMode: "TEST" },
+          {
+            gpProceedsFunding: {
+              is: {
+                failureCode: GP_TEST_REPAIR_ABANDONED,
+                legs: { none: { status: "PENDING" } },
+              },
+            },
+          },
+        ],
+      },
       OR: [
         {
           status: { not: "RELEASED" },
@@ -687,6 +703,7 @@ async function fundOne(opts: {
   };
   funding: {
     id: string;
+    failureCode: string;
     legs: {
       id: string;
       sequence: number;
@@ -726,6 +743,12 @@ async function fundOne(opts: {
   const freshLegs = await prisma.gpProceedsFundingLeg.findMany({ where: { fundingId: opts.funding.id } });
   const postedMinor = freshLegs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0);
   const pendingLegs = freshLegs.filter((leg) => leg.status === "PENDING");
+  if (
+    isTestRepairAbandoned({ stripeMode: opts.mode, failureCode: opts.funding.failureCode }) &&
+    pendingLegs.length === 0
+  ) {
+    return false;
+  }
   const faId = getGlobalPayoutsFinancialAccountId(opts.mode);
   if (pendingLegs.length > 0) {
     const pending = pendingLegs[0];

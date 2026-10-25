@@ -11,10 +11,14 @@ import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-fundi
 import {
   assessChargePayoutMembership,
   fundingRowAfterCompletedPurchase,
+  GP_TEST_REPAIR_ABANDONED,
+  isTestRepairAbandoned,
   matchFundingCredit,
+  otherGpAvailableUnpaidMinor,
   redactReceivedCreditInventory,
   type ChargePayoutMembership,
 } from "@/lib/payments/payout-rail/proceeds-funding";
+import { withPlatformBalanceLock } from "@/lib/payments/payout-rail/platform-balance-lock";
 import { getGlobalPayoutsFinancialAccountId } from "@/lib/payments/payout-rail/gp-client";
 import { listReceivedCredits, retrieveReceivedCredit } from "@/lib/payments/payout-rail/received-credits";
 import {
@@ -58,6 +62,8 @@ export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   quoteSourceAmountMinor: number | null;
   quoteExpiresAt: string | null;
   quoteExpired: boolean;
+  testAbandoned: boolean;
+  selfReserveMinor: number;
 };
 
 function membershipState(membership: ChargePayoutMembership): RecoveryMembership {
@@ -363,6 +369,26 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     quoteSourceAmountMinor: quote?.sourceAmountMinor ?? outbound?.amountMinor ?? null,
     quoteExpiresAt: quote?.expiresAt || null,
     quoteExpired: Boolean(quote?.expiresAt && Date.parse(quote.expiresAt) <= Date.now()),
+    testAbandoned: isTestRepairAbandoned({
+      stripeMode: "TEST",
+      failureCode: funding?.failureCode || "",
+    }),
+    selfReserveMinor: otherGpAvailableUnpaidMinor(
+      [
+        {
+          chargeNetMinor: plan.chargeNetMinor,
+          status: funding?.status || "SHORT",
+          failureCode: funding?.failureCode || "",
+          availableOn: null,
+          txnStatus: purchase.status,
+          outboundStatuses: outbound?.status ? [outbound.status] : [],
+          postedMinor,
+          pendingMinor,
+          stripeMode: "TEST",
+        },
+      ],
+      new Date(),
+    ).minor,
   };
 }
 
@@ -563,5 +589,129 @@ export async function confirmTestSiblingFundingLeg(): Promise<{
     siblingPendingLegMinorAfter: (fresh?.legs ?? [])
       .filter((row) => row.status === "PENDING")
       .reduce((sum, row) => sum + row.amountMinor, 0),
+  };
+}
+
+const IN_FLIGHT_OUTBOUND = new Set(["PROCESSING", "SUCCEEDED", "RECONCILED", "ACTION_REQUIRED"]);
+
+export async function abandonDamagedTestFundingRow(): Promise<Record<string, unknown>> {
+  if (isGlobalPayoutsLiveInitiationEnabled()) {
+    throw Object.assign(new Error("LIVE GP initiation must stay off"), { status: 409 });
+  }
+  const now = new Date();
+  const locked = await withPlatformBalanceLock("TEST", "GBP", now, async () => {
+    const purchases = await prisma.protectedTransaction.findMany({
+      where: {
+        stripeMode: "TEST",
+        payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+        currency: { equals: "GBP", mode: "insensitive" },
+        totalChargeMinor: DAMAGED_GP_TEST_PURCHASE.totalChargeMinor,
+      },
+      select: {
+        id: true,
+        buyerId: true,
+        sellerId: true,
+        stripeChargeId: true,
+        stripeMode: true,
+        payoutRail: true,
+        currency: true,
+        totalChargeMinor: true,
+        status: true,
+      },
+    });
+    const purchase = selectDamagedTestPurchase(purchases as ApprovedPurchaseRow[]);
+    if (!purchase) {
+      throw Object.assign(new Error("Damaged TEST purchase was not found"), { status: 404 });
+    }
+    const funding = await prisma.gpProceedsFunding.findUnique({
+      where: { protectedTxnId: purchase.id },
+      select: {
+        id: true,
+        stripeMode: true,
+        status: true,
+        failureCode: true,
+        chargeNetMinor: true,
+        legs: {
+          select: {
+            status: true,
+            amountMinor: true,
+            stripePayoutId: true,
+          },
+        },
+      },
+    });
+    if (!funding || funding.stripeMode !== "TEST") {
+      throw Object.assign(new Error("Damaged TEST funding was not found"), { status: 404 });
+    }
+    const pendingLegs = funding.legs.filter((leg) => leg.status === "PENDING");
+    const outbound = await prisma.outboundPaymentAttempt.findFirst({
+      where: { protectedTxnId: purchase.id },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        status: true,
+        stripeOutboundPaymentId: true,
+        initiatedAt: true,
+      },
+    });
+    const inFlightOutbound = Boolean(
+      outbound &&
+        (IN_FLIGHT_OUTBOUND.has(String(outbound.status || "").toUpperCase()) ||
+          outbound.stripeOutboundPaymentId ||
+          outbound.initiatedAt),
+    );
+    const already = isTestRepairAbandoned({
+      stripeMode: funding.stripeMode,
+      failureCode: funding.failureCode,
+    });
+    if (pendingLegs.length > 0) {
+      return {
+        wrote: false,
+        reason: "PENDING_LEG",
+        pendingLegCount: pendingLegs.length,
+        fundingStatus: funding.status,
+        failureCode: funding.failureCode,
+      };
+    }
+    if (inFlightOutbound) {
+      return {
+        wrote: false,
+        reason: "OUTBOUND_IN_FLIGHT",
+        outboundStatus: outbound?.status || null,
+        hasOutboundId: Boolean(outbound?.stripeOutboundPaymentId),
+        fundingStatus: funding.status,
+        failureCode: funding.failureCode,
+      };
+    }
+    if (already) {
+      return {
+        wrote: false,
+        reason: "ALREADY_ABANDONED",
+        fundingStatus: funding.status,
+        failureCode: funding.failureCode,
+        chargeNetMinor: funding.chargeNetMinor,
+      };
+    }
+    await prisma.gpProceedsFunding.update({
+      where: { id: funding.id },
+      data: { status: "BLOCKED", failureCode: GP_TEST_REPAIR_ABANDONED },
+    });
+    return {
+      wrote: true,
+      reason: "ABANDONED",
+      fundingStatus: "BLOCKED",
+      failureCode: GP_TEST_REPAIR_ABANDONED,
+      chargeNetMinor: funding.chargeNetMinor,
+      outboundStatus: outbound?.status || null,
+    };
+  });
+  if (!locked.acquired) {
+    return { ok: true, stripeMode: "TEST", liveInitiationEnabled: false, wrote: false, reason: locked.code };
+  }
+  return {
+    ok: true,
+    stripeMode: "TEST",
+    liveInitiationEnabled: false,
+    purchaseHash: DAMAGED_GP_TEST_PURCHASE.txnHash,
+    ...locked.value,
   };
 }
