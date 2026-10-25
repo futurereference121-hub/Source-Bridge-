@@ -460,10 +460,10 @@ function paymentLabel(status: string, option: string, procReleased = false) {
       ? "Partially protected — item funds already released to sourcer"
       : "Funded / Protected";
   }
-  if (status === "DELIVERED") return "Delivered — waiting for buyer decision";
-  if (status === "IN_INSPECTION") return "Funded — inspection active";
+  if (status === "DELIVERED") return "Receipt confirmed — choose release or inspection";
+  if (status === "IN_INSPECTION") return "Inspection active";
   if (status === "READY_TO_RELEASE") return "Ready to release residual";
-  if (status === "RELEASED") return "Completed — residual released to seller";
+  if (status === "RELEASED") return "Completed — residual released";
   if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "Refunded";
   if (status === "DISPUTED") return "Issue reported — remaining funds on hold";
   return status;
@@ -511,18 +511,19 @@ function deliveryLabel(status: string, option: string) {
     return "Direct Payment — no inspection period";
   }
   if (status === "IN_INSPECTION") {
-    return "Delivery confirmed — inspection period active (buyer may release early)";
+    return "Receipt confirmed — 12-hour inspection is active";
   }
   if (status === "DELIVERED") {
-    return "Delivered — awaiting buyer decision (release now or start inspection)";
+    return "Receipt confirmed — choose release now or start a 12-hour inspection";
   }
-  if (status === "READY_TO_RELEASE") return "Inspection complete — releasing residual";
-  if (status === "RELEASED") return "Complete";
+  if (status === "READY_TO_RELEASE") return "Release authorized";
+  if (status === "RELEASED") return "Release authorized";
   if (status === "DISPUTED") {
     return "Issue reported — auto-release frozen; remaining funds protected";
   }
-  if (status === "IN_TRANSIT") return "In transit";
-  if (status === "AWAITING_SHIPMENT") return "Shipped — awaiting buyer confirmation";
+  if (status === "IN_TRANSIT" || status === "AWAITING_SHIPMENT") {
+    return "Shipped — awaiting receipt confirmation";
+  }
   return "Pending delivery";
 }
 

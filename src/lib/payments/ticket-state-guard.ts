@@ -14,7 +14,20 @@ export type TicketStateSlice = {
   lifecycleStage?: string | null;
   buyerApprovedRevision?: number | null;
   sellerApprovedRevision?: number | null;
+  inspectionEndsAt?: string | null;
+  gpPayoutPhase?: string | null;
+  gpPayoutHeadline?: string | null;
+  gpPayoutProgress?: { phase?: string | null; headline?: string | null } | null;
 };
+
+function ticketDisplayProgressKey(t: TicketStateSlice): string {
+  const gp = t.gpPayoutProgress;
+  return [
+    t.inspectionEndsAt || "",
+    t.gpPayoutPhase || gp?.phase || "",
+    t.gpPayoutHeadline || gp?.headline || "",
+  ].join("|");
+}
 
 const FUNDED_TICKET_STATUSES = new Set(["FUNDED", "ACCEPTED"]);
 const FUNDED_PROTECTED_STATUSES = new Set([
@@ -105,6 +118,9 @@ export function shouldApplyTicketUpdate(
     (incoming.lifecycleStage || "") !== (existing.lifecycleStage || "") &&
     incomingFunded
   ) {
+    return true;
+  }
+  if (ticketDisplayProgressKey(incoming) !== ticketDisplayProgressKey(existing)) {
     return true;
   }
   return false;

@@ -3,6 +3,14 @@
  * Does not mutate financial status — UI labels only.
  */
 
+import {
+  INSPECTION_ACTIVE_LABEL,
+  RECEIPT_CONFIRMED_LABEL,
+  RECEIPT_CONFIRMED_SHORT,
+  SHIPPED_AWAITING_RECEIPT_LABEL,
+  SHIPPED_AWAITING_RECEIPT_SHORT,
+} from "./fulfilment-display";
+
 export type PurchaseDisplayPhase =
   | "AWAITING_PAYMENT"
   | "AWAITING_SHIPMENT"
@@ -138,7 +146,7 @@ export function derivePurchaseDisplayState(
   if (status === "IN_INSPECTION") {
     return {
       phase: "IN_INSPECTION",
-      label: "Inspection active",
+      label: INSPECTION_ACTIVE_LABEL,
       shortLabel: "IN INSPECTION",
     };
   }
@@ -152,16 +160,16 @@ export function derivePurchaseDisplayState(
   if (status === "DELIVERED" || input.deliveredAt) {
     return {
       phase: "DELIVERED",
-      label: "Delivered — awaiting buyer decision",
-      shortLabel: "DELIVERED",
+      label: RECEIPT_CONFIRMED_LABEL,
+      shortLabel: RECEIPT_CONFIRMED_SHORT,
     };
   }
 
   if (status === "IN_TRANSIT") {
     return {
       phase: "IN_TRANSIT",
-      label: "In transit",
-      shortLabel: "IN TRANSIT",
+      label: SHIPPED_AWAITING_RECEIPT_LABEL,
+      shortLabel: SHIPPED_AWAITING_RECEIPT_SHORT,
     };
   }
   if (
@@ -170,8 +178,8 @@ export function derivePurchaseDisplayState(
   ) {
     return {
       phase: "SHIPPED_AWAITING_BUYER",
-      label: "Shipped — awaiting buyer confirmation",
-      shortLabel: "SHIPPED — AWAITING BUYER CONFIRMATION",
+      label: SHIPPED_AWAITING_RECEIPT_LABEL,
+      shortLabel: SHIPPED_AWAITING_RECEIPT_SHORT,
     };
   }
 

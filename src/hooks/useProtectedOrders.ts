@@ -63,7 +63,11 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
     const idx = prev.orders.findIndex((o) => o.id === order.id);
     if (idx < 0) return;
     const nextOrders = [...prev.orders];
-    nextOrders[idx] = { ...nextOrders[idx], ...order };
+    const existing = nextOrders[idx];
+    const existingMs = Date.parse(String(existing.updatedAt || "")) || 0;
+    const incomingMs = Date.parse(String(order.updatedAt || "")) || 0;
+    if (incomingMs && existingMs && incomingMs < existingMs) return;
+    nextOrders[idx] = { ...existing, ...order };
     commit({ ...prev, orders: nextOrders });
   }, [commit]);
 

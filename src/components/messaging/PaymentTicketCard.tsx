@@ -33,6 +33,13 @@ import {
   isProductPurchaseOrigin,
 } from "@/lib/payments/ticket-lifecycle";
 import { shouldApplyTicketUpdate } from "@/lib/payments/ticket-state-guard";
+import {
+  connectCompletedBuyerCopy,
+  formatInspectionWindow,
+  isGlobalPayoutsRail,
+  shippedAwaitingReceiptCopy,
+} from "@/lib/payments/fulfilment-display";
+import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
 
 const DEFAULT_BREAKDOWN_LABELS = {
   itemCost: "Item / procurement budget",
@@ -177,6 +184,7 @@ export type PaymentTicketView = {
   shipmentPhotoUrl?: string;
   shippedAt?: string | null;
   deliveredAt?: string | null;
+  releasedAt?: string | null;
   inspectionEndsAt?: string | null;
   books?: {
     itemFundsReleasedEarlyMinor: number;
@@ -363,6 +371,14 @@ export function PaymentTicketCard({
     }
   }, [ticketId]);
 
+  const silentReload = useCallback(() => {
+    void load({ silent: true });
+  }, [load]);
+  useInspectionDeadlineRefresh(
+    ticket?.protectedTxnStatus === "IN_INSPECTION" ? ticket.inspectionEndsAt : null,
+    silentReload,
+  );
+
   useEffect(() => {
     autoExpandDone.current = false;
     setGone(false);
@@ -401,6 +417,10 @@ export function PaymentTicketCard({
         prev.deliveredAt === snap.deliveredAt &&
         prev.trackingNumber === snap.trackingNumber &&
         prev.fundedAt === snap.fundedAt &&
+        prev.inspectionEndsAt === snap.inspectionEndsAt &&
+        prev.releasedAt === snap.releasedAt &&
+        prev.gpPayoutProgress?.phase === snap.gpPayoutProgress?.phase &&
+        prev.gpPayoutProgress?.headline === snap.gpPayoutProgress?.headline &&
         prev.paymentIntentStatus === snap.paymentIntentStatus &&
         prev.actions?.canPay === snap.actions?.canPay &&
         prev.actions?.canConfirmReceipt === snap.actions?.canConfirmReceipt &&
@@ -475,14 +495,20 @@ export function PaymentTicketCard({
 
   // Soft revalidate ticket state while conversation is open (visibility-aware).
   // Skip GET only when the parent poll supplies a snapshot AND we are not in
-  // an in-flight checkout / post-submit funding wait.
+  // an in-flight checkout / post-submit funding wait / inspection / payout wait.
   useEffect(() => {
     if (typeof window === "undefined" || !ticketId) return;
+    const snapshotNeedsOwnPoll =
+      ticketSnapshot?.protectedTxnStatus === "IN_INSPECTION" ||
+      ticketSnapshot?.protectedTxnStatus === "READY_TO_RELEASE" ||
+      Boolean(ticketSnapshot?.inspectionEndsAt) ||
+      Boolean(ticketSnapshot?.gpPayoutProgress);
     if (
       ticketSnapshot &&
       ticketSnapshot.id === ticketId &&
       !checkout &&
-      !paymentSubmitted
+      !paymentSubmitted &&
+      !snapshotNeedsOwnPoll
     ) {
       return;
     }
@@ -513,7 +539,16 @@ export function PaymentTicketCard({
       window.removeEventListener("focus", onVis);
       window.removeEventListener("online", onVis);
     };
-  }, [ticketId, load, ticketSnapshot?.id, checkout, paymentSubmitted]);
+  }, [
+    ticketId,
+    load,
+    ticketSnapshot?.id,
+    ticketSnapshot?.protectedTxnStatus,
+    ticketSnapshot?.inspectionEndsAt,
+    ticketSnapshot?.gpPayoutProgress,
+    checkout,
+    paymentSubmitted,
+  ]);
 
   // After return from 3DS: poll — client reconcile + webhook both mark FUNDED.
   useEffect(() => {
@@ -1404,7 +1439,6 @@ export function PaymentTicketCard({
     (ticket.books?.finalTransferredMinor ?? 0);
   const hasTracking = Boolean(ticket.trackingNumber);
   const showFulfilment =
-    !historical &&
     !isDirect &&
     Boolean(ticket.protectedTransactionId) &&
     (procTransferred ||
@@ -1414,6 +1448,7 @@ export function PaymentTicketCard({
       canReleaseNow ||
       canReportIssue ||
       issueHold ||
+      isCompleted ||
       [
         "FUNDED",
         "PROCUREMENT_RELEASED",
@@ -1423,6 +1458,7 @@ export function PaymentTicketCard({
         "IN_INSPECTION",
         "READY_TO_RELEASE",
         "DISPUTED",
+        "RELEASED",
       ].includes(ticket.protectedTxnStatus || ticket.status));
   const residualProtected =
     ticket.books?.finalResidualMinor ??
@@ -2027,9 +2063,17 @@ export function PaymentTicketCard({
           ? " · no longer actionable"
           : isDirect
             ? " · funds route on fund"
-            : procTransferred
-              ? " · item funds released; remainder held until delivery"
-              : " · funds held until release / delivery"}
+            : ticket.gpPayoutProgress?.hideReleaseActions
+              ? " · release authorized"
+              : inInspection
+                ? " · inspection in progress"
+                : canConfirmReceipt
+                  ? " · awaiting receipt confirmation"
+                  : canReleaseNow && ticket.protectedTxnStatus === "DELIVERED"
+                    ? " · item received — choose release or inspection"
+                    : procTransferred
+                      ? " · item funds released; remainder held until receipt"
+                      : " · funds held until release"}
       </p>
 
       <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">
@@ -2143,12 +2187,17 @@ export function PaymentTicketCard({
         </p>
       ) : null}
 
-      {ticket.status === "FUNDED" && !procTransferred && !isCompleted ? (
+      {ticket.status === "FUNDED" &&
+      !procTransferred &&
+      !isCompleted &&
+      !hasTracking &&
+      !canConfirmReceipt &&
+      !ticket.gpPayoutProgress?.hideReleaseActions ? (
         <p className="mt-3 text-xs text-emerald-300/90">
           Funded and held on platform. No transfer yet
           {procAgreed
             ? " — release item funds when ready to authorize procurement."
-            : " — seller payout waits until delivery/inspection."}
+            : " — seller payout waits until you confirm receipt and authorize release."}
         </p>
       ) : null}
 
@@ -2168,6 +2217,9 @@ export function PaymentTicketCard({
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300/90">
             COMPLETED · {completedSubstatus || "Funds Settled"}
           </p>
+          {!isGlobalPayoutsRail(ticket.payoutRail) ? (
+            <p className="text-white/55">{connectCompletedBuyerCopy()}</p>
+          ) : null}
           <p className="flex justify-between gap-3">
             <span>Buyer refund</span>
             <span className="tabular-nums text-white">
@@ -2236,12 +2288,17 @@ export function PaymentTicketCard({
                 </span>
               </p>
             </div>
-          ) : (
+          ) : !ticket.gpPayoutProgress?.hideReleaseActions &&
+            !isCompleted &&
+            !inInspection &&
+            !canConfirmReceipt &&
+            ticket.protectedTxnStatus !== "DELIVERED" &&
+            ticket.protectedTxnStatus !== "READY_TO_RELEASE" ? (
             <p className="text-xs text-white/55">
-              Seller earnings remain protected until you choose release,
-              inspection completes, or an issue is resolved.
+              Seller earnings remain protected until you confirm receipt and
+              authorize release.
             </p>
-          )}
+          ) : null}
 
           {hasTracking ? (
             <div className="space-y-1 border-t border-white/10 pt-2 text-xs text-white/70">
@@ -2301,10 +2358,18 @@ export function PaymentTicketCard({
                   ) : null}
                 </div>
               ) : null}
-              {residualProtected > 0 && !isProductPurchase ? (
+              {residualProtected > 0 &&
+              !isProductPurchase &&
+              !isCompleted &&
+              !ticket.gpPayoutProgress?.hideReleaseActions &&
+              (inInspection ||
+                canConfirmReceipt ||
+                ticket.protectedTxnStatus === "DELIVERED") ? (
                 <p className="text-white/45">
                   Remaining {formatMinor(residualProtected, cur)} stays protected
-                  until inspection completes.
+                  {inInspection
+                    ? " until the inspection deadline."
+                    : " until you release or start inspection."}
                 </p>
               ) : null}
               {isProductPurchase && residualProtected > 0 ? (
@@ -2400,7 +2465,7 @@ export function PaymentTicketCard({
           {canConfirmReceipt ? (
             <div className="border-t border-white/10 pt-2">
               <p className="mb-2 text-xs font-medium text-white/90">
-                Item shipped
+                {shippedAwaitingReceiptCopy("buyer")}
               </p>
               <button
                 type="button"
@@ -2489,10 +2554,7 @@ export function PaymentTicketCard({
               {inInspection ? (
                 ticket.inspectionEndsAt ? (
                   <p className="text-white/50">
-                    Inspection ends{" "}
-                    {new Date(ticket.inspectionEndsAt).toLocaleString()}
-                    {" — "}remaining residual auto-releases after this deadline
-                    unless you release early or report a problem.
+                    {formatInspectionWindow(ticket.inspectionEndsAt)?.summary}
                   </p>
                 ) : (
                   <p className="text-white/50">
@@ -2674,11 +2736,12 @@ export function PaymentTicketCard({
           {!disputeResolved &&
           !inInspection &&
           !canConfirmReceipt &&
+          !ticket.gpPayoutProgress &&
           ticket.inspectionEndsAt &&
           (ticket.protectedTxnStatus === "READY_TO_RELEASE" ||
             ticket.lifecycleStage === "READY_TO_RELEASE") ? (
             <p className="text-xs text-white/50">
-              Inspection complete — residual release in progress.
+              Inspection window ended — residual release is authorized.
             </p>
           ) : null}
         </div>

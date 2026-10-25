@@ -14,6 +14,14 @@ import {
   useProtectedOrders,
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
+import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
+import {
+  formatInspectionWindow,
+  receiptConfirmedCopy,
+  sellerReleaseProgressCopy,
+  shippedAwaitingReceiptCopy,
+} from "@/lib/payments/fulfilment-display";
+import type { GpBuyerPayoutProgress } from "@/lib/payments/payout-rail/proceeds-funding";
 
 type Order = ProtectedOrderSummary & {
   paymentOption: string;
@@ -31,6 +39,8 @@ type Order = ProtectedOrderSummary & {
   paymentTicketId?: string | null;
   shipmentPhotoUrl?: string;
   inspectionEndsAt?: string | null;
+  payoutRail?: string | null;
+  gpPayoutProgress?: GpBuyerPayoutProgress | null;
   procurementTransferredMinor?: number;
   books?: {
     remainingProtectedSellerShareMinor?: number;
@@ -74,6 +84,7 @@ export default function SalesFulfilmentPage() {
     orders: rawOrders,
     loading,
     error,
+    reload,
     publishOrderUpdate,
   } = useProtectedOrders({
     role: "seller",
@@ -81,6 +92,11 @@ export default function SalesFulfilmentPage() {
     accountId: account?.id ?? null,
   });
   const orders = rawOrders as Order[];
+  const soonestInspection = orders
+    .filter((o) => o.status === "IN_INSPECTION" && o.inspectionEndsAt)
+    .map((o) => o.inspectionEndsAt as string)
+    .sort()[0];
+  useInspectionDeadlineRefresh(soonestInspection, reload);
   const [openId, setOpenId] = useState<string | null>(null);
   const [carrier, setCarrier] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
@@ -265,28 +281,22 @@ export default function SalesFulfilmentPage() {
                   o.status === "IN_TRANSIT" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Shipped — waiting for buyer confirmation (release now or
-                        start inspection). Sellers cannot release residual funds.
+                        {shippedAwaitingReceiptCopy("seller")}
                       </p>
                     </div>
                   ) : null}
                   {o.status === "DELIVERED" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Delivered — awaiting buyer decision (release now or start
-                        inspection). Residual stays protected.
+                        {receiptConfirmedCopy("seller")}
                       </p>
                     </div>
                   ) : null}
                   {o.status === "IN_INSPECTION" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Buyer inspection window active
-                        {o.inspectionEndsAt
-                          ? ` until ${fmtDate(o.inspectionEndsAt)}`
-                          : ""}
-                        . Buyer may release residual early or report a problem.
-                        Auto-release after the window if neither happens.
+                        {formatInspectionWindow(o.inspectionEndsAt)?.summary ||
+                          "Buyer inspection window is active. Buyer may release residual early or report a problem."}
                       </p>
                     </div>
                   ) : null}
@@ -301,10 +311,17 @@ export default function SalesFulfilmentPage() {
                   {o.status === "RELEASED" || o.status === "READY_TO_RELEASE" ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        {o.status === "RELEASED"
-                          ? "Completed — residual released to your Connect balance (when transfer succeeded)."
-                          : "Inspection complete — residual release in progress."}
+                        {sellerReleaseProgressCopy({
+                          status: o.status,
+                          payoutRail: o.payoutRail,
+                          gpHeadline: o.gpPayoutProgress?.headline,
+                        })}
                       </p>
+                      {o.gpPayoutProgress?.timing ? (
+                        <p className="mt-1 text-xs text-white/45">
+                          {o.gpPayoutProgress.timing}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                   {o.origin === "PRODUCT_CHECKOUT" ? (

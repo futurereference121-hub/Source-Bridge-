@@ -20,6 +20,8 @@ import {
   useProtectedOrders,
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
+import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
+import { formatInspectionWindow } from "@/lib/payments/fulfilment-display";
 
 type Order = ProtectedOrderSummary & {
   origin?: string;
@@ -100,6 +102,11 @@ export default function PurchasesPage() {
     accountId: account?.id ?? null,
   });
   const orders = rawOrders as Order[];
+  const soonestInspection = orders
+    .filter((o) => o.status === "IN_INSPECTION" && o.inspectionEndsAt)
+    .map((o) => o.inspectionEndsAt)
+    .sort()[0];
+  useInspectionDeadlineRefresh(soonestInspection, reload);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [issueId, setIssueId] = useState<string | null>(null);
   const [issueReason, setIssueReason] = useState("");
@@ -495,9 +502,10 @@ export default function PurchasesPage() {
                   ) : null}
                   {o.inspectionEndsAt && o.status === "IN_INSPECTION" ? (
                     <div>
-                      <dt className="text-white/40">Inspection ends</dt>
+                      <dt className="text-white/40">Inspection</dt>
                       <dd className="text-white/85">
-                        {fmtDate(o.inspectionEndsAt)}
+                        {formatInspectionWindow(o.inspectionEndsAt)?.summary ||
+                          `Inspection ends ${fmtDate(o.inspectionEndsAt)}`}
                       </dd>
                     </div>
                   ) : null}
@@ -619,12 +627,8 @@ export default function PurchasesPage() {
                 (o.status === "IN_INSPECTION" && o.actions.canReportIssue) ? (
                   <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
                     <p className="text-sm text-white/70">
-                      Inspection active
-                      {o.inspectionEndsAt
-                        ? ` until ${fmtDate(o.inspectionEndsAt)}`
-                        : ""}
-                      . Remaining residual auto-releases after the deadline
-                      unless you release early or report a problem.
+                      {formatInspectionWindow(o.inspectionEndsAt)?.summary ||
+                        "Inspection active. Remaining residual auto-releases after the deadline unless you release early or report a problem."}
                     </p>
                     {quoteKind === "FINAL" && showInsp ? (
                       <GpQuoteReview

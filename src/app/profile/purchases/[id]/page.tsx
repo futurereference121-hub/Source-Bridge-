@@ -14,6 +14,9 @@ import {
   useProtectedOrders,
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
+import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
+import { formatInspectionWindow } from "@/lib/payments/fulfilment-display";
+import type { GpBuyerPayoutProgress } from "@/lib/payments/payout-rail/proceeds-funding";
 
 type OrderDetail = ProtectedOrderSummary & {
   origin?: string;
@@ -24,7 +27,10 @@ type OrderDetail = ProtectedOrderSummary & {
   fundedAt: string | null;
   shippedAt: string | null;
   deliveredAt?: string | null;
+  inspectionEndsAt?: string | null;
   releasedAt?: string | null;
+  updatedAt?: string | null;
+  gpPayoutProgress?: GpBuyerPayoutProgress | null;
   createdAt?: string | null;
   trackingNumber: string;
   trackingCarrier: string;
@@ -64,7 +70,7 @@ export default function PurchaseOrderDetailPage() {
   const router = useRouter();
   const txnId = typeof params.id === "string" ? params.id : "";
   const { account, signedIn, authReady } = useAppUi();
-  const { orders, loading: listLoading } = useProtectedOrders({
+  const { orders, loading: listLoading, reload } = useProtectedOrders({
     role: "buyer",
     enabled: authReady && signedIn,
     accountId: account?.id ?? null,
@@ -81,7 +87,13 @@ export default function PurchaseOrderDetailPage() {
   useEffect(() => {
     const fromList = orders.find((o) => o.id === txnId);
     if (fromList) {
-      setOrder((prev) => ({ ...(prev || {}), ...fromList }) as OrderDetail);
+      setOrder((prev) => {
+        if (!prev) return fromList as OrderDetail;
+        const prevMs = Date.parse(String(prev.updatedAt || "")) || 0;
+        const nextMs = Date.parse(String((fromList as OrderDetail).updatedAt || "")) || 0;
+        if (nextMs && prevMs && nextMs < prevMs) return prev;
+        return { ...prev, ...fromList } as OrderDetail;
+      });
       setDetailError("");
     }
   }, [orders, txnId]);
@@ -101,7 +113,14 @@ export default function PurchaseOrderDetailPage() {
         if (!res.ok) throw new Error(data.error || "Order not found");
         if (!data.order) throw new Error("Order not found");
         if (!cancelled) {
-          setOrder(data.order as OrderDetail);
+          setOrder((prev) => {
+            const incoming = data.order as OrderDetail;
+            if (!prev) return incoming;
+            const prevMs = Date.parse(String(prev.updatedAt || "")) || 0;
+            const nextMs = Date.parse(String(incoming.updatedAt || "")) || 0;
+            if (nextMs && prevMs && nextMs < prevMs) return prev;
+            return { ...prev, ...incoming };
+          });
           setDetailError("");
         }
       } catch (err) {
@@ -116,6 +135,11 @@ export default function PurchaseOrderDetailPage() {
       cancelled = true;
     };
   }, [authReady, signedIn, txnId]);
+
+  useInspectionDeadlineRefresh(
+    order?.status === "IN_INSPECTION" ? order.inspectionEndsAt : null,
+    reload,
+  );
 
   if (!authReady) {
     return (
@@ -132,6 +156,7 @@ export default function PurchaseOrderDetailPage() {
 
   const display = order?.displayState;
   const model = order ? purchaseCardModel(order) : null;
+
   const residual =
     order?.books?.finalResidualMinor ??
     order?.books?.remainingProtectedSellerShareMinor ??
@@ -214,6 +239,24 @@ export default function PurchaseOrderDetailPage() {
                 <dt className="text-white/40">Date shipped</dt>
                 <dd className="text-white/85">{fmtDate(order.shippedAt)}</dd>
               </div>
+              {order.status === "IN_INSPECTION" && order.inspectionEndsAt ? (
+                <div className="sm:col-span-2">
+                  <dt className="text-white/40">Inspection</dt>
+                  <dd className="text-white/85">
+                    {formatInspectionWindow(order.inspectionEndsAt)?.summary ||
+                      `Inspection ends ${fmtDate(order.inspectionEndsAt)}`}
+                  </dd>
+                </div>
+              ) : null}
+              {order.gpPayoutProgress ? (
+                <div className="sm:col-span-2">
+                  <dt className="text-white/40">Payout</dt>
+                  <dd className="text-white/85">
+                    <p>{order.gpPayoutProgress.headline}</p>
+                    <p className="text-white/55">{order.gpPayoutProgress.timing}</p>
+                  </dd>
+                </div>
+              ) : null}
               {order.releasedAt ? (
                 <div>
                   <dt className="text-white/40">Completed</dt>

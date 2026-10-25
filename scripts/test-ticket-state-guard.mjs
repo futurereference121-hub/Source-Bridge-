@@ -123,6 +123,12 @@ assert.match(convRoute, /sinceVersion/);
 assert.match(inbox, /activityVersionRef/);
 assert.match(inbox, /sinceVersion=/);
 assert.match(card, /shouldApplyTicketUpdate/);
+assert.match(card, /inspectionEndsAt/);
+assert.match(card, /gpPayoutProgress/);
+assert.match(
+  fs.readFileSync(guardPath, "utf8"),
+  /ticketDisplayProgressKey/,
+);
 assert.match(
   fs.readFileSync(path.join(root, "src/lib/conversation-activity.ts"), "utf8"),
   /bumpConversationActivity/,

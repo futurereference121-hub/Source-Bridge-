@@ -41,7 +41,7 @@ function derivePurchaseDisplayState(input) {
   ) {
     return {
       phase: "SHIPPED_AWAITING_BUYER",
-      shortLabel: "SHIPPED — AWAITING BUYER CONFIRMATION",
+      shortLabel: "SHIPPED — AWAITING RECEIPT CONFIRMATION",
     };
   }
   if (["FUNDED", "PROCUREMENT_RELEASED"].includes(status)) {
@@ -69,7 +69,7 @@ function shouldApplyOrdersPayload(opts) {
   });
   assert.equal(shipped.phase, "SHIPPED_AWAITING_BUYER");
   assert.match(shipped.shortLabel, /SHIPPED/);
-  assert.match(shipped.shortLabel, /AWAITING BUYER/);
+  assert.match(shipped.shortLabel, /AWAITING RECEIPT/);
 }
 
 // TEST 5 — refund surfaces REFUNDED

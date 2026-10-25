@@ -31,6 +31,12 @@ const assert = (await import("node:assert/strict")).default;
 const { derivePurchaseDisplayState } = await import(
   "../src/lib/payments/purchase-display-state.ts"
 );
+const {
+  formatInspectionWindow,
+  sellerReleaseProgressCopy,
+  shippedAwaitingReceiptCopy,
+  CONNECT_RELEASED_SELLER_COPY,
+} = await import("../src/lib/payments/fulfilment-display.ts");
 const { deriveOutboundDisplayState, GP_POSTED_WORDING } = await import(
   "../src/lib/payments/payout-rail/outbound-display.ts"
 );
@@ -64,6 +70,44 @@ assert.equal(
   derivePurchaseDisplayState({ ...base, status: "READY_TO_RELEASE" }).label,
   "Ready to release residual",
 );
+assert.equal(
+  derivePurchaseDisplayState({
+    status: "AWAITING_SHIPMENT",
+    shippedAt: "2026-10-01T00:00:00.000Z",
+    trackingNumber: "1Z999",
+  }).label,
+  "Shipped — awaiting receipt confirmation",
+);
+assert.equal(
+  derivePurchaseDisplayState({ ...base, status: "DELIVERED" }).label,
+  "Item received — choose release or inspection",
+);
+assert.match(shippedAwaitingReceiptCopy("seller"), /awaiting receipt confirmation/);
+assert.doesNotMatch(shippedAwaitingReceiptCopy("seller"), /release now or start inspection/);
+assert.equal(
+  sellerReleaseProgressCopy({ status: "RELEASED", payoutRail: "STRIPE_CONNECT" }),
+  CONNECT_RELEASED_SELLER_COPY,
+);
+assert.match(
+  sellerReleaseProgressCopy({
+    status: "RELEASED",
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    gpHeadline: "Release confirmed. Source Bridge is funding your sourcer’s international payout. No further action is needed.",
+  }) || "",
+  /is funding/,
+);
+{
+  const windowCopy = formatInspectionWindow("2026-10-25T16:00:00.000Z", Date.parse("2026-10-25T12:00:00.000Z"));
+  assert.equal(windowCopy?.expired, false);
+  assert.match(windowCopy?.remainingLabel || "", /4 hours/);
+  assert.match(windowCopy?.summary || "", /Inspection ends/);
+  assert.doesNotMatch(windowCopy?.summary || "", /3–6|3-6 day|within three days of release/);
+}
+{
+  const ended = formatInspectionWindow("2026-10-25T11:00:00.000Z", Date.parse("2026-10-25T12:00:00.000Z"));
+  assert.equal(ended?.expired, true);
+  assert.match(ended?.summary || "", /refresh from the server/);
+}
 
 const returned = deriveOutboundDisplayState("RETURNED");
 assert.equal(returned.buyerLabel, "Payout returned — Source Bridge is reviewing");
@@ -166,5 +210,20 @@ const reviewSrc = fs.readFileSync(
 assert.match(reviewSrc, /action: "prepare" \| "confirm"/);
 assert.doesNotMatch(reviewSrc, /useEffect\(/);
 assert.match(reviewSrc, /Request a fresh estimate before release/);
+
+const salesSrc = fs.readFileSync(path.join(root, "src/app/profile/sales/page.tsx"), "utf8");
+const purchasesSrc = fs.readFileSync(path.join(root, "src/app/profile/purchases/page.tsx"), "utf8");
+const cardSrc = fs.readFileSync(path.join(root, "src/components/messaging/PaymentTicketCard.tsx"), "utf8");
+const detailSrc = fs.readFileSync(path.join(root, "src/app/profile/purchases/[id]/page.tsx"), "utf8");
+assert.match(salesSrc, /sellerReleaseProgressCopy/);
+assert.match(salesSrc, /shippedAwaitingReceiptCopy/);
+assert.doesNotMatch(salesSrc, /released to your Connect balance/);
+assert.match(purchasesSrc, /formatInspectionWindow/);
+assert.match(purchasesSrc, /useInspectionDeadlineRefresh/);
+assert.match(detailSrc, /gpPayoutProgress/);
+assert.match(cardSrc, /formatInspectionWindow/);
+assert.match(cardSrc, /hideReleaseActions/);
+assert.doesNotMatch(cardSrc, /seller payout waits until delivery\/inspection/);
+assert.doesNotMatch(cardSrc + salesSrc + purchasesSrc, /3–6 day|3-6 day/);
 
 console.log("gp unavailable ui states: PASS");
