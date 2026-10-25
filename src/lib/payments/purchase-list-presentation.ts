@@ -5,7 +5,7 @@
 import { formatMinor } from "@/lib/payments/money";
 import { purchaseQuoteReviewKind } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
-  GP_FUNDING_HOLD_COPY,
+  gpAwaitingFundsListPhrase,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 
@@ -54,7 +54,7 @@ export type PurchaseCardModel = {
 export function purchasePayoutPhrase(phase: string | null | undefined): string | null {
   switch (phase) {
     case "awaiting_funds":
-      return GP_FUNDING_HOLD_COPY;
+      return gpAwaitingFundsListPhrase("unknown");
     case "awaiting_minimum":
       return "Release authorized — payout awaiting minimum";
     case "pending":
@@ -101,13 +101,21 @@ export function purchaseCardModel(order: PurchaseCardInput): PurchaseCardModel {
     order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
       ? purchasePayoutPhrase(order.globalPayouts?.phase)
       : null;
+  const awaitingFundsLabel =
+    order.payoutRail === "STRIPE_GLOBAL_PAYOUTS" &&
+    order.globalPayouts?.phase === "awaiting_funds" &&
+    order.globalPayouts.buyerLabel
+      ? order.globalPayouts.buyerLabel
+      : null;
   const payoutLabel = order.gpPayoutProgress?.headline
     ? order.gpPayoutProgress.headline
-    : order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
-      ? payoutPhrase
-        ? `Global Payouts — ${payoutPhrase}`
-        : "Global Payouts"
-      : null;
+    : awaitingFundsLabel
+      ? awaitingFundsLabel
+      : order.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+        ? payoutPhrase
+          ? `Global Payouts — ${payoutPhrase}`
+          : "Global Payouts"
+        : null;
   const quoteKind = purchaseQuoteReviewKind(order);
   const offersRelease =
     !order.gpPayoutProgress?.hideReleaseActions &&

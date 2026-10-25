@@ -73,8 +73,41 @@ assert.equal(failed.buyerLabel, "Release not completed — funds remain protecte
 const funding = deriveOutboundDisplayState("AWAITING_FA_FUNDS");
 assert.equal(
   funding.buyerLabel,
-  "Release confirmed. Source Bridge is reviewing the payout. No further action is needed.",
+  "Release confirmed. Checking payout status. No further action is needed.",
 );
+assert.equal(funding.needsAdminAction, false);
+assert.doesNotMatch(funding.buyerLabel, /within three days|is funding/);
+const fundingPending = deriveOutboundDisplayState("AWAITING_FA_FUNDS", "GP_FA_BALANCE_SHORT", {
+  proceedsFundingEnabled: true,
+  chargeAvailable: false,
+  fundingStatus: "AWAITING_SETTLEMENT",
+});
+assert.match(fundingPending.buyerLabel, /once your payment is available/);
+const fundingReview = deriveOutboundDisplayState("AWAITING_FA_FUNDS", "GP_INITIATION_DISABLED", {
+  proceedsFundingEnabled: false,
+  failureCode: "GP_INITIATION_DISABLED",
+});
+assert.match(fundingReview.buyerLabel, /reviewing the payout/);
+assert.equal(fundingReview.needsAdminAction, true);
+const fundingProgress = deriveOutboundDisplayState("AWAITING_FA_FUNDS", "GP_FA_BALANCE_SHORT", {
+  proceedsFundingEnabled: true,
+  chargeAvailable: true,
+  fundingStatus: "SHORT",
+});
+assert.match(fundingProgress.buyerLabel, /waiting to fund/);
+assert.doesNotMatch(fundingProgress.buyerLabel, /is funding|being processed|reviewing/);
+assert.doesNotMatch(fundingProgress.buyerLabel, /within three days/);
+const fundingPosted = deriveOutboundDisplayState("AWAITING_FA_FUNDS", null, {
+  proceedsFundingEnabled: true,
+  fundingStatus: "POSTED",
+});
+assert.match(fundingPosted.buyerLabel, /funding is confirmed/);
+const fundingActive = deriveOutboundDisplayState("AWAITING_FA_FUNDS", null, {
+  proceedsFundingEnabled: true,
+  fundingStatus: "FUNDING",
+});
+assert.match(fundingActive.buyerLabel, /is funding/);
+assert.doesNotMatch(fundingActive.buyerLabel, /waiting to fund/);
 const review = deriveOutboundDisplayState("PROCESSING", "GP_UNDER_REVIEW");
 assert.equal(review.sellerLabel, "Payout under review");
 assert.equal(review.pendingProvider, true);

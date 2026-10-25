@@ -157,7 +157,20 @@ const payoutPhrases = {
   failed: purchasePayoutPhrase("failed"),
   returned: purchasePayoutPhrase("returned"),
 };
-assert.match(payoutPhrases.awaiting_funds, /Release authorized/);
+assert.match(payoutPhrases.awaiting_funds, /checking payout status/);
+assert.doesNotMatch(payoutPhrases.awaiting_funds, /reviewing|is funding|three days/);
+const awaitingModel = purchaseCardModel({
+  ...completedGp,
+  id: "fixture-gp-awaiting",
+  status: "READY_TO_RELEASE",
+  globalPayouts: {
+    phase: "awaiting_funds",
+    buyerLabel:
+      "Release confirmed. Your payment is available. Source Bridge is waiting to fund your sourcer\u2019s international payout. No further action is needed.",
+  },
+});
+assert.match(awaitingModel.payoutLabel || "", /waiting to fund/);
+assert.doesNotMatch(awaitingModel.payoutLabel || "", /reviewing|is funding|three days/);
 assert.match(payoutPhrases.awaiting_minimum, /Release authorized/);
 assert.match(payoutPhrases.pending, /Payout pending/);
 assert.match(payoutPhrases.processing, /Payout confirming/);
@@ -340,10 +353,11 @@ assert.doesNotMatch(page, /quoteConfirmationRequired/);
 assert.match(detail, /purchaseCardModel/);
 assert.match(detail, /model\?\.quoteKind/);
 assert.match(fulfilment, /globalPayouts: globalPayoutsBuyerDisplay/);
-assert.match(fulfilment, /select: \{ status: true, failureCode: true \}/);
+assert.match(fulfilment, /failureCode: true/);
+assert.match(fulfilment, /gpProceedsFunding/);
 assert.doesNotMatch(
   fulfilment.slice(fulfilment.indexOf("outboundPaymentAttempts:")),
-  /stripeOutboundPaymentId|stripeRecipientId|failureMessage/,
+  /stripeRecipientId|failureMessage/,
 );
 
 const hook = fs.readFileSync(path.join(root, "src/hooks/useProtectedOrders.ts"), "utf8");

@@ -9,7 +9,7 @@ import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPayment
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
-  GP_FUNDING_HOLD_COPY,
+  GP_FUNDING_CHECKING_COPY,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import {
@@ -2691,7 +2691,7 @@ export function PaymentTicketCard({
         </div>
       ) : releaseHold ? (
         <p className="mt-3 text-xs text-white/80" data-testid="gp-payout-progress">
-          {GP_FUNDING_HOLD_COPY}
+          {GP_FUNDING_CHECKING_COPY}
         </p>
       ) : null}
       {error ? <p className="mt-3 text-xs text-amber-300">{error}</p> : null}

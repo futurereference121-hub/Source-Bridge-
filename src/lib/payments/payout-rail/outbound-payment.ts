@@ -37,7 +37,8 @@ import {
   readFinancialAccountBalance,
 } from "@/lib/payments/payout-rail/fa-funding";
 import {
-  GP_FUNDING_HOLD_COPY,
+  classifyGpAwaitingFunds,
+  gpAwaitingFundsHeadline,
   proceedsFundingAllowsOutbound,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import {
@@ -980,7 +981,7 @@ async function executeOutboundRelease(opts: {
         lastAttemptAt: new Date(),
       },
     });
-    throw Object.assign(new Error(GP_FUNDING_HOLD_COPY), {
+    throw Object.assign(new Error(gpAwaitingFundsHeadline("funding_awaited")), {
       status: 409,
       code: "GP_AWAITING_FA_FUNDS",
     });
@@ -1022,10 +1023,29 @@ async function executeOutboundRelease(opts: {
       },
     });
     // Preserve entitlement — do not advance domain transferred counters.
-    throw Object.assign(new Error(GP_FUNDING_HOLD_COPY), {
-      status: 409,
-      code: "GP_AWAITING_FA_FUNDS",
-    });
+    throw Object.assign(
+      new Error(
+        gpAwaitingFundsHeadline(
+          classifyGpAwaitingFunds({
+            proceedsFundingEnabled: true,
+            failureCode: funding.code,
+            fundingStatus: proceedsRow?.status,
+            chargeAvailable:
+              proceedsRow?.status === "POSTED" ||
+              proceedsRow?.status === "FUNDING" ||
+              proceedsRow?.status === "SHORT"
+                ? true
+                : proceedsRow?.status === "AWAITING_SETTLEMENT"
+                  ? false
+                  : null,
+          }),
+        ),
+      ),
+      {
+        status: 409,
+        code: "GP_AWAITING_FA_FUNDS",
+      },
+    );
   }
 
   if (!canInitiateGlobalPayoutsMoney(txnMode)) {

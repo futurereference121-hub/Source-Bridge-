@@ -31,13 +31,84 @@ export const GP_RELEASE_WAITING_COPY =
 export const GP_FUNDING_HOLD_COPY =
   "Release confirmed. Source Bridge is reviewing the payout. No further action is needed.";
 
-/** Charge is available and the financial-account funding payout has not been sent. */
+/** Funding row unread / no confirmed charge state. */
+export const GP_FUNDING_CHECKING_COPY =
+  "Release confirmed. Checking payout status. No further action is needed.";
+
+/**
+ * Charge is available and a funding payout has not started.
+ * Do not imply that a transfer is underway.
+ */
 export const GP_FUNDING_PROGRESS_COPY =
-  "Release confirmed. Your payment is available. Source Bridge is funding your sourcer\u2019s international payout automatically. No further action is needed.";
+  "Release confirmed. Your payment is available. Source Bridge is waiting to fund your sourcer\u2019s international payout. No further action is needed.";
 
 /** Funding payout is in progress after the charge became available. */
 export const GP_FUNDING_PROCESSING_COPY =
-  "Release confirmed. Your sourcer\u2019s international payout is being processed. No further action is needed.";
+  "Release confirmed. Source Bridge is funding your sourcer\u2019s international payout. No further action is needed.";
+
+/** This purchase's funding credit is posted. Further progress is the outbound payout. */
+export const GP_FUNDING_CONFIRMED_COPY =
+  "Release confirmed. Payout funding is confirmed. No further action is needed.";
+
+export type GpAwaitingFundsKind =
+  | "unknown"
+  | "payment_pending"
+  | "funding_awaited"
+  | "funding_in_progress"
+  | "funding_confirmed"
+  | "review";
+
+/**
+ * AWAITING_FA_FUNDS is a seller-outbound gate, not a buyer-status. Review is
+ * only a genuine configuration hold. Unknown is not payment-pending.
+ */
+export function classifyGpAwaitingFunds(opts: {
+  proceedsFundingEnabled?: boolean | null;
+  configurationBlocked?: boolean | null;
+  chargeAvailable?: boolean | null;
+  fundingStatus?: string | null;
+  failureCode?: string | null;
+}): GpAwaitingFundsKind {
+  const failure = String(opts.failureCode || "").trim();
+  const status = String(opts.fundingStatus || "").trim().toUpperCase();
+  if (
+    opts.proceedsFundingEnabled === false ||
+    opts.configurationBlocked === true ||
+    failure === "GP_INITIATION_DISABLED" ||
+    scheduleBlocksBuyerFunding(failure)
+  ) {
+    return "review";
+  }
+  if (status === "POSTED") return "funding_confirmed";
+  if (status === "FUNDING") return "funding_in_progress";
+  if (status === "SHORT") return "funding_awaited";
+  if (status === "AWAITING_SETTLEMENT" || opts.chargeAvailable === false) return "payment_pending";
+  if (opts.chargeAvailable === true) return "funding_awaited";
+  return "unknown";
+}
+
+export function gpAwaitingFundsHeadline(kind: GpAwaitingFundsKind): string {
+  if (kind === "review") return GP_FUNDING_HOLD_COPY;
+  if (kind === "unknown") return GP_FUNDING_CHECKING_COPY;
+  if (kind === "payment_pending") return GP_RELEASE_WAITING_COPY;
+  if (kind === "funding_in_progress") return GP_FUNDING_PROCESSING_COPY;
+  if (kind === "funding_confirmed") return GP_FUNDING_CONFIRMED_COPY;
+  return GP_FUNDING_PROGRESS_COPY;
+}
+
+/** Short list phrase. Does not promise a three-day arrival. */
+export function gpAwaitingFundsListPhrase(kind: GpAwaitingFundsKind): string {
+  if (kind === "review") return "Release confirmed — Source Bridge is reviewing the payout";
+  if (kind === "unknown") return "Release confirmed — checking payout status";
+  if (kind === "funding_in_progress") {
+    return "Release authorized — funding your sourcer\u2019s international payout";
+  }
+  if (kind === "funding_confirmed") return "Release authorized — payout funding is confirmed";
+  if (kind === "funding_awaited") {
+    return "Release authorized — waiting to fund your sourcer\u2019s international payout";
+  }
+  return "Release authorized — waiting for your payment to become available";
+}
 
 /** Stripe retains idempotency results for 24 hours. After that, the same key can create a new payout. */
 export const STRIPE_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -45,6 +116,7 @@ export const STRIPE_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const USUAL_CLEARING_BUSINESS_DAYS = 3;
 
 export type GpBuyerPayoutPhase =
+  | "checking"
   | "waiting_settlement"
   | "waiting_funding"
   | "review"
@@ -846,7 +918,10 @@ export function describeGpBuyerPayout(opts: {
       hideReleaseActions: true,
     };
   }
-  if ((outbound === "PROCESSING" || outbound === "PENDING") && opts.outboundIdPresent) {
+  if (
+    (outbound === "PROCESSING" || outbound === "PENDING") &&
+    (opts.outboundIdPresent || String(opts.fundingStatus || "").toUpperCase() === "POSTED")
+  ) {
     return {
       phase: "sending",
       headline: "Sending your sourcer\u2019s international payout.",
@@ -866,18 +941,34 @@ export function describeGpBuyerPayout(opts: {
     };
   }
   if (!opts.releaseAuthorized && opts.txnStatus !== "READY_TO_RELEASE") return null;
-  if (!opts.proceedsFundingEnabled || opts.configurationBlocked) {
+  const kind = classifyGpAwaitingFunds({
+    proceedsFundingEnabled: opts.proceedsFundingEnabled === true,
+    configurationBlocked: Boolean(opts.configurationBlocked),
+    chargeAvailable:
+      opts.chargeAvailable === true ? true : opts.chargeAvailable === false ? false : null,
+    fundingStatus: opts.fundingStatus,
+    failureCode: opts.failureCode,
+  });
+  if (kind === "review") {
     return {
       phase: "review",
-      headline: GP_FUNDING_HOLD_COPY,
+      headline: gpAwaitingFundsHeadline(kind),
       timing: "No further action is needed from you.",
       hideReleaseActions: true,
     };
   }
-  if (!opts.chargeAvailable) {
+  if (kind === "unknown") {
+    return {
+      phase: "checking",
+      headline: gpAwaitingFundsHeadline(kind),
+      timing: "No further action is needed.",
+      hideReleaseActions: true,
+    };
+  }
+  if (kind === "payment_pending") {
     return {
       phase: "waiting_settlement",
-      headline: GP_RELEASE_WAITING_COPY,
+      headline: gpAwaitingFundsHeadline(kind),
       timing: clearingTiming({
         fundedAt: opts.fundedAt ?? null,
         availableOn: opts.availableOn ?? null,
@@ -887,13 +978,22 @@ export function describeGpBuyerPayout(opts: {
       hideReleaseActions: true,
     };
   }
-  const processing = opts.fundingStatus === "FUNDING";
+  if (kind === "funding_confirmed") {
+    return {
+      phase: "waiting_funding",
+      headline: gpAwaitingFundsHeadline(kind),
+      timing:
+        "Payout funding is confirmed. Further progress follows the payout status. This is not a promise that the sourcer is paid within three days of release.",
+      hideReleaseActions: true,
+    };
+  }
   return {
     phase: "waiting_funding",
-    headline: processing ? GP_FUNDING_PROCESSING_COPY : GP_FUNDING_PROGRESS_COPY,
-    timing: processing
-      ? "Your payment is available. Source Bridge is moving the available amount into the international payout balance. This is not a promise that the sourcer is paid within three days of release."
-      : "Your payment is available. The international payout starts automatically once that balance is ready. This is not a promise that the sourcer is paid within three days of release.",
+    headline: gpAwaitingFundsHeadline(kind),
+    timing:
+      kind === "funding_in_progress"
+        ? "Source Bridge is funding the international payout balance. This is not a promise that the sourcer is paid within three days of release."
+        : "Your payment is available. Payout funding has not started. This is not a promise that the sourcer is paid within three days of release.",
     hideReleaseActions: true,
   };
 }

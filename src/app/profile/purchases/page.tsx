@@ -11,7 +11,7 @@ import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { PurchaseRecordedAmounts } from "@/components/payments/PurchaseRecordedAmounts";
 import { purchaseCardModel } from "@/lib/payments/purchase-list-presentation";
 import {
-  GP_FUNDING_HOLD_COPY,
+  GP_FUNDING_CHECKING_COPY,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import { purchasesPanelState } from "@/lib/payments/purchase-orders-load";
@@ -154,7 +154,7 @@ export default function PurchasesPage() {
       if (decision === "RELEASE_NOW") {
         showToast(
           data.waitingForProceeds
-            ? data.message || GP_FUNDING_HOLD_COPY
+            ? data.message || GP_FUNDING_CHECKING_COPY
             : data.transferTriggered
               ? "Residual seller funds released"
               : data.alreadyConfirmed
@@ -510,7 +510,7 @@ export default function PurchasesPage() {
                   </div>
                 ) : releaseHold[o.id] ? (
                   <p className="mt-4 text-sm text-white/80" data-testid="purchase-gp-progress">
-                    {GP_FUNDING_HOLD_COPY}
+                    {GP_FUNDING_CHECKING_COPY}
                   </p>
                 ) : null}
 

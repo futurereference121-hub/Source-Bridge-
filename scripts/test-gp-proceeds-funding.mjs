@@ -40,6 +40,8 @@ const quoteConfirmation = await import(
 
 const {
   GP_FUNDING_HOLD_COPY,
+  GP_FUNDING_CHECKING_COPY,
+  GP_FUNDING_CONFIRMED_COPY,
   GP_FUNDING_PROCESSING_COPY,
   GP_FUNDING_PROGRESS_COPY,
   GP_PROCEEDS_FUNDING_MECHANISM,
@@ -60,6 +62,9 @@ const {
   matchFundingCredit,
   proceedsFundingAllowsOutbound,
   fundingRowAfterCompletedPurchase,
+  classifyGpAwaitingFunds,
+  gpAwaitingFundsHeadline,
+  gpAwaitingFundsListPhrase,
   redactReceivedCreditInventory,
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
@@ -163,7 +168,11 @@ assert.match(read("src/lib/payments/fulfilment.ts"), /proceedsFundingEnabled: is
 assert.match(GP_RELEASE_WAITING_COPY, /is available/);
 assert.doesNotMatch(GP_RELEASE_WAITING_COPY, /clears|cleared/);
 assert.match(GP_FUNDING_PROGRESS_COPY, /is available/);
-assert.doesNotMatch(GP_FUNDING_PROGRESS_COPY, /cleared/);
+assert.match(GP_FUNDING_PROGRESS_COPY, /waiting to fund/);
+assert.doesNotMatch(GP_FUNDING_PROGRESS_COPY, /cleared|is funding|being processed/);
+assert.match(GP_FUNDING_PROCESSING_COPY, /is funding/);
+assert.doesNotMatch(GP_FUNDING_PROCESSING_COPY, /being processed|within three days/);
+assert.equal(GP_FUNDING_CHECKING_COPY, "Release confirmed. Checking payout status. No further action is needed.");
 const fundBody = runner.slice(runner.indexOf("async function fundOne"), runner.indexOf("async function confirmLegs"));
 assert.ok(fundBody.indexOf("pendingLegs.length") < fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED"));
 assert.ok(fundBody.indexOf("GP_FUNDING_ALREADY_COMPLETED") < fundBody.indexOf("prepareFundingQuote"));
@@ -251,12 +260,14 @@ assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /!== "T
 
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
 assert.match(card, /gpPayoutProgress\?\.hideReleaseActions/);
-assert.match(card, /GP_FUNDING_HOLD_COPY/);
+assert.match(card, /GP_FUNDING_CHECKING_COPY/);
+assert.doesNotMatch(card, /GP_FUNDING_HOLD_COPY/);
 assert.doesNotMatch(card, /continues automatically/);
 assert.match(card, /releaseHold/);
 const purchases = read("src/app/profile/purchases/page.tsx");
 assert.match(purchases, /gpPayoutProgress\?\.hideReleaseActions/);
-assert.match(purchases, /GP_FUNDING_HOLD_COPY/);
+assert.match(purchases, /GP_FUNDING_CHECKING_COPY/);
+assert.doesNotMatch(purchases, /GP_FUNDING_HOLD_COPY/);
 assert.doesNotMatch(purchases, /continues automatically/);
 
 const started = process.hrtime.bigint();
@@ -1127,6 +1138,28 @@ const fundingProgress = describeGpBuyerPayout({
 assert.equal(fundingProgress.phase, "waiting_funding");
 assert.equal(fundingProgress.headline, GP_FUNDING_PROGRESS_COPY);
 assert.equal(fundingProgress.hideReleaseActions, true);
+assert.doesNotMatch(fundingProgress.headline, /is funding|being processed|automatically/);
+assert.equal(classifyGpAwaitingFunds({}), "unknown");
+assert.equal(classifyGpAwaitingFunds({ proceedsFundingEnabled: false }), "review");
+assert.equal(classifyGpAwaitingFunds({ configurationBlocked: true }), "review");
+assert.equal(classifyGpAwaitingFunds({ failureCode: "GP_INITIATION_DISABLED" }), "review");
+assert.equal(classifyGpAwaitingFunds({ chargeAvailable: false }), "payment_pending");
+assert.equal(classifyGpAwaitingFunds({ fundingStatus: "AWAITING_SETTLEMENT" }), "payment_pending");
+assert.equal(classifyGpAwaitingFunds({ chargeAvailable: true }), "funding_awaited");
+assert.equal(classifyGpAwaitingFunds({ fundingStatus: "SHORT" }), "funding_awaited");
+assert.equal(classifyGpAwaitingFunds({ fundingStatus: "FUNDING" }), "funding_in_progress");
+assert.equal(classifyGpAwaitingFunds({ fundingStatus: "POSTED" }), "funding_confirmed");
+assert.equal(gpAwaitingFundsHeadline("unknown"), GP_FUNDING_CHECKING_COPY);
+assert.equal(gpAwaitingFundsHeadline("payment_pending"), GP_RELEASE_WAITING_COPY);
+assert.equal(gpAwaitingFundsHeadline("review"), GP_FUNDING_HOLD_COPY);
+assert.equal(gpAwaitingFundsHeadline("funding_in_progress"), GP_FUNDING_PROCESSING_COPY);
+assert.equal(gpAwaitingFundsHeadline("funding_awaited"), GP_FUNDING_PROGRESS_COPY);
+assert.equal(gpAwaitingFundsHeadline("funding_confirmed"), GP_FUNDING_CONFIRMED_COPY);
+assert.match(gpAwaitingFundsListPhrase("payment_pending"), /become available/);
+assert.match(gpAwaitingFundsListPhrase("unknown"), /checking payout status/);
+assert.doesNotMatch(gpAwaitingFundsHeadline("payment_pending"), /within three days of release/);
+assert.doesNotMatch(gpAwaitingFundsHeadline("funding_in_progress"), /within three days of release/);
+assert.doesNotMatch(gpAwaitingFundsListPhrase("funding_in_progress"), /three days/);
 assert.doesNotMatch(fundingProgress.headline, /once your payment clears/);
 assert.doesNotMatch(fundingProgress.timing, /still clearing/);
 const processing = describeGpBuyerPayout({
@@ -1140,6 +1173,38 @@ const processing = describeGpBuyerPayout({
 });
 assert.equal(processing.headline, GP_FUNDING_PROCESSING_COPY);
 assert.equal(processing.hideReleaseActions, true);
+const checking = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  proceedsFundingEnabled: true,
+  now,
+});
+assert.equal(checking.phase, "checking");
+assert.equal(checking.headline, GP_FUNDING_CHECKING_COPY);
+assert.equal(checking.hideReleaseActions, true);
+const postedFunding = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  fundingStatus: "POSTED",
+  chargeAvailable: true,
+  proceedsFundingEnabled: true,
+  now,
+});
+assert.equal(postedFunding.headline, GP_FUNDING_CONFIRMED_COPY);
+assert.equal(postedFunding.hideReleaseActions, true);
+const postedSending = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundStatus: "PROCESSING",
+  outboundIdPresent: true,
+  fundingStatus: "POSTED",
+  proceedsFundingEnabled: true,
+  now,
+});
+assert.equal(postedSending.phase, "sending");
+assert.equal(postedSending.hideReleaseActions, true);
 
 const shape = await import(
   pathToFileURL(path.join(root, "src/lib/payments/payout-rail/proceeds-preflight-shape.ts")).href
@@ -1264,6 +1329,10 @@ assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayment
 const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
 assert.match(outbound, /proceedsFundingAllowsOutbound/);
 assert.match(outbound, /GP_PURCHASE_FUNDING_UNCONFIRMED/);
+assert.match(outbound, /gpAwaitingFundsHeadline/);
+assert.doesNotMatch(outbound, /GP_FUNDING_HOLD_COPY/);
+assert.match(read("src/lib/payments/payout-rail/outbound-display.ts"), /classifyGpAwaitingFunds/);
+assert.match(read("src/app/api/payments/confirm-receipt/route.ts"), /GP_FUNDING_CHECKING_COPY/);
 assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /balanceTransferPayoutId/);
 assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /rec\.payout/);
 assert.match(read("src/lib/payments/flags.ts"), /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/);

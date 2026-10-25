@@ -4,7 +4,19 @@
  * Buyer progress for an authorized payout comes from the server status.
  * This label does not promise that funding will continue.
  */
-import { GP_FUNDING_HOLD_COPY } from "./proceeds-funding.ts";
+import {
+  classifyGpAwaitingFunds,
+  gpAwaitingFundsHeadline,
+  type GpAwaitingFundsKind,
+} from "./proceeds-funding.ts";
+
+export type OutboundFundingDisplay = {
+  proceedsFundingEnabled?: boolean | null;
+  configurationBlocked?: boolean | null;
+  chargeAvailable?: boolean | null;
+  fundingStatus?: string | null;
+  failureCode?: string | null;
+};
 
 export type OutboundDisplayPhase =
   | "none"
@@ -53,6 +65,7 @@ export const GP_POSTED_WORDING =
 export function deriveOutboundDisplayState(
   status: string | null | undefined,
   failureCode?: string | null,
+  funding?: OutboundFundingDisplay | null,
 ): OutboundDisplayState {
   const s = String(status || "")
     .trim()
@@ -97,15 +110,34 @@ export function deriveOutboundDisplayState(
         pendingProvider: true,
         needsAdminAction: false,
       };
-    case "AWAITING_FA_FUNDS":
+    case "AWAITING_FA_FUNDS": {
+      const kind: GpAwaitingFundsKind = classifyGpAwaitingFunds({
+        proceedsFundingEnabled: funding?.proceedsFundingEnabled,
+        configurationBlocked: funding?.configurationBlocked,
+        chargeAvailable: funding?.chargeAvailable,
+        fundingStatus: funding?.fundingStatus,
+        failureCode: funding?.failureCode ?? failureCode,
+      });
       return {
         phase: "awaiting_funds",
-        sellerLabel: "Payout waiting on platform funding",
-        buyerLabel: GP_FUNDING_HOLD_COPY,
-        adminLabel: "AWAITING_FA_FUNDS",
+        sellerLabel:
+          kind === "review"
+            ? "Payout under review"
+            : kind === "funding_in_progress"
+              ? "Payout funding in progress"
+              : kind === "funding_confirmed"
+                ? "Payout funding confirmed"
+                : kind === "funding_awaited"
+                  ? "Payout waiting to be funded"
+                  : kind === "unknown"
+                    ? "Checking payout status"
+                    : "Payout waiting for payment to become available",
+        buyerLabel: gpAwaitingFundsHeadline(kind),
+        adminLabel: `AWAITING_FA_FUNDS:${kind}`,
         pendingProvider: true,
-        needsAdminAction: true,
+        needsAdminAction: kind === "review",
       };
+    }
     case "AWAITING_MINIMUM":
       return {
         phase: "awaiting_minimum",

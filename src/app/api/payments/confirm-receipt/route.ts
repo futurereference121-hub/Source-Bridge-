@@ -7,7 +7,7 @@ import { formatMinor } from "@/lib/payments/money";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { getPaymentTicket } from "@/lib/payments/tickets";
 import { prisma } from "@/lib/db";
-import { GP_FUNDING_HOLD_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
+import { GP_FUNDING_CHECKING_COPY } from "@/lib/payments/payout-rail/proceeds-funding";
 
 export const runtime = "nodejs";
 
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
           "headline" in ticket.gpPayoutProgress &&
           typeof ticket.gpPayoutProgress.headline === "string"
             ? ticket.gpPayoutProgress.headline
-            : GP_FUNDING_HOLD_COPY)
+            : GP_FUNDING_CHECKING_COPY)
         : (result as { pendingProvider?: boolean }).pendingProvider
           ? "Release submitted. Payout is confirming with the provider — not yet marked paid."
           : undefined,

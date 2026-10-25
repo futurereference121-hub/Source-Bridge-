@@ -160,10 +160,22 @@ export type ConfirmReceiptDecision =
 function globalPayoutsBuyerDisplay(t: {
   payoutRail?: string | null;
   outboundPaymentAttempts?: { status?: string | null; failureCode?: string | null }[];
+  gpProceedsFunding?: { status?: string | null; availableOn?: Date | null; failureCode?: string | null } | null;
 }): { phase: string; buyerLabel: string } | null {
   if (String(t.payoutRail || "") !== "STRIPE_GLOBAL_PAYOUTS") return null;
   const attempt = t.outboundPaymentAttempts?.[0];
-  const state = deriveOutboundDisplayState(attempt?.status, attempt?.failureCode);
+  const funding = t.gpProceedsFunding;
+  const state = deriveOutboundDisplayState(attempt?.status, attempt?.failureCode, {
+    proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
+    configurationBlocked: scheduleBlocksBuyerFunding(funding?.failureCode),
+    chargeAvailable:
+      funding?.status === "POSTED" ||
+      funding?.status === "FUNDING" ||
+      funding?.status === "SHORT" ||
+      (funding?.availableOn != null && funding.availableOn.getTime() <= Date.now()),
+    fundingStatus: funding?.status,
+    failureCode: attempt?.failureCode || funding?.failureCode,
+  });
   return { phase: state.phase, buyerLabel: state.buyerLabel };
 }
 
