@@ -34,6 +34,7 @@ const { derivePurchaseDisplayState } = await import(
 );
 const {
   emptyOrdersListClientState,
+  mergeOrdersPreserveAuthorizedRelease,
   ordersListSinceQuery,
   parseOrdersListBody,
   purchasesPanelState,
@@ -42,8 +43,14 @@ const {
 const { purchaseCardModel, purchasePayoutPhrase } = await import(
   "../src/lib/payments/purchase-list-presentation.ts"
 );
-const { describeProcurementStage } = await import(
+const { describeProcurementStage, procurementAdvanceAuthorized } = await import(
   "../src/lib/payments/fulfilment-display.ts"
+);
+const { shouldApplyTicketUpdate } = await import(
+  "../src/lib/payments/ticket-state-guard.ts"
+);
+const { describeGpBuyerPayout, GP_PROCUREMENT_PENDING_COPY } = await import(
+  "../src/lib/payments/payout-rail/proceeds-funding.ts"
 );
 
 const formatGbp = (minor) => `£${(minor / 100).toFixed(2)}`;
@@ -83,6 +90,105 @@ const connectAccepted = describeProcurementStage({
   formatMinor: formatGbp,
 });
 assert.equal(connectAccepted.detail, gpAccepted.detail);
+const authorizedPending = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 0,
+  remainingHeldMinor: 1500,
+  status: "FUNDED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(authorizedPending.headline, /Item release authorized — payout pending: £20.00/);
+assert.doesNotMatch(authorizedPending.detail || "", /Buyer authorizes/);
+assert.match(authorizedPending.detail, /Remaining £15.00/);
+assert.equal(
+  procurementAdvanceAuthorized({
+    transferredMinor: 0,
+    status: "FUNDED",
+    outboundKind: "PROCUREMENT",
+    outboundStatus: "AWAITING_FA_FUNDS",
+  }),
+  true,
+);
+assert.equal(
+  procurementAdvanceAuthorized({
+    transferredMinor: 0,
+    status: "FUNDED",
+    outboundKind: "PROCUREMENT",
+    outboundStatus: "FAILED",
+    hideReleaseActions: true,
+  }),
+  false,
+);
+assert.equal(
+  describeGpBuyerPayout({
+    releaseAuthorized: true,
+    txnStatus: "FUNDED",
+    outboundKind: "PROCUREMENT",
+    outboundStatus: "AWAITING_FA_FUNDS",
+    fundingStatus: "AWAITING_SETTLEMENT",
+    chargeAvailable: false,
+    proceedsFundingEnabled: true,
+    now: new Date("2026-10-25T12:00:00.000Z"),
+  }).headline,
+  GP_PROCUREMENT_PENDING_COPY,
+);
+assert.equal(
+  shouldApplyTicketUpdate(
+    {
+      updatedAt: "2026-10-25T11:20:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "FUNDED",
+      fundedAt: "2026-10-25T11:19:07.808Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      canReleaseProcurement: true,
+      actions: { canReleaseProcurement: true },
+    },
+    {
+      updatedAt: "2026-10-25T11:20:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "FUNDED",
+      fundedAt: "2026-10-25T11:19:07.808Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "PROCUREMENT",
+      outboundStatus: "AWAITING_FA_FUNDS",
+      canReleaseProcurement: false,
+      gpPayoutProgress: { phase: "waiting_settlement", hideReleaseActions: true },
+    },
+  ),
+  false,
+);
+assert.equal(
+  mergeOrdersPreserveAuthorizedRelease(
+    [
+      {
+        id: "txn-a",
+        status: "FUNDED",
+        outboundKind: "PROCUREMENT",
+        outboundStatus: "AWAITING_FA_FUNDS",
+        actions: { canReleaseProcurement: false },
+      },
+    ],
+    [
+      {
+        id: "txn-a",
+        status: "FUNDED",
+        outboundKind: null,
+        outboundStatus: null,
+        actions: { canReleaseProcurement: true },
+      },
+    ],
+  )[0].actions.canReleaseProcurement,
+  false,
+);
 const paid = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,

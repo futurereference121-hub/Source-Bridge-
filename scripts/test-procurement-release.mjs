@@ -519,4 +519,24 @@ assert.match(proposeSrc, /if \(procurement && !sellerProcurement.available\)/);
 // PCI smoke: release route has no card fields
 assert.ok(!/cardNumber|cvc|pan/i.test(releaseApi));
 
+assert.match(releaseApi, /GP_AWAITING_FA_FUNDS/);
+assert.match(releaseApi, /pendingProvider/);
+assert.match(releaseApi, /NOT auto-on-fund/);
+const outboundSrc = readFileSync(
+  join(root, "src/lib/payments/payout-rail/outbound-payment.ts"),
+  "utf8",
+);
+assert.match(outboundSrc, /surfaceAuthorizedReleasePending/);
+assert.match(outboundSrc, /pendingProvider: true/);
+assert.doesNotMatch(
+  outboundSrc.slice(
+    outboundSrc.indexOf("if (!purchaseFunding.ok)"),
+    outboundSrc.indexOf("if (!purchaseFunding.ok)") + 900,
+  ),
+  /code: "GP_AWAITING_FA_FUNDS"/,
+);
+const fulfilmentSrc = readFileSync(join(root, "src/lib/payments/fulfilment.ts"), "utf8");
+assert.match(fulfilmentSrc, /procurementAdvanceAuthorized/);
+assert.match(ticketsSrc, /procurementAdvanceAuthorized/);
+
 console.log("test-procurement-release: all assertions passed");

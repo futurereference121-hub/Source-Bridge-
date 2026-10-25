@@ -7,6 +7,7 @@ import {
 } from "@/lib/purchase-order-surface-sync";
 import {
   emptyOrdersListClientState,
+  mergeOrdersPreserveAuthorizedRelease,
   ordersListScope,
   ordersListSinceQuery,
   parseOrdersListBody,
@@ -67,7 +68,10 @@ export function useProtectedOrders(opts: UseProtectedOrdersOpts) {
     const existingMs = Date.parse(String(existing.updatedAt || "")) || 0;
     const incomingMs = Date.parse(String(order.updatedAt || "")) || 0;
     if (incomingMs && existingMs && incomingMs < existingMs) return;
-    nextOrders[idx] = { ...existing, ...order };
+    nextOrders[idx] = mergeOrdersPreserveAuthorizedRelease(
+      [existing],
+      [{ ...existing, ...order }],
+    )[0];
     commit({ ...prev, orders: nextOrders });
   }, [commit]);
 

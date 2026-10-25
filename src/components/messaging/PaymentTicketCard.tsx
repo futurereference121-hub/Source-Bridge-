@@ -38,6 +38,7 @@ import {
   describeProcurementStage,
   formatInspectionWindow,
   isGlobalPayoutsRail,
+  procurementAdvanceAuthorized,
   shippedAwaitingReceiptCopy,
 } from "@/lib/payments/fulfilment-display";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
@@ -582,6 +583,21 @@ export function PaymentTicketCard({
     }
   }, [ticket]);
 
+  useEffect(() => {
+    if (!ticket) return;
+    if (
+      procurementAdvanceAuthorized({
+        transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
+        status: ticket.protectedTxnStatus || ticket.status,
+        outboundKind: ticket.outboundKind,
+        outboundStatus: ticket.outboundStatus,
+        hideReleaseActions: ticket.gpPayoutProgress?.hideReleaseActions,
+      })
+    ) {
+      setConfirmRelease(false);
+    }
+  }, [ticket]);
+
   async function respond(action: "accept" | "decline") {
     if (actionLockRef.current || busy) return;
     actionLockRef.current = true;
@@ -801,7 +817,11 @@ export function PaymentTicketCard({
           procurementReleasedAt?: string | null;
         };
       };
-      if (!res.ok) {
+      const authorizedPending =
+        Boolean(json.pendingProvider) ||
+        json.ticket?.outboundStatus === "AWAITING_FA_FUNDS" ||
+        json.ticket?.gpPayoutProgress?.hideReleaseActions === true;
+      if (!res.ok && !authorizedPending) {
         setError(
           json.error ||
             "Could not release item funds. Payment remains on the platform.",
@@ -1388,11 +1408,19 @@ export function PaymentTicketCard({
   const procAgreed =
     ticket.procurementAdvanceAgreed && ticket.procurementAdvanceMinor > 0;
   const procTransferred = (ticket.books?.procurementTransferredMinor ?? 0) > 0;
+  const itemReleaseAuthorized = procurementAdvanceAuthorized({
+    transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
+    status: ticket.protectedTxnStatus || ticket.status,
+    outboundKind: ticket.outboundKind,
+    outboundStatus: ticket.outboundStatus,
+    hideReleaseActions: ticket.gpPayoutProgress?.hideReleaseActions,
+  });
   const canRelease =
     !historical &&
     paymentsAccess &&
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseProcurement) &&
+    !itemReleaseAuthorized &&
     Boolean(ticket.protectedTransactionId);
   const canMarkShipped =
     !historical &&
@@ -2160,7 +2188,11 @@ export function PaymentTicketCard({
         <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
           <p className="font-medium text-white/70">Release structure</p>
           <p className="flex justify-between gap-3">
-            <span>Item funds available for buyer-authorized release</span>
+            <span>
+              {itemReleaseAuthorized
+                ? "Item funds authorized — not marked paid until the provider confirms"
+                : "Item funds available for buyer-authorized release"}
+            </span>
             <span className="tabular-nums text-white">
               {formatMinor(
                 ticket.breakdown.releaseStructure.itemFundsReleasedEarlyMinor,
@@ -2191,8 +2223,9 @@ export function PaymentTicketCard({
             </span>
           </p>
           <p className="text-white/40">
-            Shipping is never released early. Buyer must authorize item funds
-            after funding.
+            {itemReleaseAuthorized
+              ? "Item release authorized. Shipping and sourcer fee stay protected."
+              : "Shipping is never released early. Buyer must authorize item funds after funding."}
           </p>
         </div>
       ) : null}
@@ -2268,7 +2301,11 @@ export function PaymentTicketCard({
         </div>
       ) : null}
 
-      {iAmSeller && ticket.status === "FUNDED" && procAgreed && !procTransferred ? (
+      {iAmSeller &&
+      ticket.status === "FUNDED" &&
+      procAgreed &&
+      !procTransferred &&
+      !itemReleaseAuthorized ? (
         <p className="mt-3 text-xs text-white/45">
           Waiting for buyer to release item funds. Sourcers cannot authorize
           release.

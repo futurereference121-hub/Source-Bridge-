@@ -4,6 +4,7 @@
  */
 
 import { shouldApplyOrdersPayload } from "@/lib/payments/purchase-display-state";
+import { procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
 
 export type OrdersListRow = { id?: string; [key: string]: unknown };
 
@@ -119,7 +120,7 @@ export function reduceOrdersList(
   if (!apply) return { state, followUp: null };
   return {
     state: {
-      orders: parsed.orders,
+      orders: mergeOrdersPreserveAuthorizedRelease(state.orders, parsed.orders),
       error: "",
       hasAppliedOrders: true,
       ordersVersion: parsed.ordersVersion,
@@ -127,6 +128,47 @@ export function reduceOrdersList(
     },
     followUp: null,
   };
+}
+
+function orderReleaseAuthorized(order: OrdersListRow): boolean {
+  const books = (order.books || {}) as { procurementTransferredMinor?: number };
+  const gp = (order.gpPayoutProgress || {}) as { hideReleaseActions?: boolean };
+  return procurementAdvanceAuthorized({
+    transferredMinor:
+      (typeof books.procurementTransferredMinor === "number"
+        ? books.procurementTransferredMinor
+        : Number(order.procurementTransferredMinor ?? 0)) || 0,
+    status: String(order.status || ""),
+    outboundKind: (order.outboundKind as string | null) ?? null,
+    outboundStatus: (order.outboundStatus as string | null) ?? null,
+    hideReleaseActions: gp.hideReleaseActions,
+  });
+}
+
+function closeProcurementReleaseActions(order: OrdersListRow): OrdersListRow {
+  const actions = (order.actions || {}) as Record<string, unknown>;
+  return {
+    ...order,
+    actions: { ...actions, canReleaseProcurement: false },
+  };
+}
+
+export function mergeOrdersPreserveAuthorizedRelease(
+  existing: OrdersListRow[],
+  incoming: OrdersListRow[],
+): OrdersListRow[] {
+  const prevById = new Map(
+    existing.filter((row) => row.id).map((row) => [String(row.id), row]),
+  );
+  return incoming.map((row) => {
+    const prev = row.id ? prevById.get(String(row.id)) : undefined;
+    if (!prev || !orderReleaseAuthorized(prev)) return row;
+    const nextAuth = orderReleaseAuthorized(row);
+    if (nextAuth && (row.actions as { canReleaseProcurement?: boolean } | undefined)?.canReleaseProcurement !== true) {
+      return row;
+    }
+    return closeProcurementReleaseActions(row);
+  });
 }
 
 /** What the purchases page should render. A failed load is never the empty copy. */

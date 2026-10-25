@@ -109,6 +109,33 @@ export function shippedAwaitingReceiptCopy(role: "buyer" | "seller"): string {
     : "Item shipped — awaiting receipt confirmation.";
 }
 
+const PROCUREMENT_AUTHORIZED_OUTBOUND = new Set([
+  "PENDING",
+  "PROCESSING",
+  "AWAITING_FA_FUNDS",
+  "AWAITING_MINIMUM",
+  "SUCCEEDED",
+  "RECONCILED",
+  "RETURNED",
+]);
+
+/** Buyer already authorized item-fund release. Paid only after transferredMinor > 0. */
+export function procurementAdvanceAuthorized(opts: {
+  transferredMinor?: number | null;
+  status?: string | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  hideReleaseActions?: boolean | null;
+}): boolean {
+  if ((opts.transferredMinor ?? 0) > 0) return true;
+  if (String(opts.status || "").toUpperCase() === "PROCUREMENT_RELEASED") return true;
+  const kind = String(opts.outboundKind || "").toUpperCase();
+  const status = String(opts.outboundStatus || "").toUpperCase();
+  if (status === "FAILED") return false;
+  if (opts.hideReleaseActions) return true;
+  return kind === "PROCUREMENT" && PROCUREMENT_AUTHORIZED_OUTBOUND.has(status);
+}
+
 export function describeProcurementStage(opts: {
   agreed: boolean;
   advanceMinor: number;
@@ -147,12 +174,22 @@ export function describeProcurementStage(opts: {
           : null,
     };
   }
-  if (procOutbound === "PROCESSING" || procOutbound === "PENDING") {
+  if (procurementAdvanceAuthorized({
+    transferredMinor: 0,
+    outboundKind: opts.outboundKind,
+    outboundStatus: opts.outboundStatus,
+  })) {
+    const pending =
+      procOutbound === "AWAITING_FA_FUNDS" ||
+      procOutbound === "PENDING" ||
+      procOutbound === "AWAITING_MINIMUM";
     return {
-      headline: `Procurement advance payout in progress: ${advance}`,
+      headline: pending
+        ? `Item release authorized — payout pending: ${advance}`
+        : `Item release authorized — payout processing: ${advance}`,
       detail: remaining
-        ? `Remaining ${remaining} stays held. Authorization is not bank arrival.`
-        : "Payout processing. Authorization is not bank arrival.",
+        ? `Authorized ${advance} is not marked paid until the provider confirms. Remaining ${remaining} (shipping + sourcer fee) stays protected.`
+        : "Authorization is not provider confirmation or bank arrival.",
     };
   }
   if (finalReleased && opts.transferredMinor <= 0) {

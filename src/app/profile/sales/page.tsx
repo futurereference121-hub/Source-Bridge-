@@ -18,6 +18,7 @@ import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefre
 import {
   describeProcurementStage,
   formatInspectionWindow,
+  procurementAdvanceAuthorized,
   receiptConfirmedCopy,
   sellerReleaseProgressCopy,
   shippedAwaitingReceiptCopy,
@@ -279,7 +280,18 @@ export default function SalesFulfilmentPage() {
                       </div>
                     );
                   })()}
-                  {o.status === "FUNDED" && o.labels.payment.includes("not released") ? (
+                  {o.status === "FUNDED" &&
+                  o.labels.payment.includes("not released") &&
+                  !procurementAdvanceAuthorized({
+                    transferredMinor:
+                      o.books?.procurementTransferredMinor ??
+                      o.procurementTransferredMinor ??
+                      0,
+                    status: o.status,
+                    outboundKind: o.outboundKind,
+                    outboundStatus: o.outboundStatus,
+                    hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
+                  }) ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
                         Buyer authorizes item fund release. Sourcers cannot

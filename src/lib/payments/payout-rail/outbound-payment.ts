@@ -28,7 +28,10 @@ import {
   assertProcurementReleaseInvariants,
   computeProtectedFinancials,
 } from "@/lib/payments/breakdown";
-import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
+import {
+  afterProtectedTxnMoneyEvent,
+  syncProtectedTxnParticipantActivity,
+} from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
 import {
   balanceFailureCode,
@@ -37,8 +40,6 @@ import {
   readFinancialAccountBalance,
 } from "@/lib/payments/payout-rail/fa-funding";
 import {
-  classifyGpAwaitingFunds,
-  gpAwaitingFundsHeadline,
   proceedsFundingAllowsOutbound,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import {
@@ -156,6 +157,19 @@ function stableReleaseErrorCode(code: string): string {
 function countryMinimumBlocks(errMsg: string): boolean {
   const m = errMsg.toLowerCase();
   return m.includes("minimum") || m.includes("below_minimum") || m.includes("amount_too_small");
+}
+
+/** Authorization accepted; funding/outbound still pending. Refresh Ticket/Purchases/Sales clocks only. */
+async function surfaceAuthorizedReleasePending(protectedTxnId: string) {
+  const fresh = await prisma.protectedTransaction.update({
+    where: { id: protectedTxnId },
+    data: { updatedAt: new Date() },
+  });
+  await syncProtectedTxnParticipantActivity({
+    protectedTxnId,
+    conversationId: fresh.conversationId,
+  });
+  return fresh;
 }
 
 export async function releaseProcurementViaGlobalPayouts(opts: {
@@ -1013,10 +1027,15 @@ async function executeOutboundRelease(opts: {
         lastAttemptAt: new Date(),
       },
     });
-    throw Object.assign(new Error(gpAwaitingFundsHeadline("funding_awaited")), {
-      status: 409,
-      code: "GP_AWAITING_FA_FUNDS",
-    });
+    const freshUnconfirmed = await surfaceAuthorizedReleasePending(txn.id);
+    return {
+      alreadyReleased: false,
+      pendingProvider: true,
+      txn: freshUnconfirmed,
+      amountMinor: 0,
+      transferId: "",
+      outboundPaymentId: attempt.stripeOutboundPaymentId || "",
+    };
   }
   const funding = await ensureFinancialAccountFunding({
     mode: txnMode,
@@ -1055,29 +1074,15 @@ async function executeOutboundRelease(opts: {
       },
     });
     // Preserve entitlement — do not advance domain transferred counters.
-    throw Object.assign(
-      new Error(
-        gpAwaitingFundsHeadline(
-          classifyGpAwaitingFunds({
-            proceedsFundingEnabled: true,
-            failureCode: funding.code,
-            fundingStatus: proceedsRow?.status,
-            chargeAvailable:
-              proceedsRow?.status === "POSTED" ||
-              proceedsRow?.status === "FUNDING" ||
-              proceedsRow?.status === "SHORT"
-                ? true
-                : proceedsRow?.status === "AWAITING_SETTLEMENT"
-                  ? false
-                  : null,
-          }),
-        ),
-      ),
-      {
-        status: 409,
-        code: "GP_AWAITING_FA_FUNDS",
-      },
-    );
+    const freshAwaiting = await surfaceAuthorizedReleasePending(txn.id);
+    return {
+      alreadyReleased: false,
+      pendingProvider: true,
+      txn: freshAwaiting,
+      amountMinor: 0,
+      transferId: "",
+      outboundPaymentId: attempt.stripeOutboundPaymentId || "",
+    };
   }
 
   if (!canInitiateGlobalPayoutsMoney(txnMode)) {

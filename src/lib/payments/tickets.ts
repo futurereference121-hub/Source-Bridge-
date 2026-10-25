@@ -64,6 +64,7 @@ import {
   ticketMayShowPayUi,
 } from "@/lib/payments/ticket-lifecycle";
 import { getStripe, isStripeConfigured } from "@/lib/payments/stripe/client";
+import { procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
 
 export {
   ACTIVE_TICKET_STATUSES,
@@ -356,7 +357,14 @@ function mapTicket(
     t.procurementAdvanceMinor > 0 &&
     t.paymentOption === "PROTECTED" &&
     (t.status === "FUNDED" || protectedStatus === "FUNDED") &&
-    (extras?.procurementTransferredMinor ?? 0) === 0;
+    (extras?.procurementTransferredMinor ?? 0) === 0 &&
+    !procurementAdvanceAuthorized({
+      transferredMinor: extras?.procurementTransferredMinor ?? 0,
+      status: protectedStatus,
+      outboundKind: extras?.outboundKind,
+      outboundStatus: extras?.outboundStatus,
+      hideReleaseActions: extras?.gpPayoutProgress?.hideReleaseActions,
+    });
   const procReleased =
     (extras?.procurementTransferredMinor ?? 0) > 0 ||
     protectedStatus === "PROCUREMENT_RELEASED";
@@ -1047,6 +1055,7 @@ async function gpProgressForTransactions(
         row.status === "RELEASED" ||
         Boolean(attempt && attempt.status !== "FAILED"),
       txnStatus: row.status,
+      outboundKind: attempt?.kind,
       outboundStatus: attempt?.status,
       outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
       failureCode: attempt?.failureCode,

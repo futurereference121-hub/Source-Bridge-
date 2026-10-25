@@ -21,7 +21,7 @@ import {
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
-import { describeProcurementStage, formatInspectionWindow } from "@/lib/payments/fulfilment-display";
+import { describeProcurementStage, formatInspectionWindow, procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
 
 type Order = ProtectedOrderSummary & {
   origin?: string;
@@ -561,7 +561,17 @@ export default function PurchasesPage() {
                     }
                   />
                 ) : null}
-                {o.actions.canReleaseProcurement ? (
+                {o.actions.canReleaseProcurement &&
+                !procurementAdvanceAuthorized({
+                  transferredMinor:
+                    o.books?.procurementTransferredMinor ??
+                    o.procurementTransferredMinor ??
+                    0,
+                  status: o.status,
+                  outboundKind: o.outboundKind,
+                  outboundStatus: o.outboundStatus,
+                  hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
+                }) ? (
                   <div className="mt-5 border-t border-white/10 pt-4">
                     <PrimaryButton
                       type="button"

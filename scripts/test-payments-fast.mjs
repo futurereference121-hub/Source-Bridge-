@@ -27,6 +27,7 @@ runNodeTestScripts(
     "scripts/test-payment-currencies.mjs",
     "scripts/test-direct-payment.mjs",
     "scripts/test-procurement-release.mjs",
+    "scripts/test-purchases-gp-display.mjs",
     "scripts/test-fulfilment.mjs",
     "scripts/test-listing-payment-options.mjs",
     "scripts/test-allowlist.mjs",

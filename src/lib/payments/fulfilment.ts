@@ -23,6 +23,7 @@ import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
+import { procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
 
 export {
   BUYER_INACTIVITY_ADMIN_RELEASE_MS,
@@ -267,6 +268,7 @@ export function mapProtectedTxnSummary(
             t.status === "RELEASED" ||
             Boolean(attempt?.status && attempt.status !== "FAILED"),
           txnStatus: t.status,
+          outboundKind: attempt?.kind,
           outboundStatus: attempt?.status,
           outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
           failureCode: attempt?.failureCode,
@@ -291,7 +293,14 @@ export function mapProtectedTxnSummary(
     t.status === "FUNDED" &&
     Boolean(t.procurementAdvanceAgreed) &&
     (t.procurementAdvanceMinor ?? 0) > 0 &&
-    (t.procurementTransferredMinor ?? 0) === 0;
+    (t.procurementTransferredMinor ?? 0) === 0 &&
+    !procurementAdvanceAuthorized({
+      transferredMinor: t.procurementTransferredMinor,
+      status: t.status,
+      outboundKind: attempt?.kind,
+      outboundStatus: attempt?.status,
+      hideReleaseActions: gpPayoutProgress?.hideReleaseActions,
+    });
   const canAddTracking =
     viewerRole === "seller" &&
     sellerCanAddTracking({
@@ -387,6 +396,13 @@ export function mapProtectedTxnSummary(
         t.status,
         t.paymentOption,
         Boolean(t.procurementAdvanceAgreed && (t.procurementTransferredMinor ?? 0) > 0),
+        procurementAdvanceAuthorized({
+          transferredMinor: t.procurementTransferredMinor,
+          status: t.status,
+          outboundKind: attempt?.kind,
+          outboundStatus: attempt?.status,
+          hideReleaseActions: gpPayoutProgress?.hideReleaseActions,
+        }),
       ),
       shipping: shippingLabel(t.status, shipped, t.paymentOption),
       delivery: deliveryLabel(t.status, t.paymentOption),
@@ -433,7 +449,12 @@ export function mapProtectedTxnSummary(
   };
 }
 
-function paymentLabel(status: string, option: string, procReleased = false) {
+function paymentLabel(
+  status: string,
+  option: string,
+  procReleased = false,
+  authorizedPending = false,
+) {
   if (isDirectPaymentOption(option)) {
     if (status === "RELEASED") return "Direct Payment — completed";
     if (status === "FUNDED") {
@@ -447,6 +468,9 @@ function paymentLabel(status: string, option: string, procReleased = false) {
     return `Direct Payment — ${status}`;
   }
   if (status === "FUNDED" && !procReleased) {
+    if (authorizedPending) {
+      return "Item release authorized — payout pending (item amount not marked paid)";
+    }
     return "Funded — held protected (buyer has not released item funds)";
   }
   if (status === "PROCUREMENT_RELEASED" || procReleased) {

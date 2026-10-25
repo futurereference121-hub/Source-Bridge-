@@ -13,6 +13,7 @@ import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { formatMinor } from "@/lib/payments/money";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { getPaymentTicket } from "@/lib/payments/tickets";
+import { pendingProviderReleaseMessage } from "@/lib/payments/payout-rail/outbound-display";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,7 @@ const schema = z.object({
  * PROCUREMENT_ADVANCES_ENABLED = manual buyer release available — NOT auto-on-fund.
  */
 export async function POST(req: NextRequest) {
+  let txnId: string | null = null;
   try {
     const user = await requireSessionUser();
 
@@ -45,6 +47,7 @@ export async function POST(req: NextRequest) {
       return jsonError(parsed.error.issues[0]?.message || "Invalid input", 400);
     }
 
+    txnId = parsed.data.protectedTxnId;
     const txn = await prisma.protectedTransaction.findUnique({
       where: { id: parsed.data.protectedTxnId },
       include: {
@@ -188,6 +191,48 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : "Failed";
     const code = (err as { code?: string }).code;
     if (status === 401) return jsonError("Sign in required", 401);
+    if (
+      (code === "GP_AWAITING_FA_FUNDS" || code === "GP_PAYMENT_IN_FLIGHT") &&
+      status >= 400 &&
+      status < 500
+    ) {
+      const pendingTxnId = txnId || (err as { protectedTxnId?: string }).protectedTxnId;
+      let ticket = null;
+      let pendingTxn = null;
+      if (pendingTxnId) {
+        try {
+          pendingTxn = await prisma.protectedTransaction.findUnique({
+            where: { id: pendingTxnId },
+            include: { paymentTicket: { select: { id: true } } },
+          });
+          const ticketId = pendingTxn?.paymentTicket?.id ?? null;
+          if (ticketId) {
+            const user = await requireSessionUser();
+            ticket = await getPaymentTicket(ticketId, user.id);
+          }
+        } catch (ticketErr) {
+          console.error("[payments:release-procurement:pending]", ticketErr);
+        }
+      }
+      const books = pendingTxn ? computeProtectedFinancials(pendingTxn) : null;
+      return Response.json({
+        ok: true,
+        alreadyReleased: false,
+        pendingProvider: true,
+        ticket,
+        message: pendingProviderReleaseMessage("PROCUREMENT"),
+        transaction: pendingTxn
+          ? {
+              id: pendingTxn.id,
+              status: pendingTxn.status,
+              procurementTransferredMinor: pendingTxn.procurementTransferredMinor,
+              procurementReleasedAt:
+                pendingTxn.procurementReleasedAt?.toISOString() ?? null,
+              books,
+            }
+          : undefined,
+      });
+    }
     if (status >= 400 && status < 500) {
       return jsonError(message, status, code ? { code } : undefined);
     }

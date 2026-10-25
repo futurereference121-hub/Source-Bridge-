@@ -1417,7 +1417,7 @@ assert.doesNotMatch(read("src/app/api/admin/gp-test-recovery-topup/route.ts"), /
 const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
 assert.match(outbound, /proceedsFundingAllowsOutbound/);
 assert.match(outbound, /GP_PURCHASE_FUNDING_UNCONFIRMED/);
-assert.match(outbound, /gpAwaitingFundsHeadline/);
+assert.match(outbound, /surfaceAuthorizedReleasePending/);
 assert.doesNotMatch(outbound, /GP_FUNDING_HOLD_COPY/);
 assert.match(read("src/lib/payments/payout-rail/outbound-display.ts"), /classifyGpAwaitingFunds/);
 assert.match(read("src/app/api/payments/confirm-receipt/route.ts"), /GP_FUNDING_CHECKING_COPY/);

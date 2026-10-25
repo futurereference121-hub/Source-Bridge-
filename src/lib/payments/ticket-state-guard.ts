@@ -17,16 +17,65 @@ export type TicketStateSlice = {
   inspectionEndsAt?: string | null;
   gpPayoutPhase?: string | null;
   gpPayoutHeadline?: string | null;
-  gpPayoutProgress?: { phase?: string | null; headline?: string | null } | null;
+  gpPayoutProgress?: {
+    phase?: string | null;
+    headline?: string | null;
+    hideReleaseActions?: boolean | null;
+  } | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  hideReleaseActions?: boolean | null;
+  canReleaseProcurement?: boolean | null;
+  actions?: { canReleaseProcurement?: boolean | null } | null;
 };
 
+function normalizeTicketSlice(t: TicketStateSlice): TicketStateSlice {
+  return {
+    ...t,
+    canReleaseProcurement:
+      t.canReleaseProcurement ?? t.actions?.canReleaseProcurement ?? null,
+    hideReleaseActions:
+      t.hideReleaseActions ?? t.gpPayoutProgress?.hideReleaseActions ?? null,
+  };
+}
+
 function ticketDisplayProgressKey(t: TicketStateSlice): string {
-  const gp = t.gpPayoutProgress;
+  const n = normalizeTicketSlice(t);
+  const gp = n.gpPayoutProgress;
   return [
-    t.inspectionEndsAt || "",
-    t.gpPayoutPhase || gp?.phase || "",
-    t.gpPayoutHeadline || gp?.headline || "",
+    n.inspectionEndsAt || "",
+    n.gpPayoutPhase || gp?.phase || "",
+    n.gpPayoutHeadline || gp?.headline || "",
+    n.outboundKind || "",
+    n.outboundStatus || "",
+    n.hideReleaseActions ? "1" : "0",
+    n.canReleaseProcurement ? "1" : "0",
   ].join("|");
+}
+
+function procurementReleaseControlsClosed(t: TicketStateSlice): boolean {
+  const n = normalizeTicketSlice(t);
+  const status = String(n.outboundStatus || "").toUpperCase();
+  if (status === "FAILED") return false;
+  if (n.hideReleaseActions) return true;
+  if (n.canReleaseProcurement === false && n.outboundKind === "PROCUREMENT") {
+    return true;
+  }
+  const kind = String(n.outboundKind || "").toUpperCase();
+  return kind === "PROCUREMENT" && Boolean(status);
+}
+
+function incomingReopensProcurementRelease(
+  incoming: TicketStateSlice,
+  existing: TicketStateSlice,
+): boolean {
+  if (!procurementReleaseControlsClosed(existing)) return false;
+  const n = normalizeTicketSlice(incoming);
+  if (n.canReleaseProcurement === true) return true;
+  if (n.hideReleaseActions === false && normalizeTicketSlice(existing).hideReleaseActions) {
+    return true;
+  }
+  return false;
 }
 
 const FUNDED_TICKET_STATUSES = new Set(["FUNDED", "ACCEPTED"]);
@@ -101,6 +150,7 @@ export function shouldApplyTicketUpdate(
   const existingFunded = ticketAppearsFunded(existing);
   // Never regress funded UI (P3: delayed pre-funded response).
   if (existingFunded && !incomingFunded) return false;
+  if (incomingReopensProcurementRelease(incoming, existing)) return false;
   const inEpoch = stateEpoch(incoming);
   const exEpoch = stateEpoch(existing);
   if (inEpoch > exEpoch) return true;

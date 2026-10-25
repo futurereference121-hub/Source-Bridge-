@@ -130,6 +130,12 @@ assert.match(
   /ticketDisplayProgressKey/,
 );
 assert.match(
+  fs.readFileSync(guardPath, "utf8"),
+  /incomingReopensProcurementRelease/,
+);
+assert.match(card, /procurementAdvanceAuthorized/);
+assert.match(card, /Item release authorized/);
+assert.match(
   fs.readFileSync(path.join(root, "src/lib/conversation-activity.ts"), "utf8"),
   /bumpConversationActivity/,
 );
