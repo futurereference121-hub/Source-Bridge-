@@ -21,7 +21,7 @@ import {
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
-import { formatInspectionWindow } from "@/lib/payments/fulfilment-display";
+import { describeProcurementStage, formatInspectionWindow } from "@/lib/payments/fulfilment-display";
 
 type Order = ProtectedOrderSummary & {
   origin?: string;
@@ -61,8 +61,11 @@ type Order = ProtectedOrderSummary & {
     canReportIssue?: boolean;
     canReleaseProcurement?: boolean;
   };
+  procurementAdvanceAgreed?: boolean;
   procurementAdvanceMinor?: number;
   procurementTransferredMinor?: number;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
   books?: {
     finalResidualMinor?: number;
     remainingProtectedSellerShareMinor?: number;
@@ -511,6 +514,32 @@ export default function PurchasesPage() {
                   ) : null}
                 </dl>
 
+                {(() => {
+                  const stage = describeProcurementStage({
+                    agreed: Boolean(o.procurementAdvanceAgreed),
+                    advanceMinor: o.procurementAdvanceMinor ?? 0,
+                    transferredMinor:
+                      o.books?.procurementTransferredMinor ??
+                      o.procurementTransferredMinor ??
+                      0,
+                    remainingHeldMinor:
+                      o.books?.finalResidualMinor ??
+                      o.books?.remainingProtectedSellerShareMinor ??
+                      0,
+                    status: o.status,
+                    payoutRail: o.payoutRail,
+                    outboundKind: o.outboundKind,
+                    outboundStatus: o.outboundStatus,
+                    currency: o.currency,
+                    formatMinor,
+                  });
+                  return (
+                    <div className="mt-3 space-y-1 text-xs text-white/45">
+                      <p>{stage.headline}</p>
+                      {stage.detail ? <p>{stage.detail}</p> : null}
+                    </div>
+                  );
+                })()}
                 {o.gpPayoutProgress ? (
                   <div className="mt-4 space-y-1 text-sm text-white/80" data-testid="purchase-gp-progress">
                     <p>{o.gpPayoutProgress.headline}</p>

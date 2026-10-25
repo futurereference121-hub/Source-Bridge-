@@ -44,6 +44,7 @@ import {
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
+  proceedsFundingAllowsOutbound,
   scheduleBlocksBuyerFunding,
   type ChargeSettlementInput,
   type GpBuyerPayoutProgress,
@@ -366,6 +367,7 @@ export async function reconcileGpProceedsFunding(opts: {
       openDispute: (txn.disputes ?? []).length > 0,
     });
     if (moved) funded += 1;
+    if (await resumeAuthorizedProcurement(txn.id, mode)) resumed += 1;
     if (opts.resumeAuthorized !== false && (await resumeOne(txn.id, mode))) resumed += 1;
     } catch (err) {
       console.error(
@@ -798,14 +800,28 @@ async function fundOne(opts: {
     });
     return false;
   }
+  const postedLegs = freshLegs.filter((leg) => leg.status === "POSTED");
+  const postedLegsHaveCredit =
+    postedLegs.length > 0 && postedLegs.every((leg) => Boolean(leg.faCreditId));
+  const requiredMinor = opts.principal + opts.fees;
+  if (
+    postedLegsHaveCredit &&
+    Number.isInteger(requiredMinor) &&
+    requiredMinor > 0 &&
+    postedMinor >= requiredMinor
+  ) {
+    await prisma.gpProceedsFunding.update({
+      where: { id: opts.funding.id },
+      data: { status: "POSTED", failureCode: "" },
+    });
+    return false;
+  }
   if (!(await newFundingAllowedNow(opts.txn.id))) {
-    const postedLegs = freshLegs.filter((leg) => leg.status === "POSTED");
     const resolved = fundingRowAfterCompletedPurchase({
       postedMinor,
       pendingMinor: 0,
-      requiredMinor: opts.principal + opts.fees,
-      postedLegsHaveCredit:
-        postedLegs.length > 0 && postedLegs.every((leg) => Boolean(leg.faCreditId)),
+      requiredMinor,
+      postedLegsHaveCredit,
     });
     if (resolved.status !== "unchanged") {
       await prisma.gpProceedsFunding.update({
@@ -1129,6 +1145,54 @@ async function confirmLegs(
       where: { id: leg.id },
       data: { status: "POSTED", stripePayoutStatus: payout.status, faCreditId: match.creditId, postedAt: new Date() },
     });
+  }
+}
+
+async function resumeAuthorizedProcurement(
+  protectedTxnId: string,
+  mode: StripeMode,
+): Promise<boolean> {
+  const txn = await prisma.protectedTransaction.findUnique({
+    where: { id: protectedTxnId },
+    include: { gpProceedsFunding: { include: { legs: true } } },
+  });
+  if (!txn || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
+  if (txn.status !== "FUNDED") return false;
+  if (!txn.procurementAdvanceAgreed || txn.procurementAdvanceMinor <= 0) return false;
+  if (txn.procurementTransferredMinor >= txn.procurementAdvanceMinor) return false;
+  const funding = txn.gpProceedsFunding;
+  const postedMinor = (funding?.legs ?? [])
+    .filter((leg) => leg.status === "POSTED")
+    .reduce((sum, leg) => sum + leg.amountMinor, 0);
+  const pendingMinor = (funding?.legs ?? [])
+    .filter((leg) => leg.status === "PENDING")
+    .reduce((sum, leg) => sum + leg.amountMinor, 0);
+  const requiredMinor =
+    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor + (funding?.payoutFeeMinor ?? 0);
+  const allowed = proceedsFundingAllowsOutbound({
+    payoutRail: txn.payoutRail,
+    proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
+    funding: funding
+      ? {
+          status: funding.status,
+          postedMinor,
+          pendingMinor,
+          postedLegsHaveCredit: (funding.legs ?? [])
+            .filter((leg) => leg.status === "POSTED")
+            .every((leg) => Boolean(leg.faCreditId)),
+        }
+      : null,
+    requiredMinor,
+  });
+  if (!allowed.ok) return false;
+  const { releaseProcurement } = await import("@/lib/payments/release");
+  try {
+    await releaseProcurement({ protectedTxnId: txn.id, actorUserId: null });
+    return true;
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+    if (WAITING.has(code)) return false;
+    return false;
   }
 }
 

@@ -848,9 +848,10 @@ export function ProposePaymentTicketButton({
             disabled={busy || (!procurementFlag && isEdit)}
           />
           <span>
-            Request procurement advance (item cost only). Allow
-            buyer-authorized item-fund release after funding — never
-            shipping.
+            Request procurement advance (item cost only). After funding
+            is confirmed, Global Payouts pays the item cost automatically.
+            Connect still waits for the buyer to authorize item-fund
+            release. Shipping and sourcer fee stay held.
             {!procurementFlag && isEdit
               ? " (Procurement advances currently disabled.)"
               : ""}

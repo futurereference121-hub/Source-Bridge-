@@ -16,6 +16,7 @@ import {
 } from "@/hooks/useProtectedOrders";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
 import {
+  describeProcurementStage,
   formatInspectionWindow,
   receiptConfirmedCopy,
   sellerReleaseProgressCopy,
@@ -41,7 +42,11 @@ type Order = ProtectedOrderSummary & {
   inspectionEndsAt?: string | null;
   payoutRail?: string | null;
   gpPayoutProgress?: GpBuyerPayoutProgress | null;
+  procurementAdvanceAgreed?: boolean;
+  procurementAdvanceMinor?: number;
   procurementTransferredMinor?: number;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
   books?: {
     remainingProtectedSellerShareMinor?: number;
     finalResidualMinor?: number;
@@ -246,11 +251,40 @@ export default function SalesFulfilmentPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
+                  {(() => {
+                    const stage = describeProcurementStage({
+                      agreed: Boolean(o.procurementAdvanceAgreed),
+                      advanceMinor: o.procurementAdvanceMinor ?? 0,
+                      transferredMinor:
+                        o.books?.procurementTransferredMinor ??
+                        o.procurementTransferredMinor ??
+                        0,
+                      remainingHeldMinor:
+                        o.books?.finalResidualMinor ??
+                        o.books?.remainingProtectedSellerShareMinor ??
+                        0,
+                    status: o.status,
+                    payoutRail: o.payoutRail,
+                    outboundKind: o.outboundKind,
+                    outboundStatus: o.outboundStatus,
+                    currency: o.currency,
+                    formatMinor,
+                    });
+                    return (
+                      <div className="sm:col-span-2">
+                        <p className="text-xs text-white/45">{stage.headline}</p>
+                        {stage.detail ? (
+                          <p className="text-xs text-white/45">{stage.detail}</p>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                   {o.status === "FUNDED" && o.labels.payment.includes("not released") ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        Buyer authorizes item fund release. Sourcers cannot
-                        release funds.
+                        {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+                          ? "Item funds pay automatically after funding is confirmed. Sourcers cannot release funds."
+                          : "Buyer authorizes item fund release. Sourcers cannot release funds."}
                       </p>
                     </div>
                   ) : null}

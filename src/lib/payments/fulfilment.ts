@@ -234,6 +234,7 @@ export function mapProtectedTxnSummary(
       slug: string | null;
     } | null;
     outboundPaymentAttempts?: {
+      kind?: string | null;
       status?: string | null;
       failureCode?: string | null;
       stripeOutboundPaymentId?: string | null;
@@ -332,6 +333,8 @@ export function mapProtectedTxnSummary(
     procurementAdvanceAgreed: Boolean(t.procurementAdvanceAgreed),
     procurementAdvanceMinor: t.procurementAdvanceMinor ?? 0,
     procurementTransferredMinor: t.procurementTransferredMinor ?? 0,
+    outboundKind: attempt?.kind ?? null,
+    outboundStatus: attempt?.status ?? null,
     books,
     stripeMode: t.stripeMode,
     payoutRail: t.payoutRail,
@@ -567,6 +570,7 @@ export async function listProtectedOrdersForUser(opts: {
         orderBy: { updatedAt: "desc" },
         take: 1,
         select: {
+          kind: true,
           status: true,
           failureCode: true,
           stripeOutboundPaymentId: true,
@@ -626,6 +630,7 @@ export async function getProtectedOrderForUser(opts: {
         orderBy: { updatedAt: "desc" },
         take: 1,
         select: {
+          kind: true,
           status: true,
           failureCode: true,
           stripeOutboundPaymentId: true,

@@ -82,6 +82,37 @@ function procurementAdvanceAmount({ agreed, itemCostMinor, eligible }) {
   return itemCostMinor;
 }
 
+function procurementIneligibilityReason(input) {
+  if (!input.agreed) return null;
+  if (!input.featureFlagOn || !input.globallyEnabled) return "PROCUREMENT_DISABLED";
+  if (input.paymentOption === "INSTANT") return "DIRECT_NO_PROCUREMENT";
+  if (!input.seller.procurementAdvancesEnabled) return "SELLER_PROCUREMENT_DISABLED";
+  if (input.seller.isDemo) return "SELLER_NOT_ELIGIBLE";
+  if (input.seller.trustLevel < input.minTrustLevel) return "SELLER_TRUST";
+  return null;
+}
+
+function isProcurementEligible(input) {
+  return procurementIneligibilityReason(input) == null && input.agreed;
+}
+
+const trustBlocked = {
+  globallyEnabled: true,
+  featureFlagOn: true,
+  seller: { trustLevel: 0, procurementAdvancesEnabled: true, isDemo: false },
+  minTrustLevel: 2,
+  paymentOption: "PROTECTED",
+  agreed: true,
+};
+assert.equal(procurementIneligibilityReason(trustBlocked), "SELLER_TRUST");
+assert.equal(isProcurementEligible(trustBlocked), false);
+assert.equal(procurementAdvanceAmount({ agreed: true, itemCostMinor: 2000, eligible: false }), 0);
+assert.equal(
+  procurementIneligibilityReason({ ...trustBlocked, agreed: false }),
+  null,
+);
+assert.equal(isProcurementEligible({ ...trustBlocked, agreed: false }), false);
+
 function isDirectPaymentOption(option) {
   const v = (option || "").toUpperCase();
   return v === "INSTANT" || v === "DIRECT";
@@ -387,6 +418,21 @@ const releaseApi = readFileSync(
 );
 assert.ok(releaseApi.includes("BUYER_ONLY") || releaseApi.includes("Only the buyer"));
 assert.ok(releaseApi.includes("isProcurementAdvancesEnabled"));
+const eligibilitySrc = readFileSync(join(root, "src/lib/payments/eligibility.ts"), "utf8");
+assert.match(eligibilitySrc, /procurementIneligibilityReason/);
+assert.match(eligibilitySrc, /SELLER_TRUST/);
+const ticketsSrc = readFileSync(join(root, "src/lib/payments/tickets.ts"), "utf8");
+assert.match(ticketsSrc, /procurementIneligibilityReason/);
+assert.match(ticketsSrc, /status: 400/);
+assert.match(ticketsSrc, /SELLER_TRUST/);
+const fundingRun = readFileSync(join(root, "src/lib/payments/payout-rail/proceeds-funding-run.ts"), "utf8");
+assert.match(fundingRun, /resumeAuthorizedProcurement/);
+assert.match(fundingRun, /txn.status !== "FUNDED"/);
+assert.match(fundingRun, /releaseProcurement/);
+assert.ok(
+  fundingRun.indexOf("resumeAuthorizedProcurement") < fundingRun.indexOf("resumeOne(txn.id"),
+  "GP procurement resumes before final outbound",
+);
 
 // PCI smoke: release route has no card fields
 assert.ok(!/cardNumber|cvc|pan/i.test(releaseApi));

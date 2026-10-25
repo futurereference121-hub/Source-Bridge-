@@ -4,6 +4,7 @@ import {
   assertEligiblePaymentParty,
   assertNotSelfTrade,
   isProcurementEligible,
+  procurementIneligibilityReason,
   type PartyUser,
 } from "@/lib/payments/eligibility";
 import { assertPaymentsTestAllowlisted } from "@/lib/payments/allowlist";
@@ -326,6 +327,8 @@ function mapTicket(
     openDisputeResolutionNote?: string | null;
     openDisputeResolvedAt?: string | null;
     gpPayoutProgress?: GpBuyerPayoutProgress | null;
+    outboundKind?: string | null;
+    outboundStatus?: string | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -508,6 +511,8 @@ function mapTicket(
     protectedTransactionId: t.protectedTransactionId,
     protectedTxnStatus: protectedStatus,
     gpPayoutProgress: extras?.gpPayoutProgress ?? null,
+    outboundKind: extras?.outboundKind ?? null,
+    outboundStatus: extras?.outboundStatus ?? null,
     payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
     pricingPolicy: t.pricingPolicy || "",
     feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
@@ -586,7 +591,10 @@ function mapTicket(
               remainingProtectedSellerShareMinor:
                 books.remainingProtectedSellerShareMinor,
               platformFeeHeldMinor: books.platformFeeMinor,
-              note: "Item funds may be released early after the buyer authorizes release. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately.",
+              note:
+                t.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+                  ? "Item funds pay automatically after funding is confirmed. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately."
+                  : "Item funds may be released early after the buyer authorizes release. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately.",
             }
           : null,
     },
@@ -985,12 +993,16 @@ async function gpProgressForTransactions(
     payoutRail: string | null;
     fundedAt: Date | null;
   }[],
-): Promise<Map<string, GpBuyerPayoutProgress>> {
+): Promise<{
+  progress: Map<string, GpBuyerPayoutProgress>;
+  outbound: Map<string, { kind: string | null; status: string | null }>;
+}> {
   const ids = rows
     .filter((row) => row.payoutRail === "STRIPE_GLOBAL_PAYOUTS")
     .map((row) => row.id);
   const out = new Map<string, GpBuyerPayoutProgress>();
-  if (ids.length === 0) return out;
+  const outbound = new Map<string, { kind: string | null; status: string | null }>();
+  if (ids.length === 0) return { progress: out, outbound };
   const [fundings, attempts] = await Promise.all([
     prisma.gpProceedsFunding.findMany({
       where: { protectedTxnId: { in: ids } },
@@ -1001,6 +1013,7 @@ async function gpProgressForTransactions(
       orderBy: { updatedAt: "desc" },
       select: {
         protectedTxnId: true,
+        kind: true,
         status: true,
         failureCode: true,
         stripeOutboundPaymentId: true,
@@ -1019,6 +1032,12 @@ async function gpProgressForTransactions(
     if (row.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") continue;
     const funding = fundingByTxn.get(row.id);
     const attempt = attemptByTxn.get(row.id);
+    if (attempt) {
+      outbound.set(row.id, {
+        kind: attempt.kind ?? null,
+        status: attempt.status ?? null,
+      });
+    }
     const progress = describeGpBuyerPayout({
       releaseAuthorized:
         row.status === "READY_TO_RELEASE" ||
@@ -1042,7 +1061,7 @@ async function gpProgressForTransactions(
     });
     if (progress) out.set(row.id, progress);
   }
-  return out;
+  return { progress: out, outbound };
 }
 
 export async function listConversationPaymentTickets(
@@ -1223,7 +1242,13 @@ export async function listConversationPaymentTickets(
         ? disputeMetaByTxn.get(t.protectedTransactionId)?.resolvedAt ?? null
         : null,
       gpPayoutProgress: t.protectedTransactionId
-        ? gpProgress.get(t.protectedTransactionId) ?? null
+        ? gpProgress.progress.get(t.protectedTransactionId) ?? null
+        : null,
+      outboundKind: t.protectedTransactionId
+        ? gpProgress.outbound.get(t.protectedTransactionId)?.kind ?? null
+        : null,
+      outboundStatus: t.protectedTransactionId
+        ? gpProgress.outbound.get(t.protectedTransactionId)?.status ?? null
         : null,
       origin: t.protectedTransaction?.origin ?? null,
     }),
@@ -1459,14 +1484,26 @@ async function resolveAmounts(
     existingPricingPolicy: commercial.existingPricingPolicy,
   });
   const agreed = Boolean(input.procurementAdvanceAgreed);
-  const eligible = isProcurementEligible({
+  const eligibilityInput = {
     globallyEnabled: quoted.config.procurementAdvancesGloballyOn,
     featureFlagOn: isProcurementAdvancesEnabled(),
     seller,
     minTrustLevel: quoted.config.procurementMinTrustLevel,
     paymentOption,
     agreed,
-  });
+  };
+  const ineligible = procurementIneligibilityReason(eligibilityInput);
+  if (agreed && ineligible) {
+    throw Object.assign(
+      new Error(
+        ineligible === "SELLER_TRUST"
+          ? "Procurement advance needs a higher sourcer trust level"
+          : "Procurement advance is not available for this agreement",
+      ),
+      { status: 400, code: ineligible },
+    );
+  }
+  const eligible = isProcurementEligible(eligibilityInput);
   const procurementMinor = procurementAdvanceAmount({
     agreed,
     itemCostMinor: quoted.itemCostMinor,
@@ -2525,7 +2562,10 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
             fundedAt: pt.fundedAt ?? null,
           },
         ])
-      : new Map<string, GpBuyerPayoutProgress>();
+      : {
+          progress: new Map<string, GpBuyerPayoutProgress>(),
+          outbound: new Map<string, { kind: string | null; status: string | null }>(),
+        };
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
     payoutRail: pt?.payoutRail ?? null,
@@ -2552,7 +2592,13 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     viewerId,
     involvesMoney,
     gpPayoutProgress: ticket.protectedTransactionId
-      ? gpProgress.get(ticket.protectedTransactionId) ?? null
+      ? gpProgress.progress.get(ticket.protectedTransactionId) ?? null
+      : null,
+    outboundKind: ticket.protectedTransactionId
+      ? gpProgress.outbound.get(ticket.protectedTransactionId)?.kind ?? null
+      : null,
+    outboundStatus: ticket.protectedTransactionId
+      ? gpProgress.outbound.get(ticket.protectedTransactionId)?.status ?? null
       : null,
   }));
 }

@@ -42,6 +42,70 @@ const {
 const { purchaseCardModel, purchasePayoutPhrase } = await import(
   "../src/lib/payments/purchase-list-presentation.ts"
 );
+const { describeProcurementStage } = await import(
+  "../src/lib/payments/fulfilment-display.ts"
+);
+
+const formatGbp = (minor) => `£${(minor / 100).toFixed(2)}`;
+assert.equal(
+  describeProcurementStage({
+    agreed: false,
+    advanceMinor: 0,
+    transferredMinor: 0,
+    remainingHeldMinor: 3500,
+    status: "FUNDED",
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    currency: "GBP",
+    formatMinor: formatGbp,
+  }).headline,
+  "Procurement advance: not requested",
+);
+const gpAccepted = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 0,
+  remainingHeldMinor: 1500,
+  status: "FUNDED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.equal(gpAccepted.headline, "Procurement advance accepted: £20.00");
+assert.match(gpAccepted.detail, /automatically after funding/);
+const connectAccepted = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 0,
+  remainingHeldMinor: 1500,
+  status: "FUNDED",
+  payoutRail: "STRIPE_CONNECT",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(connectAccepted.detail, /Buyer authorizes/);
+const paid = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 1500,
+  status: "PROCUREMENT_RELEASED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.equal(paid.headline, "Procurement advance paid: £20.00");
+assert.match(paid.detail, /Remaining £15.00 held/);
+const finalAuth = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 0,
+  status: "READY_TO_RELEASE",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(finalAuth.detail, /Final release authorized/);
 
 const posted = deriveOutboundDisplayState("SUCCEEDED");
 assert.equal(posted.buyerLabel, "Released to sourcer");
@@ -378,7 +442,9 @@ assert.match(detail, /\/api\/payments\/orders\?role=buyer/);
 assert.match(sales, /useProtectedOrders/);
 assert.match(sales, /role: "seller"/);
 assert.match(sales, /accountId: account\?\.id/);
-assert.doesNotMatch(sales, /STRIPE_GLOBAL_PAYOUTS/);
+assert.match(sales, /describeProcurementStage/);
+assert.match(sales, /Item funds pay automatically after funding is confirmed/);
+assert.doesNotMatch(sales, /global-payouts\/quote|releaseProcurement|stripe\.outbound/);
 
 function cardHtml(model, title) {
   const lines = model.lines

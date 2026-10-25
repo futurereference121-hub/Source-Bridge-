@@ -35,6 +35,7 @@ import {
 import { shouldApplyTicketUpdate } from "@/lib/payments/ticket-state-guard";
 import {
   connectCompletedBuyerCopy,
+  describeProcurementStage,
   formatInspectionWindow,
   isGlobalPayoutsRail,
   shippedAwaitingReceiptCopy,
@@ -137,6 +138,8 @@ export type PaymentTicketView = {
   stripeMode?: string | null;
   fundedAt?: string | null;
   gpPayoutProgress?: GpBuyerPayoutProgress | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;
@@ -2128,22 +2131,40 @@ export function PaymentTicketCard({
             You need to review and accept this agreement.
           </p>
         ) : null}
-        {procAgreed ? (
-          <p>
-            Procurement advance:{" "}
-            {formatMinor(ticket.procurementAdvanceMinor, cur)} (buyer
-            authorizes after funding)
-          </p>
-        ) : (
-          <p>Procurement advance: not requested</p>
-        )}
+        {(() => {
+          const stage = describeProcurementStage({
+            agreed: ticket.procurementAdvanceAgreed,
+            advanceMinor: ticket.procurementAdvanceMinor,
+            transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
+            remainingHeldMinor:
+              ticket.books?.finalResidualMinor ??
+              ticket.books?.remainingProtectedSellerShareMinor ??
+              0,
+            status: ticket.protectedTxnStatus || ticket.status,
+            payoutRail: ticket.payoutRail,
+            outboundKind: ticket.outboundKind,
+            outboundStatus: ticket.outboundStatus,
+            currency: cur,
+            formatMinor,
+          });
+          return (
+            <>
+              <p>{stage.headline}</p>
+              {stage.detail ? <p>{stage.detail}</p> : null}
+            </>
+          );
+        })()}
       </div>
 
       {procAgreed && ticket.breakdown.releaseStructure && !procTransferred ? (
         <div className="mt-3 space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/55">
           <p className="font-medium text-white/70">Release structure</p>
           <p className="flex justify-between gap-3">
-            <span>Item funds available for buyer-authorized release</span>
+            <span>
+              {ticket.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+                ? "Item funds pay automatically after funding is confirmed"
+                : "Item funds available for buyer-authorized release"}
+            </span>
             <span className="tabular-nums text-white">
               {formatMinor(
                 ticket.breakdown.releaseStructure.itemFundsReleasedEarlyMinor,

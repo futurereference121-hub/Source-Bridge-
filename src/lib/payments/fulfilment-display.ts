@@ -109,6 +109,62 @@ export function shippedAwaitingReceiptCopy(role: "buyer" | "seller"): string {
     : "Item shipped — awaiting receipt confirmation.";
 }
 
+export function describeProcurementStage(opts: {
+  agreed: boolean;
+  advanceMinor: number;
+  transferredMinor: number;
+  remainingHeldMinor: number;
+  status: string;
+  payoutRail?: string | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  currency: string;
+  formatMinor: (minor: number, currency: string) => string;
+}): { headline: string; detail: string | null } {
+  const agreed = Boolean(opts.agreed) && opts.advanceMinor > 0;
+  const status = String(opts.status || "").toUpperCase();
+  const finalReleased = status === "RELEASED" || status === "READY_TO_RELEASE";
+  const advance = agreed ? opts.formatMinor(opts.advanceMinor, opts.currency) : "";
+  const remaining =
+    opts.remainingHeldMinor > 0
+      ? opts.formatMinor(opts.remainingHeldMinor, opts.currency)
+      : "";
+  const procOutbound =
+    String(opts.outboundKind || "").toUpperCase() === "PROCUREMENT"
+      ? String(opts.outboundStatus || "").toUpperCase()
+      : "";
+
+  if (!agreed) {
+    return { headline: "Procurement advance: not requested", detail: null };
+  }
+  if (opts.transferredMinor > 0) {
+    return {
+      headline: `Procurement advance paid: ${advance}`,
+      detail: remaining
+        ? `Remaining ${remaining} held until final release.`
+        : finalReleased
+          ? "Final release authorized."
+          : null,
+    };
+  }
+  if (procOutbound === "PROCESSING" || procOutbound === "PENDING") {
+    return {
+      headline: `Procurement advance payout in progress: ${advance}`,
+      detail: remaining ? `Remaining ${remaining} stays held.` : null,
+    };
+  }
+  if (isGlobalPayoutsRail(opts.payoutRail)) {
+    return {
+      headline: `Procurement advance accepted: ${advance}`,
+      detail: "Item cost pays automatically after funding is confirmed. Shipping and sourcer fee stay held.",
+    };
+  }
+  return {
+    headline: `Procurement advance accepted: ${advance}`,
+    detail: "Buyer authorizes item-fund release after funding. Shipping and sourcer fee stay held.",
+  };
+}
+
 export function receiptConfirmedCopy(role: "buyer" | "seller"): string {
   return role === "seller"
     ? "Receipt confirmed — buyer may release now or start a 12-hour inspection. Residual stays protected."

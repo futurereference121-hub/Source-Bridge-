@@ -524,6 +524,10 @@ assert.equal(
 );
 assert.match(runner, /stripeMode: "TEST"/);
 assert.match(runner, /isTestRepairAbandoned/);
+assert.match(runner, /resumeAuthorizedProcurement/);
+assert.match(runner, /txn.status !== "FUNDED"/);
+assert.match(runner, /postedMinor >= requiredMinor/);
+assert.match(runner, /status: "POSTED", failureCode: ""/);
 assert.match(runner, /GP_TEST_REPAIR_ABANDONED/);
 const absentObjectField = assessChargePayoutMembership({
   balanceTransactionId: "txn_charge_new",

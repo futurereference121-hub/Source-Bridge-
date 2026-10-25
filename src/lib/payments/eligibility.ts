@@ -81,13 +81,20 @@ export type ProcurementEligibilityInput = {
   agreed: boolean;
 };
 
+export function procurementIneligibilityReason(
+  input: ProcurementEligibilityInput,
+): string | null {
+  if (!input.agreed) return null;
+  if (!input.featureFlagOn || !input.globallyEnabled) return "PROCUREMENT_DISABLED";
+  if (input.paymentOption === "INSTANT") return "DIRECT_NO_PROCUREMENT";
+  if (!input.seller.procurementAdvancesEnabled) return "SELLER_PROCUREMENT_DISABLED";
+  if (input.seller.isDemo || isAdminsource(input.seller)) return "SELLER_NOT_ELIGIBLE";
+  if (input.seller.trustLevel < input.minTrustLevel) return "SELLER_TRUST";
+  return null;
+}
+
 export function isProcurementEligible(input: ProcurementEligibilityInput): boolean {
-  if (!input.featureFlagOn || !input.globallyEnabled) return false;
-  if (!input.agreed) return false;
-  if (input.paymentOption === "INSTANT") return false;
-  if (!input.seller.procurementAdvancesEnabled) return false;
-  if (input.seller.isDemo || isAdminsource(input.seller)) return false;
-  return input.seller.trustLevel >= input.minTrustLevel;
+  return procurementIneligibilityReason(input) == null && input.agreed;
 }
 
 export function sessionToParty(
