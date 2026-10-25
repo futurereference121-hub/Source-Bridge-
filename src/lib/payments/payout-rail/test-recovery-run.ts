@@ -29,6 +29,7 @@ import {
   type DamagedRecoveryPlan,
   type RecoveryMembership,
 } from "@/lib/payments/payout-rail/test-recovery-preview";
+import { parseQuoteSnapshot } from "@/lib/payments/payout-rail/outbound-quote";
 
 export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   ok: true;
@@ -52,6 +53,11 @@ export type DamagedRecoveryPreview = DamagedRecoveryPlan & {
   creditInventory: ReturnType<typeof redactReceivedCreditInventory> | null;
   siblingPayoutStatus: string | null;
   siblingMatchFound: boolean;
+  outboundStatus: string | null;
+  quoteIdSuffix: string;
+  quoteSourceAmountMinor: number | null;
+  quoteExpiresAt: string | null;
+  quoteExpired: boolean;
 };
 
 function membershipState(membership: ChargePayoutMembership): RecoveryMembership {
@@ -156,6 +162,12 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
   ]);
 
   const siblingRow = sibling.find((row) => idHash8(row.protectedTxnId) === DAMAGED_GP_TEST_PURCHASE.siblingHash);
+  const outbound = await prisma.outboundPaymentAttempt.findFirst({
+    where: { protectedTxnId: purchase.id },
+    orderBy: { updatedAt: "desc" },
+    select: { status: true, fxRateSnapshot: true, amountMinor: true },
+  });
+  const quote = parseQuoteSnapshot(outbound?.fxRateSnapshot || "");
   const siblingPendingLegMinor = (siblingRow?.legs ?? [])
     .filter((leg) => leg.status === "PENDING")
     .reduce((sum, leg) => sum + leg.amountMinor, 0);
@@ -346,6 +358,11 @@ export async function runDamagedTestRecoveryPreview(): Promise<DamagedRecoveryPr
     creditInventory,
     siblingPayoutStatus,
     siblingMatchFound,
+    outboundStatus: outbound?.status ?? null,
+    quoteIdSuffix: quote?.quoteId ? last5(quote.quoteId) : "",
+    quoteSourceAmountMinor: quote?.sourceAmountMinor ?? outbound?.amountMinor ?? null,
+    quoteExpiresAt: quote?.expiresAt || null,
+    quoteExpired: Boolean(quote?.expiresAt && Date.parse(quote.expiresAt) <= Date.now()),
   };
 }
 

@@ -60,6 +60,20 @@ export type DamagedRecoveryPlan = {
   options: RecoveryOption[];
 };
 
+export const TEST_REPAIR_TOPUP_CAP_MINOR = 3372;
+
+export function decideTestRepairTopupAmount(opts: {
+  requiredMinor: number;
+  leftoverAvailableMinor: number;
+  capMinor?: number;
+}): { action: "none" | "topup" | "stop"; amountMinor: number; code: string } {
+  const cap = opts.capMinor ?? TEST_REPAIR_TOPUP_CAP_MINOR;
+  const need = Math.max(0, opts.requiredMinor - opts.leftoverAvailableMinor);
+  if (need === 0) return { action: "none", amountMinor: 0, code: "ALREADY_FUNDED_ROOM" };
+  if (need > cap) return { action: "stop", amountMinor: need, code: "EXCEEDS_CAP" };
+  return { action: "topup", amountMinor: need, code: "RESTORE_PLATFORM_ROOM" };
+}
+
 export function planDamagedGpTestRecovery(input: {
   membershipState: RecoveryMembership;
   postedMinor: number;

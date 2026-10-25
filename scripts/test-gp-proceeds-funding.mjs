@@ -1326,6 +1326,30 @@ assert.match(recoveryRun, /redactReceivedCreditInventory/);
 assert.match(recoveryRun, /creditListHttpStatus/);
 assert.match(recoveryRun, /siblingFailureCode/);
 assert.doesNotMatch(recoveryRun, /payouts\.create|topups\.create|outboundPayments/);
+
+assert.equal(recovery.TEST_REPAIR_TOPUP_CAP_MINOR, 3372);
+assert.deepEqual(recovery.decideTestRepairTopupAmount({ requiredMinor: 3638, leftoverAvailableMinor: 266 }), {
+  action: "topup",
+  amountMinor: 3372,
+  code: "RESTORE_PLATFORM_ROOM",
+});
+assert.deepEqual(recovery.decideTestRepairTopupAmount({ requiredMinor: 3638, leftoverAvailableMinor: 3638 }), {
+  action: "none",
+  amountMinor: 0,
+  code: "ALREADY_FUNDED_ROOM",
+});
+assert.deepEqual(recovery.decideTestRepairTopupAmount({ requiredMinor: 3638, leftoverAvailableMinor: 0 }), {
+  action: "stop",
+  amountMinor: 3638,
+  code: "EXCEEDS_CAP",
+});
+const topupSrc = read("src/lib/payments/payout-rail/test-recovery-topup.ts");
+assert.match(topupSrc, /stripe\.topups\.create/);
+assert.match(topupSrc, /currency: "gbp"/);
+assert.match(topupSrc, /ownChargeProof: "false"/);
+assert.doesNotMatch(topupSrc, /charges\.create|paymentIntents\.create|financialAccounts/);
+assert.match(read("src/app/api/admin/gp-test-recovery-topup/route.ts"), /restore_platform_balance/);
+assert.doesNotMatch(read("src/app/api/admin/gp-test-recovery-topup/route.ts"), /charges\.create/);
 const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
 assert.match(outbound, /proceedsFundingAllowsOutbound/);
 assert.match(outbound, /GP_PURCHASE_FUNDING_UNCONFIRMED/);
