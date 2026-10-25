@@ -81,15 +81,40 @@ export type ProcurementEligibilityInput = {
   agreed: boolean;
 };
 
-export function procurementIneligibilityReason(
-  input: ProcurementEligibilityInput,
+export function procurementAvailabilityReason(
+  input: Omit<ProcurementEligibilityInput, "agreed">,
 ): string | null {
-  if (!input.agreed) return null;
   if (!input.featureFlagOn || !input.globallyEnabled) return "PROCUREMENT_DISABLED";
   if (input.paymentOption === "INSTANT") return "DIRECT_NO_PROCUREMENT";
   if (!input.seller.procurementAdvancesEnabled) return "SELLER_PROCUREMENT_DISABLED";
   if (input.seller.isDemo || isAdminsource(input.seller)) return "SELLER_NOT_ELIGIBLE";
   if (input.seller.trustLevel < input.minTrustLevel) return "SELLER_TRUST";
+  return null;
+}
+
+export function procurementIneligibilityReason(
+  input: ProcurementEligibilityInput,
+): string | null {
+  if (!input.agreed) return null;
+  return procurementAvailabilityReason(input);
+}
+
+export function procurementAvailabilityCopy(
+  reason: string | null,
+  minTrustLevel: number,
+): string | null {
+  if (reason === "SELLER_TRUST") {
+    return `Procurement advance needs sourcer trust level ${minTrustLevel} or higher.`;
+  }
+  if (reason === "SELLER_PROCUREMENT_DISABLED" || reason === "SELLER_NOT_ELIGIBLE") {
+    return "Procurement advance is not available for this sourcer.";
+  }
+  if (reason === "PROCUREMENT_DISABLED") {
+    return "Procurement advances are not available right now.";
+  }
+  if (reason === "DIRECT_NO_PROCUREMENT") {
+    return "Procurement advance is only available on Protected Payment.";
+  }
   return null;
 }
 

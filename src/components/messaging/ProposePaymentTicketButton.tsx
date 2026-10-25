@@ -72,6 +72,18 @@ export type PaymentsProposalAccess = {
   peerPresent?: boolean;
   /** Server pair policy from conversation eligibility. Absent for ordinary chats. */
   ticketCurrency?: TicketCurrencyPolicy | null;
+  procurement?: {
+    flagOn?: boolean;
+    globallyOn?: boolean;
+    minTrustLevel?: number;
+    sellers?: {
+      userId: string;
+      trustLevel: number;
+      available: boolean;
+      reason?: string | null;
+      message?: string | null;
+    }[];
+  } | null;
 };
 
 /** Visible options and the currency the form will submit. Role-specific. */
@@ -390,6 +402,23 @@ export function ProposePaymentTicketButton({
     buyerIsMe === true ? myId : buyerIsMe === false ? otherUserId || "" : "";
   const selectedSellerId =
     buyerIsMe === true ? otherUserId || "" : buyerIsMe === false ? myId : "";
+  const sellerProcurement = (() => {
+    const minTrustLevel = proposalAccess?.procurement?.minTrustLevel ?? 2;
+    const row = proposalAccess?.procurement?.sellers?.find(
+      (seller) => seller.userId === selectedSellerId,
+    );
+    const available = Boolean(
+      procurementFlag &&
+        proposalAccess?.procurement?.globallyOn !== false &&
+        row?.available,
+    );
+    return {
+      available,
+      minTrustLevel,
+      trustLevel: row?.trustLevel ?? 0,
+      message: row?.message || null,
+    };
+  })();
   const buyerHandle =
     buyerIsMe === true ? "You" : buyerIsMe === false ? peerHandle : "—";
   const sourcerHandle =
@@ -483,6 +512,13 @@ export function ProposePaymentTicketButton({
       setBusy(false);
       return;
     }
+    if (procurement && !sellerProcurement.available) {
+      setError(
+        `${sellerProcurement.message || "Procurement advance is not available for this sourcer."} Ref: ${proposalTraceId}`,
+      );
+      setBusy(false);
+      return;
+    }
     if (showGpPricing && item + Math.max(0, shipping) + Math.max(0, service) < gpFloorMinor) {
       setError(
         `Minimum seller amount for this payment is ${formatMinor(gpFloorMinor, "GBP")}. Ref: ${proposalTraceId}`,
@@ -507,7 +543,8 @@ export function ProposePaymentTicketButton({
           title: title || undefined,
           currency: submittedCurrency,
           paymentOption: "PROTECTED",
-          procurementAdvanceAgreed: procurementFlag ? procurement : false,
+          procurementAdvanceAgreed:
+            procurementFlag && sellerProcurement.available ? procurement : false,
           // Fee is always calculated server-side (7% on item+shipping) and
           // shown in the breakdown — no client acknowledgment / "included" toggle.
           platformFeeIncludedInPrice: false,
@@ -843,15 +880,27 @@ export function ProposePaymentTicketButton({
           <input
             type="checkbox"
             className="mt-0.5"
-            checked={procurement}
-            onChange={(e) => setProcurement(e.target.checked)}
-            disabled={busy || (!procurementFlag && isEdit)}
+            checked={procurement && sellerProcurement.available}
+            onChange={(e) => {
+              if (!sellerProcurement.available) return;
+              setProcurement(e.target.checked);
+            }}
+            disabled={
+              busy ||
+              (!procurementFlag && isEdit) ||
+              !sellerProcurement.available
+            }
           />
           <span>
-            Request procurement advance (item cost only). After funding
-            is confirmed, Global Payouts pays the item cost automatically.
-            Connect still waits for the buyer to authorize item-fund
-            release. Shipping and sourcer fee stay held.
+            Request procurement advance (item cost only). After payment,
+            the buyer authorizes item-fund release. Shipping and sourcer
+            fee stay held until receipt or inspection. This sourcer needs
+            trust level {sellerProcurement.minTrustLevel} or higher
+            {selectedSellerId
+              ? ` (currently ${sellerProcurement.trustLevel})`
+              : ""}
+            .
+            {sellerProcurement.message ? ` ${sellerProcurement.message}` : ""}
             {!procurementFlag && isEdit
               ? " (Procurement advances currently disabled.)"
               : ""}

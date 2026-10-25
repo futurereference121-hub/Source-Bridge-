@@ -282,9 +282,8 @@ export default function SalesFulfilmentPage() {
                   {o.status === "FUNDED" && o.labels.payment.includes("not released") ? (
                     <div className="sm:col-span-2">
                       <p className="text-xs text-white/45">
-                        {o.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
-                          ? "Item funds pay automatically after funding is confirmed. Sourcers cannot release funds."
-                          : "Buyer authorizes item fund release. Sourcers cannot release funds."}
+                        Buyer authorizes item fund release. Sourcers cannot
+                        release funds.
                       </p>
                     </div>
                   ) : null}

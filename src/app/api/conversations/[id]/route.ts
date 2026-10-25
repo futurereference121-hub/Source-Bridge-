@@ -21,8 +21,14 @@ import {
 } from "@/lib/payments/allowlist";
 import {
   isInstantPaymentsEnabled,
+  isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
 } from "@/lib/payments/flags";
+import { getPlatformPaymentConfig } from "@/lib/payments/config";
+import {
+  procurementAvailabilityCopy,
+  procurementAvailabilityReason,
+} from "@/lib/payments/eligibility";
 import { gpGbpEntitlementFloorMinor } from "@/lib/payments/gp-pricing";
 import { sandboxTicketCurrencyPolicy } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
@@ -199,6 +205,50 @@ export async function GET(_req: Request, { params }: Params) {
       peerAllowed,
       bothAllowed: selfAllowed && peerAllowed,
       peerPresent: Boolean(peerPart),
+      procurement: await (async () => {
+        const ids = activeParts.map((p) => p.userId);
+        if (ids.length === 0) return null;
+        const [config, sellers] = await Promise.all([
+          getPlatformPaymentConfig(),
+          prisma.user.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              trustLevel: true,
+              procurementAdvancesEnabled: true,
+              isDemo: true,
+              isAdmin: true,
+              role: true,
+              username: true,
+            },
+          }),
+        ]);
+        const flagOn = isProcurementAdvancesEnabled();
+        return {
+          flagOn,
+          globallyOn: config.procurementAdvancesGloballyOn,
+          minTrustLevel: config.procurementMinTrustLevel,
+          sellers: sellers.map((seller) => {
+            const reason = procurementAvailabilityReason({
+              globallyEnabled: config.procurementAdvancesGloballyOn,
+              featureFlagOn: flagOn,
+              seller,
+              minTrustLevel: config.procurementMinTrustLevel,
+              paymentOption: "PROTECTED",
+            });
+            return {
+              userId: seller.id,
+              trustLevel: seller.trustLevel,
+              available: reason == null,
+              reason,
+              message: procurementAvailabilityCopy(
+                reason,
+                config.procurementMinTrustLevel,
+              ),
+            };
+          }),
+        };
+      })(),
       ticketCurrency: (() => {
         const policy = peerPart
           ? sandboxTicketCurrencyPolicy(user.id, peerPart.userId)

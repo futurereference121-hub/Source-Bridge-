@@ -592,9 +592,7 @@ function mapTicket(
                 books.remainingProtectedSellerShareMinor,
               platformFeeHeldMinor: books.platformFeeMinor,
               note:
-                t.payoutRail === "STRIPE_GLOBAL_PAYOUTS"
-                  ? "Item funds pay automatically after funding is confirmed. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately."
-                  : "Item funds may be released early after the buyer authorizes release. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately.",
+                "Item funds may be released early after the buyer authorizes release. Remaining seller funds (shipping + sourcer fee) stay protected. Source Bridge fee is held separately.",
             }
           : null,
     },
@@ -1497,7 +1495,7 @@ async function resolveAmounts(
     throw Object.assign(
       new Error(
         ineligible === "SELLER_TRUST"
-          ? "Procurement advance needs a higher sourcer trust level"
+          ? `Procurement advance needs sourcer trust level ${eligibilityInput.minTrustLevel} or higher`
           : "Procurement advance is not available for this agreement",
       ),
       { status: 400, code: ineligible },

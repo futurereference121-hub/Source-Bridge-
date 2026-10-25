@@ -524,8 +524,8 @@ assert.equal(
 );
 assert.match(runner, /stripeMode: "TEST"/);
 assert.match(runner, /isTestRepairAbandoned/);
-assert.match(runner, /resumeAuthorizedProcurement/);
-assert.match(runner, /txn.status !== "FUNDED"/);
+assert.doesNotMatch(runner, /resumeAuthorizedProcurement/);
+assert.match(runner, /recoverUncertainInitiatedOutbound/);
 assert.match(runner, /postedMinor >= requiredMinor/);
 assert.match(runner, /status: "POSTED", failureCode: ""/);
 assert.match(runner, /GP_TEST_REPAIR_ABANDONED/);
@@ -1424,5 +1424,103 @@ assert.match(read("src/app/api/payments/confirm-receipt/route.ts"), /GP_FUNDING_
 assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /balanceTransferPayoutId/);
 assert.match(read("src/lib/payments/payout-rail/proceeds-funding.ts"), /rec\.payout/);
 assert.match(read("src/lib/payments/flags.ts"), /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/);
+assert.match(outbound, /recoverUncertainInitiatedOutbound/);
+assert.match(outbound, /matchUncertainOutboundFromList/);
+assert.match(outbound, /listUncertainOutboundEvidence/);
+assert.match(outbound, /financial_account=/);
+assert.match(outbound, /replayOriginalOutboundIdempotency/);
+assert.match(outbound, /idempotencyKey: key/);
+assert.match(outbound, /attemptCount > 1/);
+const verifySrc = read("src/lib/payments/payout-rail/gp-testrun-verify.ts");
+assert.match(verifySrc, /matchFundingCredit/);
+assert.match(verifySrc, /getStripe\("TEST"\)/);
+assert.match(verifySrc, /recoverUncertainInitiatedOutbound/);
+assert.match(verifySrc, /isGlobalPayoutsLiveInitiationEnabled/);
+assert.doesNotMatch(verifySrc, /idempotencyKey: `/);
+assert.match(read("src/app/api/admin/gp-testrun-verify/route.ts"), /recover_uncertain/);
+
+const { matchUncertainOutboundFromList } = await import(
+  pathToFileURL(path.join(root, "src/lib/payments/payout-rail/outbound-quote.ts")).href
+);
+const listedBase = {
+  recipient: "rec_1",
+  payoutMethod: "pm_1",
+  financialAccount: "fa_1",
+  amountMinor: 3500,
+  currency: "gbp",
+};
+assert.equal(
+  matchUncertainOutboundFromList({
+    complete: false,
+    payments: [],
+    protectedTxnId: "txn_1",
+    kind: "FINAL",
+    recipientId: "rec_1",
+    payoutMethodId: "pm_1",
+    financialAccountId: "fa_1",
+    amountMinor: 3500,
+    currency: "GBP",
+  }).action,
+  "wait",
+);
+assert.equal(
+  matchUncertainOutboundFromList({
+    complete: true,
+    payments: [],
+    protectedTxnId: "txn_1",
+    kind: "FINAL",
+    recipientId: "rec_1",
+    payoutMethodId: "pm_1",
+    financialAccountId: "fa_1",
+    amountMinor: 3500,
+    currency: "GBP",
+  }).code,
+  "GP_RECONCILIATION_INCOMPLETE",
+);
+assert.deepEqual(
+  matchUncertainOutboundFromList({
+    complete: true,
+    payments: [{ ...listedBase, id: "ob_1", metadataTxnId: "txn_1", metadataKind: "FINAL" }],
+    protectedTxnId: "txn_1",
+    kind: "FINAL",
+    recipientId: "rec_1",
+    payoutMethodId: "pm_1",
+    financialAccountId: "fa_1",
+    amountMinor: 3500,
+    currency: "GBP",
+  }),
+  { action: "attach", outboundId: "ob_1" },
+);
+assert.deepEqual(
+  matchUncertainOutboundFromList({
+    complete: false,
+    payments: [{ ...listedBase, id: "ob_1", metadataTxnId: "txn_1", metadataKind: "FINAL" }],
+    protectedTxnId: "txn_1",
+    kind: "FINAL",
+    recipientId: "rec_1",
+    payoutMethodId: "pm_1",
+    financialAccountId: "fa_1",
+    amountMinor: 3500,
+    currency: "GBP",
+  }),
+  { action: "attach", outboundId: "ob_1" },
+);
+assert.equal(
+  matchUncertainOutboundFromList({
+    complete: true,
+    payments: [
+      { ...listedBase, id: "ob_1", metadataTxnId: "txn_1", metadataKind: "FINAL" },
+      { ...listedBase, id: "ob_2", metadataTxnId: "txn_1", metadataKind: "FINAL" },
+    ],
+    protectedTxnId: "txn_1",
+    kind: "FINAL",
+    recipientId: "rec_1",
+    payoutMethodId: "pm_1",
+    financialAccountId: "fa_1",
+    amountMinor: 3500,
+    currency: "GBP",
+  }).code,
+  "GP_PAYMENT_AMBIGUOUS",
+);
 
 console.log("gp proceeds funding: ok");

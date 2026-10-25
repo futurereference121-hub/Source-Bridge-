@@ -59,6 +59,10 @@ import {
   planQuoteRefreshIdentity,
   payoutMethodCountry,
   payoutMethodCurrencies,
+  buildQuotedPaymentBody,
+  buildSameCurrencyPaymentBody,
+  matchUncertainOutboundFromList,
+  OUTBOUND_PAYMENT_PATH,
   proveNoExistingOutboundPayment,
   providerErrorRecord,
   resolveDestinationCurrency,
@@ -847,8 +851,36 @@ async function executeOutboundRelease(opts: {
 
   if (
     existingAttempt &&
+    existingAttempt.initiatedAt &&
+    !existingAttempt.stripeOutboundPaymentId
+  ) {
+    const recovered = await recoverUncertainInitiatedOutbound(existingAttempt);
+    if (recovered.finalized) {
+      const full = await prisma.protectedTransaction.findUniqueOrThrow({
+        where: { id: txn.id },
+      });
+      return {
+        alreadyReleased: true,
+        txn: full,
+        amountMinor: amount,
+        transferId: recovered.outboundId,
+        outboundPaymentId: recovered.outboundId,
+      };
+    }
+    throw Object.assign(
+      new Error("Outbound payment outcome is still uncertain. Automatic retry is blocked."),
+      {
+        status: 409,
+        code: recovered.attached ? "GP_PAYMENT_IN_FLIGHT" : recovered.code || "GP_PAYMENT_IN_FLIGHT",
+        pendingProvider: true,
+        outboundPaymentId: recovered.outboundId,
+      },
+    );
+  }
+
+  if (
+    existingAttempt &&
     (existingAttempt.stripeOutboundPaymentId ||
-      existingAttempt.initiatedAt ||
       pilotFailureIsSticky(existingAttempt.failureCode))
   ) {
     throw Object.assign(
@@ -1572,7 +1604,7 @@ function readListedPayments(body: Record<string, unknown>): ListedOutboundPaymen
         : {};
     const metadata =
       row.metadata && typeof row.metadata === "object"
-        ? (row.metadata as { protectedTxnId?: unknown })
+        ? (row.metadata as { protectedTxnId?: unknown; kind?: unknown })
         : {};
     payments.push({
       id: typeof row.id === "string" ? row.id : "",
@@ -1582,9 +1614,284 @@ function readListedPayments(body: Record<string, unknown>): ListedOutboundPaymen
       amountMinor: typeof amount.value === "number" && Number.isInteger(amount.value) ? amount.value : null,
       currency: typeof amount.currency === "string" ? amount.currency : "",
       metadataTxnId: typeof metadata.protectedTxnId === "string" ? metadata.protectedTxnId : "",
+      metadataKind: typeof metadata.kind === "string" ? metadata.kind : "",
     });
   }
   return payments;
+}
+
+async function listOutboundPaymentsByQuery(
+  mode: "TEST" | "LIVE",
+  query: string,
+): Promise<{ complete: boolean; payments: ListedOutboundPayment[] }> {
+  if (!query) return { complete: false, payments: [] };
+  let path = `/v2/money_management/outbound_payments?${query}&limit=100`;
+  const payments: ListedOutboundPayment[] = [];
+  for (let page = 0; page < 20; page += 1) {
+    const listed = await gpFetch({ mode, method: "GET", path });
+    if (!listed.ok) return { complete: false, payments };
+    const batch = readListedPayments(listed.body);
+    if (!batch) return { complete: false, payments };
+    payments.push(...batch);
+    const next = listed.body.next_page_url;
+    if (!next) return { complete: true, payments };
+    if (typeof next !== "string" || !next.startsWith("https://api.stripe.com/v2/money_management/outbound_payments")) {
+      return { complete: false, payments };
+    }
+    path = next.slice("https://api.stripe.com".length);
+  }
+  return { complete: false, payments };
+}
+
+async function listRecipientOutboundPayments(
+  mode: "TEST" | "LIVE",
+  recipientId: string,
+): Promise<{ complete: boolean; payments: ListedOutboundPayment[] }> {
+  if (!recipientId) return { complete: false, payments: [] };
+  return listOutboundPaymentsByQuery(mode, `recipient=${encodeURIComponent(recipientId)}`);
+}
+
+export async function listUncertainOutboundEvidence(
+  mode: "TEST" | "LIVE",
+  recipientId: string,
+  financialAccountId: string,
+): Promise<{ complete: boolean; payments: ListedOutboundPayment[] }> {
+  const queries: string[] = [];
+  if (recipientId) queries.push(`recipient=${encodeURIComponent(recipientId)}`);
+  if (financialAccountId) queries.push(`financial_account=${encodeURIComponent(financialAccountId)}`);
+  if (queries.length === 0) return { complete: false, payments: [] };
+  const results = await Promise.all(
+    queries.map((query) => listOutboundPaymentsByQuery(mode, query)),
+  );
+  const byId = new Map<string, ListedOutboundPayment>();
+  for (const result of results) {
+    for (const payment of result.payments) {
+      if (payment.id) byId.set(payment.id, payment);
+    }
+  }
+  return {
+    complete: results.every((row) => row.complete),
+    payments: [...byId.values()],
+  };
+}
+
+function originalOutboundPaymentBody(opts: {
+  attempt: {
+    protectedTxnId: string;
+    kind: string;
+    amountMinor: number;
+    currency: string;
+    stripeRecipientId: string;
+    stripePayoutMethodId: string;
+    stripeFinancialAccountId: string;
+    destinationCurrency: string;
+    fxRateSnapshot: string;
+  };
+  termsHash: string;
+  financialAccountId: string;
+}): Record<string, unknown> | null {
+  const snapshot = parseQuoteSnapshot(opts.attempt.fxRateSnapshot || "");
+  const source = opts.attempt.currency.toLowerCase();
+  const destination = String(
+    opts.attempt.destinationCurrency || snapshot?.destinationCurrency || "",
+  ).toLowerCase();
+  const metadata = {
+    protectedTxnId: opts.attempt.protectedTxnId,
+    kind: opts.attempt.kind === "PROCUREMENT" ? "PROCUREMENT" : "FINAL",
+    rail: "STRIPE_GLOBAL_PAYOUTS",
+    termsHash: opts.termsHash,
+  };
+  if (!opts.financialAccountId || !opts.attempt.stripeRecipientId || !opts.attempt.stripePayoutMethodId) {
+    return null;
+  }
+  if (destination && destination !== source) {
+    if (!snapshot?.quoteId) return null;
+    return buildQuotedPaymentBody({
+      financialAccountId: opts.financialAccountId,
+      recipientId: opts.attempt.stripeRecipientId,
+      payoutMethodId: opts.attempt.stripePayoutMethodId,
+      sourceAmountMinor: opts.attempt.amountMinor,
+      sourceCurrency: opts.attempt.currency,
+      destinationCurrency: destination,
+      quoteId: snapshot.quoteId,
+      metadata,
+    });
+  }
+  return buildSameCurrencyPaymentBody({
+    financialAccountId: opts.financialAccountId,
+    recipientId: opts.attempt.stripeRecipientId,
+    payoutMethodId: opts.attempt.stripePayoutMethodId,
+    sourceAmountMinor: opts.attempt.amountMinor,
+    sourceCurrency: opts.attempt.currency,
+    metadata,
+  });
+}
+
+async function replayOriginalOutboundIdempotency(opts: {
+  attempt: {
+    idempotencyKey: string;
+    stripeMode: string;
+    protectedTxnId: string;
+    kind: string;
+    amountMinor: number;
+    currency: string;
+    stripeRecipientId: string;
+    stripePayoutMethodId: string;
+    stripeFinancialAccountId: string;
+    destinationCurrency: string;
+    fxRateSnapshot: string;
+    attemptCount: number;
+  };
+  termsHash: string;
+  financialAccountId: string;
+}): Promise<{ outboundId: string } | { code: "GP_RECONCILIATION_INCOMPLETE" }> {
+  const mode = normalizeStripeMode(opts.attempt.stripeMode);
+  if (mode !== "TEST" || !canInitiateGlobalPayoutsMoney("TEST")) {
+    return { code: "GP_RECONCILIATION_INCOMPLETE" };
+  }
+  // First submission uses the stored key. A later _aN key would be a new payment.
+  if (opts.attempt.attemptCount > 1) {
+    return { code: "GP_RECONCILIATION_INCOMPLETE" };
+  }
+  const key = String(opts.attempt.idempotencyKey || "").trim();
+  const body = originalOutboundPaymentBody({
+    attempt: opts.attempt,
+    termsHash: opts.termsHash,
+    financialAccountId: opts.financialAccountId,
+  });
+  if (!key || !body) return { code: "GP_RECONCILIATION_INCOMPLETE" };
+  const created = await gpFetch({
+    mode: "TEST",
+    method: "POST",
+    path: OUTBOUND_PAYMENT_PATH,
+    moneyMutation: true,
+    idempotencyKey: key,
+    body,
+  });
+  const outboundId = typeof created.body?.id === "string" ? created.body.id : "";
+  if (!outboundId) return { code: "GP_RECONCILIATION_INCOMPLETE" };
+  return { outboundId };
+}
+
+export async function recoverUncertainInitiatedOutbound(attempt: {
+  id: string;
+  protectedTxnId: string;
+  kind: string;
+  status: string;
+  amountMinor: number;
+  currency: string;
+  stripeMode: string;
+  stripeOutboundPaymentId: string;
+  initiatedAt: Date | null;
+  stripeRecipientId: string;
+  stripePayoutMethodId: string;
+  stripeFinancialAccountId?: string;
+  destinationCurrency?: string;
+  fxRateSnapshot?: string;
+  idempotencyKey?: string;
+  attemptCount?: number;
+}): Promise<{
+  attached: boolean;
+  finalized: boolean;
+  outboundId: string;
+  code: string;
+}> {
+  if (attempt.stripeOutboundPaymentId) {
+    return {
+      attached: true,
+      finalized: false,
+      outboundId: attempt.stripeOutboundPaymentId,
+      code: "",
+    };
+  }
+  if (!attempt.initiatedAt || attempt.status !== "PENDING") {
+    return { attached: false, finalized: false, outboundId: "", code: "NOT_UNCERTAIN" };
+  }
+  const mode = normalizeStripeMode(attempt.stripeMode);
+  const faId =
+    attempt.stripeFinancialAccountId || getGlobalPayoutsFinancialAccountId(mode);
+  const listed = await listUncertainOutboundEvidence(
+    mode,
+    attempt.stripeRecipientId,
+    faId,
+  );
+  const matched = matchUncertainOutboundFromList({
+    complete: listed.complete,
+    payments: listed.payments,
+    protectedTxnId: attempt.protectedTxnId,
+    kind: attempt.kind === "PROCUREMENT" ? "PROCUREMENT" : "FINAL",
+    recipientId: attempt.stripeRecipientId,
+    payoutMethodId: attempt.stripePayoutMethodId,
+    financialAccountId: faId,
+    amountMinor: attempt.amountMinor,
+    currency: attempt.currency,
+  });
+  let outboundId = matched.action === "attach" ? matched.outboundId : "";
+  if (!outboundId && matched.action === "wait" && matched.code === "GP_PAYMENT_AMBIGUOUS") {
+    return { attached: false, finalized: false, outboundId: "", code: matched.code };
+  }
+  if (!outboundId) {
+    const txn = await prisma.protectedTransaction.findUnique({
+      where: { id: attempt.protectedTxnId },
+      select: { termsHash: true, stripeMode: true },
+    });
+    if (!txn || normalizeStripeMode(txn.stripeMode) !== "TEST") {
+      return { attached: false, finalized: false, outboundId: "", code: "GP_RECONCILIATION_INCOMPLETE" };
+    }
+    const replayed = await replayOriginalOutboundIdempotency({
+      attempt: {
+        idempotencyKey: attempt.idempotencyKey || "",
+        stripeMode: attempt.stripeMode,
+        protectedTxnId: attempt.protectedTxnId,
+        kind: attempt.kind,
+        amountMinor: attempt.amountMinor,
+        currency: attempt.currency,
+        stripeRecipientId: attempt.stripeRecipientId,
+        stripePayoutMethodId: attempt.stripePayoutMethodId,
+        stripeFinancialAccountId: attempt.stripeFinancialAccountId || faId,
+        destinationCurrency: attempt.destinationCurrency || "",
+        fxRateSnapshot: attempt.fxRateSnapshot || "",
+        attemptCount: attempt.attemptCount ?? 0,
+      },
+      termsHash: txn.termsHash,
+      financialAccountId: faId,
+    });
+    if (!("outboundId" in replayed)) {
+      return { attached: false, finalized: false, outboundId: "", code: replayed.code };
+    }
+    outboundId = replayed.outboundId;
+  }
+  const attached = await prisma.outboundPaymentAttempt.updateMany({
+    where: {
+      id: attempt.id,
+      stripeOutboundPaymentId: "",
+      initiatedAt: { not: null },
+      status: "PENDING",
+    },
+    data: {
+      stripeOutboundPaymentId: outboundId,
+      status: "PROCESSING",
+      failureCode: "",
+      failureMessage: "",
+      lastAttemptAt: new Date(),
+    },
+  });
+  if (attached.count !== 1) {
+    return {
+      attached: false,
+      finalized: false,
+      outboundId,
+      code: "GP_PAYMENT_IN_FLIGHT",
+    };
+  }
+  const { reconcileOutboundAttempt } = await import("@/lib/payments/payout-rail/reconcile");
+  const result = await reconcileOutboundAttempt({ attemptId: attempt.id, force: true });
+  return {
+    attached: true,
+    finalized: result.action === "finalized" || result.action === "already_finalized",
+    outboundId,
+    code: "",
+  };
 }
 
 async function reconcileNoMatchingOutbound(opts: {
@@ -1599,24 +1906,12 @@ async function reconcileNoMatchingOutbound(opts: {
   if (!opts.recipientId || !opts.payoutMethodId || !opts.financialAccountId || opts.amountMinor <= 0) {
     return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
   }
-  let path = `/v2/money_management/outbound_payments?recipient=${encodeURIComponent(opts.recipientId)}&limit=100`;
-  const payments: ListedOutboundPayment[] = [];
-  for (let page = 0; page < 20; page += 1) {
-    const listed = await gpFetch({ mode: opts.mode, method: "GET", path });
-    if (!listed.ok) return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
-    const batch = readListedPayments(listed.body);
-    if (!batch) return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
-    payments.push(...batch);
-    const next = listed.body.next_page_url;
-    if (!next) {
-      return proveNoExistingOutboundPayment({ complete: true, payments, ...opts });
-    }
-    if (typeof next !== "string" || !next.startsWith("https://api.stripe.com/v2/money_management/outbound_payments")) {
-      return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
-    }
-    path = next.slice("https://api.stripe.com".length);
-  }
-  return { ok: false as const, code: "GP_RECONCILIATION_INCOMPLETE" as const };
+  const listed = await listRecipientOutboundPayments(opts.mode, opts.recipientId);
+  return proveNoExistingOutboundPayment({
+    complete: listed.complete,
+    payments: listed.payments,
+    ...opts,
+  });
 }
 
 /**

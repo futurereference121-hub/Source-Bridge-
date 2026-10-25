@@ -71,7 +71,7 @@ const gpAccepted = describeProcurementStage({
   formatMinor: formatGbp,
 });
 assert.equal(gpAccepted.headline, "Procurement advance accepted: £20.00");
-assert.match(gpAccepted.detail, /automatically after funding/);
+assert.match(gpAccepted.detail, /Buyer authorizes/);
 const connectAccepted = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
@@ -82,7 +82,7 @@ const connectAccepted = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.match(connectAccepted.detail, /Buyer authorizes/);
+assert.equal(connectAccepted.detail, gpAccepted.detail);
 const paid = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
@@ -106,6 +106,7 @@ const finalAuth = describeProcurementStage({
   formatMinor: formatGbp,
 });
 assert.match(finalAuth.detail, /Final release authorized/);
+assert.doesNotMatch(finalAuth.detail || "", /inspection/i);
 
 const posted = deriveOutboundDisplayState("SUCCEEDED");
 assert.equal(posted.buyerLabel, "Released to sourcer");
@@ -443,7 +444,8 @@ assert.match(sales, /useProtectedOrders/);
 assert.match(sales, /role: "seller"/);
 assert.match(sales, /accountId: account\?\.id/);
 assert.match(sales, /describeProcurementStage/);
-assert.match(sales, /Item funds pay automatically after funding is confirmed/);
+assert.match(sales, /Buyer authorizes item fund release/);
+assert.doesNotMatch(sales, /pays automatically after funding/);
 assert.doesNotMatch(sales, /global-payouts\/quote|releaseProcurement|stripe\.outbound/);
 
 function cardHtml(model, title) {

@@ -1116,7 +1116,43 @@ export type ListedOutboundPayment = {
   amountMinor: number | null;
   currency: string;
   metadataTxnId: string;
+  metadataKind?: string;
 };
+
+export function matchUncertainOutboundFromList(opts: {
+  complete: boolean;
+  payments: ListedOutboundPayment[];
+  protectedTxnId: string;
+  kind: "PROCUREMENT" | "FINAL";
+  recipientId: string;
+  payoutMethodId: string;
+  financialAccountId: string;
+  amountMinor: number;
+  currency: string;
+}):
+  | { action: "attach"; outboundId: string }
+  | { action: "wait"; code: "GP_RECONCILIATION_INCOMPLETE" | "GP_PAYMENT_AMBIGUOUS" } {
+  const source = opts.currency.toLowerCase();
+  const matches: string[] = [];
+  for (const payment of opts.payments) {
+    if (!payment.id) continue;
+    const kind = String(payment.metadataKind || "").toUpperCase();
+    const txnMatch = payment.metadataTxnId === opts.protectedTxnId;
+    const kindMatch = !kind || kind === opts.kind;
+    const routeMatch =
+      payment.recipient === opts.recipientId &&
+      payment.payoutMethod === opts.payoutMethodId &&
+      payment.financialAccount === opts.financialAccountId &&
+      payment.amountMinor === opts.amountMinor &&
+      payment.currency.toLowerCase() === source;
+    if (txnMatch && kindMatch) matches.push(payment.id);
+    else if (!payment.metadataTxnId && routeMatch) matches.push(payment.id);
+  }
+  const unique = [...new Set(matches)];
+  if (unique.length === 1) return { action: "attach", outboundId: unique[0] };
+  if (unique.length > 1) return { action: "wait", code: "GP_PAYMENT_AMBIGUOUS" };
+  return { action: "wait", code: "GP_RECONCILIATION_INCOMPLETE" };
+}
 
 export function proveNoExistingOutboundPayment(opts: {
   complete: boolean;

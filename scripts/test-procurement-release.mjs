@@ -426,13 +426,31 @@ assert.match(ticketsSrc, /procurementIneligibilityReason/);
 assert.match(ticketsSrc, /status: 400/);
 assert.match(ticketsSrc, /SELLER_TRUST/);
 const fundingRun = readFileSync(join(root, "src/lib/payments/payout-rail/proceeds-funding-run.ts"), "utf8");
-assert.match(fundingRun, /resumeAuthorizedProcurement/);
-assert.match(fundingRun, /txn.status !== "FUNDED"/);
-assert.match(fundingRun, /releaseProcurement/);
-assert.ok(
-  fundingRun.indexOf("resumeAuthorizedProcurement") < fundingRun.indexOf("resumeOne(txn.id"),
-  "GP procurement resumes before final outbound",
+assert.doesNotMatch(fundingRun, /resumeAuthorizedProcurement/);
+assert.doesNotMatch(fundingRun, /releaseProcurement/);
+assert.match(eligibilitySrc, /procurementAvailabilityReason/);
+assert.match(eligibilitySrc, /if \(!input.agreed\) return null/);
+const proposeSrc = readFileSync(
+  join(root, "src/components/messaging/ProposePaymentTicketButton.tsx"),
+  "utf8",
 );
+assert.match(proposeSrc, /sellerProcurement.available \? procurement : false/);
+assert.match(proposeSrc, /if \(procurement && !sellerProcurement.available\)/);
+{
+  const books = computeProtectedFinancials({
+    itemCostMinor: 2000,
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+    protectionFeeMinor: 525,
+    procurementAdvanceAgreed: true,
+    procurementAdvanceMinor: 2000,
+    procurementTransferredMinor: 2000,
+    finalTransferredMinor: 1500,
+  });
+  assert.equal(books.transferredTotalMinor, 3500);
+  assert.equal(books.finalResidualMinor, 0);
+  assert.equal(books.sellerEntitledMinor, 3500);
+}
 
 // PCI smoke: release route has no card fields
 assert.ok(!/cardNumber|cvc|pan/i.test(releaseApi));

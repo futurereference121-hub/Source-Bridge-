@@ -150,13 +150,15 @@ export function describeProcurementStage(opts: {
   if (procOutbound === "PROCESSING" || procOutbound === "PENDING") {
     return {
       headline: `Procurement advance payout in progress: ${advance}`,
-      detail: remaining ? `Remaining ${remaining} stays held.` : null,
+      detail: remaining
+        ? `Remaining ${remaining} stays held. Authorization is not bank arrival.`
+        : "Payout processing. Authorization is not bank arrival.",
     };
   }
-  if (isGlobalPayoutsRail(opts.payoutRail)) {
+  if (finalReleased && opts.transferredMinor <= 0) {
     return {
       headline: `Procurement advance accepted: ${advance}`,
-      detail: "Item cost pays automatically after funding is confirmed. Shipping and sourcer fee stay held.",
+      detail: "Final release authorized. Shipping and sourcer fee follow the existing receipt rules.",
     };
   }
   return {

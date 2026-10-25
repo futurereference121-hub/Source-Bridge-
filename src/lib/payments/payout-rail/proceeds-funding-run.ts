@@ -44,7 +44,6 @@ import {
   nextFundingLegSequence,
   otherGpAvailableUnpaidMinor,
   planProceedsAfterQuote,
-  proceedsFundingAllowsOutbound,
   scheduleBlocksBuyerFunding,
   type ChargeSettlementInput,
   type GpBuyerPayoutProgress,
@@ -367,7 +366,6 @@ export async function reconcileGpProceedsFunding(opts: {
       openDispute: (txn.disputes ?? []).length > 0,
     });
     if (moved) funded += 1;
-    if (await resumeAuthorizedProcurement(txn.id, mode)) resumed += 1;
     if (opts.resumeAuthorized !== false && (await resumeOne(txn.id, mode))) resumed += 1;
     } catch (err) {
       console.error(
@@ -1148,54 +1146,6 @@ async function confirmLegs(
   }
 }
 
-async function resumeAuthorizedProcurement(
-  protectedTxnId: string,
-  mode: StripeMode,
-): Promise<boolean> {
-  const txn = await prisma.protectedTransaction.findUnique({
-    where: { id: protectedTxnId },
-    include: { gpProceedsFunding: { include: { legs: true } } },
-  });
-  if (!txn || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
-  if (txn.status !== "FUNDED") return false;
-  if (!txn.procurementAdvanceAgreed || txn.procurementAdvanceMinor <= 0) return false;
-  if (txn.procurementTransferredMinor >= txn.procurementAdvanceMinor) return false;
-  const funding = txn.gpProceedsFunding;
-  const postedMinor = (funding?.legs ?? [])
-    .filter((leg) => leg.status === "POSTED")
-    .reduce((sum, leg) => sum + leg.amountMinor, 0);
-  const pendingMinor = (funding?.legs ?? [])
-    .filter((leg) => leg.status === "PENDING")
-    .reduce((sum, leg) => sum + leg.amountMinor, 0);
-  const requiredMinor =
-    txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor + (funding?.payoutFeeMinor ?? 0);
-  const allowed = proceedsFundingAllowsOutbound({
-    payoutRail: txn.payoutRail,
-    proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled(),
-    funding: funding
-      ? {
-          status: funding.status,
-          postedMinor,
-          pendingMinor,
-          postedLegsHaveCredit: (funding.legs ?? [])
-            .filter((leg) => leg.status === "POSTED")
-            .every((leg) => Boolean(leg.faCreditId)),
-        }
-      : null,
-    requiredMinor,
-  });
-  if (!allowed.ok) return false;
-  const { releaseProcurement } = await import("@/lib/payments/release");
-  try {
-    await releaseProcurement({ protectedTxnId: txn.id, actorUserId: null });
-    return true;
-  } catch (err) {
-    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-    if (WAITING.has(code)) return false;
-    return false;
-  }
-}
-
 async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<boolean> {
   const txn = await prisma.protectedTransaction.findUnique({
     where: { id: protectedTxnId },
@@ -1226,6 +1176,19 @@ async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<bool
   });
   if (quotePlan.action !== "complete") return false;
   if (posted < principal + fees) return false;
+  const existingOutbound = txn.outboundPaymentAttempts[0];
+  if (
+    existingOutbound &&
+    existingOutbound.initiatedAt &&
+    !existingOutbound.stripeOutboundPaymentId
+  ) {
+    const { recoverUncertainInitiatedOutbound } = await import(
+      "@/lib/payments/payout-rail/outbound-payment"
+    );
+    const recovered = await recoverUncertainInitiatedOutbound(existingOutbound);
+    if (recovered.finalized) return true;
+    return false;
+  }
   const audit = await prisma.financialAuditEvent.findFirst({
     where: { protectedTxnId: txn.id, actorUserId: txn.buyerId, action: "BUYER_RELEASE_NOW" },
     select: { id: true },
