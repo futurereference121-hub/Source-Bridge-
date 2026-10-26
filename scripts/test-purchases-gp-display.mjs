@@ -43,7 +43,7 @@ const {
 const { purchaseCardModel, purchasePayoutPhrase } = await import(
   "../src/lib/payments/purchase-list-presentation.ts"
 );
-const { describeProcurementStage, procurementAdvanceAuthorized } = await import(
+const { describeProcurementStage, procurementAdvanceAuthorized, procurementRemainderHeldMinor } = await import(
   "../src/lib/payments/fulfilment-display.ts"
 );
 const { shouldApplyTicketUpdate } = await import(
@@ -102,9 +102,15 @@ const authorizedPending = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.match(authorizedPending.headline, /Item release authorized — payout pending: £20.00/);
+assert.equal(authorizedPending.headline, "Item release authorized: £20.00");
 assert.doesNotMatch(authorizedPending.detail || "", /Buyer authorizes/);
-assert.match(authorizedPending.detail, /Remaining £15.00/);
+assert.match(authorizedPending.detail, /Procurement payout status: awaiting settlement/);
+assert.match(authorizedPending.detail, /Shipping \+ sourcer fee awaiting final release: £15.00/);
+assert.match(authorizedPending.detail, /Paid\/sent: £0.00/);
+assert.doesNotMatch(authorizedPending.detail || "", /already released/);
+assert.equal(authorizedPending.paidAdvanceMinor, 0);
+assert.equal(authorizedPending.authorizedAdvanceMinor, 2000);
+assert.equal(authorizedPending.remainderHeldMinor, 1500);
 assert.equal(
   procurementAdvanceAuthorized({
     transferredMinor: 0,
@@ -199,8 +205,23 @@ const paid = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.equal(paid.headline, "Procurement advance paid: £20.00");
-assert.match(paid.detail, /Remaining £15.00 held/);
+assert.equal(paid.headline, "Item release paid: £20.00");
+assert.match(paid.detail, /Shipping \+ sourcer fee awaiting final release: £15.00/);
+assert.match(paid.detail, /Paid\/sent: £20.00/);
+assert.equal(paid.payoutStatus, "succeeded");
+assert.equal(
+  procurementRemainderHeldMinor({
+    remainingProtectedSellerShareMinor: 1500,
+  }),
+  1500,
+);
+assert.equal(
+  procurementRemainderHeldMinor({
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+  }),
+  1500,
+);
 const finalAuth = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,

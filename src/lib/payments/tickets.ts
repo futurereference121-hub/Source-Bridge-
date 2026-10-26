@@ -335,6 +335,7 @@ function mapTicket(
     gpPayoutProgress?: GpBuyerPayoutProgress | null;
     outboundKind?: string | null;
     outboundStatus?: string | null;
+    fundingStatus?: string | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -526,6 +527,7 @@ function mapTicket(
     gpPayoutProgress: extras?.gpPayoutProgress ?? null,
     outboundKind: extras?.outboundKind ?? null,
     outboundStatus: extras?.outboundStatus ?? null,
+    fundingStatus: extras?.fundingStatus ?? null,
     payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
     pricingPolicy: t.pricingPolicy || "",
     feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
@@ -1007,13 +1009,15 @@ async function gpProgressForTransactions(
 ): Promise<{
   progress: Map<string, GpBuyerPayoutProgress>;
   outbound: Map<string, { kind: string | null; status: string | null }>;
+  funding: Map<string, string | null>;
 }> {
   const ids = rows
     .filter((row) => row.payoutRail === "STRIPE_GLOBAL_PAYOUTS")
     .map((row) => row.id);
   const out = new Map<string, GpBuyerPayoutProgress>();
   const outbound = new Map<string, { kind: string | null; status: string | null }>();
-  if (ids.length === 0) return { progress: out, outbound };
+  const fundingStatus = new Map<string, string | null>();
+  if (ids.length === 0) return { progress: out, outbound, funding: fundingStatus };
   const [fundings, attempts] = await Promise.all([
     prisma.gpProceedsFunding.findMany({
       where: { protectedTxnId: { in: ids } },
@@ -1049,6 +1053,7 @@ async function gpProgressForTransactions(
         status: attempt.status ?? null,
       });
     }
+    if (funding) fundingStatus.set(row.id, funding.status ?? null);
     const progress = describeGpBuyerPayout({
       releaseAuthorized:
         row.status === "READY_TO_RELEASE" ||
@@ -1073,7 +1078,7 @@ async function gpProgressForTransactions(
     });
     if (progress) out.set(row.id, progress);
   }
-  return { progress: out, outbound };
+  return { progress: out, outbound, funding: fundingStatus };
 }
 
 export async function listConversationPaymentTickets(
@@ -1261,6 +1266,9 @@ export async function listConversationPaymentTickets(
         : null,
       outboundStatus: t.protectedTransactionId
         ? gpProgress.outbound.get(t.protectedTransactionId)?.status ?? null
+        : null,
+      fundingStatus: t.protectedTransactionId
+        ? gpProgress.funding.get(t.protectedTransactionId) ?? null
         : null,
       origin: t.protectedTransaction?.origin ?? null,
     }),
@@ -2587,6 +2595,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
       : {
           progress: new Map<string, GpBuyerPayoutProgress>(),
           outbound: new Map<string, { kind: string | null; status: string | null }>(),
+          funding: new Map<string, string | null>(),
         };
   return mapTicket(ticket, await extrasWithParties(ticket, {
     protectedTxnStatus: pt?.status ?? null,
@@ -2621,6 +2630,9 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
       : null,
     outboundStatus: ticket.protectedTransactionId
       ? gpProgress.outbound.get(ticket.protectedTransactionId)?.status ?? null
+      : null,
+    fundingStatus: ticket.protectedTransactionId
+      ? gpProgress.funding.get(ticket.protectedTransactionId) ?? null
       : null,
   }));
 }

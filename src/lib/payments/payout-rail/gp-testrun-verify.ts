@@ -28,6 +28,16 @@ export const CURRENT_GP_TEST_RUN = {
   createdOnOrAfter: "2026-10-25T00:00:00.000Z",
 };
 
+export const CURRENT_GP_PROCUREMENT_TEST = {
+  txnHash: "6ba47234",
+  ticketHash: "151cd1de",
+  stripeMode: "TEST" as const,
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  currency: "GBP",
+  totalChargeMinor: 4025,
+  createdOnOrAfter: "2026-10-25T00:00:00.000Z",
+};
+
 function assertLiveInitiationOff() {
   if (isGlobalPayoutsLiveInitiationEnabled()) {
     throw Object.assign(new Error("LIVE GP initiation must stay off"), {
@@ -55,6 +65,118 @@ async function loadCurrentTestRun() {
     throw Object.assign(new Error("Current TEST purchase was not found"), { status: 404 });
   }
   return purchase;
+}
+
+export async function verifyProcurementTestCharge() {
+  assertLiveInitiationOff();
+  const rows = await prisma.protectedTransaction.findMany({
+    where: {
+      stripeMode: CURRENT_GP_PROCUREMENT_TEST.stripeMode,
+      payoutRail: CURRENT_GP_PROCUREMENT_TEST.payoutRail,
+      totalChargeMinor: CURRENT_GP_PROCUREMENT_TEST.totalChargeMinor,
+      createdAt: { gte: new Date(CURRENT_GP_PROCUREMENT_TEST.createdOnOrAfter) },
+    },
+    include: {
+      paymentTicket: { select: { id: true, title: true } },
+      gpProceedsFunding: { include: { legs: true } },
+      outboundPaymentAttempts: { orderBy: { updatedAt: "desc" }, take: 2 },
+    },
+  });
+  const purchase = rows.find((row) => idHash8(row.id) === CURRENT_GP_PROCUREMENT_TEST.txnHash);
+  if (!purchase || purchase.stripeMode !== "TEST") {
+    throw Object.assign(new Error("Current TEST procurement purchase was not found"), {
+      status: 404,
+    });
+  }
+  const ticketHash = purchase.paymentTicket?.id
+    ? idHash8(purchase.paymentTicket.id)
+    : null;
+  const stripe = getStripe("TEST");
+  let charge: {
+    suffix: string;
+    livemode: boolean;
+    status: string | null;
+    paid: boolean | null;
+    amountMinor: number | null;
+    currency: string | null;
+    last4: string | null;
+    paymentMethodSuffix: string;
+    bypassInternationalCard: boolean;
+    bypassInternationalPm: boolean;
+    btStatus: string | null;
+    availableOn: string | null;
+    netMinor: number | null;
+    feeMinor: number | null;
+  } | null = null;
+  if (purchase.stripeChargeId) {
+    const retrieved = await stripe.charges.retrieve(purchase.stripeChargeId, {
+      expand: ["balance_transaction", "payment_method_details"],
+    });
+    const bt =
+      retrieved.balance_transaction && typeof retrieved.balance_transaction === "object"
+        ? (retrieved.balance_transaction as {
+            status?: string;
+            available_on?: number;
+            net?: number;
+            fee?: number;
+          })
+        : null;
+    const card = retrieved.payment_method_details?.card;
+    const last4 = card && typeof card.last4 === "string" ? card.last4 : null;
+    const pm = String(retrieved.payment_method || "");
+    charge = {
+      suffix: last5(retrieved.id),
+      livemode: retrieved.livemode,
+      status: retrieved.status ?? null,
+      paid: retrieved.paid ?? null,
+      amountMinor: retrieved.amount ?? null,
+      currency: retrieved.currency ?? null,
+      last4,
+      paymentMethodSuffix: last5(pm),
+      bypassInternationalCard: last4 === "0278",
+      bypassInternationalPm: pm === "pm_card_bypassPendingInternational",
+      btStatus: bt?.status ?? null,
+      availableOn:
+        typeof bt?.available_on === "number"
+          ? new Date(bt.available_on * 1000).toISOString()
+          : null,
+      netMinor: typeof bt?.net === "number" ? bt.net : null,
+      feeMinor: typeof bt?.fee === "number" ? bt.fee : null,
+    };
+  }
+  const funding = purchase.gpProceedsFunding;
+  const attempt = purchase.outboundPaymentAttempts[0] || null;
+  return {
+    ok: true,
+    stripeCalled: Boolean(purchase.stripeChargeId),
+    purchaseHash: CURRENT_GP_PROCUREMENT_TEST.txnHash,
+    ticketHash,
+    title: purchase.paymentTicket?.title || purchase.title || "",
+    status: purchase.status,
+    agreed: purchase.procurementAdvanceAgreed,
+    advanceMinor: purchase.procurementAdvanceMinor,
+    transferredMinor: purchase.procurementTransferredMinor,
+    finalTransferredMinor: purchase.finalTransferredMinor,
+    fundingStatus: funding?.status ?? null,
+    fundingFailure: funding?.failureCode || "",
+    chargeNet: funding?.chargeNetMinor ?? null,
+    legs: (funding?.legs || []).length,
+    outbound: attempt
+      ? {
+          kind: attempt.kind,
+          status: attempt.status,
+          amountMinor: attempt.amountMinor,
+          hasProviderId: Boolean(attempt.stripeOutboundPaymentId),
+          failureCode: attempt.failureCode || "",
+        }
+      : null,
+    charge,
+    reservesAgainstNewAvailable:
+      funding?.status === "AWAITING_SETTLEMENT" ||
+      funding?.failureCode === "GP_CHARGE_PENDING"
+        ? false
+        : null,
+  };
 }
 
 export async function verifyCurrentTestRunFunding() {

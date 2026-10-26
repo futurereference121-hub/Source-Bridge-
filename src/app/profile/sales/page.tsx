@@ -19,6 +19,7 @@ import {
   describeProcurementStage,
   formatInspectionWindow,
   procurementAdvanceAuthorized,
+  procurementRemainderHeldMinor,
   receiptConfirmedCopy,
   sellerReleaseProgressCopy,
   shippedAwaitingReceiptCopy,
@@ -48,6 +49,7 @@ type Order = ProtectedOrderSummary & {
   procurementTransferredMinor?: number;
   outboundKind?: string | null;
   outboundStatus?: string | null;
+  fundingStatus?: string | null;
   books?: {
     remainingProtectedSellerShareMinor?: number;
     finalResidualMinor?: number;
@@ -260,14 +262,16 @@ export default function SalesFulfilmentPage() {
                         o.books?.procurementTransferredMinor ??
                         o.procurementTransferredMinor ??
                         0,
-                      remainingHeldMinor:
-                        o.books?.finalResidualMinor ??
-                        o.books?.remainingProtectedSellerShareMinor ??
-                        0,
+                      remainingHeldMinor: procurementRemainderHeldMinor({
+                        remainingProtectedSellerShareMinor:
+                          o.books?.remainingProtectedSellerShareMinor,
+                      }),
                     status: o.status,
                     payoutRail: o.payoutRail,
                     outboundKind: o.outboundKind,
                     outboundStatus: o.outboundStatus,
+                    fundingStatus: o.fundingStatus,
+                    gpPhase: o.gpPayoutProgress?.phase,
                     currency: o.currency,
                     formatMinor,
                     });

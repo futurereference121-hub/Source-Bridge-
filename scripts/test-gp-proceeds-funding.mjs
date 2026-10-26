@@ -934,8 +934,9 @@ assert.equal(scheduleHold.headline, GP_FUNDING_HOLD_COPY);
 assert.equal(scheduleHold.hideReleaseActions, true);
 assert.doesNotMatch(scheduleHold.headline, /automatically/);
 assert.match(waiting.timing, /15 October 2026/);
-assert.match(waiting.timing, /three business days from payment/);
-assert.match(waiting.timing, /taking longer than the usual three business days/);
+assert.match(waiting.timing, /become available/);
+assert.doesNotMatch(waiting.timing, /three business days/);
+assert.doesNotMatch(waiting.timing, /taking longer than usual/);
 assert.doesNotMatch(waiting.timing, /within three days of release/);
 
 const sending = describeGpBuyerPayout({
@@ -948,7 +949,8 @@ const sending = describeGpBuyerPayout({
 });
 assert.equal(sending.phase, "sending");
 assert.match(sending.timing, /20 October 2026/);
-assert.match(sending.timing, /not a promise that the sourcer is paid within three days of release/);
+assert.match(sending.timing, /estimates bank arrival/);
+assert.match(sending.timing, /estimate, not a promise/);
 const sendingUnknown = describeGpBuyerPayout({
   releaseAuthorized: true,
   txnStatus: "READY_TO_RELEASE",
@@ -956,8 +958,8 @@ const sendingUnknown = describeGpBuyerPayout({
   outboundIdPresent: true,
   now,
 });
-assert.match(sendingUnknown.timing, /has not given a bank arrival date/);
-assert.match(sendingUnknown.timing, /not promised within three days of release/);
+assert.match(sendingUnknown.timing, /has not given a bank-arrival estimate/);
+assert.doesNotMatch(sendingUnknown.timing, /three days/);
 
 const sent = describeGpBuyerPayout({
   releaseAuthorized: true,

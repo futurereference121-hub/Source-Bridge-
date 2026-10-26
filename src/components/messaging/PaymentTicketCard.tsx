@@ -39,6 +39,7 @@ import {
   formatInspectionWindow,
   isGlobalPayoutsRail,
   procurementAdvanceAuthorized,
+  procurementRemainderHeldMinor,
   shippedAwaitingReceiptCopy,
 } from "@/lib/payments/fulfilment-display";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
@@ -141,6 +142,7 @@ export type PaymentTicketView = {
   gpPayoutProgress?: GpBuyerPayoutProgress | null;
   outboundKind?: string | null;
   outboundStatus?: string | null;
+  fundingStatus?: string | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;
@@ -2164,14 +2166,18 @@ export function PaymentTicketCard({
             agreed: ticket.procurementAdvanceAgreed,
             advanceMinor: ticket.procurementAdvanceMinor,
             transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
-            remainingHeldMinor:
-              ticket.books?.finalResidualMinor ??
-              ticket.books?.remainingProtectedSellerShareMinor ??
-              0,
+            remainingHeldMinor: procurementRemainderHeldMinor({
+              remainingProtectedSellerShareMinor:
+                ticket.books?.remainingProtectedSellerShareMinor,
+              shippingMinor: ticket.shippingMinor,
+              sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
+            }),
             status: ticket.protectedTxnStatus || ticket.status,
             payoutRail: ticket.payoutRail,
             outboundKind: ticket.outboundKind,
             outboundStatus: ticket.outboundStatus,
+            fundingStatus: ticket.fundingStatus,
+            gpPhase: ticket.gpPayoutProgress?.phase,
             currency: cur,
             formatMinor,
           });
@@ -2319,18 +2325,39 @@ export function PaymentTicketCard({
           </p>
           {procAgreed || itemFundsReceived > 0 ? (
             <div className="space-y-1 text-xs text-white/70">
+              {itemReleaseAuthorized && itemFundsReceived <= 0 ? (
+                <>
+                  <p className="flex justify-between gap-3">
+                    <span>Item release authorized</span>
+                    <span className="tabular-nums text-white">
+                      {formatMinor(ticket.procurementAdvanceMinor, cur)}
+                    </span>
+                  </p>
+                  <p className="flex justify-between gap-3">
+                    <span>Paid/sent</span>
+                    <span className="tabular-nums text-white">
+                      {formatMinor(0, cur)}
+                    </span>
+                  </p>
+                </>
+              ) : (
+                <p className="flex justify-between gap-3">
+                  <span>Item funds already released</span>
+                  <span className="tabular-nums text-white">
+                    {formatMinor(itemFundsReceived, cur)}
+                  </span>
+                </p>
+              )}
               <p className="flex justify-between gap-3">
-                <span>Item funds already released</span>
-                <span className="tabular-nums text-white">
-                  {formatMinor(itemFundsReceived, cur)}
-                </span>
-              </p>
-              <p className="flex justify-between gap-3">
-                <span>Remaining seller funds protected</span>
+                <span>Shipping + sourcer fee awaiting final release</span>
                 <span className="tabular-nums text-white">
                   {formatMinor(
-                    ticket.books?.finalResidualMinor ??
-                      remainingSellerFundsProtected,
+                    procurementRemainderHeldMinor({
+                      remainingProtectedSellerShareMinor:
+                        remainingSellerFundsProtected,
+                      shippingMinor: ticket.shippingMinor,
+                      sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
+                    }),
                     cur,
                   )}
                 </span>

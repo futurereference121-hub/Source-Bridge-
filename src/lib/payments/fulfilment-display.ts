@@ -119,6 +119,63 @@ const PROCUREMENT_AUTHORIZED_OUTBOUND = new Set([
   "RETURNED",
 ]);
 
+export type ProcurementPayoutStatus =
+  | "awaiting_settlement"
+  | "funding"
+  | "processing"
+  | "succeeded"
+  | "failed";
+
+export function procurementRemainderHeldMinor(opts: {
+  remainingProtectedSellerShareMinor?: number | null;
+  shippingMinor?: number | null;
+  sellerServiceFeeMinor?: number | null;
+}): number {
+  if (typeof opts.remainingProtectedSellerShareMinor === "number") {
+    return Math.max(0, opts.remainingProtectedSellerShareMinor);
+  }
+  return Math.max(0, (opts.shippingMinor ?? 0) + (opts.sellerServiceFeeMinor ?? 0));
+}
+
+export function describeProcurementPayoutStatus(opts: {
+  transferredMinor?: number | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  outboundIdPresent?: boolean | null;
+  fundingStatus?: string | null;
+  gpPhase?: string | null;
+}): ProcurementPayoutStatus {
+  if ((opts.transferredMinor ?? 0) > 0) return "succeeded";
+  const outbound = String(opts.outboundStatus || "").toUpperCase();
+  const kind = String(opts.outboundKind || "").toUpperCase();
+  const funding = String(opts.fundingStatus || "").toUpperCase();
+  const phase = String(opts.gpPhase || "").toLowerCase();
+  if (kind === "PROCUREMENT" && outbound === "FAILED") return "failed";
+  if (kind === "PROCUREMENT" && (outbound === "SUCCEEDED" || outbound === "RECONCILED")) {
+    return "succeeded";
+  }
+  if (phase === "failed") return "failed";
+  if (phase === "sent") return "succeeded";
+  if (
+    phase === "sending" ||
+    (kind === "PROCUREMENT" &&
+      (outbound === "PROCESSING" || outbound === "PENDING") &&
+      opts.outboundIdPresent)
+  ) {
+    return "processing";
+  }
+  if (funding === "POSTED" || funding === "FUNDING" || phase === "waiting_funding") {
+    return funding === "POSTED" ? "processing" : "funding";
+  }
+  if (funding === "SHORT") return "funding";
+  return "awaiting_settlement";
+}
+
+export function procurementPayoutStatusLabel(status: ProcurementPayoutStatus): string {
+  if (status === "awaiting_settlement") return "awaiting settlement";
+  return status;
+}
+
 /** Buyer already authorized item-fund release. Paid only after transferredMinor > 0. */
 export function procurementAdvanceAuthorized(opts: {
   transferredMinor?: number | null;
@@ -145,9 +202,20 @@ export function describeProcurementStage(opts: {
   payoutRail?: string | null;
   outboundKind?: string | null;
   outboundStatus?: string | null;
+  outboundIdPresent?: boolean | null;
+  fundingStatus?: string | null;
+  gpPhase?: string | null;
   currency: string;
   formatMinor: (minor: number, currency: string) => string;
-}): { headline: string; detail: string | null } {
+}): {
+  headline: string;
+  detail: string | null;
+  authorizedAdvanceMinor: number;
+  paidAdvanceMinor: number;
+  remainderHeldMinor: number;
+  payoutStatus: ProcurementPayoutStatus;
+  payoutStatusLabel: string;
+} {
   const agreed = Boolean(opts.agreed) && opts.advanceMinor > 0;
   const status = String(opts.status || "").toUpperCase();
   const finalReleased = status === "RELEASED" || status === "READY_TO_RELEASE";
@@ -156,22 +224,51 @@ export function describeProcurementStage(opts: {
     opts.remainingHeldMinor > 0
       ? opts.formatMinor(opts.remainingHeldMinor, opts.currency)
       : "";
-  const procOutbound =
-    String(opts.outboundKind || "").toUpperCase() === "PROCUREMENT"
-      ? String(opts.outboundStatus || "").toUpperCase()
-      : "";
+
+  const paidAdvanceMinor = Math.max(0, opts.transferredMinor);
+  const authorizedAdvanceMinor = agreed ? opts.advanceMinor : 0;
+  const remainderHeldMinor = Math.max(0, opts.remainingHeldMinor);
+  const payoutStatus = describeProcurementPayoutStatus({
+    transferredMinor: paidAdvanceMinor,
+    outboundKind: opts.outboundKind,
+    outboundStatus: opts.outboundStatus,
+    outboundIdPresent: opts.outboundIdPresent,
+    fundingStatus: opts.fundingStatus,
+    gpPhase: opts.gpPhase,
+  });
+  const payoutStatusLabel = procurementPayoutStatusLabel(payoutStatus);
+  const remainderDetail = remaining
+    ? `Shipping + sourcer fee awaiting final release: ${remaining}.`
+    : null;
+  const paidDetail = `Paid/sent: ${opts.formatMinor(paidAdvanceMinor, opts.currency)}.`;
 
   if (!agreed) {
-    return { headline: "Procurement advance: not requested", detail: null };
-  }
-  if (opts.transferredMinor > 0) {
     return {
-      headline: `Procurement advance paid: ${advance}`,
-      detail: remaining
-        ? `Remaining ${remaining} held until final release.`
-        : finalReleased
-          ? "Final release authorized."
-          : null,
+      headline: "Procurement advance: not requested",
+      detail: null,
+      authorizedAdvanceMinor: 0,
+      paidAdvanceMinor,
+      remainderHeldMinor,
+      payoutStatus,
+      payoutStatusLabel,
+    };
+  }
+  if (paidAdvanceMinor > 0) {
+    return {
+      headline: `Item release paid: ${advance}`,
+      detail: [
+        `Procurement payout status: ${payoutStatusLabel}.`,
+        remainderDetail,
+        paidDetail,
+        !remaining && finalReleased ? "Final release authorized." : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      authorizedAdvanceMinor,
+      paidAdvanceMinor,
+      remainderHeldMinor,
+      payoutStatus,
+      payoutStatusLabel,
     };
   }
   if (procurementAdvanceAuthorized({
@@ -179,28 +276,41 @@ export function describeProcurementStage(opts: {
     outboundKind: opts.outboundKind,
     outboundStatus: opts.outboundStatus,
   })) {
-    const pending =
-      procOutbound === "AWAITING_FA_FUNDS" ||
-      procOutbound === "PENDING" ||
-      procOutbound === "AWAITING_MINIMUM";
     return {
-      headline: pending
-        ? `Item release authorized — payout pending: ${advance}`
-        : `Item release authorized — payout processing: ${advance}`,
-      detail: remaining
-        ? `Authorized ${advance} is not marked paid until the provider confirms. Remaining ${remaining} (shipping + sourcer fee) stays protected.`
-        : "Authorization is not provider confirmation or bank arrival.",
+      headline: `Item release authorized: ${advance}`,
+      detail: [
+        `Procurement payout status: ${payoutStatusLabel}.`,
+        `${paidDetail} Authorized ${advance} is reserved until the provider confirms payment.`,
+        remainderDetail,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      authorizedAdvanceMinor,
+      paidAdvanceMinor,
+      remainderHeldMinor,
+      payoutStatus,
+      payoutStatusLabel,
     };
   }
-  if (finalReleased && opts.transferredMinor <= 0) {
+  if (finalReleased && paidAdvanceMinor <= 0) {
     return {
       headline: `Procurement advance accepted: ${advance}`,
       detail: "Final release authorized. Shipping and sourcer fee follow the existing receipt rules.",
+      authorizedAdvanceMinor,
+      paidAdvanceMinor,
+      remainderHeldMinor,
+      payoutStatus,
+      payoutStatusLabel,
     };
   }
   return {
     headline: `Procurement advance accepted: ${advance}`,
     detail: "Buyer authorizes item-fund release after funding. Shipping and sourcer fee stay held.",
+    authorizedAdvanceMinor,
+    paidAdvanceMinor,
+    remainderHeldMinor,
+    payoutStatus,
+    payoutStatusLabel,
   };
 }
 

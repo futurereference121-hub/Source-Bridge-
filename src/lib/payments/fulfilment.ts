@@ -344,6 +344,7 @@ export function mapProtectedTxnSummary(
     procurementTransferredMinor: t.procurementTransferredMinor ?? 0,
     outboundKind: attempt?.kind ?? null,
     outboundStatus: attempt?.status ?? null,
+    fundingStatus: t.gpProceedsFunding?.status ?? null,
     books,
     stripeMode: t.stripeMode,
     payoutRail: t.payoutRail,

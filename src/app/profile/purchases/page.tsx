@@ -21,7 +21,12 @@ import {
   type ProtectedOrderSummary,
 } from "@/hooks/useProtectedOrders";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
-import { describeProcurementStage, formatInspectionWindow, procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
+import {
+  describeProcurementStage,
+  formatInspectionWindow,
+  procurementAdvanceAuthorized,
+  procurementRemainderHeldMinor,
+} from "@/lib/payments/fulfilment-display";
 
 type Order = ProtectedOrderSummary & {
   origin?: string;
@@ -66,6 +71,7 @@ type Order = ProtectedOrderSummary & {
   procurementTransferredMinor?: number;
   outboundKind?: string | null;
   outboundStatus?: string | null;
+  fundingStatus?: string | null;
   books?: {
     finalResidualMinor?: number;
     remainingProtectedSellerShareMinor?: number;
@@ -396,22 +402,50 @@ export default function PurchasesPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
-                  {procDone > 0 || residual > 0 ? (
+                  {procDone > 0 || residual > 0 || Boolean(o.procurementAdvanceAgreed) ? (
                     <div className="sm:col-span-2 space-y-1 text-xs text-white/50">
                       {procDone > 0 ? (
                         <p>
                           Item funds already released:{" "}
                           {formatMinor(procDone, o.currency)}
                         </p>
-                      ) : null}
-                      {residual > 0 ? (
+                      ) : procurementAdvanceAuthorized({
+                          transferredMinor: procDone,
+                          status: o.status,
+                          outboundKind: o.outboundKind,
+                          outboundStatus: o.outboundStatus,
+                          hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
+                        }) ? (
                         <p>
-                          Remaining seller funds protected:{" "}
+                          Item release authorized:{" "}
+                          {formatMinor(o.procurementAdvanceMinor ?? 0, o.currency)}
+                          . Paid/sent: {formatMinor(0, o.currency)}
+                        </p>
+                      ) : null}
+                      {(procDone > 0 ||
+                        procurementAdvanceAuthorized({
+                          transferredMinor: procDone,
+                          status: o.status,
+                          outboundKind: o.outboundKind,
+                          outboundStatus: o.outboundStatus,
+                          hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
+                        })) ? (
+                        <p>
+                          Shipping + sourcer fee awaiting final release:{" "}
                           {formatMinor(
-                            o.books?.remainingProtectedSellerShareMinor ??
-                              residual,
+                            procurementRemainderHeldMinor({
+                              remainingProtectedSellerShareMinor:
+                                o.books?.remainingProtectedSellerShareMinor,
+                              shippingMinor: o.shippingMinor,
+                              sellerServiceFeeMinor: o.sellerServiceFeeMinor,
+                            }),
                             o.currency,
                           )}
+                        </p>
+                      ) : residual > 0 && !o.procurementAdvanceAgreed ? (
+                        <p>
+                          Remaining seller funds protected:{" "}
+                          {formatMinor(residual, o.currency)}
                         </p>
                       ) : null}
                       <p>
@@ -522,14 +556,18 @@ export default function PurchasesPage() {
                       o.books?.procurementTransferredMinor ??
                       o.procurementTransferredMinor ??
                       0,
-                    remainingHeldMinor:
-                      o.books?.finalResidualMinor ??
-                      o.books?.remainingProtectedSellerShareMinor ??
-                      0,
+                    remainingHeldMinor: procurementRemainderHeldMinor({
+                      remainingProtectedSellerShareMinor:
+                        o.books?.remainingProtectedSellerShareMinor,
+                      shippingMinor: o.shippingMinor,
+                      sellerServiceFeeMinor: o.sellerServiceFeeMinor,
+                    }),
                     status: o.status,
                     payoutRail: o.payoutRail,
                     outboundKind: o.outboundKind,
                     outboundStatus: o.outboundStatus,
+                    fundingStatus: o.fundingStatus,
+                    gpPhase: o.gpPayoutProgress?.phase,
                     currency: o.currency,
                     formatMinor,
                   });

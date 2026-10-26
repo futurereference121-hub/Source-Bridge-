@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import {
   recoverCurrentTestRunOutbound,
   verifyCurrentTestRunFunding,
+  verifyProcurementTestCharge,
 } from "@/lib/payments/payout-rail/gp-testrun-verify";
 import { jsonError } from "@/lib/validation";
 
@@ -14,9 +15,13 @@ export const dynamic = "force-dynamic";
  * POST { action: "recover_uncertain", confirmed: true }: attach the original
  * outbound only. Never posts a new idempotency key.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
+    const focus = new URL(req.url).searchParams.get("focus");
+    if (focus === "procurement") {
+      return Response.json(await verifyProcurementTestCharge());
+    }
     return Response.json(await verifyCurrentTestRunFunding());
   } catch (err) {
     const status = err && typeof err === "object" && "status" in err ? Number(err.status) : 500;

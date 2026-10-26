@@ -879,20 +879,14 @@ function clearingTiming(opts: {
   now: Date;
   settled: boolean;
 }): string {
-  const usual =
-    "Card payments usually clear in three business days from payment. Some payments take longer.";
-  const funded = opts.fundedAt;
-  const longer =
-    funded != null &&
-    ((opts.availableOn != null &&
-      opts.availableOn.getTime() > addBusinessDays(funded, USUAL_CLEARING_BUSINESS_DAYS).getTime()) ||
-      (!opts.settled &&
-        opts.now.getTime() > addBusinessDays(funded, USUAL_CLEARING_BUSINESS_DAYS).getTime()));
-  const delay = longer ? " This payment is taking longer than the usual three business days." : "";
   if (opts.availableOn) {
-    return `Your payment is expected to clear on ${formatPayoutDate(opts.availableOn)}. ${usual}${delay}`;
+    const when = formatPayoutDate(opts.availableOn);
+    const pending = opts.availableOn.getTime() > opts.now.getTime();
+    return pending
+      ? `Stripe expects these funds to become available on ${when}. Payout processing starts after that date. This is not a bank-arrival time.`
+      : `Stripe marked these funds available on ${when}. Payout processing follows availability. This is not a bank-arrival time.`;
   }
-  return `${usual}${delay}`;
+  return "Stripe has not given an availability date yet. Payout processing starts after the charge becomes available. This is not a bank-arrival time.";
 }
 
 export function describeGpBuyerPayout(opts: {
@@ -947,8 +941,8 @@ export function describeGpBuyerPayout(opts: {
       headline:
         "Your sourcer\u2019s international payout has been sent. Posted means the funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.",
       timing: opts.expectedArrival
-        ? `Stripe expects the bank to receive it on ${formatPayoutDate(opts.expectedArrival)}. This is not a promise that the sourcer is paid within three days of release.`
-        : "Stripe has not given a bank arrival date. Arrival depends on the destination bank and is not promised within three days of release.",
+        ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
+        : "Stripe has not given a bank-arrival estimate.",
       hideReleaseActions: true,
     };
   }
@@ -960,8 +954,8 @@ export function describeGpBuyerPayout(opts: {
       phase: "sending",
       headline: "Sending your sourcer\u2019s international payout.",
       timing: opts.expectedArrival
-        ? `Stripe expects the bank to receive it on ${formatPayoutDate(opts.expectedArrival)}. This is not a promise that the sourcer is paid within three days of release.`
-        : "Stripe has not given a bank arrival date yet. Arrival depends on the destination bank and is not promised within three days of release.",
+        ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
+        : "Stripe has not given a bank-arrival estimate.",
       hideReleaseActions: true,
     };
   }
@@ -1017,7 +1011,7 @@ export function describeGpBuyerPayout(opts: {
       phase: "waiting_funding",
       headline: gpAwaitingFundsHeadline(kind, { outboundKind: opts.outboundKind }),
       timing:
-        "Payout funding is confirmed. Further progress follows the payout status. This is not a promise that the sourcer is paid within three days of release.",
+        "Payout funding is confirmed. Further progress follows the payout status. This is not a bank-arrival time.",
       hideReleaseActions: true,
     };
   }
@@ -1026,8 +1020,8 @@ export function describeGpBuyerPayout(opts: {
     headline: gpAwaitingFundsHeadline(kind, { outboundKind: opts.outboundKind }),
     timing:
       kind === "funding_in_progress"
-        ? "Source Bridge is funding the international payout balance. This is not a promise that the sourcer is paid within three days of release."
-        : "Your payment is available. Payout funding has not started. This is not a promise that the sourcer is paid within three days of release.",
+        ? "Source Bridge is funding the international payout balance. This is not a bank-arrival time."
+        : "Your payment is available. Payout funding has not started. This is not a bank-arrival time.",
     hideReleaseActions: true,
   };
 }

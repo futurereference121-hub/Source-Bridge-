@@ -538,5 +538,17 @@ assert.doesNotMatch(
 const fulfilmentSrc = readFileSync(join(root, "src/lib/payments/fulfilment.ts"), "utf8");
 assert.match(fulfilmentSrc, /procurementAdvanceAuthorized/);
 assert.match(ticketsSrc, /procurementAdvanceAuthorized/);
+assert.match(
+  readFileSync(join(root, "src/lib/payments/payout-rail/gp-testrun-verify.ts"), "utf8"),
+  /verifyProcurementTestCharge/,
+);
+assert.match(
+  readFileSync(join(root, "src/lib/payments/fulfilment-display.ts"), "utf8"),
+  /procurementRemainderHeldMinor/,
+);
+assert.doesNotMatch(
+  readFileSync(join(root, "src/lib/payments/payout-rail/proceeds-funding.ts"), "utf8"),
+  /usually clear in three business days/,
+);
 
 console.log("test-procurement-release: all assertions passed");
