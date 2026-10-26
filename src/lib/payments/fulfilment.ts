@@ -284,6 +284,9 @@ export function mapProtectedTxnSummary(
           availableOn: t.gpProceedsFunding?.availableOn ?? null,
           fundedAt: t.fundedAt,
           expectedArrival: attempt?.expectedArrivalAt ?? null,
+          remainderHeldMinor: books.remainingProtectedSellerShareMinor,
+          itemAdvanceMinor: t.procurementAdvanceMinor,
+          currency: t.currency,
         })
       : null;
   const canReleaseProcurement =

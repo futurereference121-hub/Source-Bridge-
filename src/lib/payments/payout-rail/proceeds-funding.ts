@@ -56,6 +56,72 @@ export const GP_FUNDING_PROCESSING_COPY =
 export const GP_FUNDING_CONFIRMED_COPY =
   "Release confirmed. Payout funding is confirmed. No further action is needed.";
 
+/** FINAL / whole-purchase outbound posted. Not used for a procurement item advance. */
+export const GP_PAYOUT_SENT_COPY =
+  "Your sourcer\u2019s international payout has been sent. Posted means the funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.";
+
+/** PROCUREMENT outbound posted. Remainder stays protected. */
+export const GP_PROCUREMENT_SENT_COPY =
+  "The item-advance payout has been sent. This is not the remaining shipping and sourcer fee. Posted means those item funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.";
+
+function formatItemAdvanceAmount(
+  minor?: number | null,
+  currency?: string | null,
+): string | null {
+  if (typeof minor !== "number" || !Number.isFinite(minor) || minor <= 0) return null;
+  const code = String(currency || "GBP").toUpperCase();
+  const formatted = (minor / 100).toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (code === "GBP") return `\u00a3${formatted}`;
+  return `${formatted} ${code}`;
+}
+
+export function gpProcurementSentCopy(opts?: {
+  itemAdvanceMinor?: number | null;
+  currency?: string | null;
+}): string {
+  const label = formatItemAdvanceAmount(opts?.itemAdvanceMinor, opts?.currency);
+  if (!label) return GP_PROCUREMENT_SENT_COPY;
+  return `The ${label} item advance has been sent. This is not the remaining shipping and sourcer fee. Posted means those item funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.`;
+}
+
+const GP_FINAL_IN_FLIGHT_STATUSES = new Set([
+  "AWAITING_FA_FUNDS",
+  "PENDING",
+  "PROCESSING",
+  "AWAITING_MINIMUM",
+  "ACTION_REQUIRED",
+]);
+
+/**
+ * Hide buyer receipt / inspection / final-release actions only when FINAL
+ * (or the whole purchase) is in-flight, posted, returned, or uncertain.
+ * A succeeded PROCUREMENT advance must not hide an unpaid remainder.
+ */
+export function gpHidesFinalReleaseActions(opts: {
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  txnStatus?: string | null;
+  remainderHeldMinor?: number | null;
+  uncertain?: boolean | null;
+}): boolean {
+  const txn = String(opts.txnStatus || "").toUpperCase();
+  const kind = String(opts.outboundKind || "").toUpperCase();
+  const status = String(opts.outboundStatus || "").toUpperCase();
+  if (opts.uncertain) return true;
+  if (txn === "RELEASED") return true;
+  if (status === "RETURNED") return true;
+  const remainderHeld =
+    typeof opts.remainderHeldMinor === "number" ? opts.remainderHeldMinor > 0 : true;
+  if (kind === "PROCUREMENT") return !remainderHeld;
+  if (status === "FAILED") return true;
+  if (GP_FINAL_IN_FLIGHT_STATUSES.has(status)) return true;
+  if (status === "SUCCEEDED" || status === "RECONCILED") return true;
+  return false;
+}
+
 export type GpAwaitingFundsKind =
   | "unknown"
   | "payment_pending"
@@ -941,6 +1007,9 @@ export function describeGpBuyerPayout(opts: {
   expectedArrival?: Date | null;
   uncertain?: boolean;
   now?: Date;
+  remainderHeldMinor?: number | null;
+  itemAdvanceMinor?: number | null;
+  currency?: string | null;
   /** Automatic sentences require this. Absent or false means funding is off. */
   proceedsFundingEnabled?: boolean;
   /** Unread or non-manual payout schedule. */
@@ -948,7 +1017,17 @@ export function describeGpBuyerPayout(opts: {
 }): GpBuyerPayoutProgress | null {
   const now = opts.now ?? new Date();
   const outbound = String(opts.outboundStatus || "").toUpperCase();
+  const outboundKind = String(opts.outboundKind || "").toUpperCase();
   const failure = String(opts.failureCode || "");
+  const hideFinal = gpHidesFinalReleaseActions({
+    outboundKind: opts.outboundKind,
+    outboundStatus: opts.outboundStatus,
+    txnStatus: opts.txnStatus,
+    remainderHeldMinor: opts.remainderHeldMinor,
+    uncertain: opts.uncertain || failure === "GP_PAYMENT_OUTCOME_UNCERTAIN",
+  });
+  const procurementRemainder =
+    outboundKind === "PROCUREMENT" && opts.txnStatus !== "RELEASED";
   const fundingShort =
     failure === "GP_PILOT_FUNDING_SHORT" ||
     failure === "GP_FA_BALANCE_SHORT" ||
@@ -959,7 +1038,7 @@ export function describeGpBuyerPayout(opts: {
       phase: "returned",
       headline: "The international payout was returned. Source Bridge is reviewing it.",
       timing: "No further action is needed from you while it is reviewed.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (opts.uncertain || failure === "GP_PAYMENT_OUTCOME_UNCERTAIN") {
@@ -967,7 +1046,7 @@ export function describeGpBuyerPayout(opts: {
       phase: "uncertain",
       headline: "Release confirmed. We are checking the payout before offering any further action.",
       timing: "No further action is needed until that check finishes.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (
@@ -976,12 +1055,16 @@ export function describeGpBuyerPayout(opts: {
   ) {
     return {
       phase: "sent",
-      headline:
-        "Your sourcer\u2019s international payout has been sent. Posted means the funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.",
+      headline: procurementRemainder
+        ? gpProcurementSentCopy({
+            itemAdvanceMinor: opts.itemAdvanceMinor,
+            currency: opts.currency,
+          })
+        : GP_PAYOUT_SENT_COPY,
       timing: opts.expectedArrival
         ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
         : "A bank-arrival estimate will appear when Stripe provides one.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (
@@ -990,20 +1073,23 @@ export function describeGpBuyerPayout(opts: {
   ) {
     return {
       phase: "sending",
-      headline: "Sending your sourcer\u2019s international payout.",
+      headline: procurementRemainder
+        ? GP_PROCUREMENT_PROCESSING_COPY
+        : "Sending your sourcer\u2019s international payout.",
       timing: opts.expectedArrival
         ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
         : "A bank-arrival estimate will appear when Stripe provides one.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (outbound === "FAILED" && !fundingShort) {
     return {
       phase: "failed",
-      headline:
-        "The international payout could not be sent. Your payment stays protected. Source Bridge will review it.",
+      headline: procurementRemainder
+        ? "The item-advance payout could not be sent. Remaining shipping and sourcer fee stay protected."
+        : "The international payout could not be sent. Your payment stays protected. Source Bridge will review it.",
       timing: "No further action is needed from you.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (!opts.releaseAuthorized && opts.txnStatus !== "READY_TO_RELEASE") return null;
@@ -1020,7 +1106,7 @@ export function describeGpBuyerPayout(opts: {
       phase: "review",
       headline: gpAwaitingFundsHeadline(kind, { outboundKind: opts.outboundKind }),
       timing: "No further action is needed from you.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (kind === "unknown") {
@@ -1028,7 +1114,7 @@ export function describeGpBuyerPayout(opts: {
       phase: "checking",
       headline: gpAwaitingFundsHeadline(kind, { outboundKind: opts.outboundKind }),
       timing: "No further action is needed.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (kind === "payment_pending") {
@@ -1041,7 +1127,7 @@ export function describeGpBuyerPayout(opts: {
         now,
         settled: false,
       }),
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   if (kind === "funding_confirmed") {
@@ -1050,7 +1136,7 @@ export function describeGpBuyerPayout(opts: {
       headline: gpAwaitingFundsHeadline(kind, { outboundKind: opts.outboundKind }),
       timing:
         "Payout funding is confirmed. Further progress follows the payout status. This is not a bank-arrival time.",
-      hideReleaseActions: true,
+      hideReleaseActions: hideFinal,
     };
   }
   return {
@@ -1060,7 +1146,7 @@ export function describeGpBuyerPayout(opts: {
       kind === "funding_in_progress"
         ? "Source Bridge is funding the international payout balance. This is not a bank-arrival time."
         : "Your payment is available. Payout funding has not started. This is not a bank-arrival time.",
-    hideReleaseActions: true,
+    hideReleaseActions: hideFinal,
   };
 }
 

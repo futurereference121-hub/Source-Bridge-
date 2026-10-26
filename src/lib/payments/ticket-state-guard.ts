@@ -71,11 +71,20 @@ function incomingReopensProcurementRelease(
 ): boolean {
   if (!procurementReleaseControlsClosed(existing)) return false;
   const n = normalizeTicketSlice(incoming);
-  if (n.canReleaseProcurement === true) return true;
-  if (n.hideReleaseActions === false && normalizeTicketSlice(existing).hideReleaseActions) {
-    return true;
-  }
-  return false;
+  return n.canReleaseProcurement === true;
+}
+
+/** Stale GP hide=true after a PROCUREMENT advance must not cover remainder actions. */
+function incomingHidesRemainderAfterProcurement(
+  incoming: TicketStateSlice,
+  existing: TicketStateSlice,
+): boolean {
+  const n = normalizeTicketSlice(incoming);
+  const e = normalizeTicketSlice(existing);
+  if (n.hideReleaseActions !== true) return false;
+  if (e.hideReleaseActions === true) return false;
+  const kind = String(n.outboundKind || e.outboundKind || "").toUpperCase();
+  return kind === "PROCUREMENT";
 }
 
 const FUNDED_TICKET_STATUSES = new Set(["FUNDED", "ACCEPTED"]);
@@ -151,6 +160,7 @@ export function shouldApplyTicketUpdate(
   // Never regress funded UI (P3: delayed pre-funded response).
   if (existingFunded && !incomingFunded) return false;
   if (incomingReopensProcurementRelease(incoming, existing)) return false;
+  if (incomingHidesRemainderAfterProcurement(incoming, existing)) return false;
   const inEpoch = stateEpoch(incoming);
   const exEpoch = stateEpoch(existing);
   if (inEpoch > exEpoch) return true;

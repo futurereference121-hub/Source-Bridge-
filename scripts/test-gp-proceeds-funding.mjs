@@ -54,6 +54,11 @@ const {
   completedPurchaseBlocksNewFunding,
   decideFundingRequest,
   describeGpBuyerPayout,
+  gpHidesFinalReleaseActions,
+  gpProcurementSentCopy,
+  GP_PAYOUT_SENT_COPY,
+  GP_PROCUREMENT_PROCESSING_COPY,
+  GP_PROCUREMENT_SENT_COPY,
   fundingPayoutCreateGate,
   fundingScanIncludesPurchase,
   GP_TEST_REPAIR_ABANDONED,
@@ -1012,7 +1017,47 @@ const sent = describeGpBuyerPayout({
   now,
 });
 assert.equal(sent.phase, "sent");
+assert.equal(sent.headline, GP_PAYOUT_SENT_COPY);
+assert.equal(sent.hideReleaseActions, true);
 assert.match(sent.headline, /does not confirm the sourcer/);
+const procurementSent = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "PROCUREMENT_RELEASED",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "SUCCEEDED",
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  now,
+});
+assert.equal(procurementSent.phase, "sent");
+assert.equal(procurementSent.hideReleaseActions, false);
+assert.equal(
+  procurementSent.headline,
+  gpProcurementSentCopy({ itemAdvanceMinor: 2000, currency: "GBP" }),
+);
+assert.match(procurementSent.headline, /£20\.00 item advance has been sent/);
+assert.doesNotMatch(procurementSent.headline, /£35|£40\.25|Your sourcer/);
+assert.equal(gpHidesFinalReleaseActions({
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "SUCCEEDED",
+  txnStatus: "PROCUREMENT_RELEASED",
+  remainderHeldMinor: 1500,
+}), false);
+assert.equal(gpHidesFinalReleaseActions({
+  outboundKind: "FINAL",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  txnStatus: "READY_TO_RELEASE",
+  remainderHeldMinor: 1500,
+}), true);
+assert.equal(gpHidesFinalReleaseActions({
+  outboundKind: "FINAL",
+  outboundStatus: "SUCCEEDED",
+  txnStatus: "RELEASED",
+  remainderHeldMinor: 0,
+}), true);
+assert.equal(GP_PROCUREMENT_SENT_COPY.includes("item-advance"), true);
+assert.equal(GP_PROCUREMENT_PROCESSING_COPY.includes("Shipping and sourcer fee stay protected"), true);
 const failed = describeGpBuyerPayout({
   releaseAuthorized: true,
   txnStatus: "READY_TO_RELEASE",

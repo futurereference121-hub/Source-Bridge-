@@ -49,9 +49,13 @@ const { describeProcurementStage, procurementAdvanceAuthorized, procurementRemai
 const { shouldApplyTicketUpdate } = await import(
   "../src/lib/payments/ticket-state-guard.ts"
 );
-const { describeGpBuyerPayout, GP_PROCUREMENT_PENDING_COPY } = await import(
-  "../src/lib/payments/payout-rail/proceeds-funding.ts"
-);
+const {
+  describeGpBuyerPayout,
+  gpHidesFinalReleaseActions,
+  gpProcurementSentCopy,
+  GP_PAYOUT_SENT_COPY,
+  GP_PROCUREMENT_PENDING_COPY,
+} = await import("../src/lib/payments/payout-rail/proceeds-funding.ts");
 
 const formatGbp = (minor) => `£${(minor / 100).toFixed(2)}`;
 assert.equal(
@@ -131,19 +135,21 @@ assert.equal(
   }),
   false,
 );
-assert.equal(
-  describeGpBuyerPayout({
-    releaseAuthorized: true,
-    txnStatus: "FUNDED",
-    outboundKind: "PROCUREMENT",
-    outboundStatus: "AWAITING_FA_FUNDS",
-    fundingStatus: "AWAITING_SETTLEMENT",
-    chargeAvailable: false,
-    proceedsFundingEnabled: true,
-    now: new Date("2026-10-25T12:00:00.000Z"),
-  }).headline,
-  GP_PROCUREMENT_PENDING_COPY,
-);
+const procurementPendingProgress = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "FUNDED",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  fundingStatus: "AWAITING_SETTLEMENT",
+  chargeAvailable: false,
+  proceedsFundingEnabled: true,
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  now: new Date("2026-10-25T12:00:00.000Z"),
+});
+assert.equal(procurementPendingProgress.headline, GP_PROCUREMENT_PENDING_COPY);
+assert.equal(procurementPendingProgress.hideReleaseActions, false);
 assert.equal(
   shouldApplyTicketUpdate(
     {
@@ -194,6 +200,72 @@ assert.equal(
       },
     ],
   )[0].actions.canReleaseProcurement,
+  false,
+);
+assert.equal(
+  shouldApplyTicketUpdate(
+    {
+      updatedAt: "2026-10-26T12:00:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "PROCUREMENT_RELEASED",
+      fundedAt: "2026-10-26T11:00:00.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "PROCUREMENT",
+      outboundStatus: "SUCCEEDED",
+      canReleaseProcurement: false,
+      hideReleaseActions: false,
+      gpPayoutProgress: { phase: "sent", hideReleaseActions: false },
+    },
+    {
+      updatedAt: "2026-10-26T12:00:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "PROCUREMENT_RELEASED",
+      fundedAt: "2026-10-26T11:00:00.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "PROCUREMENT",
+      outboundStatus: "SUCCEEDED",
+      canReleaseProcurement: false,
+      hideReleaseActions: true,
+      gpPayoutProgress: { phase: "sent", hideReleaseActions: true },
+    },
+  ),
+  true,
+);
+assert.equal(
+  shouldApplyTicketUpdate(
+    {
+      updatedAt: "2026-10-26T12:00:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "PROCUREMENT_RELEASED",
+      fundedAt: "2026-10-26T11:00:00.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "PROCUREMENT",
+      outboundStatus: "SUCCEEDED",
+      canReleaseProcurement: false,
+      hideReleaseActions: true,
+      gpPayoutProgress: { phase: "sent", hideReleaseActions: true },
+    },
+    {
+      updatedAt: "2026-10-26T12:00:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "PROCUREMENT_RELEASED",
+      fundedAt: "2026-10-26T11:00:00.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "PROCUREMENT",
+      outboundStatus: "SUCCEEDED",
+      canReleaseProcurement: false,
+      hideReleaseActions: false,
+      gpPayoutProgress: { phase: "sent", hideReleaseActions: false },
+    },
+  ),
   false,
 );
 const submittedPending = describeProcurementStage({
@@ -270,6 +342,160 @@ const finalAuth = describeProcurementStage({
 });
 assert.match(finalAuth.detail, /Final release authorized/);
 assert.doesNotMatch(finalAuth.detail || "", /inspection/i);
+
+const now = new Date("2026-10-26T12:00:00.000Z");
+const gpProcSucceeded = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "PROCUREMENT_RELEASED",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "SUCCEEDED",
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  now,
+});
+assert.equal(gpProcSucceeded.hideReleaseActions, false);
+assert.equal(
+  gpProcSucceeded.headline,
+  gpProcurementSentCopy({ itemAdvanceMinor: 2000, currency: "GBP" }),
+);
+assert.match(gpProcSucceeded.headline, /£20\.00 item advance has been sent/);
+assert.doesNotMatch(gpProcSucceeded.headline, /£35|Your sourcer\u2019s international payout has been sent/);
+assert.equal(
+  gpHidesFinalReleaseActions({
+    outboundKind: "PROCUREMENT",
+    outboundStatus: "SUCCEEDED",
+    txnStatus: "DELIVERED",
+    remainderHeldMinor: 1500,
+  }),
+  false,
+);
+
+function remainderStage(opts) {
+  const gp = opts.rail === "STRIPE_GLOBAL_PAYOUTS";
+  return {
+    id: `fixture-${gp ? "gp" : "connect"}-${opts.status}`,
+    status: opts.status,
+    origin: "CHAT_TICKET",
+    paymentOption: "PROTECTED",
+    title: "testing testing test",
+    currency: "GBP",
+    itemCostMinor: 2000,
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+    protectionFeeMinor: 525,
+    totalChargeMinor: 4025,
+    stripeMode: "TEST",
+    payoutRail: opts.rail,
+    books: {
+      procurementTransferredMinor: 2000,
+      finalResidualMinor: opts.remainder,
+      remainingProtectedSellerShareMinor: opts.remainder,
+    },
+    gpPayoutProgress: gp ? opts.progress : null,
+    actions: {
+      canConfirmReceipt: Boolean(opts.canConfirmReceipt),
+      canReleaseNow: Boolean(opts.canReleaseNow),
+      canReleaseProcurement: false,
+      canReportIssue: opts.status !== "RELEASED",
+    },
+  };
+}
+
+const gpReceiptConfirmed = remainderStage({
+  rail: "STRIPE_GLOBAL_PAYOUTS",
+  status: "DELIVERED",
+  remainder: 1500,
+  canReleaseNow: true,
+  progress: gpProcSucceeded,
+});
+assert.equal(purchaseCardModel(gpReceiptConfirmed).offersRelease, true);
+assert.equal(gpReceiptConfirmed.gpPayoutProgress.hideReleaseActions, false);
+
+const connectReceiptConfirmed = remainderStage({
+  rail: "STRIPE_CONNECT",
+  status: "DELIVERED",
+  remainder: 1500,
+  canReleaseNow: true,
+});
+assert.equal(connectReceiptConfirmed.gpPayoutProgress, null);
+assert.equal(purchaseCardModel(connectReceiptConfirmed).offersRelease, true);
+
+const gpInspection = remainderStage({
+  rail: "STRIPE_GLOBAL_PAYOUTS",
+  status: "IN_INSPECTION",
+  remainder: 1500,
+  canReleaseNow: true,
+  progress: gpProcSucceeded,
+});
+assert.equal(purchaseCardModel(gpInspection).offersRelease, true);
+const connectInspection = remainderStage({
+  rail: "STRIPE_CONNECT",
+  status: "IN_INSPECTION",
+  remainder: 1500,
+  canReleaseNow: true,
+});
+assert.equal(purchaseCardModel(connectInspection).offersRelease, true);
+
+const gpFinalAuthorizedProgress = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundKind: "FINAL",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  fundingStatus: "POSTED",
+  chargeAvailable: true,
+  proceedsFundingEnabled: true,
+  remainderHeldMinor: 1500,
+  now,
+});
+assert.equal(gpFinalAuthorizedProgress.hideReleaseActions, true);
+assert.equal(
+  purchaseCardModel(
+    remainderStage({
+      rail: "STRIPE_GLOBAL_PAYOUTS",
+      status: "READY_TO_RELEASE",
+      remainder: 1500,
+      canReleaseNow: true,
+      progress: gpFinalAuthorizedProgress,
+    }),
+  ).offersRelease,
+  false,
+);
+const connectFinalAuthorized = remainderStage({
+  rail: "STRIPE_CONNECT",
+  status: "READY_TO_RELEASE",
+  remainder: 1500,
+  canReleaseNow: false,
+});
+assert.equal(purchaseCardModel(connectFinalAuthorized).offersRelease, false);
+
+const gpFinalCompletedProgress = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "RELEASED",
+  outboundKind: "FINAL",
+  outboundStatus: "SUCCEEDED",
+  remainderHeldMinor: 0,
+  now,
+});
+assert.equal(gpFinalCompletedProgress.hideReleaseActions, true);
+assert.equal(gpFinalCompletedProgress.headline, GP_PAYOUT_SENT_COPY);
+assert.equal(
+  purchaseCardModel(
+    remainderStage({
+      rail: "STRIPE_GLOBAL_PAYOUTS",
+      status: "RELEASED",
+      remainder: 0,
+      progress: gpFinalCompletedProgress,
+    }),
+  ).offersRelease,
+  false,
+);
+const connectFinalCompleted = remainderStage({
+  rail: "STRIPE_CONNECT",
+  status: "RELEASED",
+  remainder: 0,
+});
+assert.equal(purchaseCardModel(connectFinalCompleted).offersRelease, false);
 
 const posted = deriveOutboundDisplayState("SUCCEEDED");
 assert.equal(posted.buyerLabel, "Released to sourcer");

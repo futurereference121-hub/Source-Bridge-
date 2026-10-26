@@ -1008,6 +1008,9 @@ async function gpProgressForTransactions(
     status: string;
     payoutRail: string | null;
     fundedAt: Date | null;
+    remainderHeldMinor?: number | null;
+    itemAdvanceMinor?: number | null;
+    currency?: string | null;
   }[],
 ): Promise<{
   progress: Map<string, GpBuyerPayoutProgress>;
@@ -1078,6 +1081,9 @@ async function gpProgressForTransactions(
       availableOn: funding?.availableOn ?? null,
       fundedAt: row.fundedAt,
       expectedArrival: attempt?.expectedArrivalAt ?? null,
+      remainderHeldMinor: row.remainderHeldMinor,
+      itemAdvanceMinor: row.itemAdvanceMinor,
+      currency: row.currency,
     });
     if (progress) out.set(row.id, progress);
   }
@@ -1212,6 +1218,14 @@ export async function listConversationPaymentTickets(
               status: t.protectedTransaction.status,
               payoutRail: t.protectedTransaction.payoutRail ?? null,
               fundedAt: t.protectedTransaction.fundedAt ?? null,
+              remainderHeldMinor: Math.max(
+                0,
+                t.shippingMinor +
+                  t.sellerServiceFeeMinor -
+                  (t.protectedTransaction.finalTransferredMinor ?? 0),
+              ),
+              itemAdvanceMinor: t.procurementAdvanceMinor,
+              currency: t.currency,
             },
           ]
         : [],
@@ -2630,6 +2644,14 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
             status: pt.status,
             payoutRail: pt.payoutRail ?? null,
             fundedAt: pt.fundedAt ?? null,
+            remainderHeldMinor: Math.max(
+              0,
+              ticket.shippingMinor +
+                ticket.sellerServiceFeeMinor -
+                (pt.finalTransferredMinor ?? 0),
+            ),
+            itemAdvanceMinor: ticket.procurementAdvanceMinor,
+            currency: ticket.currency,
           },
         ])
       : {

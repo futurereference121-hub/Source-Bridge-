@@ -1283,6 +1283,9 @@ export async function gpPayoutProgressForTransaction(opts: {
   payoutRail: string | null;
   txnStatus: string | null;
   fundedAt: Date | null;
+  remainderHeldMinor?: number | null;
+  itemAdvanceMinor?: number | null;
+  currency?: string | null;
 }): Promise<GpBuyerPayoutProgress | null> {
   if (opts.payoutRail !== "STRIPE_GLOBAL_PAYOUTS" || !opts.protectedTxnId) return null;
   const [funding, attempt] = await Promise.all([
@@ -1321,6 +1324,9 @@ export async function gpPayoutProgressForTransaction(opts: {
     availableOn: funding?.availableOn,
     fundedAt: opts.fundedAt,
     expectedArrival: attempt?.expectedArrivalAt ?? null,
+    remainderHeldMinor: opts.remainderHeldMinor,
+    itemAdvanceMinor: opts.itemAdvanceMinor,
+    currency: opts.currency,
   });
 }
 
