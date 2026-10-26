@@ -427,7 +427,12 @@ assert.match(ticketsSrc, /status: 400/);
 assert.match(ticketsSrc, /SELLER_TRUST/);
 const fundingRun = readFileSync(join(root, "src/lib/payments/payout-rail/proceeds-funding-run.ts"), "utf8");
 assert.doesNotMatch(fundingRun, /resumeAuthorizedProcurement/);
-assert.doesNotMatch(fundingRun, /releaseProcurement/);
+assert.match(fundingRun, /procurementAttemptAllowsFunding/);
+assert.match(fundingRun, /releaseProcurement/);
+assert.match(
+  fundingRun.slice(fundingRun.indexOf("async function resumeOne")),
+  /funding.status !== "POSTED"/,
+);
 assert.match(eligibilitySrc, /procurementAvailabilityReason/);
 assert.match(eligibilitySrc, /if \(!input.agreed\) return null/);
 assert.match(eligibilitySrc, /applyTestProcurementTrustOverride/);

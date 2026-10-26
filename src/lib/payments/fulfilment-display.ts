@@ -240,7 +240,11 @@ export function describeProcurementStage(opts: {
   const remainderDetail = remaining
     ? `Shipping + sourcer fee awaiting final release: ${remaining}.`
     : null;
-  const paidDetail = `Paid/sent: ${opts.formatMinor(paidAdvanceMinor, opts.currency)}.`;
+  const payoutDetail = `Payout stage: ${payoutStatusLabel}.`;
+  const submitted =
+    payoutStatus === "processing" ||
+    payoutStatus === "succeeded" ||
+    Boolean(opts.outboundIdPresent);
 
   if (!agreed) {
     return {
@@ -253,13 +257,12 @@ export function describeProcurementStage(opts: {
       payoutStatusLabel,
     };
   }
-  if (paidAdvanceMinor > 0) {
+  if (paidAdvanceMinor > 0 || payoutStatus === "succeeded") {
     return {
-      headline: `Item release paid: ${advance}`,
+      headline: `Item funds sent: ${advance}.`,
       detail: [
-        `Procurement payout status: ${payoutStatusLabel}.`,
+        payoutDetail,
         remainderDetail,
-        paidDetail,
         !remaining && finalReleased ? "Final release authorized." : null,
       ]
         .filter(Boolean)
@@ -276,11 +279,22 @@ export function describeProcurementStage(opts: {
     outboundKind: opts.outboundKind,
     outboundStatus: opts.outboundStatus,
   })) {
+    if (submitted) {
+      return {
+        headline: `Item funds sent: ${advance} — bank delivery pending.`,
+        detail: [payoutDetail, remainderDetail].filter(Boolean).join(" "),
+        authorizedAdvanceMinor,
+        paidAdvanceMinor,
+        remainderHeldMinor,
+        payoutStatus,
+        payoutStatusLabel,
+      };
+    }
     return {
-      headline: `Item release authorized: ${advance}`,
+      headline: `Item release confirmed: ${advance}.`,
       detail: [
-        `Procurement payout status: ${payoutStatusLabel}.`,
-        `${paidDetail} Authorized ${advance} is reserved until the provider confirms payment.`,
+        `${advance} release confirmed — transfer pending.`,
+        payoutDetail,
         remainderDetail,
       ]
         .filter(Boolean)

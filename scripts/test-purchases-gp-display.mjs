@@ -102,11 +102,12 @@ const authorizedPending = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.equal(authorizedPending.headline, "Item release authorized: £20.00");
+assert.equal(authorizedPending.headline, "Item release confirmed: £20.00.");
 assert.doesNotMatch(authorizedPending.detail || "", /Buyer authorizes/);
-assert.match(authorizedPending.detail, /Procurement payout status: awaiting settlement/);
+assert.match(authorizedPending.detail, /£20\.00 release confirmed — transfer pending/);
+assert.match(authorizedPending.detail, /Payout stage: awaiting settlement/);
 assert.match(authorizedPending.detail, /Shipping \+ sourcer fee awaiting final release: £15.00/);
-assert.match(authorizedPending.detail, /Paid\/sent: £0.00/);
+assert.doesNotMatch(authorizedPending.detail || "", /Paid\/sent/);
 assert.doesNotMatch(authorizedPending.detail || "", /already released/);
 assert.equal(authorizedPending.paidAdvanceMinor, 0);
 assert.equal(authorizedPending.authorizedAdvanceMinor, 2000);
@@ -195,6 +196,39 @@ assert.equal(
   )[0].actions.canReleaseProcurement,
   false,
 );
+const submittedPending = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 0,
+  remainingHeldMinor: 1500,
+  status: "FUNDED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "PROCESSING",
+  outboundIdPresent: true,
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.equal(
+  submittedPending.headline,
+  "Item funds sent: £20.00 — bank delivery pending.",
+);
+assert.doesNotMatch(submittedPending.detail || "", /Paid\/sent/);
+assert.doesNotMatch(submittedPending.headline, /received|completed/);
+const failedAdvance = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 0,
+  remainingHeldMinor: 1500,
+  status: "FUNDED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "FAILED",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(failedAdvance.headline, /Procurement advance accepted/);
+assert.doesNotMatch(failedAdvance.headline, /Item funds sent|Item release confirmed/);
 const paid = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
@@ -205,9 +239,11 @@ const paid = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.equal(paid.headline, "Item release paid: £20.00");
+assert.equal(paid.headline, "Item funds sent: £20.00.");
 assert.match(paid.detail, /Shipping \+ sourcer fee awaiting final release: £15.00/);
-assert.match(paid.detail, /Paid\/sent: £20.00/);
+assert.match(paid.detail, /Payout stage: succeeded/);
+assert.doesNotMatch(paid.detail || "", /Paid\/sent/);
+assert.doesNotMatch(paid.headline, /bank has paid|received/);
 assert.equal(paid.payoutStatus, "succeeded");
 assert.equal(
   procurementRemainderHeldMinor({
@@ -539,6 +575,8 @@ const fulfilment = fs.readFileSync(path.join(root, "src/lib/payments/fulfilment.
 assert.match(page, /purchasesPanelState/);
 assert.match(page, /purchaseCardModel/);
 assert.match(page, /PurchaseRecordedAmounts/);
+assert.match(page, /describeProcurementStage/);
+assert.doesNotMatch(page, /Paid\/sent/);
 assert.match(page, /quoteKind === "FINAL"/);
 assert.match(page, /quoteKind === "PROCUREMENT"/);
 assert.doesNotMatch(page, /quoteConfirmationRequired/);

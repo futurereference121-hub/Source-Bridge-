@@ -58,6 +58,8 @@ const {
   fundingScanIncludesPurchase,
   GP_TEST_REPAIR_ABANDONED,
   isTestRepairAbandoned,
+  fundingPrincipalMinor,
+  procurementAttemptAllowsFunding,
   fundingIdempotencyKey,
   fundingPayoutMatchesLeg,
   isSimulatedFundingCredit,
@@ -476,6 +478,48 @@ assert.equal(GP_TEST_REPAIR_ABANDONED, "GP_TEST_REPAIR_ABANDONED");
 assert.equal(isTestRepairAbandoned({ stripeMode: "TEST", failureCode: GP_TEST_REPAIR_ABANDONED }), true);
 assert.equal(isTestRepairAbandoned({ stripeMode: "LIVE", failureCode: GP_TEST_REPAIR_ABANDONED }), false);
 assert.equal(isTestRepairAbandoned({ stripeMode: "TEST", failureCode: "GP_FUNDING_ROOM" }), false);
+assert.equal(
+  procurementAttemptAllowsFunding({ kind: "PROCUREMENT", status: "AWAITING_FA_FUNDS" }),
+  true,
+);
+assert.equal(
+  procurementAttemptAllowsFunding({ kind: "PROCUREMENT", status: "PENDING" }),
+  true,
+);
+assert.equal(
+  procurementAttemptAllowsFunding({ kind: "PROCUREMENT", status: "FAILED" }),
+  false,
+);
+assert.equal(
+  procurementAttemptAllowsFunding({ kind: "FINAL", status: "AWAITING_FA_FUNDS" }),
+  false,
+);
+assert.equal(
+  fundingPrincipalMinor({
+    itemCostMinor: 2000,
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+    procurementAuthorizedAmountMinor: 2000,
+  }),
+  2000,
+);
+assert.equal(
+  fundingPrincipalMinor({
+    itemCostMinor: 2000,
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+    finalAuthorized: true,
+    procurementAuthorizedAmountMinor: 2000,
+  }),
+  3500,
+);
+assert.match(runner, /procurementAttemptAllowsFunding/);
+assert.match(runner, /fundingPrincipalMinor/);
+assert.match(runner, /releaseProcurement/);
+assert.doesNotMatch(
+  runner.slice(runner.indexOf("async function buyerReleaseMayFund"), runner.indexOf("async function newFundingAllowedNow")),
+  /stripeMode === "TEST"/,
+);
 const abandonedTest = {
   ...newAvailable,
   status: "BLOCKED",
@@ -958,7 +1002,7 @@ const sendingUnknown = describeGpBuyerPayout({
   outboundIdPresent: true,
   now,
 });
-assert.match(sendingUnknown.timing, /has not given a bank-arrival estimate/);
+assert.match(sendingUnknown.timing, /bank-arrival estimate will appear when Stripe provides one/);
 assert.doesNotMatch(sendingUnknown.timing, /three days/);
 
 const sent = describeGpBuyerPayout({
@@ -1434,6 +1478,7 @@ assert.match(outbound, /replayOriginalOutboundIdempotency/);
 assert.match(outbound, /idempotencyKey: key/);
 assert.match(outbound, /attemptCount > 1/);
 const verifySrc = read("src/lib/payments/payout-rail/gp-testrun-verify.ts");
+assert.match(verifySrc, /470dd580/);
 assert.match(verifySrc, /matchFundingCredit/);
 assert.match(verifySrc, /getStripe\("TEST"\)/);
 assert.match(verifySrc, /recoverUncertainInitiatedOutbound/);

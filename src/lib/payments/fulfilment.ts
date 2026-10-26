@@ -470,7 +470,7 @@ function paymentLabel(
   }
   if (status === "FUNDED" && !procReleased) {
     if (authorizedPending) {
-      return "Item release authorized — payout pending (item amount not marked paid)";
+      return "Item release confirmed — transfer pending";
     }
     return "Funded — held protected (buyer has not released item funds)";
   }

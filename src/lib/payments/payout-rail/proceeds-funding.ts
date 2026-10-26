@@ -28,10 +28,10 @@ export const GP_RELEASE_WAITING_COPY =
   "Release confirmed. Your sourcer\u2019s international payout will be sent automatically once your payment is available. No further action is needed.";
 
 export const GP_PROCUREMENT_PENDING_COPY =
-  "Item release authorized \u2014 payout pending. The item amount is not marked paid until the provider confirms. Shipping and sourcer fee stay protected.";
+  "Item release confirmed \u2014 transfer pending. The item amount is not marked sent until Stripe accepts the payout. Shipping and sourcer fee stay protected.";
 
 export const GP_PROCUREMENT_PROCESSING_COPY =
-  "Item release authorized \u2014 payout processing. The item amount is not marked paid until the provider confirms. Shipping and sourcer fee stay protected.";
+  "Item funds sent \u2014 bank delivery pending. Shipping and sourcer fee stay protected.";
 
 /** Funding is off, or the payout schedule blocks it. No internal account terms. */
 export const GP_FUNDING_HOLD_COPY =
@@ -166,6 +166,43 @@ export function isTestRepairAbandoned(opts: {
     String(opts.stripeMode || "").toUpperCase() === "TEST" &&
     String(opts.failureCode || "") === GP_TEST_REPAIR_ABANDONED
   );
+}
+
+const PROCUREMENT_FUNDING_AUTHORIZED_STATUSES = [
+  "PENDING",
+  "AWAITING_FA_FUNDS",
+  "PROCESSING",
+  "SUCCEEDED",
+  "RECONCILED",
+] as const;
+
+/** Buyer-authorized item advance may fund FA proceeds. FAILED does not. */
+export function procurementAttemptAllowsFunding(opts: {
+  kind?: string | null;
+  status?: string | null;
+}): boolean {
+  return (
+    String(opts.kind || "").toUpperCase() === "PROCUREMENT" &&
+    (PROCUREMENT_FUNDING_AUTHORIZED_STATUSES as readonly string[]).includes(
+      String(opts.status || "").toUpperCase(),
+    )
+  );
+}
+
+/** Fund the authorized stage only. Final authorization funds the full seller principal. */
+export function fundingPrincipalMinor(opts: {
+  itemCostMinor: number;
+  shippingMinor: number;
+  sellerServiceFeeMinor: number;
+  finalAuthorized?: boolean | null;
+  procurementAuthorizedAmountMinor?: number | null;
+}): number {
+  const full =
+    opts.itemCostMinor + opts.shippingMinor + opts.sellerServiceFeeMinor;
+  if (opts.finalAuthorized) return full;
+  const procurement = opts.procurementAuthorizedAmountMinor;
+  if (Number.isInteger(procurement) && (procurement ?? 0) > 0) return procurement as number;
+  return full;
 }
 
 export function fundingScanIncludesPurchase(opts: {
@@ -882,11 +919,12 @@ function clearingTiming(opts: {
   if (opts.availableOn) {
     const when = formatPayoutDate(opts.availableOn);
     const pending = opts.availableOn.getTime() > opts.now.getTime();
-    return pending
-      ? `Stripe expects these funds to become available on ${when}. Payout processing starts after that date. This is not a bank-arrival time.`
-      : `Stripe marked these funds available on ${when}. Payout processing follows availability. This is not a bank-arrival time.`;
+    const availability = pending
+      ? `Stripe expects these funds to become available on ${when}.`
+      : `Stripe marked these funds available on ${when}.`;
+    return `${availability} Bank delivery follows payout submission. A bank-arrival estimate will appear when Stripe provides one. This availability date is not a bank-arrival time.`;
   }
-  return "Stripe has not given an availability date yet. Payout processing starts after the charge becomes available. This is not a bank-arrival time.";
+  return "Stripe has not given an availability date yet. Bank delivery follows payout submission. A bank-arrival estimate will appear when Stripe provides one.";
 }
 
 export function describeGpBuyerPayout(opts: {
@@ -942,7 +980,7 @@ export function describeGpBuyerPayout(opts: {
         "Your sourcer\u2019s international payout has been sent. Posted means the funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.",
       timing: opts.expectedArrival
         ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
-        : "Stripe has not given a bank-arrival estimate.",
+        : "A bank-arrival estimate will appear when Stripe provides one.",
       hideReleaseActions: true,
     };
   }
@@ -955,7 +993,7 @@ export function describeGpBuyerPayout(opts: {
       headline: "Sending your sourcer\u2019s international payout.",
       timing: opts.expectedArrival
         ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
-        : "Stripe has not given a bank-arrival estimate.",
+        : "A bank-arrival estimate will appear when Stripe provides one.",
       hideReleaseActions: true,
     };
   }

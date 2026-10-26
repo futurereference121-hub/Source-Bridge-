@@ -39,6 +39,8 @@ import {
   GP_FUNDING_WAITING_CODES,
   GP_TEST_REPAIR_ABANDONED,
   isTestRepairAbandoned,
+  fundingPrincipalMinor,
+  procurementAttemptAllowsFunding,
   fundingRowAfterCompletedPurchase,
   matchFundingCredit,
   nextFundingLegSequence,
@@ -331,7 +333,7 @@ export async function reconcileGpProceedsFunding(opts: {
     take: limit,
     include: {
       gpProceedsFunding: { include: { legs: true } },
-      outboundPaymentAttempts: { orderBy: { updatedAt: "desc" }, take: 1 },
+      outboundPaymentAttempts: { orderBy: { updatedAt: "desc" }, take: 4 },
       disputes: { where: { status: { in: ["OPEN", "UNDER_REVIEW"] } }, select: { id: true }, take: 1 },
     },
   });
@@ -340,8 +342,22 @@ export async function reconcileGpProceedsFunding(opts: {
   for (const txn of txns) {
     try {
     const attempts = txn.outboundPaymentAttempts ?? [];
-    const principal = txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
-    const fees = feeMinor(attempts[0]?.fxRateSnapshot || "", principal, txn.currency);
+    const finalAttempt = attempts.find((row) => row.kind === "FINAL") ?? null;
+    const procurementAttempt =
+      attempts.find((row) => row.kind === "PROCUREMENT") ?? null;
+    const principal = fundingPrincipalMinor({
+      itemCostMinor: txn.itemCostMinor,
+      shippingMinor: txn.shippingMinor,
+      sellerServiceFeeMinor: txn.sellerServiceFeeMinor,
+      finalAuthorized: Boolean(finalAttempt),
+      procurementAuthorizedAmountMinor: procurementAttemptAllowsFunding(
+        procurementAttempt || {},
+      )
+        ? procurementAttempt?.amountMinor ?? null
+        : null,
+    });
+    const quoteAttempt = finalAttempt || procurementAttempt;
+    const fees = feeMinor(quoteAttempt?.fxRateSnapshot || "", principal, txn.currency);
     const funding = await prisma.gpProceedsFunding.upsert({
       where: { protectedTxnId: txn.id },
       create: {
@@ -381,6 +397,12 @@ async function buyerReleaseMayFund(
   txn: { id: string; buyerId: string; inspectionEndsAt: Date | null },
   now: Date,
 ): Promise<boolean> {
+  const procurement = await prisma.outboundPaymentAttempt.findFirst({
+    where: { protectedTxnId: txn.id, kind: "PROCUREMENT" },
+    select: { kind: true, status: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (procurementAttemptAllowsFunding(procurement || {})) return true;
   const audits = await prisma.financialAuditEvent.findMany({
     where: {
       protectedTxnId: txn.id,
@@ -882,10 +904,15 @@ async function fundOne(opts: {
     return false;
   }
   if (!(await buyerReleaseMayFund(opts.txn, opts.now))) return false;
-  const attempt = await prisma.outboundPaymentAttempt.findFirst({
-    where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
-    orderBy: { updatedAt: "desc" },
-  });
+  const attempt =
+    (await prisma.outboundPaymentAttempt.findFirst({
+      where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
+      orderBy: { updatedAt: "desc" },
+    })) ||
+    (await prisma.outboundPaymentAttempt.findFirst({
+      where: { protectedTxnId: opts.txn.id, kind: "PROCUREMENT" },
+      orderBy: { updatedAt: "desc" },
+    }));
   const storedQuote = parseQuoteSnapshot(attempt?.fxRateSnapshot || "");
   let fees = feeMinor(attempt?.fxRateSnapshot || "", opts.principal, opts.txn.currency);
   let quote = classifyStoredQuote({
@@ -1149,11 +1176,42 @@ async function confirmLegs(
 async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<boolean> {
   const txn = await prisma.protectedTransaction.findUnique({
     where: { id: protectedTxnId },
-    include: { gpProceedsFunding: { include: { legs: true } }, outboundPaymentAttempts: { take: 1, orderBy: { updatedAt: "desc" } } },
+    include: {
+      gpProceedsFunding: { include: { legs: true } },
+      outboundPaymentAttempts: { orderBy: { updatedAt: "desc" } },
+    },
   });
-  if (!txn || txn.status !== "READY_TO_RELEASE" || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
+  if (!txn || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
   const funding = txn.gpProceedsFunding;
   if (!funding || funding.status !== "POSTED") return false;
+  const procurement = txn.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT");
+  if (
+    procurement &&
+    !procurement.stripeOutboundPaymentId &&
+    (procurement.status === "AWAITING_FA_FUNDS" || procurement.status === "PENDING")
+  ) {
+    if (procurement.initiatedAt) {
+      const { recoverUncertainInitiatedOutbound } = await import(
+        "@/lib/payments/payout-rail/outbound-payment"
+      );
+      const recovered = await recoverUncertainInitiatedOutbound(procurement);
+      if (recovered.finalized) return true;
+      return false;
+    }
+    const { releaseProcurement } = await import("@/lib/payments/release");
+    try {
+      await releaseProcurement({
+        protectedTxnId: txn.id,
+        actorUserId: null,
+      });
+      return true;
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+      if (WAITING.has(code)) return false;
+      return false;
+    }
+  }
+  if (txn.status !== "READY_TO_RELEASE") return false;
   const principal = txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
   const fees = feeMinor(txn.outboundPaymentAttempts[0]?.fxRateSnapshot || "", principal, txn.currency);
   const posted = funding.legs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0);
@@ -1233,6 +1291,7 @@ export async function gpPayoutProgressForTransaction(opts: {
       where: { protectedTxnId: opts.protectedTxnId },
       orderBy: { updatedAt: "desc" },
       select: {
+        kind: true,
         status: true,
         failureCode: true,
         stripeOutboundPaymentId: true,
@@ -1247,6 +1306,7 @@ export async function gpPayoutProgressForTransaction(opts: {
   return describeGpBuyerPayout({
     releaseAuthorized: authorized,
     txnStatus: opts.txnStatus || "",
+    outboundKind: attempt?.kind,
     outboundStatus: attempt?.status,
     outboundIdPresent: Boolean(attempt?.stripeOutboundPaymentId),
     failureCode: attempt?.failureCode,

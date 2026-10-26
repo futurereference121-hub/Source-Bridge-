@@ -402,52 +402,24 @@ export default function PurchasesPage() {
                     <dt className="text-white/40">Funded</dt>
                     <dd className="text-white/85">{fmtDate(o.fundedAt)}</dd>
                   </div>
-                  {procDone > 0 || residual > 0 || Boolean(o.procurementAdvanceAgreed) ? (
+                  {residual > 0 &&
+                  !o.procurementAdvanceAgreed &&
+                  procDone <= 0 ? (
                     <div className="sm:col-span-2 space-y-1 text-xs text-white/50">
-                      {procDone > 0 ? (
-                        <p>
-                          Item funds already released:{" "}
-                          {formatMinor(procDone, o.currency)}
-                        </p>
-                      ) : procurementAdvanceAuthorized({
-                          transferredMinor: procDone,
-                          status: o.status,
-                          outboundKind: o.outboundKind,
-                          outboundStatus: o.outboundStatus,
-                          hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
-                        }) ? (
-                        <p>
-                          Item release authorized:{" "}
-                          {formatMinor(o.procurementAdvanceMinor ?? 0, o.currency)}
-                          . Paid/sent: {formatMinor(0, o.currency)}
-                        </p>
-                      ) : null}
-                      {(procDone > 0 ||
-                        procurementAdvanceAuthorized({
-                          transferredMinor: procDone,
-                          status: o.status,
-                          outboundKind: o.outboundKind,
-                          outboundStatus: o.outboundStatus,
-                          hideReleaseActions: o.gpPayoutProgress?.hideReleaseActions,
-                        })) ? (
-                        <p>
-                          Shipping + sourcer fee awaiting final release:{" "}
-                          {formatMinor(
-                            procurementRemainderHeldMinor({
-                              remainingProtectedSellerShareMinor:
-                                o.books?.remainingProtectedSellerShareMinor,
-                              shippingMinor: o.shippingMinor,
-                              sellerServiceFeeMinor: o.sellerServiceFeeMinor,
-                            }),
-                            o.currency,
-                          )}
-                        </p>
-                      ) : residual > 0 && !o.procurementAdvanceAgreed ? (
-                        <p>
-                          Remaining seller funds protected:{" "}
-                          {formatMinor(residual, o.currency)}
-                        </p>
-                      ) : null}
+                      <p>
+                        Remaining seller funds protected:{" "}
+                        {formatMinor(residual, o.currency)}
+                      </p>
+                      <p>
+                        Source Bridge fee held:{" "}
+                        {formatMinor(
+                          o.books?.platformFeeMinor ?? o.protectionFeeMinor,
+                          o.currency,
+                        )}
+                      </p>
+                    </div>
+                  ) : Boolean(o.procurementAdvanceAgreed) || procDone > 0 ? (
+                    <div className="sm:col-span-2 space-y-1 text-xs text-white/50">
                       <p>
                         Source Bridge fee held:{" "}
                         {formatMinor(

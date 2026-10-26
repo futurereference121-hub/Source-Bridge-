@@ -2231,7 +2231,7 @@ export function PaymentTicketCard({
           </p>
           <p className="text-white/40">
             {itemReleaseAuthorized
-              ? "Item release authorized. Shipping and sourcer fee stay protected."
+              ? "Item release confirmed. Shipping and sourcer fee stay protected."
               : "Shipping is never released early. Buyer must authorize item funds after funding."}
           </p>
         </div>
@@ -2327,20 +2327,12 @@ export function PaymentTicketCard({
           {procAgreed || itemFundsReceived > 0 ? (
             <div className="space-y-1 text-xs text-white/70">
               {itemReleaseAuthorized && itemFundsReceived <= 0 ? (
-                <>
-                  <p className="flex justify-between gap-3">
-                    <span>Item release authorized</span>
-                    <span className="tabular-nums text-white">
-                      {formatMinor(ticket.procurementAdvanceMinor, cur)}
-                    </span>
-                  </p>
-                  <p className="flex justify-between gap-3">
-                    <span>Paid/sent</span>
-                    <span className="tabular-nums text-white">
-                      {formatMinor(0, cur)}
-                    </span>
-                  </p>
-                </>
+                <p className="flex justify-between gap-3">
+                  <span>Item release confirmed</span>
+                  <span className="tabular-nums text-white">
+                    {formatMinor(ticket.procurementAdvanceMinor, cur)}
+                  </span>
+                </p>
               ) : (
                 <p className="flex justify-between gap-3">
                   <span>Item funds already released</span>

@@ -134,7 +134,7 @@ assert.match(
   /incomingReopensProcurementRelease/,
 );
 assert.match(card, /procurementAdvanceAuthorized/);
-assert.match(card, /Item release authorized/);
+assert.match(card, /Item release confirmed/);
 assert.match(
   fs.readFileSync(path.join(root, "src/lib/conversation-activity.ts"), "utf8"),
   /bumpConversationActivity/,

@@ -29,13 +29,13 @@ export const CURRENT_GP_TEST_RUN = {
 };
 
 export const CURRENT_GP_PROCUREMENT_TEST = {
-  txnHash: "6ba47234",
-  ticketHash: "151cd1de",
+  txnHash: "470dd580",
+  ticketHash: "1665f34d",
   stripeMode: "TEST" as const,
   payoutRail: "STRIPE_GLOBAL_PAYOUTS",
   currency: "GBP",
   totalChargeMinor: 4025,
-  createdOnOrAfter: "2026-10-25T00:00:00.000Z",
+  createdOnOrAfter: "2026-10-26T00:00:00.000Z",
 };
 
 function assertLiveInitiationOff() {
