@@ -216,7 +216,13 @@ export function isActiveLifecycleTicket(opts: {
   hiddenFromChatAt?: Date | string | null;
   /** Product Purchase Tickets do not consume the sourcing 3-active cap. */
   origin?: string | null;
+  /**
+   * TEST-only funding abandon (GP_TEST_REPAIR_ABANDONED). History stays;
+   * the record does not consume the sourcing 3-active cap. LIVE never sets this.
+   */
+  testRepairAbandoned?: boolean | null;
 }): boolean {
+  if (opts.testRepairAbandoned) return false;
   if (isProductPurchaseOrigin(opts.origin)) return false;
   if (opts.hiddenFromChatAt) return false;
   if (isInactiveTicketStatus(opts.ticketStatus)) return false;

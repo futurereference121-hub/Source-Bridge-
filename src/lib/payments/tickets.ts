@@ -26,6 +26,7 @@ import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import {
   describeGpBuyerPayout,
+  isTestRepairAbandoned,
   scheduleBlocksBuyerFunding,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
@@ -336,6 +337,7 @@ function mapTicket(
     outboundKind?: string | null;
     outboundStatus?: string | null;
     fundingStatus?: string | null;
+    testRepairAbandoned?: boolean | null;
   },
 ) {
   const books = computeProtectedFinancials({
@@ -528,6 +530,7 @@ function mapTicket(
     outboundKind: extras?.outboundKind ?? null,
     outboundStatus: extras?.outboundStatus ?? null,
     fundingStatus: extras?.fundingStatus ?? null,
+    testRepairAbandoned: Boolean(extras?.testRepairAbandoned),
     payoutRail: extras?.payoutRail || t.payoutRail || "STRIPE_CONNECT",
     pricingPolicy: t.pricingPolicy || "",
     feeExplanation: feeExplanationForPolicy(t.pricingPolicy),
@@ -1113,6 +1116,7 @@ export async function listConversationPaymentTickets(
           inspectionEndsAt: true,
           origin: true,
           payoutRail: true,
+          gpProceedsFunding: { select: { failureCode: true } },
         },
       },
     },
@@ -1271,6 +1275,10 @@ export async function listConversationPaymentTickets(
         ? gpProgress.funding.get(t.protectedTransactionId) ?? null
         : null,
       origin: t.protectedTransaction?.origin ?? null,
+      testRepairAbandoned: isTestRepairAbandoned({
+        stripeMode: t.stripeMode,
+        failureCode: t.protectedTransaction?.gpProceedsFunding?.failureCode,
+      }),
     }),
   );
 }
@@ -1291,12 +1299,15 @@ export async function countActiveConversationTickets(
     select: {
       id: true,
       status: true,
+      stripeMode: true,
       hiddenFromChatAt: true,
       protectedTransaction: {
         select: {
           status: true,
           origin: true,
           procurementTransferredMinor: true,
+          stripeMode: true,
+          gpProceedsFunding: { select: { failureCode: true } },
         },
       },
     },
@@ -1313,6 +1324,11 @@ export async function countActiveConversationTickets(
         procReleased,
         hiddenFromChatAt: r.hiddenFromChatAt,
         origin: r.protectedTransaction?.origin ?? null,
+        testRepairAbandoned: isTestRepairAbandoned({
+          stripeMode:
+            r.stripeMode || r.protectedTransaction?.stripeMode || "",
+          failureCode: r.protectedTransaction?.gpProceedsFunding?.failureCode,
+        }),
       })
     ) {
       n += 1;
@@ -1404,7 +1420,13 @@ async function assertNoConcurrentSourcingAgreement(opts: {
       // Same-conversation multi-ticket independence: only other threads.
       conversationId: { not: opts.conversationId },
     },
-    select: { id: true, protectedTransactionId: true, status: true, hiddenFromChatAt: true },
+    select: {
+      id: true,
+      protectedTransactionId: true,
+      status: true,
+      stripeMode: true,
+      hiddenFromChatAt: true,
+    },
   });
   if (activeTicket) {
     // COMPLETED (RELEASED PT) does not block — only true active lifecycles.
@@ -1412,7 +1434,12 @@ async function assertNoConcurrentSourcingAgreement(opts: {
     if (activeTicket.protectedTransactionId) {
       const pt = await prisma.protectedTransaction.findUnique({
         where: { id: activeTicket.protectedTransactionId },
-        select: { status: true, procurementTransferredMinor: true },
+        select: {
+          status: true,
+          procurementTransferredMinor: true,
+          stripeMode: true,
+          gpProceedsFunding: { select: { failureCode: true } },
+        },
       });
       const procReleased =
         (pt?.procurementTransferredMinor ?? 0) > 0 ||
@@ -1422,6 +1449,10 @@ async function assertNoConcurrentSourcingAgreement(opts: {
         protectedStatus: pt?.status ?? null,
         procReleased,
         hiddenFromChatAt: activeTicket.hiddenFromChatAt,
+        testRepairAbandoned: isTestRepairAbandoned({
+          stripeMode: activeTicket.stripeMode || pt?.stripeMode || "",
+          failureCode: pt?.gpProceedsFunding?.failureCode,
+        }),
       });
     } else {
       stillActive = isActiveLifecycleTicket({
@@ -1765,12 +1796,15 @@ export async function createOrRevisePaymentTicket(opts: {
       },
       select: {
         status: true,
+        stripeMode: true,
         hiddenFromChatAt: true,
         protectedTransaction: {
           select: {
             status: true,
             procurementTransferredMinor: true,
             fundedAt: true,
+            stripeMode: true,
+            gpProceedsFunding: { select: { failureCode: true } },
           },
         },
       },
@@ -1786,6 +1820,11 @@ export async function createOrRevisePaymentTicket(opts: {
           protectedStatus: st,
           procReleased,
           hiddenFromChatAt: row.hiddenFromChatAt,
+          testRepairAbandoned: isTestRepairAbandoned({
+            stripeMode:
+              row.stripeMode || row.protectedTransaction?.stripeMode || "",
+            failureCode: row.protectedTransaction?.gpProceedsFunding?.failureCode,
+          }),
         })
       ) {
         return false;
@@ -2549,6 +2588,7 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
           inspectionEndsAt: true,
           origin: true,
           payoutRail: true,
+          gpProceedsFunding: { select: { failureCode: true } },
         },
       },
     },
@@ -2634,5 +2674,9 @@ export async function getPaymentTicket(ticketId: string, viewerId: string) {
     fundingStatus: ticket.protectedTransactionId
       ? gpProgress.funding.get(ticket.protectedTransactionId) ?? null
       : null,
+    testRepairAbandoned: isTestRepairAbandoned({
+      stripeMode: ticket.stripeMode,
+      failureCode: pt?.gpProceedsFunding?.failureCode,
+    }),
   }));
 }

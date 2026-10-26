@@ -143,6 +143,7 @@ export type PaymentTicketView = {
   outboundKind?: string | null;
   outboundStatus?: string | null;
   fundingStatus?: string | null;
+  testRepairAbandoned?: boolean | null;
   paymentIntentStatus?: string | null;
   lifecycleStage?: string;
   lifecycleLabel?: string;

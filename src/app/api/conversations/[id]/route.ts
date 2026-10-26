@@ -181,6 +181,7 @@ export async function GET(_req: Request, { params }: Params) {
         lifecycleStage: t.lifecycleStage ?? null,
         hiddenFromChatAt: t.hiddenFromChatAt ?? null,
         origin: t.origin ?? null,
+        testRepairAbandoned: Boolean(t.testRepairAbandoned),
       }),
     ).length;
     const messagesAsc = [...conversation.messages].reverse().map(mapMessage);

@@ -6,6 +6,9 @@
  * Run with DB: node --env-file=.env scripts/test-payment-ticket-lifecycle.mjs
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // --- Mirrors of ticket-lifecycle.ts + tickets.ts guards (keep in sync) ---
 
@@ -111,6 +114,7 @@ function isTerminalLifecycleStage(stage) {
 }
 
 function isActiveLifecycleTicket(opts) {
+  if (opts.testRepairAbandoned) return false;
   if (opts.hiddenFromChatAt) return false;
   if (isInactiveTicketStatus(opts.ticketStatus)) return false;
   const stage =
@@ -404,7 +408,71 @@ ok(
     protectedStatus: "AWAITING_PAYMENT",
   }),
 );
+ok(
+  "TEST repair-abandoned FUNDED does not consume a slot",
+  !isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "READY_TO_RELEASE",
+    testRepairAbandoned: true,
+  }),
+);
+ok(
+  "ordinary FUNDED still consumes a slot",
+  isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "READY_TO_RELEASE",
+  }),
+);
+ok(
+  "LIVE-looking FUNDED still consumes a slot without the TEST abandon flag",
+  isActiveLifecycleTicket({
+    ticketStatus: "FUNDED",
+    protectedStatus: "READY_TO_RELEASE",
+    testRepairAbandoned: false,
+  }),
+);
+{
+  const afterExcludeAbandoned = [
+    isActiveLifecycleTicket({
+      ticketStatus: "FUNDED",
+      protectedStatus: "FUNDED",
+    }),
+    isActiveLifecycleTicket({
+      ticketStatus: "FUNDED",
+      protectedStatus: "READY_TO_RELEASE",
+      testRepairAbandoned: true,
+    }),
+    isActiveLifecycleTicket({
+      ticketStatus: "FUNDED",
+      protectedStatus: "READY_TO_RELEASE",
+    }),
+  ].filter(Boolean).length;
+  ok(
+    "abandoned TEST + two funded = 2 slots (one free)",
+    afterExcludeAbandoned === 2 && canCreateNewTicket(afterExcludeAbandoned, false),
+  );
+}
 ok("max active is 3", MAX_ACTIVE_PAYMENT_TICKETS === 3);
+{
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const lifecycleSrc = readFileSync(
+    join(root, "src/lib/payments/ticket-lifecycle.ts"),
+    "utf8",
+  );
+  const ticketsSrc = readFileSync(
+    join(root, "src/lib/payments/tickets.ts"),
+    "utf8",
+  );
+  ok(
+    "source helper excludes TEST repair-abandoned from the cap",
+    lifecycleSrc.includes("if (opts.testRepairAbandoned) return false"),
+  );
+  ok(
+    "active count loads funding failure + stripeMode",
+    ticketsSrc.includes("gpProceedsFunding: { select: { failureCode: true } }") &&
+      ticketsSrc.includes("testRepairAbandoned: isTestRepairAbandoned({"),
+  );
+}
 ok("0 active → can create", canCreateNewTicket(0, false));
 ok("2 active → can create", canCreateNewTicket(2, false));
 ok("3 active → blocked", !canCreateNewTicket(3, false));

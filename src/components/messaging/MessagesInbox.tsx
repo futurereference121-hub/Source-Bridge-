@@ -209,6 +209,7 @@ type TimelineTicketLite = {
   paymentIntentStatus?: string | null;
   protectedTransactionId?: string | null;
   origin?: string | null;
+  testRepairAbandoned?: boolean | null;
 };
 
 /** Merge ticket snapshots by id — newer authoritative state wins (never regress funded). */
@@ -306,6 +307,7 @@ function countActiveTicketsClient(
         lifecycleStage: t.lifecycleStage ?? null,
         hiddenFromChatAt: t.hiddenFromChatAt ?? null,
         origin: t.origin ?? null,
+        testRepairAbandoned: Boolean(t.testRepairAbandoned),
       })
     ) {
       n += 1;
