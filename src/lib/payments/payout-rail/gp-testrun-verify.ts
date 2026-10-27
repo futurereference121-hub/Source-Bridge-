@@ -8,7 +8,13 @@ import { prisma } from "@/lib/db";
 import {
   isGlobalPayoutsLiveInitiationEnabled,
   isGpTestProcurementTrustOverrideEnabled,
+  isProcurementAdvancesEnabled,
 } from "@/lib/payments/flags";
+import {
+  applyTestProcurementTrustOverride,
+  procurementAvailabilityReason,
+} from "@/lib/payments/eligibility";
+import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { getGlobalPayoutsFinancialAccountId } from "@/lib/payments/payout-rail/gp-client";
 import { describeProcurementStage } from "@/lib/payments/fulfilment-display";
@@ -172,9 +178,65 @@ export async function verifyProcurementTestCharge() {
   const seller = purchase.sellerId
     ? await prisma.user.findUnique({
         where: { id: purchase.sellerId },
-        select: { trustLevel: true },
+        select: {
+          trustLevel: true,
+          procurementAdvancesEnabled: true,
+          isDemo: true,
+          isAdmin: true,
+          role: true,
+          username: true,
+        },
       })
     : null;
+  const configRow = await prisma.platformPaymentConfig.findUnique({
+    where: { id: "default" },
+    select: {
+      procurementMinTrustLevel: true,
+      procurementAdvancesGloballyOn: true,
+    },
+  });
+  const minTrustLevel = configRow?.procurementMinTrustLevel ?? 2;
+  const sellerIsApprovedTestSourcer = purchase.sellerId
+    ? isApprovedSandboxSourcer(purchase.sellerId)
+    : false;
+  const overrideEnabled = isGpTestProcurementTrustOverrideEnabled();
+  const storedSellerTrustLevel = seller?.trustLevel ?? null;
+  const effectiveTestTrust = seller
+    ? applyTestProcurementTrustOverride({
+        storedTrustLevel: seller.trustLevel,
+        minTrustLevel,
+        stripeMode: "TEST",
+        sellerIsApprovedTestSourcer,
+        overrideEnabled,
+      })
+    : null;
+  const liveEffectiveTrust = seller
+    ? applyTestProcurementTrustOverride({
+        storedTrustLevel: seller.trustLevel,
+        minTrustLevel,
+        stripeMode: "LIVE",
+        sellerIsApprovedTestSourcer,
+        overrideEnabled,
+      })
+    : null;
+  const testProcurementReason = seller
+    ? procurementAvailabilityReason({
+        globallyEnabled: configRow?.procurementAdvancesGloballyOn ?? true,
+        featureFlagOn: isProcurementAdvancesEnabled(),
+        seller: { ...seller, trustLevel: effectiveTestTrust ?? seller.trustLevel },
+        minTrustLevel,
+        paymentOption: "PROTECTED",
+      })
+    : "SELLER_NOT_ELIGIBLE";
+  const liveProcurementReason = seller
+    ? procurementAvailabilityReason({
+        globallyEnabled: configRow?.procurementAdvancesGloballyOn ?? true,
+        featureFlagOn: isProcurementAdvancesEnabled(),
+        seller: { ...seller, trustLevel: liveEffectiveTrust ?? seller.trustLevel },
+        minTrustLevel,
+        paymentOption: "PROTECTED",
+      })
+    : "SELLER_NOT_ELIGIBLE";
   const remainingHeldMinor = Math.max(
     0,
     purchase.itemCostMinor +
@@ -225,8 +287,16 @@ export async function verifyProcurementTestCharge() {
     ok: true,
     stripeCalled: Boolean(purchase.stripeChargeId),
     liveInitiationOff: !isGlobalPayoutsLiveInitiationEnabled(),
-    trustOverrideEnabled: isGpTestProcurementTrustOverrideEnabled(),
-    storedSellerTrustLevel: seller?.trustLevel ?? null,
+    trustOverrideEnabled: overrideEnabled,
+    storedSellerTrustLevel,
+    sellerIsApprovedTestSourcer,
+    minTrustLevel,
+    effectiveTestTrust,
+    liveEffectiveTrust,
+    testProcurementAvailable: testProcurementReason == null,
+    liveProcurementAvailable: liveProcurementReason == null,
+    testProcurementReason,
+    liveProcurementReason,
     purchaseHash: CURRENT_GP_PROCUREMENT_TEST.txnHash,
     ticketHash,
     title: purchase.paymentTicket?.title || purchase.title || "",
