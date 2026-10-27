@@ -91,7 +91,7 @@ export function sellerReleaseProgressCopy(opts: {
     const headline = String(opts.gpHeadline || "").trim();
     if (headline) return headline;
     return status === "RELEASED"
-      ? "Release authorized — checking international payout status."
+      ? "Completed — international payout has been sent."
       : GP_RELEASING_FALLBACK_COPY;
   }
   return status === "RELEASED"
@@ -126,15 +126,52 @@ export type ProcurementPayoutStatus =
   | "succeeded"
   | "failed";
 
+/**
+ * Cash still owed to the sourcer after the item advance. The books field
+ * remainingProtectedSellerShareMinor is the agreed remainder structure and
+ * does not fall when FINAL pays. Subtract finalTransferredMinor for display.
+ */
 export function procurementRemainderHeldMinor(opts: {
   remainingProtectedSellerShareMinor?: number | null;
   shippingMinor?: number | null;
   sellerServiceFeeMinor?: number | null;
+  finalTransferredMinor?: number | null;
 }): number {
-  if (typeof opts.remainingProtectedSellerShareMinor === "number") {
-    return Math.max(0, opts.remainingProtectedSellerShareMinor);
+  const agreed =
+    typeof opts.remainingProtectedSellerShareMinor === "number"
+      ? Math.max(0, opts.remainingProtectedSellerShareMinor)
+      : Math.max(0, (opts.shippingMinor ?? 0) + (opts.sellerServiceFeeMinor ?? 0));
+  return Math.max(0, agreed - Math.max(0, opts.finalTransferredMinor ?? 0));
+}
+
+/** Provider FINAL success overrides a stale remaining-held remainder. */
+export function finalRemainderSent(opts: {
+  status?: string | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  gpPhase?: string | null;
+  remainingHeldMinor?: number | null;
+  finalPaidMinor?: number | null;
+}): boolean {
+  const status = String(opts.status || "").toUpperCase();
+  const kind = String(opts.outboundKind || "").toUpperCase();
+  const outbound = String(opts.outboundStatus || "").toUpperCase();
+  const phase = String(opts.gpPhase || "").toLowerCase();
+  const paid = Math.max(0, opts.finalPaidMinor ?? 0);
+  const held = Math.max(0, opts.remainingHeldMinor ?? 0);
+  if (outbound === "FAILED" || outbound === "RETURNED") return false;
+  if (kind === "FINAL" && (outbound === "SUCCEEDED" || outbound === "RECONCILED")) {
+    return true;
   }
-  return Math.max(0, (opts.shippingMinor ?? 0) + (opts.sellerServiceFeeMinor ?? 0));
+  if (kind === "FINAL" && phase === "sent") return true;
+  if (status === "RELEASED" && paid > 0) return true;
+  return paid > 0 && held <= 0;
+}
+
+export function sourceBridgeFeeLineLabel(completed: boolean): string {
+  return completed
+    ? "Source Bridge platform fee"
+    : "Source Bridge platform fee (held)";
 }
 
 export function describeProcurementPayoutStatus(opts: {
@@ -198,11 +235,12 @@ function finalRemainderAuthorized(opts: {
   outboundKind?: string | null;
   outboundStatus?: string | null;
 }): boolean {
+  const outbound = String(opts.outboundStatus || "").toUpperCase();
+  if (outbound === "FAILED" || outbound === "RETURNED") return false;
   const status = String(opts.status || "").toUpperCase();
   if (status === "READY_TO_RELEASE" || status === "RELEASED") return true;
   const kind = String(opts.outboundKind || "").toUpperCase();
-  const outbound = String(opts.outboundStatus || "").toUpperCase();
-  return kind === "FINAL" && Boolean(outbound) && outbound !== "FAILED";
+  return kind === "FINAL" && Boolean(outbound);
 }
 
 export function describeProcurementStage(opts: {
@@ -219,6 +257,7 @@ export function describeProcurementStage(opts: {
   gpPhase?: string | null;
   finalPaidMinor?: number | null;
   remainderAuthorizedMinor?: number | null;
+  platformFeeMinor?: number | null;
   currency: string;
   formatMinor: (minor: number, currency: string) => string;
 }): {
@@ -228,6 +267,7 @@ export function describeProcurementStage(opts: {
   authorizedAdvanceMinor: number;
   paidAdvanceMinor: number;
   remainderHeldMinor: number;
+  remainderDisplayMinor: number;
   payoutStatus: ProcurementPayoutStatus;
   payoutStatusLabel: string;
 } {
@@ -257,35 +297,58 @@ export function describeProcurementStage(opts: {
     gpPhase: opts.gpPhase,
   });
   const payoutStatusLabel = procurementPayoutStatusLabel(payoutStatus);
-  const remainderPending = remainderHeldMinor > 0;
+  const remainderSent = finalRemainderSent({
+    status: opts.status,
+    outboundKind: opts.outboundKind,
+    outboundStatus: opts.outboundStatus,
+    gpPhase: opts.gpPhase,
+    remainingHeldMinor: remainderHeldMinor,
+    finalPaidMinor,
+  });
+  const remainderPending = !remainderSent && remainderHeldMinor > 0;
   const remainderAuthorized = finalRemainderAuthorized({
     status: opts.status,
     outboundKind: opts.outboundKind,
     outboundStatus: opts.outboundStatus,
   });
-  const remainderSent =
-    !remainderPending && (status === "RELEASED" || finalPaidMinor > 0);
-  const remainderAmountText = remaining
-    ? remaining
-    : remainderAuthorizedMinor > 0
-      ? opts.formatMinor(remainderAuthorizedMinor, opts.currency)
+  const remainderDisplayMinor = remainderSent
+    ? finalPaidMinor || remainderAuthorizedMinor
+    : remainderHeldMinor;
+  const remainderAmountText =
+    remainderDisplayMinor > 0
+      ? opts.formatMinor(remainderDisplayMinor, opts.currency)
+      : remaining
+        ? remaining
+        : remainderAuthorizedMinor > 0
+          ? opts.formatMinor(remainderAuthorizedMinor, opts.currency)
+          : "";
+  const feeAmountText =
+    typeof opts.platformFeeMinor === "number" && opts.platformFeeMinor > 0
+      ? opts.formatMinor(opts.platformFeeMinor, opts.currency)
       : "";
   const remainderLabel = remainderPending
     ? remainderAuthorized
       ? `Final ${remainderAmountText} release authorized — payout pending`
       : `Shipping + sourcer fee awaiting final release`
     : remainderSent
-      ? "Remainder sent"
+      ? "Final remainder sent"
       : null;
   const remainderDetail = remainderPending
     ? remainderAuthorized
       ? `Final ${remainderAmountText} release authorized, payout pending.`
       : `Shipping + sourcer fee awaiting final release: ${remainderAmountText}.`
     : remainderSent && remainderAmountText
-      ? `Remainder sent: ${remainderAmountText}. Total sent to sourcer: ${opts.formatMinor(
-          paidAdvanceMinor + (finalPaidMinor || remainderAuthorizedMinor),
-          opts.currency,
-        )}. £0 awaiting release. Source Bridge fee stays on platform.`
+      ? [
+          `Final remainder sent: ${remainderAmountText}.`,
+          `Total sent to sourcer: ${opts.formatMinor(
+            paidAdvanceMinor + (finalPaidMinor || remainderAuthorizedMinor),
+            opts.currency,
+          )}.`,
+          `Awaiting release: ${opts.formatMinor(0, opts.currency)}.`,
+          feeAmountText
+            ? `Source Bridge platform fee: ${feeAmountText}, kept on platform.`
+            : "Source Bridge platform fee kept on platform.",
+        ].join(" ")
       : null;
   const payoutDetail = `Payout stage: ${payoutStatusLabel}.`;
   const submitted =
@@ -293,6 +356,15 @@ export function describeProcurementStage(opts: {
     payoutStatus === "succeeded" ||
     Boolean(opts.outboundIdPresent);
 
+  const stage = {
+    remainderLabel,
+    authorizedAdvanceMinor,
+    paidAdvanceMinor,
+    remainderHeldMinor,
+    remainderDisplayMinor,
+    payoutStatus,
+    payoutStatusLabel,
+  };
   if (!agreed) {
     return {
       headline: "Procurement advance: not requested",
@@ -301,6 +373,7 @@ export function describeProcurementStage(opts: {
       authorizedAdvanceMinor: 0,
       paidAdvanceMinor,
       remainderHeldMinor,
+      remainderDisplayMinor,
       payoutStatus,
       payoutStatusLabel,
     };
@@ -309,12 +382,7 @@ export function describeProcurementStage(opts: {
     return {
       headline: `Item funds sent: ${advance}.`,
       detail: [payoutDetail, remainderDetail].filter(Boolean).join(" "),
-      remainderLabel,
-      authorizedAdvanceMinor,
-      paidAdvanceMinor,
-      remainderHeldMinor,
-      payoutStatus,
-      payoutStatusLabel,
+      ...stage,
     };
   }
   if (procurementAdvanceAuthorized({
@@ -326,12 +394,7 @@ export function describeProcurementStage(opts: {
       return {
         headline: `Item funds sent: ${advance} — bank delivery pending.`,
         detail: [payoutDetail, remainderDetail].filter(Boolean).join(" "),
-        remainderLabel,
-        authorizedAdvanceMinor,
-        paidAdvanceMinor,
-        remainderHeldMinor,
-        payoutStatus,
-        payoutStatusLabel,
+        ...stage,
       };
     }
     return {
@@ -343,35 +406,20 @@ export function describeProcurementStage(opts: {
       ]
         .filter(Boolean)
         .join(" "),
-      remainderLabel,
-      authorizedAdvanceMinor,
-      paidAdvanceMinor,
-      remainderHeldMinor,
-      payoutStatus,
-      payoutStatusLabel,
+      ...stage,
     };
   }
   if (finalReleased && paidAdvanceMinor <= 0) {
     return {
       headline: `Procurement advance accepted: ${advance}`,
       detail: "Final release authorized. Shipping and sourcer fee follow the existing receipt rules.",
-      remainderLabel,
-      authorizedAdvanceMinor,
-      paidAdvanceMinor,
-      remainderHeldMinor,
-      payoutStatus,
-      payoutStatusLabel,
+      ...stage,
     };
   }
   return {
     headline: `Procurement advance accepted: ${advance}`,
     detail: "Buyer authorizes item-fund release after funding. Shipping and sourcer fee stay held.",
-    remainderLabel,
-    authorizedAdvanceMinor,
-    paidAdvanceMinor,
-    remainderHeldMinor,
-    payoutStatus,
-    payoutStatusLabel,
+    ...stage,
   };
 }
 

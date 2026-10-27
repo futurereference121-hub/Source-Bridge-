@@ -98,7 +98,7 @@ export async function verifyProcurementTestCharge() {
       createdAt: { gte: new Date(CURRENT_GP_PROCUREMENT_TEST.createdOnOrAfter) },
     },
     include: {
-      paymentTicket: { select: { id: true, title: true } },
+      paymentTicket: { select: { id: true, title: true, pricingPolicy: true } },
       gpProceedsFunding: { include: { legs: true } },
       outboundPaymentAttempts: { orderBy: { updatedAt: "desc" }, take: 2 },
     },
@@ -184,25 +184,11 @@ export async function verifyProcurementTestCharge() {
       purchase.finalTransferredMinor,
   );
   const remainderAuthorizedMinor = purchase.shippingMinor + purchase.sellerServiceFeeMinor;
+  const sellerEntitlementMinor =
+    purchase.itemCostMinor + purchase.shippingMinor + purchase.sellerServiceFeeMinor;
   const finalAttempt = purchase.outboundPaymentAttempts.find((row) => row.kind === "FINAL") ?? null;
   const procurementAttempt =
     purchase.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT") ?? null;
-  const stage = describeProcurementStage({
-    agreed: Boolean(purchase.procurementAdvanceAgreed),
-    advanceMinor: purchase.procurementAdvanceMinor,
-    transferredMinor: purchase.procurementTransferredMinor,
-    remainingHeldMinor,
-    status: purchase.status,
-    payoutRail: purchase.payoutRail,
-    outboundKind: finalAttempt?.kind || procurementAttempt?.kind,
-    outboundStatus: finalAttempt?.status || procurementAttempt?.status,
-    outboundIdPresent: Boolean(finalAttempt?.stripeOutboundPaymentId || procurementAttempt?.stripeOutboundPaymentId),
-    fundingStatus: funding?.status,
-    finalPaidMinor: purchase.finalTransferredMinor,
-    remainderAuthorizedMinor,
-    currency: purchase.currency,
-    formatMinor,
-  });
   const payout = describeGpBuyerPayout({
     releaseAuthorized: true,
     txnStatus: purchase.status,
@@ -216,6 +202,24 @@ export async function verifyProcurementTestCharge() {
     currency: purchase.currency,
     expectedArrival: finalAttempt?.expectedArrivalAt,
     proceedsFundingEnabled: true,
+  });
+  const stage = describeProcurementStage({
+    agreed: Boolean(purchase.procurementAdvanceAgreed),
+    advanceMinor: purchase.procurementAdvanceMinor,
+    transferredMinor: purchase.procurementTransferredMinor,
+    remainingHeldMinor,
+    status: purchase.status,
+    payoutRail: purchase.payoutRail,
+    outboundKind: finalAttempt?.kind || procurementAttempt?.kind,
+    outboundStatus: finalAttempt?.status || procurementAttempt?.status,
+    outboundIdPresent: Boolean(finalAttempt?.stripeOutboundPaymentId || procurementAttempt?.stripeOutboundPaymentId),
+    fundingStatus: funding?.status,
+    gpPhase: payout?.phase,
+    finalPaidMinor: purchase.finalTransferredMinor,
+    remainderAuthorizedMinor,
+    platformFeeMinor: purchase.protectionFeeMinor,
+    currency: purchase.currency,
+    formatMinor,
   });
   return {
     ok: true,
@@ -233,6 +237,19 @@ export async function verifyProcurementTestCharge() {
     finalTransferredMinor: purchase.finalTransferredMinor,
     trackingPresent: Boolean(purchase.trackingNumber),
     remainingHeldMinor,
+    pricingPolicy: purchase.pricingPolicy || purchase.paymentTicket?.pricingPolicy || "",
+    protectionFeeMinor: purchase.protectionFeeMinor,
+    sellerEntitlementMinor,
+    fee: {
+      pricingPolicy: purchase.pricingPolicy || purchase.paymentTicket?.pricingPolicy || "",
+      protectionFeeMinor: purchase.protectionFeeMinor,
+      sellerEntitlementMinor,
+      buyerTotalMinor: purchase.totalChargeMinor,
+      stripeCardFeeMinor: charge?.feeMinor ?? null,
+      gpProviderFeeMinor: funding?.payoutFeeMinor ?? null,
+      note:
+        "Gross Source Bridge fee is the stored GP GBP policy amount (15% of seller amount below £100, 11% at or above £100). Connect 7% is a different rail. Stripe card fee and GP provider fee are costs, not the displayed platform fee.",
+    },
     ticketCopy: {
       headline: stage.headline,
       detail: stage.detail,

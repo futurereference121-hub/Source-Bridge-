@@ -96,6 +96,21 @@ assert.match(
   }) || "",
   /is funding/,
 );
+assert.equal(
+  sellerReleaseProgressCopy({
+    status: "RELEASED",
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  }),
+  "Completed — international payout has been sent.",
+);
+assert.match(
+  sellerReleaseProgressCopy({
+    status: "READY_TO_RELEASE",
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    gpHeadline: "Final release authorized — payout pending. The item advance already sent is separate.",
+  }) || "",
+  /payout pending/,
+);
 {
   const windowCopy = formatInspectionWindow("2026-10-25T16:00:00.000Z", Date.parse("2026-10-25T12:00:00.000Z"));
   assert.equal(windowCopy?.expired, false);

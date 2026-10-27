@@ -91,6 +91,16 @@ for (const [entitlement, fee, total] of approved) {
 
 assert.equal(gpQuote(20000).protectionFeeMinor, 2200);
 assert.notEqual(gpQuote(20000).protectionFeeMinor, globalPayoutsGbpFeeMinor(20000));
+assert.equal(globalPayoutsGbpFlatFeeMinor(3500), 525);
+assert.equal(3500 + 525, 4025, "this GP ticket is £35 seller + £5.25 fee = £40.25");
+assert.equal(roundBpsToMinor(3500, 700), 245, "Connect 7% of £35 is £2.45, not this GP fee");
+assert.notEqual(
+  globalPayoutsGbpFlatFeeMinor(3500),
+  roundBpsToMinor(3500, 700),
+  "GBP GP below £100 is 15%, not Connect 7%",
+);
+assert.equal(globalPayoutsGbpFlatFeeMinor(10000), 1100);
+assert.notEqual(globalPayoutsGbpFlatFeeMinor(10000), roundBpsToMinor(10000, 700));
 
 const belowThreshold = gpQuote(9999);
 const atThreshold = gpQuote(10000);

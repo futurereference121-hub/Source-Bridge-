@@ -57,6 +57,7 @@ type Order = ProtectedOrderSummary & {
     finalResidualMinor?: number;
     procurementTransferredMinor?: number;
     finalTransferredMinor?: number;
+    platformFeeMinor?: number;
   };
   labels: { payment: string; shipping: string; delivery: string };
   listing: { id: string; slug: string; name: string; saleStatus: string } | null;
@@ -268,6 +269,9 @@ export default function SalesFulfilmentPage() {
                       remainingHeldMinor: procurementRemainderHeldMinor({
                         remainingProtectedSellerShareMinor:
                           o.books?.remainingProtectedSellerShareMinor,
+                        shippingMinor: o.shippingMinor,
+                        sellerServiceFeeMinor: o.sellerServiceFeeMinor,
+                        finalTransferredMinor: o.books?.finalTransferredMinor ?? 0,
                       }),
                     status: o.status,
                     payoutRail: o.payoutRail,
@@ -278,6 +282,8 @@ export default function SalesFulfilmentPage() {
                     finalPaidMinor: o.books?.finalTransferredMinor ?? 0,
                     remainderAuthorizedMinor:
                       (o.shippingMinor ?? 0) + (o.sellerServiceFeeMinor ?? 0),
+                    platformFeeMinor:
+                      o.books?.platformFeeMinor ?? o.protectionFeeMinor,
                     currency: o.currency,
                     formatMinor,
                     });

@@ -26,6 +26,7 @@ import {
   formatInspectionWindow,
   procurementAdvanceAuthorized,
   procurementRemainderHeldMinor,
+  sourceBridgeFeeLineLabel,
 } from "@/lib/payments/fulfilment-display";
 
 type Order = ProtectedOrderSummary & {
@@ -412,7 +413,7 @@ export default function PurchasesPage() {
                         {formatMinor(residual, o.currency)}
                       </p>
                       <p>
-                        Source Bridge fee held:{" "}
+                        {sourceBridgeFeeLineLabel(o.status === "RELEASED")}:{" "}
                         {formatMinor(
                           o.books?.platformFeeMinor ?? o.protectionFeeMinor,
                           o.currency,
@@ -422,7 +423,11 @@ export default function PurchasesPage() {
                   ) : Boolean(o.procurementAdvanceAgreed) || procDone > 0 ? (
                     <div className="sm:col-span-2 space-y-1 text-xs text-white/50">
                       <p>
-                        Source Bridge fee held:{" "}
+                        {sourceBridgeFeeLineLabel(
+                          o.status === "RELEASED" ||
+                            (o.books?.finalTransferredMinor ?? 0) > 0,
+                        )}
+                        :{" "}
                         {formatMinor(
                           o.books?.platformFeeMinor ?? o.protectionFeeMinor,
                           o.currency,
@@ -534,6 +539,7 @@ export default function PurchasesPage() {
                         o.books?.remainingProtectedSellerShareMinor,
                       shippingMinor: o.shippingMinor,
                       sellerServiceFeeMinor: o.sellerServiceFeeMinor,
+                      finalTransferredMinor: o.books?.finalTransferredMinor ?? 0,
                     }),
                     status: o.status,
                     payoutRail: o.payoutRail,
@@ -544,6 +550,8 @@ export default function PurchasesPage() {
                     finalPaidMinor: o.books?.finalTransferredMinor ?? 0,
                     remainderAuthorizedMinor:
                       (o.shippingMinor ?? 0) + (o.sellerServiceFeeMinor ?? 0),
+                    platformFeeMinor:
+                      o.books?.platformFeeMinor ?? o.protectionFeeMinor,
                     currency: o.currency,
                     formatMinor,
                   });

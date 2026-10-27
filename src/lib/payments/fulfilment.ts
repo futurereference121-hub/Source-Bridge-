@@ -23,7 +23,10 @@ import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { derivePurchaseDisplayState } from "@/lib/payments/purchase-display-state";
 import { computeProtectedFinancials } from "@/lib/payments/breakdown";
 import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
-import { procurementAdvanceAuthorized } from "@/lib/payments/fulfilment-display";
+import {
+  procurementAdvanceAuthorized,
+  procurementRemainderHeldMinor,
+} from "@/lib/payments/fulfilment-display";
 
 export {
   BUYER_INACTIVITY_ADMIN_RELEASE_MS,
@@ -284,7 +287,13 @@ export function mapProtectedTxnSummary(
           availableOn: t.gpProceedsFunding?.availableOn ?? null,
           fundedAt: t.fundedAt,
           expectedArrival: attempt?.expectedArrivalAt ?? null,
-          remainderHeldMinor: books.remainingProtectedSellerShareMinor,
+          remainderHeldMinor: procurementRemainderHeldMinor({
+            remainingProtectedSellerShareMinor:
+              books.remainingProtectedSellerShareMinor,
+            shippingMinor: t.shippingMinor,
+            sellerServiceFeeMinor: t.sellerServiceFeeMinor,
+            finalTransferredMinor: t.finalTransferredMinor,
+          }),
           itemAdvanceMinor: t.procurementAdvanceMinor,
           currency: t.currency,
         })

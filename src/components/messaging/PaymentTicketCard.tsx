@@ -41,6 +41,7 @@ import {
   procurementAdvanceAuthorized,
   procurementRemainderHeldMinor,
   shippedAwaitingReceiptCopy,
+  sourceBridgeFeeLineLabel,
 } from "@/lib/payments/fulfilment-display";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
 
@@ -1501,10 +1502,6 @@ export function PaymentTicketCard({
     ticket.books?.remainingProtectedSellerShareMinor ??
     ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
     0;
-  const remainingSellerFundsProtected =
-    ticket.books?.remainingProtectedSellerShareMinor ??
-    ticket.breakdown.releaseStructure?.remainingProtectedSellerShareMinor ??
-    residualProtected;
   const platformFeeHeld =
     ticket.books?.platformFeeMinor ?? ticket.protectionFeeMinor ?? 0;
   const itemFundsReceived =
@@ -1567,6 +1564,7 @@ export function PaymentTicketCard({
         ticket.books?.remainingProtectedSellerShareMinor,
       shippingMinor: ticket.shippingMinor,
       sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
+      finalTransferredMinor,
     }),
     status: ticket.protectedTxnStatus || ticket.status,
     payoutRail: ticket.payoutRail,
@@ -1576,6 +1574,7 @@ export function PaymentTicketCard({
     gpPhase: ticket.gpPayoutProgress?.phase,
     finalPaidMinor: finalTransferredMinor,
     remainderAuthorizedMinor: ticket.shippingMinor + ticket.sellerServiceFeeMinor,
+    platformFeeMinor: platformFeeHeld,
     currency: cur,
     formatMinor,
   });
@@ -2120,7 +2119,9 @@ export function PaymentTicketCard({
           ? " · no longer actionable"
           : isDirect
             ? " · funds route on fund"
-            : ticket.gpPayoutProgress?.hideReleaseActions
+            : isCompleted
+              ? " · completed"
+              : ticket.gpPayoutProgress?.hideReleaseActions
               ? " · release authorized"
               : inInspection
                 ? " · inspection in progress"
@@ -2128,8 +2129,10 @@ export function PaymentTicketCard({
                   ? " · awaiting receipt confirmation"
                   : canReleaseNow && ticket.protectedTxnStatus === "DELIVERED"
                     ? " · item received — choose release or inspection"
-                    : procTransferred
+                    : procTransferred && remainingSellerEntitlement > 0
                       ? " · item funds released; remainder held until receipt"
+                      : procTransferred
+                        ? " · item funds sent"
                       : " · funds held until release"}
       </p>
 
@@ -2283,8 +2286,24 @@ export function PaymentTicketCard({
               {formatMinor(ticket.books?.refundedMinor ?? 0, cur)}
             </span>
           </p>
+          {procAgreed ? (
+            <>
+              <p className="flex justify-between gap-3">
+                <span>Item funds sent</span>
+                <span className="tabular-nums text-white">
+                  {formatMinor(itemFundsReceived, cur)}
+                </span>
+              </p>
+              <p className="flex justify-between gap-3">
+                <span>Final remainder sent</span>
+                <span className="tabular-nums text-white">
+                  {formatMinor(finalTransferredMinor, cur)}
+                </span>
+              </p>
+            </>
+          ) : null}
           <p className="flex justify-between gap-3">
-            <span>Sourcer release</span>
+            <span>Total sent to sourcer</span>
             <span className="tabular-nums text-white">
               {formatMinor(
                 (ticket.books?.procurementTransferredMinor ?? 0) +
@@ -2294,13 +2313,16 @@ export function PaymentTicketCard({
             </span>
           </p>
           <p className="flex justify-between gap-3">
-            <span>Source Bridge fee retained</span>
+            <span>{sourceBridgeFeeLineLabel(true)}</span>
             <span className="tabular-nums text-white">
               {formatMinor(platformFeeHeld, cur)}
             </span>
           </p>
+          <p className="text-white/40">
+            Gross Source Bridge fee. Not net after card or payout-provider costs.
+          </p>
           <p className="flex justify-between gap-3">
-            <span>Remaining protected</span>
+            <span>Awaiting release</span>
             <span className="tabular-nums text-white">
               {formatMinor(0, cur)}
             </span>
@@ -2344,23 +2366,32 @@ export function PaymentTicketCard({
               <p className="flex justify-between gap-3">
                 <span>
                   {procurementStage.remainderLabel ||
-                    "Shipping + sourcer fee awaiting final release"}
+                    (isCompleted
+                      ? "Final remainder sent"
+                      : "Shipping + sourcer fee awaiting final release")}
                 </span>
                 <span className="tabular-nums text-white">
                   {formatMinor(
-                    procurementStage.remainderHeldMinor ||
+                    procurementStage.remainderDisplayMinor ||
                       finalTransferredMinor ||
-                      ticket.shippingMinor + ticket.sellerServiceFeeMinor,
+                      (isCompleted
+                        ? 0
+                        : ticket.shippingMinor + ticket.sellerServiceFeeMinor),
                     cur,
                   )}
                 </span>
               </p>
               <p className="flex justify-between gap-3">
-                <span>Source Bridge fee (held)</span>
+                <span>{sourceBridgeFeeLineLabel(isCompleted)}</span>
                 <span className="tabular-nums text-white">
                   {formatMinor(platformFeeHeld, cur)}
                 </span>
               </p>
+              {isCompleted ? (
+                <p className="text-white/40">
+                  Gross Source Bridge fee. Not net after card or payout-provider costs.
+                </p>
+              ) : null}
             </div>
           ) : !ticket.gpPayoutProgress?.hideReleaseActions &&
             !isCompleted &&

@@ -65,6 +65,26 @@ function ticketDisplayProgressKey(t: TicketStateSlice): string {
   ].join("|");
 }
 
+function incomingRegressesFinalSuccess(
+  incoming: TicketStateSlice,
+  existing: TicketStateSlice,
+): boolean {
+  const eKind = String(existing.outboundKind || "").toUpperCase();
+  const eStatus = String(existing.outboundStatus || "").toUpperCase();
+  if (eKind !== "FINAL" || (eStatus !== "SUCCEEDED" && eStatus !== "RECONCILED")) {
+    return false;
+  }
+  const nKind = String(incoming.outboundKind || existing.outboundKind || "").toUpperCase();
+  const nStatus = String(incoming.outboundStatus || "").toUpperCase();
+  if (nKind !== "FINAL" || !nStatus) return false;
+  return (
+    nStatus === "AWAITING_FA_FUNDS" ||
+    nStatus === "PENDING" ||
+    nStatus === "PROCESSING" ||
+    nStatus === "AWAITING_MINIMUM"
+  );
+}
+
 function incomingRegressesPayoutBooks(
   incoming: TicketStateSlice,
   existing: TicketStateSlice,
@@ -186,6 +206,7 @@ export function shouldApplyTicketUpdate(
   if (existingFunded && !incomingFunded) return false;
   if (incomingReopensProcurementRelease(incoming, existing)) return false;
   if (incomingHidesRemainderAfterProcurement(incoming, existing)) return false;
+  if (incomingRegressesFinalSuccess(incoming, existing)) return false;
   if (incomingRegressesPayoutBooks(incoming, existing)) return false;
   const inEpoch = stateEpoch(incoming);
   const exEpoch = stateEpoch(existing);

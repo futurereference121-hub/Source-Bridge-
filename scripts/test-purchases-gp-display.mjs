@@ -43,9 +43,12 @@ const {
 const { purchaseCardModel, purchasePayoutPhrase } = await import(
   "../src/lib/payments/purchase-list-presentation.ts"
 );
-const { describeProcurementStage, procurementAdvanceAuthorized, procurementRemainderHeldMinor } = await import(
-  "../src/lib/payments/fulfilment-display.ts"
-);
+const {
+  describeProcurementStage,
+  procurementAdvanceAuthorized,
+  procurementRemainderHeldMinor,
+  sourceBridgeFeeLineLabel,
+} = await import("../src/lib/payments/fulfilment-display.ts");
 const { shouldApplyTicketUpdate } = await import(
   "../src/lib/payments/ticket-state-guard.ts"
 );
@@ -269,6 +272,68 @@ assert.equal(
   ),
   false,
 );
+assert.equal(
+  shouldApplyTicketUpdate(
+    {
+      updatedAt: "2026-10-27T04:50:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "READY_TO_RELEASE",
+      fundedAt: "2026-10-26T08:31:27.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "FINAL",
+      outboundStatus: "AWAITING_FA_FUNDS",
+      finalTransferredMinor: 1500,
+      gpPayoutProgress: { phase: "waiting_funding", headline: "payout pending" },
+    },
+    {
+      updatedAt: "2026-10-27T04:50:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "RELEASED",
+      fundedAt: "2026-10-26T08:31:27.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "FINAL",
+      outboundStatus: "SUCCEEDED",
+      finalTransferredMinor: 1500,
+      gpPayoutProgress: { phase: "sent", headline: "payout has been sent" },
+    },
+  ),
+  false,
+  "stale FINAL pending must not overlay a succeeded remainder",
+);
+assert.equal(
+  shouldApplyTicketUpdate(
+    {
+      updatedAt: "2026-10-27T04:51:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "RELEASED",
+      fundedAt: "2026-10-26T08:31:27.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "FINAL",
+      outboundStatus: "RETURNED",
+      finalTransferredMinor: 1500,
+    },
+    {
+      updatedAt: "2026-10-27T04:50:00.000Z",
+      status: "FUNDED",
+      protectedTxnStatus: "RELEASED",
+      fundedAt: "2026-10-26T08:31:27.000Z",
+      revision: 1,
+      buyerApprovedRevision: 1,
+      sellerApprovedRevision: 1,
+      outboundKind: "FINAL",
+      outboundStatus: "SUCCEEDED",
+      finalTransferredMinor: 1500,
+    },
+  ),
+  true,
+  "a later FINAL return may replace success",
+);
 const submittedPending = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
@@ -326,6 +391,21 @@ assert.equal(
 );
 assert.equal(
   procurementRemainderHeldMinor({
+    remainingProtectedSellerShareMinor: 1500,
+    finalTransferredMinor: 1500,
+  }),
+  0,
+);
+assert.equal(
+  procurementRemainderHeldMinor({
+    shippingMinor: 500,
+    sellerServiceFeeMinor: 1000,
+    finalTransferredMinor: 1500,
+  }),
+  0,
+);
+assert.equal(
+  procurementRemainderHeldMinor({
     shippingMinor: 500,
     sellerServiceFeeMinor: 1000,
   }),
@@ -354,6 +434,7 @@ const finalDone = describeProcurementStage({
   remainingHeldMinor: 0,
   remainderAuthorizedMinor: 1500,
   finalPaidMinor: 1500,
+  platformFeeMinor: 525,
   status: "RELEASED",
   payoutRail: "STRIPE_GLOBAL_PAYOUTS",
   outboundKind: "FINAL",
@@ -361,11 +442,63 @@ const finalDone = describeProcurementStage({
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.match(finalDone.detail, /Remainder sent: £15\.00/);
+assert.match(finalDone.headline, /Item funds sent: £20\.00/);
+assert.match(finalDone.detail, /Final remainder sent: £15\.00/);
 assert.match(finalDone.detail, /Total sent to sourcer: £35\.00/);
-assert.match(finalDone.detail, /£0 awaiting release/);
-assert.match(finalDone.detail, /Source Bridge fee stays on platform/);
-assert.equal(finalDone.remainderLabel, "Remainder sent");
+assert.match(finalDone.detail, /Awaiting release: £0\.00/);
+assert.match(finalDone.detail, /Source Bridge platform fee: £5\.25, kept on platform/);
+assert.doesNotMatch(finalDone.detail || "", /7%|held/);
+assert.equal(finalDone.remainderLabel, "Final remainder sent");
+const staleHeldAfterFinal = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 1500,
+  remainderAuthorizedMinor: 1500,
+  finalPaidMinor: 1500,
+  platformFeeMinor: 525,
+  status: "RELEASED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "FINAL",
+  outboundStatus: "SUCCEEDED",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(staleHeldAfterFinal.detail, /Final remainder sent: £15\.00/);
+assert.doesNotMatch(staleHeldAfterFinal.detail || "", /payout pending|awaiting final release/);
+assert.equal(staleHeldAfterFinal.remainderLabel, "Final remainder sent");
+const otherPurchasePending = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 1500,
+  remainderAuthorizedMinor: 1500,
+  finalPaidMinor: 0,
+  status: "PROCUREMENT_RELEASED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "PROCUREMENT",
+  outboundStatus: "SUCCEEDED",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(otherPurchasePending.detail, /Shipping \+ sourcer fee awaiting final release: £15\.00/);
+assert.doesNotMatch(otherPurchasePending.detail || "", /Final remainder sent/);
+const otherPurchaseFailed = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 1500,
+  remainderAuthorizedMinor: 1500,
+  finalPaidMinor: 0,
+  status: "READY_TO_RELEASE",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "FINAL",
+  outboundStatus: "FAILED",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.doesNotMatch(otherPurchaseFailed.detail || "", /Final remainder sent/);
+assert.match(otherPurchaseFailed.detail || "", /awaiting final release|payout pending/);
 const connectFinalPending = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
@@ -407,6 +540,23 @@ const gpFinalPending = describeGpBuyerPayout({
 });
 assert.equal(gpFinalPending.hideReleaseActions, true);
 assert.equal(gpFinalPending.headline, GP_FINAL_PENDING_COPY);
+const gpFinalSentStaleHeld = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "RELEASED",
+  outboundKind: "FINAL",
+  outboundStatus: "SUCCEEDED",
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  expectedArrival: new Date("2026-10-27T04:52:24.000Z"),
+  now,
+});
+assert.equal(gpFinalSentStaleHeld.headline, GP_PAYOUT_SENT_COPY);
+assert.doesNotMatch(gpFinalSentStaleHeld.headline, /payout pending/i);
+assert.match(gpFinalSentStaleHeld.timing, /estimates bank arrival/);
+assert.match(gpFinalSentStaleHeld.timing, /estimate, not a promise/);
+assert.equal(sourceBridgeFeeLineLabel(true), "Source Bridge platform fee");
+assert.equal(sourceBridgeFeeLineLabel(false), "Source Bridge platform fee (held)");
 assert.doesNotMatch(gpFinalPending.headline, /Payout funding is confirmed|awaiting buyer approval/);
 assert.match(gpFinalPending.timing, /bank-arrival estimate/);
 assert.equal(
@@ -889,6 +1039,17 @@ assert.match(sales, /useProtectedOrders/);
 assert.match(sales, /role: "seller"/);
 assert.match(sales, /accountId: account\?\.id/);
 assert.match(sales, /describeProcurementStage/);
+assert.match(fulfilment, /procurementRemainderHeldMinor/);
+assert.match(sales, /finalTransferredMinor: o.books\?\.finalTransferredMinor/);
+assert.match(page, /finalTransferredMinor: o.books\?\.finalTransferredMinor/);
+assert.match(
+  fs.readFileSync(path.join(root, "src/components/messaging/PaymentTicketCard.tsx"), "utf8"),
+  /sourceBridgeFeeLineLabel/,
+);
+assert.match(
+  fs.readFileSync(path.join(root, "src/components/messaging/PaymentTicketCard.tsx"), "utf8"),
+  /remainderDisplayMinor/,
+);
 assert.match(sales, /Buyer authorizes item fund release/);
 assert.doesNotMatch(sales, /pays automatically after funding/);
 assert.doesNotMatch(sales, /global-payouts\/quote|releaseProcurement|stripe\.outbound/);
