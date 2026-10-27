@@ -5,10 +5,15 @@
  */
 
 import { prisma } from "@/lib/db";
-import { isGlobalPayoutsLiveInitiationEnabled } from "@/lib/payments/flags";
+import {
+  isGlobalPayoutsLiveInitiationEnabled,
+  isGpTestProcurementTrustOverrideEnabled,
+} from "@/lib/payments/flags";
 import { getStripe } from "@/lib/payments/stripe/client";
 import { getGlobalPayoutsFinancialAccountId } from "@/lib/payments/payout-rail/gp-client";
-import { matchFundingCredit } from "@/lib/payments/payout-rail/proceeds-funding";
+import { describeProcurementStage } from "@/lib/payments/fulfilment-display";
+import { formatMinor } from "@/lib/payments/money";
+import { describeGpBuyerPayout, matchFundingCredit } from "@/lib/payments/payout-rail/proceeds-funding";
 import { listReceivedCredits, retrieveReceivedCredit } from "@/lib/payments/payout-rail/received-credits";
 import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-funding";
 import {
@@ -164,10 +169,60 @@ export async function verifyProcurementTestCharge() {
   const attempt = purchase.outboundPaymentAttempts[0] || null;
   const nowMs = Date.now();
   const faBalance = await readFinancialAccountBalance("TEST", purchase.currency);
+  const seller = purchase.sellerId
+    ? await prisma.user.findUnique({
+        where: { id: purchase.sellerId },
+        select: { trustLevel: true },
+      })
+    : null;
+  const remainingHeldMinor = Math.max(
+    0,
+    purchase.itemCostMinor +
+      purchase.shippingMinor +
+      purchase.sellerServiceFeeMinor -
+      purchase.procurementTransferredMinor -
+      purchase.finalTransferredMinor,
+  );
+  const remainderAuthorizedMinor = purchase.shippingMinor + purchase.sellerServiceFeeMinor;
+  const finalAttempt = purchase.outboundPaymentAttempts.find((row) => row.kind === "FINAL") ?? null;
+  const procurementAttempt =
+    purchase.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT") ?? null;
+  const stage = describeProcurementStage({
+    agreed: Boolean(purchase.procurementAdvanceAgreed),
+    advanceMinor: purchase.procurementAdvanceMinor,
+    transferredMinor: purchase.procurementTransferredMinor,
+    remainingHeldMinor,
+    status: purchase.status,
+    payoutRail: purchase.payoutRail,
+    outboundKind: finalAttempt?.kind || procurementAttempt?.kind,
+    outboundStatus: finalAttempt?.status || procurementAttempt?.status,
+    outboundIdPresent: Boolean(finalAttempt?.stripeOutboundPaymentId || procurementAttempt?.stripeOutboundPaymentId),
+    fundingStatus: funding?.status,
+    finalPaidMinor: purchase.finalTransferredMinor,
+    remainderAuthorizedMinor,
+    currency: purchase.currency,
+    formatMinor,
+  });
+  const payout = describeGpBuyerPayout({
+    releaseAuthorized: true,
+    txnStatus: purchase.status,
+    outboundKind: finalAttempt?.kind || procurementAttempt?.kind,
+    outboundStatus: finalAttempt?.status || procurementAttempt?.status,
+    outboundIdPresent: Boolean(finalAttempt?.stripeOutboundPaymentId),
+    failureCode: finalAttempt?.failureCode,
+    fundingStatus: funding?.status,
+    remainderHeldMinor: remainingHeldMinor,
+    itemAdvanceMinor: purchase.procurementAdvanceMinor,
+    currency: purchase.currency,
+    expectedArrival: finalAttempt?.expectedArrivalAt,
+    proceedsFundingEnabled: true,
+  });
   return {
     ok: true,
     stripeCalled: Boolean(purchase.stripeChargeId),
     liveInitiationOff: !isGlobalPayoutsLiveInitiationEnabled(),
+    trustOverrideEnabled: isGpTestProcurementTrustOverrideEnabled(),
+    storedSellerTrustLevel: seller?.trustLevel ?? null,
     purchaseHash: CURRENT_GP_PROCUREMENT_TEST.txnHash,
     ticketHash,
     title: purchase.paymentTicket?.title || purchase.title || "",
@@ -177,6 +232,15 @@ export async function verifyProcurementTestCharge() {
     transferredMinor: purchase.procurementTransferredMinor,
     finalTransferredMinor: purchase.finalTransferredMinor,
     trackingPresent: Boolean(purchase.trackingNumber),
+    remainingHeldMinor,
+    ticketCopy: {
+      headline: stage.headline,
+      detail: stage.detail,
+      remainderLabel: stage.remainderLabel,
+      payoutHeadline: payout?.headline || "",
+      payoutTiming: payout?.timing || "",
+      hideReleaseActions: payout?.hideReleaseActions ?? null,
+    },
     fundingStatus: funding?.status ?? null,
     fundingFailure: funding?.failureCode || "",
     chargeNet: funding?.chargeNetMinor ?? null,
