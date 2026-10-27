@@ -282,6 +282,91 @@ export function fundingPrincipalMinor(opts: {
   return full;
 }
 
+/**
+ * Quote the unpaid outbound, not the full seller principal. After a posted
+ * item advance, remainder funding must quote the FINAL amount only.
+ */
+export function proceedsQuoteSourceAmount(opts: {
+  procurementAmountMinor: number;
+  procurementCovered: boolean;
+  finalAmountMinor: number;
+}): number {
+  const procurement = Number.isInteger(opts.procurementAmountMinor)
+    ? opts.procurementAmountMinor
+    : 0;
+  const remaining = Number.isInteger(opts.finalAmountMinor) ? opts.finalAmountMinor : 0;
+  if (remaining > 0 && opts.procurementCovered && procurement > 0) return remaining;
+  if (procurement > 0 && !opts.procurementCovered) return procurement;
+  return remaining > 0 ? remaining : procurement;
+}
+
+/** When the item-advance snapshot is missing, infer its fee from the posted first leg. */
+export function inferredProcurementFeeMinor(opts: {
+  snapshotFeeMinor: number;
+  procurementAmountMinor: number;
+  postedMinor: number;
+  fundingPrincipalMinor: number;
+}): number {
+  if (opts.snapshotFeeMinor > 0) return opts.snapshotFeeMinor;
+  if (
+    opts.procurementAmountMinor > 0 &&
+    opts.postedMinor >= opts.procurementAmountMinor &&
+    opts.postedMinor < opts.fundingPrincipalMinor
+  ) {
+    return opts.postedMinor - opts.procurementAmountMinor;
+  }
+  return 0;
+}
+
+/**
+ * Item-advance provider fees were already consumed by the PROCUREMENT outbound.
+ * Remainder cover is full principal plus both outbounds' fees so the second
+ * funding leg is the unpaid FINAL debit, not principal minus posted cash.
+ */
+export function proceedsRequiredPostedMinor(opts: {
+  principalMinor: number;
+  procurementFeeMinor: number;
+  finalFeeMinor: number;
+}): number {
+  const principal = Number.isInteger(opts.principalMinor) ? opts.principalMinor : 0;
+  const procurementFee = Number.isInteger(opts.procurementFeeMinor)
+    ? opts.procurementFeeMinor
+    : 0;
+  const finalFee = Number.isInteger(opts.finalFeeMinor) ? opts.finalFeeMinor : 0;
+  return principal + procurementFee + finalFee;
+}
+
+/** Prefix includes source amount so a procurement quote key is never reused for remainder. */
+export function proceedsQuoteKeyPrefix(
+  txnId: string,
+  sourceAmountMinor: number,
+  previousQuoteId?: string | null,
+): string {
+  return `gp_proceeds_quote_${txnId}_${sourceAmountMinor}_${previousQuoteId || "initial"}`;
+}
+
+/**
+ * Reuse the stored key only when it is for this source amount. A different
+ * amount keeps the original key untouched and starts a new remainder quote.
+ * Uncertain retries of the same amount reuse the stored key.
+ */
+export function nextProceedsQuoteKey(opts: {
+  txnId: string;
+  sourceAmountMinor: number;
+  previousQuoteId?: string | null;
+  storedKey: string;
+  nowMs: number;
+}): { key: string; reused: boolean } {
+  const desired = proceedsQuoteKeyPrefix(
+    opts.txnId,
+    opts.sourceAmountMinor,
+    opts.previousQuoteId,
+  );
+  const stored = String(opts.storedKey || "");
+  if (stored.startsWith(desired)) return { key: stored, reused: true };
+  return { key: `${desired}_n${opts.nowMs.toString(36)}`, reused: false };
+}
+
 export function fundingScanIncludesPurchase(opts: {
   txnStatus: string;
   outboundStatuses: readonly string[];

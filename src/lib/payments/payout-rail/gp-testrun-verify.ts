@@ -10,12 +10,28 @@ import { getStripe } from "@/lib/payments/stripe/client";
 import { getGlobalPayoutsFinancialAccountId } from "@/lib/payments/payout-rail/gp-client";
 import { matchFundingCredit } from "@/lib/payments/payout-rail/proceeds-funding";
 import { listReceivedCredits, retrieveReceivedCredit } from "@/lib/payments/payout-rail/received-credits";
+import { readFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-funding";
 import {
   listUncertainOutboundEvidence,
   recoverUncertainInitiatedOutbound,
 } from "@/lib/payments/payout-rail/outbound-payment";
-import { matchUncertainOutboundFromList } from "@/lib/payments/payout-rail/outbound-quote";
+import { matchUncertainOutboundFromList, parseQuoteSnapshot } from "@/lib/payments/payout-rail/outbound-quote";
 import { idHash8, last5 } from "@/lib/payments/payout-rail/proceeds-preflight-shape";
+
+function quoteView(raw: string | null | undefined, nowMs: number) {
+  const snap = parseQuoteSnapshot(raw || "");
+  if (!snap) return null;
+  const expiresMs = Date.parse(snap.expiresAt || "");
+  return {
+    quoteSuffix: last5(snap.quoteId),
+    sourceAmountMinor: snap.sourceAmountMinor,
+    destAmountMinor: snap.destinationAmountMinor,
+    destCurrency: snap.destinationCurrency || "",
+    providerFeeMinor: snap.providerFeeMinor,
+    expiresAt: snap.expiresAt || "",
+    expired: !Number.isNaN(expiresMs) && expiresMs <= nowMs,
+  };
+}
 
 export const CURRENT_GP_TEST_RUN = {
   txnHash: "28ce7ec2",
@@ -146,6 +162,8 @@ export async function verifyProcurementTestCharge() {
   }
   const funding = purchase.gpProceedsFunding;
   const attempt = purchase.outboundPaymentAttempts[0] || null;
+  const nowMs = Date.now();
+  const faBalance = await readFinancialAccountBalance("TEST", purchase.currency);
   return {
     ok: true,
     stripeCalled: Boolean(purchase.stripeChargeId),
@@ -163,6 +181,20 @@ export async function verifyProcurementTestCharge() {
     fundingFailure: funding?.failureCode || "",
     chargeNet: funding?.chargeNetMinor ?? null,
     principalMinor: funding?.principalMinor ?? null,
+    payoutFeeMinor: funding?.payoutFeeMinor ?? null,
+    quoteKeyHash8: funding?.quoteIdempotencyKey ? idHash8(funding.quoteIdempotencyKey) : "",
+    faAvailableMinor: faBalance.availableMinor,
+    faBalanceCode: faBalance.errorCode || faBalance.failureKind || "",
+    quotes: {
+      final: quoteView(
+        purchase.outboundPaymentAttempts.find((row) => row.kind === "FINAL")?.fxRateSnapshot,
+        nowMs,
+      ),
+      procurement: quoteView(
+        purchase.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT")?.fxRateSnapshot,
+        nowMs,
+      ),
+    },
     legs: (funding?.legs || []).map((leg) => ({
       sequence: leg.sequence,
       status: leg.status,

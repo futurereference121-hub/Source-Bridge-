@@ -137,6 +137,10 @@ assert.match(
   fs.readFileSync(guardPath, "utf8"),
   /incomingHidesRemainderAfterProcurement/,
 );
+assert.match(
+  fs.readFileSync(guardPath, "utf8"),
+  /incomingRegressesPayoutBooks/,
+);
 assert.match(card, /procurementAdvanceAuthorized/);
 assert.match(card, /Item release confirmed/);
 assert.match(

@@ -65,6 +65,11 @@ const {
   GP_TEST_REPAIR_ABANDONED,
   isTestRepairAbandoned,
   fundingPrincipalMinor,
+  inferredProcurementFeeMinor,
+  nextProceedsQuoteKey,
+  proceedsQuoteKeyPrefix,
+  proceedsQuoteSourceAmount,
+  proceedsRequiredPostedMinor,
   procurementAttemptAllowsFunding,
   fundingIdempotencyKey,
   fundingPayoutMatchesLeg,
@@ -200,6 +205,96 @@ while (sendCursor >= 0) {
   sendCursor = sendAt + 1;
 }
 assert.match(runner, /posted < principal \+ fees/);
+assert.match(runner, /sourceAmountMinor: quoteSource/);
+assert.match(runner, /nextProceedsQuoteKey/);
+assert.match(runner, /proceedsQuoteSourceAmount/);
+assert.match(runner, /inferredProcurementFeeMinor/);
+assert.equal(
+  proceedsQuoteSourceAmount({
+    procurementAmountMinor: 2000,
+    procurementCovered: true,
+    finalAmountMinor: 1500,
+  }),
+  1500,
+);
+assert.equal(
+  proceedsQuoteSourceAmount({
+    procurementAmountMinor: 2000,
+    procurementCovered: false,
+    finalAmountMinor: 0,
+  }),
+  2000,
+);
+assert.equal(
+  proceedsQuoteSourceAmount({
+    procurementAmountMinor: 0,
+    procurementCovered: false,
+    finalAmountMinor: 3500,
+  }),
+  3500,
+);
+assert.equal(
+  proceedsRequiredPostedMinor({
+    principalMinor: 3500,
+    procurementFeeMinor: 100,
+    finalFeeMinor: 75,
+  }),
+  3675,
+);
+assert.equal(
+  inferredProcurementFeeMinor({
+    snapshotFeeMinor: 0,
+    procurementAmountMinor: 2000,
+    postedMinor: 2100,
+    fundingPrincipalMinor: 3500,
+  }),
+  100,
+);
+assert.equal(
+  inferredProcurementFeeMinor({
+    snapshotFeeMinor: 100,
+    procurementAmountMinor: 2000,
+    postedMinor: 3675,
+    fundingPrincipalMinor: 3500,
+  }),
+  100,
+);
+{
+  const remainderKey = nextProceedsQuoteKey({
+    txnId: "txn_split",
+    sourceAmountMinor: 1500,
+    previousQuoteId: "",
+    storedKey: "gp_proceeds_quote_txn_split_initial_nxyz",
+    nowMs: 1,
+  });
+  assert.equal(remainderKey.reused, false);
+  assert.match(remainderKey.key, /_1500_initial_/);
+  assert.equal(
+    proceedsQuoteKeyPrefix("txn_split", 1500, ""),
+    "gp_proceeds_quote_txn_split_1500_initial",
+  );
+  const retry = nextProceedsQuoteKey({
+    txnId: "txn_split",
+    sourceAmountMinor: 1500,
+    previousQuoteId: "",
+    storedKey: remainderKey.key,
+    nowMs: 2,
+  });
+  assert.equal(retry.reused, true);
+  assert.equal(retry.key, remainderKey.key);
+}
+{
+  const remainderCover = planProceedsAfterQuote({
+    quote: "usable",
+    principalMinor: 3500,
+    payoutFeeMinor: 175,
+    chargeNetMinor: 3904,
+    postedMinor: 2100,
+    pendingMinor: 0,
+  });
+  assert.equal(remainderCover.action, "fund");
+  assert.equal(remainderCover.amountMinor, 1575);
+}
 assert.match(runner, /fundingPayoutCreateGate/);
 const sendFn = runner.slice(
   runner.indexOf("async function sendFundingPayout"),

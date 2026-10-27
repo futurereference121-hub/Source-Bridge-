@@ -40,6 +40,10 @@ import {
   GP_TEST_REPAIR_ABANDONED,
   isTestRepairAbandoned,
   fundingPrincipalMinor,
+  inferredProcurementFeeMinor,
+  nextProceedsQuoteKey,
+  proceedsQuoteSourceAmount,
+  proceedsRequiredPostedMinor,
   procurementAttemptAllowsFunding,
   fundingRowAfterCompletedPurchase,
   matchFundingCredit,
@@ -360,8 +364,17 @@ export async function reconcileGpProceedsFunding(opts: {
         ? procurementAttempt?.amountMinor ?? null
         : null,
     });
-    const quoteAttempt = finalAttempt || procurementAttempt;
-    const fees = feeMinor(quoteAttempt?.fxRateSnapshot || "", principal, txn.currency);
+    const procFees = feeMinor(
+      procurementAttempt?.fxRateSnapshot || "",
+      procurementAttempt?.amountMinor ?? 0,
+      txn.currency,
+    );
+    const finalFees = feeMinor(
+      finalAttempt?.fxRateSnapshot || "",
+      finalAttempt?.amountMinor ?? 0,
+      txn.currency,
+    );
+    const fees = procFees + (finalAttempt ? finalFees : 0);
     const funding = await prisma.gpProceedsFunding.upsert({
       where: { protectedTxnId: txn.id },
       create: {
@@ -602,7 +615,7 @@ async function prepareFundingQuote(opts: {
   fundingId: string;
   attempt: { id: string; fxRateSnapshot: string };
   mode: StripeMode;
-  principal: number;
+  sourceAmountMinor: number;
   nowMs: number;
 }): Promise<{ ok: true; fees: number; waived: boolean } | { ok: false; code: string }> {
   if (gpQuoteConfirmationRequired(opts.mode, "STRIPE_GLOBAL_PAYOUTS")) {
@@ -642,14 +655,19 @@ async function prepareFundingQuote(opts: {
   if (!route.ok) return { ok: false, code: route.code };
   if (!route.requiresQuote) return { ok: true, fees: 0, waived: true };
   const previous = parseQuoteSnapshot(opts.attempt.fxRateSnapshot);
-  const desired = `gp_proceeds_quote_${opts.txn.id}_${previous?.quoteId || "initial"}`;
   const funding = await prisma.gpProceedsFunding.findUnique({
     where: { id: opts.fundingId },
     select: { quoteIdempotencyKey: true },
   });
-  const storedKey = funding?.quoteIdempotencyKey || "";
-  const keyWasReused = storedKey.startsWith(desired);
-  const key = keyWasReused ? storedKey : `${desired}_n${opts.nowMs.toString(36)}`;
+  const quoteKey = nextProceedsQuoteKey({
+    txnId: opts.txn.id,
+    sourceAmountMinor: opts.sourceAmountMinor,
+    previousQuoteId: previous?.quoteId || "",
+    storedKey: funding?.quoteIdempotencyKey || "",
+    nowMs: opts.nowMs,
+  });
+  const keyWasReused = quoteKey.reused;
+  const key = quoteKey.key;
   if (!keyWasReused) {
     await prisma.gpProceedsFunding.update({
       where: { id: opts.fundingId },
@@ -657,7 +675,7 @@ async function prepareFundingQuote(opts: {
     });
   }
   const quoted = await prepareQuoteOnly({
-    sourceAmountMinor: opts.principal,
+    sourceAmountMinor: opts.sourceAmountMinor,
     sourceCurrency: opts.txn.currency,
     destinationCurrency: destination.currency,
     financialAccountId: faId,
@@ -678,9 +696,16 @@ async function prepareFundingQuote(opts: {
   });
   if (!quoted.ok) {
     if (!quoted.uncertain && keyWasReused) {
+      const rotated = nextProceedsQuoteKey({
+        txnId: opts.txn.id,
+        sourceAmountMinor: opts.sourceAmountMinor,
+        previousQuoteId: previous?.quoteId || "",
+        storedKey: "",
+        nowMs: opts.nowMs,
+      });
       await prisma.gpProceedsFunding.update({
         where: { id: opts.fundingId },
-        data: { quoteIdempotencyKey: `${desired}_n${opts.nowMs.toString(36)}` },
+        data: { quoteIdempotencyKey: rotated.key },
       });
     }
     return { ok: false, code: quoted.code };
@@ -712,7 +737,11 @@ async function prepareFundingQuote(opts: {
     },
   });
   if (stored.count !== 1) return { ok: false, code: "GP_PAYMENT_IN_FLIGHT" };
-  return { ok: true, fees: feeMinor(JSON.stringify(snapshot), opts.principal, opts.txn.currency), waived: false };
+  return {
+    ok: true,
+    fees: feeMinor(JSON.stringify(snapshot), opts.sourceAmountMinor, opts.txn.currency),
+    waived: false,
+  };
 }
 
 async function fundOne(opts: {
@@ -909,24 +938,56 @@ async function fundOne(opts: {
     return false;
   }
   if (!(await buyerReleaseMayFund(opts.txn, opts.now))) return false;
-  const attempt =
-    (await prisma.outboundPaymentAttempt.findFirst({
-      where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
-      orderBy: { updatedAt: "desc" },
-    })) ||
-    (await prisma.outboundPaymentAttempt.findFirst({
-      where: { protectedTxnId: opts.txn.id, kind: "PROCUREMENT" },
-      orderBy: { updatedAt: "desc" },
-    }));
-  const storedQuote = parseQuoteSnapshot(attempt?.fxRateSnapshot || "");
-  let fees = feeMinor(attempt?.fxRateSnapshot || "", opts.principal, opts.txn.currency);
-  let quote = classifyStoredQuote({
-    quoteConfirmationRequired: gpQuoteConfirmationRequired(opts.mode, opts.txn.payoutRail),
-    quoteId: storedQuote?.quoteId || "",
-    expiresAt: storedQuote?.expiresAt || "",
-    confirmedByUserId: storedQuote?.confirmedByUserId || "",
-    nowMs: opts.now.getTime(),
+  const finalAttempt = await prisma.outboundPaymentAttempt.findFirst({
+    where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
+    orderBy: { updatedAt: "desc" },
   });
+  const procurementAttempt = await prisma.outboundPaymentAttempt.findFirst({
+    where: { protectedTxnId: opts.txn.id, kind: "PROCUREMENT" },
+    orderBy: { updatedAt: "desc" },
+  });
+  const procAmount = procurementAttempt?.amountMinor ?? 0;
+  const finalAmount = finalAttempt?.amountMinor ?? 0;
+  const procFees = inferredProcurementFeeMinor({
+    snapshotFeeMinor: feeMinor(
+      procurementAttempt?.fxRateSnapshot || "",
+      procAmount,
+      opts.txn.currency,
+    ),
+    procurementAmountMinor: procAmount,
+    postedMinor,
+    fundingPrincipalMinor: opts.principal,
+  });
+  const quoteSource = proceedsQuoteSourceAmount({
+    procurementAmountMinor: procAmount,
+    procurementCovered: procAmount > 0 && postedMinor >= procAmount + procFees,
+    finalAmountMinor: finalAmount,
+  });
+  const attempt =
+    finalAttempt && quoteSource === finalAmount
+      ? finalAttempt
+      : procurementAttempt || finalAttempt;
+  const storedQuote = parseQuoteSnapshot(attempt?.fxRateSnapshot || "");
+  const quoteMatchesSource = storedQuote?.sourceAmountMinor === quoteSource;
+  let finalFees = feeMinor(
+    finalAttempt?.fxRateSnapshot || "",
+    finalAmount,
+    opts.txn.currency,
+  );
+  let fees = proceedsRequiredPostedMinor({
+    principalMinor: 0,
+    procurementFeeMinor: procFees,
+    finalFeeMinor: finalAttempt ? finalFees : 0,
+  });
+  let quote = quoteMatchesSource
+    ? classifyStoredQuote({
+        quoteConfirmationRequired: gpQuoteConfirmationRequired(opts.mode, opts.txn.payoutRail),
+        quoteId: storedQuote?.quoteId || "",
+        expiresAt: storedQuote?.expiresAt || "",
+        confirmedByUserId: storedQuote?.confirmedByUserId || "",
+        nowMs: opts.now.getTime(),
+      })
+    : "missing";
   let quotePlan = planProceedsAfterQuote({
     quote,
     principalMinor: opts.principal,
@@ -955,7 +1016,7 @@ async function fundOne(opts: {
       fundingId: opts.funding.id,
       attempt,
       mode: opts.mode,
-      principal: opts.principal,
+      sourceAmountMinor: quoteSource,
       nowMs: opts.now.getTime(),
     });
     if (!prepared.ok) {
@@ -965,7 +1026,12 @@ async function fundOne(opts: {
       });
       return false;
     }
-    fees = prepared.fees;
+    if (finalAttempt && quoteSource === finalAmount && procAmount > 0) {
+      finalFees = prepared.fees;
+      fees = procFees + prepared.fees;
+    } else {
+      fees = prepared.fees;
+    }
     quote = "usable";
     quotePlan = planProceedsAfterQuote({
       quote,
@@ -1220,26 +1286,38 @@ async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<bool
   }
   if (txn.status !== "READY_TO_RELEASE") return false;
   const principal = txn.itemCostMinor + txn.shippingMinor + txn.sellerServiceFeeMinor;
-  const fees = feeMinor(txn.outboundPaymentAttempts[0]?.fxRateSnapshot || "", principal, txn.currency);
+  const finalAttempt = txn.outboundPaymentAttempts.find((row) => row.kind === "FINAL") ?? null;
   const posted = funding.legs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0);
   const pending = funding.legs.filter((leg) => leg.status === "PENDING").reduce((sum, leg) => sum + leg.amountMinor, 0);
-  const storedQuote = parseQuoteSnapshot(txn.outboundPaymentAttempts[0]?.fxRateSnapshot || "");
-  const quote = classifyStoredQuote({
-    quoteConfirmationRequired: gpQuoteConfirmationRequired(txn.stripeMode, txn.payoutRail),
-    quoteId: storedQuote?.quoteId || "",
-    expiresAt: storedQuote?.expiresAt || "",
-    confirmedByUserId: storedQuote?.confirmedByUserId || "",
-    nowMs: Date.now(),
-  });
-  const quotePlan = planProceedsAfterQuote({
-    quote,
-    principalMinor: principal,
-    payoutFeeMinor: fees,
-    chargeNetMinor: funding.chargeNetMinor,
+  if (pending > 0) return false;
+  const procAmount = procurement?.amountMinor ?? 0;
+  const procFees = inferredProcurementFeeMinor({
+    snapshotFeeMinor: feeMinor(procurement?.fxRateSnapshot || "", procAmount, txn.currency),
+    procurementAmountMinor: procAmount,
     postedMinor: posted,
-    pendingMinor: pending,
+    fundingPrincipalMinor: principal,
   });
-  if (quotePlan.action !== "complete") return false;
+  const finalFees = feeMinor(
+    finalAttempt?.fxRateSnapshot || "",
+    finalAttempt?.amountMinor ?? 0,
+    txn.currency,
+  );
+  const fees = proceedsRequiredPostedMinor({
+    principalMinor: 0,
+    procurementFeeMinor: procFees,
+    finalFeeMinor: finalAttempt ? finalFees : 0,
+  });
+  if (gpQuoteConfirmationRequired(txn.stripeMode, txn.payoutRail)) {
+    const storedQuote = parseQuoteSnapshot(finalAttempt?.fxRateSnapshot || "");
+    const quote = classifyStoredQuote({
+      quoteConfirmationRequired: true,
+      quoteId: storedQuote?.quoteId || "",
+      expiresAt: storedQuote?.expiresAt || "",
+      confirmedByUserId: storedQuote?.confirmedByUserId || "",
+      nowMs: Date.now(),
+    });
+    if (quote !== "usable") return false;
+  }
   if (posted < principal + fees) return false;
   const existingOutbound = txn.outboundPaymentAttempts[0];
   if (

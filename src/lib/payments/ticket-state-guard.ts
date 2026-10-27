@@ -27,6 +27,12 @@ export type TicketStateSlice = {
   hideReleaseActions?: boolean | null;
   canReleaseProcurement?: boolean | null;
   actions?: { canReleaseProcurement?: boolean | null } | null;
+  procurementTransferredMinor?: number | null;
+  finalTransferredMinor?: number | null;
+  books?: {
+    procurementTransferredMinor?: number | null;
+    finalTransferredMinor?: number | null;
+  } | null;
 };
 
 function normalizeTicketSlice(t: TicketStateSlice): TicketStateSlice {
@@ -36,6 +42,10 @@ function normalizeTicketSlice(t: TicketStateSlice): TicketStateSlice {
       t.canReleaseProcurement ?? t.actions?.canReleaseProcurement ?? null,
     hideReleaseActions:
       t.hideReleaseActions ?? t.gpPayoutProgress?.hideReleaseActions ?? null,
+    procurementTransferredMinor:
+      t.procurementTransferredMinor ?? t.books?.procurementTransferredMinor ?? null,
+    finalTransferredMinor:
+      t.finalTransferredMinor ?? t.books?.finalTransferredMinor ?? null,
   };
 }
 
@@ -50,7 +60,22 @@ function ticketDisplayProgressKey(t: TicketStateSlice): string {
     n.outboundStatus || "",
     n.hideReleaseActions ? "1" : "0",
     n.canReleaseProcurement ? "1" : "0",
+    String(n.procurementTransferredMinor ?? 0),
+    String(n.finalTransferredMinor ?? 0),
   ].join("|");
+}
+
+function incomingRegressesPayoutBooks(
+  incoming: TicketStateSlice,
+  existing: TicketStateSlice,
+): boolean {
+  const inProc = Number(incoming.procurementTransferredMinor ?? 0);
+  const exProc = Number(existing.procurementTransferredMinor ?? 0);
+  const inFinal = Number(incoming.finalTransferredMinor ?? 0);
+  const exFinal = Number(existing.finalTransferredMinor ?? 0);
+  if (!Number.isFinite(inProc) || !Number.isFinite(inFinal)) return false;
+  if (!Number.isFinite(exProc) || !Number.isFinite(exFinal)) return false;
+  return exProc > inProc || exFinal > inFinal;
 }
 
 function procurementReleaseControlsClosed(t: TicketStateSlice): boolean {
@@ -161,6 +186,7 @@ export function shouldApplyTicketUpdate(
   if (existingFunded && !incomingFunded) return false;
   if (incomingReopensProcurementRelease(incoming, existing)) return false;
   if (incomingHidesRemainderAfterProcurement(incoming, existing)) return false;
+  if (incomingRegressesPayoutBooks(incoming, existing)) return false;
   const inEpoch = stateEpoch(incoming);
   const exEpoch = stateEpoch(existing);
   if (inEpoch > exEpoch) return true;

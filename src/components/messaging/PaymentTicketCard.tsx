@@ -428,6 +428,8 @@ export function PaymentTicketCard({
         prev.releasedAt === snap.releasedAt &&
         prev.gpPayoutProgress?.phase === snap.gpPayoutProgress?.phase &&
         prev.gpPayoutProgress?.headline === snap.gpPayoutProgress?.headline &&
+        prev.books?.procurementTransferredMinor === snap.books?.procurementTransferredMinor &&
+        prev.books?.finalTransferredMinor === snap.books?.finalTransferredMinor &&
         prev.paymentIntentStatus === snap.paymentIntentStatus &&
         prev.actions?.canPay === snap.actions?.canPay &&
         prev.actions?.canConfirmReceipt === snap.actions?.canConfirmReceipt &&
