@@ -57,6 +57,7 @@ const {
   gpHidesFinalReleaseActions,
   gpProcurementSentCopy,
   GP_PAYOUT_SENT_COPY,
+  GP_FINAL_PENDING_COPY,
   GP_PROCUREMENT_PROCESSING_COPY,
   GP_PROCUREMENT_SENT_COPY,
   fundingPayoutCreateGate,
@@ -151,6 +152,7 @@ assert.match(runner, /FOR UPDATE/);
 assert.match(runner, /GP_FUNDING_ALREADY_COMPLETED/);
 assert.match(runner, /newFundingAllowedNow/);
 assert.match(runner, /GP_COMPLETED_OUTBOUND_STATUSES/);
+assert.match(runner, /kind: "FINAL"/);
 assert.match(runner, /otherGpAvailableUnpaidMinor/);
 assert.match(runner, /assessChargePayoutMembership/);
 assert.match(runner, /listAutomaticPayoutBalanceTransactions/);
@@ -237,6 +239,31 @@ const currentPurchase = {
 assert.equal(currentPurchase.purchaseHash, "597151ee");
 assert.equal(fundingScanIncludesPurchase(currentPurchase), true);
 assert.equal(completedPurchaseBlocksNewFunding(currentPurchase), false);
+assert.equal(
+  completedPurchaseBlocksNewFunding({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["SUCCEEDED", "AWAITING_FA_FUNDS"],
+    outboundKinds: ["PROCUREMENT", "FINAL"],
+  }),
+  false,
+);
+assert.equal(
+  fundingScanIncludesPurchase({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["SUCCEEDED", "AWAITING_FA_FUNDS"],
+    outboundKinds: ["PROCUREMENT", "FINAL"],
+    hasPendingFundingLeg: false,
+  }),
+  true,
+);
+assert.equal(
+  completedPurchaseBlocksNewFunding({
+    txnStatus: "READY_TO_RELEASE",
+    outboundStatuses: ["SUCCEEDED"],
+    outboundKinds: ["FINAL"],
+  }),
+  true,
+);
 assert.equal(3500 + 525, 4025);
 assert.match(runner, /isSimulatedFundingCredit|matchFundingCredit/);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/outbound-payment.ts"), /awaiting Financial Account funds/);
@@ -332,6 +359,18 @@ const uncertainLeg = nextFundingLegSequence(txnId, [
 ]);
 assert.equal(uncertainLeg.action, "reuse");
 assert.equal(uncertainLeg.idempotencyKey, fundingIdempotencyKey(txnId, 1));
+const postedWait = nextFundingLegSequence(txnId, [
+  { sequence: 1, amountMinor: 2100, status: "POSTED", stripePayoutId: "po_1", faCreditId: "cr_1" },
+]);
+assert.equal(postedWait.action, "wait");
+const remainderFundingLeg = nextFundingLegSequence(
+  txnId,
+  [{ sequence: 1, amountMinor: 2100, status: "POSTED", stripePayoutId: "po_1", faCreditId: "cr_1" }],
+  { outstandingMinor: 1575 },
+);
+assert.equal(remainderFundingLeg.action, "create");
+assert.equal(remainderFundingLeg.sequence, 2);
+assert.notEqual(remainderFundingLeg.idempotencyKey, fundingIdempotencyKey(txnId, 1));
 
 const withFees = allocateGpProceedsFunding(
   input({ payoutFeeMinor: 200, postedMinor: 3500, platformAvailableMinor: 400 }),
@@ -1344,6 +1383,22 @@ const postedFunding = describeGpBuyerPayout({
 });
 assert.equal(postedFunding.headline, GP_FUNDING_CONFIRMED_COPY);
 assert.equal(postedFunding.hideReleaseActions, true);
+const finalRemainderFunding = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundKind: "FINAL",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  fundingStatus: "POSTED",
+  chargeAvailable: true,
+  proceedsFundingEnabled: true,
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  now,
+});
+assert.equal(finalRemainderFunding.headline, GP_FINAL_PENDING_COPY);
+assert.equal(finalRemainderFunding.hideReleaseActions, true);
+assert.doesNotMatch(finalRemainderFunding.headline, /Payout funding is confirmed/);
 const postedSending = describeGpBuyerPayout({
   releaseAuthorized: true,
   txnStatus: "READY_TO_RELEASE",

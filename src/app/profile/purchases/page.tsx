@@ -76,6 +76,7 @@ type Order = ProtectedOrderSummary & {
     finalResidualMinor?: number;
     remainingProtectedSellerShareMinor?: number;
     procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
     platformFeeMinor?: number;
     sellerEntitledMinor?: number;
   };
@@ -540,6 +541,9 @@ export default function PurchasesPage() {
                     outboundStatus: o.outboundStatus,
                     fundingStatus: o.fundingStatus,
                     gpPhase: o.gpPayoutProgress?.phase,
+                    finalPaidMinor: o.books?.finalTransferredMinor ?? 0,
+                    remainderAuthorizedMinor:
+                      (o.shippingMinor ?? 0) + (o.sellerServiceFeeMinor ?? 0),
                     currency: o.currency,
                     formatMinor,
                   });

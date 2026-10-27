@@ -113,7 +113,7 @@ export async function loadPlatformLiabilities(mode: StripeMode): Promise<{
     orderBy: { fundedAt: "asc" },
     include: {
       gpProceedsFunding: { include: { legs: true } },
-      outboundPaymentAttempts: { select: { status: true } },
+      outboundPaymentAttempts: { select: { status: true, kind: true } },
       transferAttempts: { where: { status: "PENDING" }, select: { amountMinor: true } },
       disputes: { where: { status: { in: ["OPEN", "UNDER_REVIEW"] } }, select: { id: true }, take: 1 },
     },
@@ -146,6 +146,7 @@ export async function loadPlatformLiabilities(mode: StripeMode): Promise<{
       balanceTransactionAmountMinor: null,
       durablyCreditedMinor: credited,
       outboundStatuses: row.outboundPaymentAttempts.map((attempt) => attempt.status),
+      outboundKinds: row.outboundPaymentAttempts.map((attempt) => attempt.kind),
       pendingTransferMinor: row.transferAttempts.reduce((sum, attempt) => sum + attempt.amountMinor, 0),
       pendingFundingMinor: pendingFunding,
       purchaseHash: idHash8(row.id),

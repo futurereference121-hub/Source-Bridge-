@@ -54,6 +54,7 @@ const {
   gpHidesFinalReleaseActions,
   gpProcurementSentCopy,
   GP_PAYOUT_SENT_COPY,
+  GP_FINAL_PENDING_COPY,
   GP_PROCUREMENT_PENDING_COPY,
 } = await import("../src/lib/payments/payout-rail/proceeds-funding.ts");
 
@@ -334,14 +335,50 @@ const finalAuth = describeProcurementStage({
   agreed: true,
   advanceMinor: 2000,
   transferredMinor: 2000,
-  remainingHeldMinor: 0,
+  remainingHeldMinor: 1500,
+  remainderAuthorizedMinor: 1500,
   status: "READY_TO_RELEASE",
   payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "FINAL",
+  outboundStatus: "AWAITING_FA_FUNDS",
   currency: "GBP",
   formatMinor: formatGbp,
 });
-assert.match(finalAuth.detail, /Final release authorized/);
-assert.doesNotMatch(finalAuth.detail || "", /inspection/i);
+assert.match(finalAuth.detail, /Final £15\.00 release authorized, payout pending/);
+assert.doesNotMatch(finalAuth.detail || "", /awaiting final release|buyer approval|inspection/i);
+assert.match(finalAuth.remainderLabel || "", /payout pending/);
+const finalDone = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 0,
+  remainderAuthorizedMinor: 1500,
+  finalPaidMinor: 1500,
+  status: "RELEASED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  outboundKind: "FINAL",
+  outboundStatus: "SUCCEEDED",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(finalDone.detail, /Remainder sent: £15\.00/);
+assert.match(finalDone.detail, /Total sent to sourcer: £35\.00/);
+assert.match(finalDone.detail, /£0 awaiting release/);
+assert.match(finalDone.detail, /Source Bridge fee stays on platform/);
+assert.equal(finalDone.remainderLabel, "Remainder sent");
+const connectFinalPending = describeProcurementStage({
+  agreed: true,
+  advanceMinor: 2000,
+  transferredMinor: 2000,
+  remainingHeldMinor: 1500,
+  remainderAuthorizedMinor: 1500,
+  status: "READY_TO_RELEASE",
+  payoutRail: "STRIPE_CONNECT",
+  currency: "GBP",
+  formatMinor: formatGbp,
+});
+assert.match(connectFinalPending.detail, /Final £15\.00 release authorized, payout pending/);
+assert.doesNotMatch(connectFinalPending.detail || "", /awaiting final release/);
 
 const now = new Date("2026-10-26T12:00:00.000Z");
 const gpProcSucceeded = describeGpBuyerPayout({
@@ -355,6 +392,23 @@ const gpProcSucceeded = describeGpBuyerPayout({
   now,
 });
 assert.equal(gpProcSucceeded.hideReleaseActions, false);
+const gpFinalPending = describeGpBuyerPayout({
+  releaseAuthorized: true,
+  txnStatus: "READY_TO_RELEASE",
+  outboundKind: "FINAL",
+  outboundStatus: "AWAITING_FA_FUNDS",
+  fundingStatus: "POSTED",
+  chargeAvailable: true,
+  proceedsFundingEnabled: true,
+  remainderHeldMinor: 1500,
+  itemAdvanceMinor: 2000,
+  currency: "GBP",
+  now,
+});
+assert.equal(gpFinalPending.hideReleaseActions, true);
+assert.equal(gpFinalPending.headline, GP_FINAL_PENDING_COPY);
+assert.doesNotMatch(gpFinalPending.headline, /Payout funding is confirmed|awaiting buyer approval/);
+assert.match(gpFinalPending.timing, /bank-arrival estimate/);
 assert.equal(
   gpProcSucceeded.headline,
   gpProcurementSentCopy({ itemAdvanceMinor: 2000, currency: "GBP" }),

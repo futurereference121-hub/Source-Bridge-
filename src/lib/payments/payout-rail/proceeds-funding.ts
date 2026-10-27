@@ -64,6 +64,10 @@ export const GP_PAYOUT_SENT_COPY =
 export const GP_PROCUREMENT_SENT_COPY =
   "The item-advance payout has been sent. This is not the remaining shipping and sourcer fee. Posted means those item funds left Source Bridge. It does not confirm the sourcer\u2019s bank has paid.";
 
+/** FINAL remainder authorized while the item advance is already posted. */
+export const GP_FINAL_PENDING_COPY =
+  "Final release authorized \u2014 payout pending. The item advance already sent is separate. Confirmed funding for that advance is not this remainder payout and does not confirm the sourcer\u2019s bank has paid.";
+
 function formatItemAdvanceAmount(
   minor?: number | null,
   currency?: string | null,
@@ -209,17 +213,24 @@ export type GpBuyerPayoutPhase =
   | "uncertain";
 
 /**
- * A released purchase, or one whose seller payout already succeeded, must not
- * receive another quote or funding payout. A pending funding leg is a separate
+ * A released purchase, or one whose FINAL seller payout already succeeded, must
+ * not receive another quote or funding payout. A succeeded PROCUREMENT advance
+ * does not complete the remainder. A pending funding leg is a separate
  * question: that leg can still be reconciled.
  */
 export function completedPurchaseBlocksNewFunding(opts: {
   txnStatus: string;
   outboundStatuses: readonly string[];
+  outboundKinds?: readonly (string | null | undefined)[];
 }): boolean {
   if (String(opts.txnStatus || "").toUpperCase() === "RELEASED") return true;
   const done = new Set<string>(GP_COMPLETED_OUTBOUND_STATUSES);
-  return opts.outboundStatuses.some((status) => done.has(String(status || "").toUpperCase()));
+  const kinds = opts.outboundKinds;
+  return opts.outboundStatuses.some((status, index) => {
+    if (!done.has(String(status || "").toUpperCase())) return false;
+    if (!kinds || kinds.length !== opts.outboundStatuses.length) return true;
+    return String(kinds[index] || "").toUpperCase() === "FINAL";
+  });
 }
 
 export const GP_TEST_REPAIR_ABANDONED = "GP_TEST_REPAIR_ABANDONED";
@@ -274,6 +285,7 @@ export function fundingPrincipalMinor(opts: {
 export function fundingScanIncludesPurchase(opts: {
   txnStatus: string;
   outboundStatuses: readonly string[];
+  outboundKinds?: readonly (string | null | undefined)[];
   hasPendingFundingLeg: boolean;
   stripeMode?: string | null;
   failureCode?: string | null;
@@ -512,6 +524,7 @@ export type OtherGpFundingRow = {
   availableOn: Date | null;
   txnStatus: string;
   outboundStatuses: readonly string[];
+  outboundKinds?: readonly (string | null | undefined)[];
   postedMinor: number;
   pendingMinor: number;
   stripeMode?: string | null;
@@ -531,6 +544,7 @@ export function otherGpAvailableUnpaidMinor(
     const completed = completedPurchaseBlocksNewFunding({
       txnStatus: row.txnStatus,
       outboundStatuses: row.outboundStatuses,
+      outboundKinds: row.outboundKinds,
     });
     if (completed && row.pendingMinor === 0) continue;
     if (row.failureCode === "GP_CHARGE_PAID_OUT") continue;
@@ -561,6 +575,7 @@ export function otherGpAvailableUnpaidMinor(
 export function nextFundingLegSequence(
   protectedTxnId: string,
   legs: FundingLegView[],
+  opts?: { outstandingMinor?: number | null },
 ): {
   action: "create" | "reuse" | "wait";
   sequence: number;
@@ -576,6 +591,22 @@ export function nextFundingLegSequence(
   }
   const max = legs.reduce((n, leg) => Math.max(n, leg.sequence), 0);
   const latest = legs.find((leg) => leg.sequence === max);
+  const outstanding =
+    typeof opts?.outstandingMinor === "number" && Number.isFinite(opts.outstandingMinor)
+      ? opts.outstandingMinor
+      : 0;
+  if (
+    outstanding > 0 &&
+    latest &&
+    (latest.status === "POSTED" || latest.status === "SUCCEEDED")
+  ) {
+    const sequence = max + 1;
+    return {
+      action: "create",
+      sequence,
+      idempotencyKey: fundingIdempotencyKey(protectedTxnId, sequence),
+    };
+  }
   if (latest && latest.status !== "FAILED" && latest.status !== "CANCELLED") {
     return {
       action: "wait",
@@ -1089,6 +1120,20 @@ export function describeGpBuyerPayout(opts: {
         ? "The item-advance payout could not be sent. Remaining shipping and sourcer fee stay protected."
         : "The international payout could not be sent. Your payment stays protected. Source Bridge will review it.",
       timing: "No further action is needed from you.",
+      hideReleaseActions: hideFinal,
+    };
+  }
+  const remainderHeld =
+    typeof opts.remainderHeldMinor === "number" ? opts.remainderHeldMinor > 0 : false;
+  const finalRemainderPending =
+    outboundKind === "FINAL" && remainderHeld && opts.txnStatus !== "RELEASED";
+  if (finalRemainderPending) {
+    return {
+      phase: "waiting_funding",
+      headline: GP_FINAL_PENDING_COPY,
+      timing: opts.expectedArrival
+        ? `Stripe estimates bank arrival on ${formatPayoutDate(opts.expectedArrival)}. This is an estimate, not a promise.`
+        : "A bank-arrival estimate will appear when Stripe provides one. Confirmed item-advance funding is not this remainder payout.",
       hideReleaseActions: hideFinal,
     };
   }

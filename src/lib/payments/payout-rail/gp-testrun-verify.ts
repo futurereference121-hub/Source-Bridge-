@@ -149,6 +149,7 @@ export async function verifyProcurementTestCharge() {
   return {
     ok: true,
     stripeCalled: Boolean(purchase.stripeChargeId),
+    liveInitiationOff: !isGlobalPayoutsLiveInitiationEnabled(),
     purchaseHash: CURRENT_GP_PROCUREMENT_TEST.txnHash,
     ticketHash,
     title: purchase.paymentTicket?.title || purchase.title || "",
@@ -157,10 +158,18 @@ export async function verifyProcurementTestCharge() {
     advanceMinor: purchase.procurementAdvanceMinor,
     transferredMinor: purchase.procurementTransferredMinor,
     finalTransferredMinor: purchase.finalTransferredMinor,
+    trackingPresent: Boolean(purchase.trackingNumber),
     fundingStatus: funding?.status ?? null,
     fundingFailure: funding?.failureCode || "",
     chargeNet: funding?.chargeNetMinor ?? null,
-    legs: (funding?.legs || []).length,
+    principalMinor: funding?.principalMinor ?? null,
+    legs: (funding?.legs || []).map((leg) => ({
+      sequence: leg.sequence,
+      status: leg.status,
+      amountMinor: leg.amountMinor,
+      payoutSuffix: last5(leg.stripePayoutId),
+      creditSuffix: last5(leg.faCreditId),
+    })),
     outbound: attempt
       ? {
           kind: attempt.kind,
@@ -168,8 +177,17 @@ export async function verifyProcurementTestCharge() {
           amountMinor: attempt.amountMinor,
           hasProviderId: Boolean(attempt.stripeOutboundPaymentId),
           failureCode: attempt.failureCode || "",
+          expectedArrivalAt: attempt.expectedArrivalAt,
         }
       : null,
+    outbounds: purchase.outboundPaymentAttempts.map((row) => ({
+      kind: row.kind,
+      status: row.status,
+      amountMinor: row.amountMinor,
+      hasProviderId: Boolean(row.stripeOutboundPaymentId),
+      failureCode: row.failureCode || "",
+      initiated: Boolean(row.initiatedAt),
+    })),
     charge,
     reservesAgainstNewAvailable:
       funding?.status === "AWAITING_SETTLEMENT" ||

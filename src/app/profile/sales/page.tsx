@@ -33,6 +33,8 @@ type Order = ProtectedOrderSummary & {
   currency: string;
   totalChargeMinor: number;
   protectionFeeMinor: number;
+  shippingMinor?: number;
+  sellerServiceFeeMinor?: number;
   fundedAt: string | null;
   shippedAt: string | null;
   trackingNumber: string;
@@ -54,6 +56,7 @@ type Order = ProtectedOrderSummary & {
     remainingProtectedSellerShareMinor?: number;
     finalResidualMinor?: number;
     procurementTransferredMinor?: number;
+    finalTransferredMinor?: number;
   };
   labels: { payment: string; shipping: string; delivery: string };
   listing: { id: string; slug: string; name: string; saleStatus: string } | null;
@@ -272,6 +275,9 @@ export default function SalesFulfilmentPage() {
                     outboundStatus: o.outboundStatus,
                     fundingStatus: o.fundingStatus,
                     gpPhase: o.gpPayoutProgress?.phase,
+                    finalPaidMinor: o.books?.finalTransferredMinor ?? 0,
+                    remainderAuthorizedMinor:
+                      (o.shippingMinor ?? 0) + (o.sellerServiceFeeMinor ?? 0),
                     currency: o.currency,
                     formatMinor,
                     });

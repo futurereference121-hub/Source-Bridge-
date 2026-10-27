@@ -200,7 +200,7 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
         protectedTxn: {
           select: {
             status: true,
-            outboundPaymentAttempts: { select: { status: true } },
+            outboundPaymentAttempts: { select: { status: true, kind: true } },
           },
         },
         legs: { select: { status: true, amountMinor: true } },
@@ -226,6 +226,7 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
       availableOn: row.availableOn,
       txnStatus: row.protectedTxn.status,
       outboundStatuses: row.protectedTxn.outboundPaymentAttempts.map((attempt) => attempt.status),
+      outboundKinds: row.protectedTxn.outboundPaymentAttempts.map((attempt) => attempt.kind),
       postedMinor: row.legs.filter((leg) => leg.status === "POSTED").reduce((sum, leg) => sum + leg.amountMinor, 0),
       pendingMinor: row.legs.filter((leg) => leg.status === "PENDING").reduce((sum, leg) => sum + leg.amountMinor, 0),
       stripeMode: mode,
@@ -322,7 +323,10 @@ export async function reconcileGpProceedsFunding(opts: {
         {
           status: { not: "RELEASED" },
           outboundPaymentAttempts: {
-            none: { status: { in: [...GP_COMPLETED_OUTBOUND_STATUSES] } },
+            none: {
+              kind: "FINAL",
+              status: { in: [...GP_COMPLETED_OUTBOUND_STATUSES] },
+            },
           },
         },
         { gpProceedsFunding: { legs: { some: { status: "PENDING" } } } },
@@ -442,11 +446,12 @@ async function newFundingAllowedNow(txnId: string): Promise<boolean> {
     if (locked.length !== 1) return false;
     const attempts = await tx.outboundPaymentAttempt.findMany({
       where: { protectedTxnId: txnId },
-      select: { status: true },
+      select: { status: true, kind: true },
     });
     return !completedPurchaseBlocksNewFunding({
       txnStatus: locked[0]?.status || "",
       outboundStatuses: attempts.map((row) => row.status),
+      outboundKinds: attempts.map((row) => row.kind),
     });
   });
 }
@@ -1055,7 +1060,9 @@ async function fundOne(opts: {
     });
     return false;
   }
-  const sequencePlan = nextFundingLegSequence(opts.txn.id, freshLegs);
+  const sequencePlan = nextFundingLegSequence(opts.txn.id, freshLegs, {
+    outstandingMinor: quotePlan.action === "fund" ? quotePlan.amountMinor : 0,
+  });
   if (sequencePlan.action === "wait") return false;
   const existingLeg = await prisma.gpProceedsFundingLeg.findUnique({
     where: { idempotencyKey: sequencePlan.idempotencyKey },

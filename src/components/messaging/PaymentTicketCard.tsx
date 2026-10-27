@@ -1556,6 +1556,27 @@ export function PaymentTicketCard({
   }
 
   const cur = (ticket.currency || "GBP").toUpperCase();
+  const procurementStage = describeProcurementStage({
+    agreed: ticket.procurementAdvanceAgreed,
+    advanceMinor: ticket.procurementAdvanceMinor,
+    transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
+    remainingHeldMinor: procurementRemainderHeldMinor({
+      remainingProtectedSellerShareMinor:
+        ticket.books?.remainingProtectedSellerShareMinor,
+      shippingMinor: ticket.shippingMinor,
+      sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
+    }),
+    status: ticket.protectedTxnStatus || ticket.status,
+    payoutRail: ticket.payoutRail,
+    outboundKind: ticket.outboundKind,
+    outboundStatus: ticket.outboundStatus,
+    fundingStatus: ticket.fundingStatus,
+    gpPhase: ticket.gpPayoutProgress?.phase,
+    finalPaidMinor: finalTransferredMinor,
+    remainderAuthorizedMinor: ticket.shippingMinor + ticket.sellerServiceFeeMinor,
+    currency: cur,
+    formatMinor,
+  });
   const rows = [
     [ticket.breakdown.labels.itemCost, ticket.itemCostMinor],
     [ticket.breakdown.labels.shipping, ticket.shippingMinor],
@@ -2162,33 +2183,10 @@ export function PaymentTicketCard({
             You need to review and accept this agreement.
           </p>
         ) : null}
-        {(() => {
-          const stage = describeProcurementStage({
-            agreed: ticket.procurementAdvanceAgreed,
-            advanceMinor: ticket.procurementAdvanceMinor,
-            transferredMinor: ticket.books?.procurementTransferredMinor ?? 0,
-            remainingHeldMinor: procurementRemainderHeldMinor({
-              remainingProtectedSellerShareMinor:
-                ticket.books?.remainingProtectedSellerShareMinor,
-              shippingMinor: ticket.shippingMinor,
-              sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
-            }),
-            status: ticket.protectedTxnStatus || ticket.status,
-            payoutRail: ticket.payoutRail,
-            outboundKind: ticket.outboundKind,
-            outboundStatus: ticket.outboundStatus,
-            fundingStatus: ticket.fundingStatus,
-            gpPhase: ticket.gpPayoutProgress?.phase,
-            currency: cur,
-            formatMinor,
-          });
-          return (
-            <>
-              <p>{stage.headline}</p>
-              {stage.detail ? <p>{stage.detail}</p> : null}
-            </>
-          );
-        })()}
+        <>
+          <p>{procurementStage.headline}</p>
+          {procurementStage.detail ? <p>{procurementStage.detail}</p> : null}
+        </>
       </div>
 
       {procAgreed && ticket.breakdown.releaseStructure && !procTransferred ? (
@@ -2342,15 +2340,15 @@ export function PaymentTicketCard({
                 </p>
               )}
               <p className="flex justify-between gap-3">
-                <span>Shipping + sourcer fee awaiting final release</span>
+                <span>
+                  {procurementStage.remainderLabel ||
+                    "Shipping + sourcer fee awaiting final release"}
+                </span>
                 <span className="tabular-nums text-white">
                   {formatMinor(
-                    procurementRemainderHeldMinor({
-                      remainingProtectedSellerShareMinor:
-                        remainingSellerFundsProtected,
-                      shippingMinor: ticket.shippingMinor,
-                      sellerServiceFeeMinor: ticket.sellerServiceFeeMinor,
-                    }),
+                    procurementStage.remainderHeldMinor ||
+                      finalTransferredMinor ||
+                      ticket.shippingMinor + ticket.sellerServiceFeeMinor,
                     cur,
                   )}
                 </span>

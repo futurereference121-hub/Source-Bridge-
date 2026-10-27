@@ -426,6 +426,7 @@ export type PurchaseLiability = {
   settlementBlockCode?: string | null;
   durablyCreditedMinor: number;
   outboundStatuses: readonly string[];
+  outboundKinds?: readonly (string | null | undefined)[];
   pendingTransferMinor: number;
   pendingFundingMinor: number;
   /** First 8 hex characters of the purchase id. Never a raw id. */
@@ -694,6 +695,7 @@ export function reservePurchase(row: PurchaseLiability): PurchaseReserve {
   const completed = completedPurchaseBlocksNewFunding({
     txnStatus: row.status,
     outboundStatuses: row.outboundStatuses,
+    outboundKinds: row.outboundKinds,
   });
   const disputed =
     row.openDispute || row.status === "DISPUTED" || row.status === "PARTIALLY_REFUNDED";
