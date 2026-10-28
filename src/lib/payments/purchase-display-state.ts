@@ -153,8 +153,8 @@ export function derivePurchaseDisplayState(
   if (status === "READY_TO_RELEASE") {
     return {
       phase: "READY_TO_RELEASE",
-      label: "Ready to release residual",
-      shortLabel: "READY TO RELEASE",
+      label: "Completed — payout in progress",
+      shortLabel: "COMPLETED",
     };
   }
   if (status === "DELIVERED" || input.deliveredAt) {

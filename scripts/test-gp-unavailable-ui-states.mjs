@@ -68,7 +68,7 @@ assert.equal(
 );
 assert.equal(
   derivePurchaseDisplayState({ ...base, status: "READY_TO_RELEASE" }).label,
-  "Ready to release residual",
+  "Completed — payout in progress",
 );
 assert.equal(
   derivePurchaseDisplayState({

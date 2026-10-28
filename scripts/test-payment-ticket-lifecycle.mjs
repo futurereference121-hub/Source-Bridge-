@@ -250,6 +250,7 @@ function shouldShowItemFundsRemainingProtectedMessage(opts) {
   });
   if (remaining <= 0) return false;
   if (opts.protectedStatus === "RELEASED") return false;
+  if (opts.protectedStatus === "READY_TO_RELEASE") return false;
   if (opts.lifecycleStage === "COMPLETED" || opts.lifecycleStage === "RELEASED") {
     return false;
   }
@@ -273,6 +274,15 @@ ok(
     sellerEntitledMinor: 15000,
     protectedStatus: "RELEASED",
     lifecycleStage: "COMPLETED",
+  }) === false,
+);
+ok(
+  "final authorized: yellow off even if remainder unpaid",
+  shouldShowItemFundsRemainingProtectedMessage({
+    procurementTransferredMinor: 2000,
+    finalTransferredMinor: 0,
+    sellerEntitledMinor: 3500,
+    protectedStatus: "READY_TO_RELEASE",
   }) === false,
 );
 ok(

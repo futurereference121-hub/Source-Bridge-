@@ -20,7 +20,10 @@ import {
   assertProcurementReleaseInvariants,
   computeProtectedFinancials,
 } from "@/lib/payments/breakdown";
-import { afterProtectedTxnMoneyEvent } from "@/lib/payments/ticket-mutation-sync";
+import {
+  afterBuyerReleaseAuthorized,
+  afterProtectedTxnMoneyEvent,
+} from "@/lib/payments/ticket-mutation-sync";
 import { lockedPayoutRailFromTxn } from "@/lib/payments/payout-rail/rail-resolver";
 import {
   coordinatePlatformSpend,
@@ -200,6 +203,14 @@ export async function releaseProcurement(opts: {
       data: { status: "PENDING", lastAttemptAt: new Date() },
     });
   }
+
+  await afterBuyerReleaseAuthorized({
+    txn,
+    kind: "PROCUREMENT",
+    amountMinor: amount,
+    currency: txn.currency,
+    actorUserId: opts.actorUserId,
+  });
 
   const stripe = getStripe(txnMode);
   try {
@@ -581,6 +592,14 @@ export async function releaseFinal(opts: {
       data: { status: "PENDING", lastAttemptAt: new Date() },
     });
   }
+
+  await afterBuyerReleaseAuthorized({
+    txn,
+    kind: "FINAL",
+    amountMinor: amount,
+    currency: txn.currency,
+    actorUserId: opts.actorUserId,
+  });
 
   const stripe = getStripe(txnMode);
   try {

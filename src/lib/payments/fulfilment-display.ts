@@ -428,3 +428,284 @@ export function receiptConfirmedCopy(role: "buyer" | "seller"): string {
     ? "Receipt confirmed — buyer may release now or start a 12-hour inspection. Residual stays protected."
     : "Item received — choose release now or start a 12-hour inspection.";
 }
+
+export type TicketBottomStatusRow = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+export type ReleaseCellStatus =
+  | "awaiting_authorization"
+  | "authorization_confirmed"
+  | "payout_pending"
+  | "payout_processing"
+  | "sent"
+  | "failed";
+
+const FINAL_OUTBOUND = new Set([
+  "PENDING",
+  "PROCESSING",
+  "AWAITING_FA_FUNDS",
+  "AWAITING_MINIMUM",
+  "SUCCEEDED",
+  "RECONCILED",
+  "RETURNED",
+  "FAILED",
+]);
+
+export function describeReleaseCellStatus(opts: {
+  expectedKind: "PROCUREMENT" | "FINAL";
+  authorized: boolean;
+  transferredMinor?: number | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+}): ReleaseCellStatus {
+  const kind = String(opts.outboundKind || "").toUpperCase();
+  const outbound = String(opts.outboundStatus || "").toUpperCase();
+  const matches = kind === opts.expectedKind;
+  if (matches && outbound === "FAILED") return "failed";
+  if ((opts.transferredMinor ?? 0) > 0) return "sent";
+  if (matches && (outbound === "SUCCEEDED" || outbound === "RECONCILED")) {
+    return "sent";
+  }
+  if (matches && outbound === "PROCESSING") return "payout_processing";
+  if (
+    matches &&
+    (outbound === "PENDING" ||
+      outbound === "AWAITING_FA_FUNDS" ||
+      outbound === "AWAITING_MINIMUM")
+  ) {
+    return "payout_pending";
+  }
+  if (opts.authorized) return "authorization_confirmed";
+  return "awaiting_authorization";
+}
+
+export function releaseCellStatusLabel(status: ReleaseCellStatus): string {
+  switch (status) {
+    case "awaiting_authorization":
+      return "Awaiting authorization";
+    case "authorization_confirmed":
+      return "Authorization confirmed";
+    case "payout_pending":
+      return "Payout pending";
+    case "payout_processing":
+      return "Payout processing";
+    case "sent":
+      return "Sent";
+    case "failed":
+      return "Failed";
+  }
+}
+
+/**
+ * Availability of that purchase portion on Stripe — not released, sent, or
+ * received. Consumed (paid-out) funds stay available; a passed date or buyer
+ * approval alone is not evidence.
+ */
+export function stripePortionAvailability(opts: {
+  payoutRail?: string | null;
+  funded?: boolean | null;
+  fundingStatus?: string | null;
+  portionConsumed?: boolean | null;
+}): "Available" | "Not yet available" {
+  if (opts.portionConsumed) return "Available";
+  if (isGlobalPayoutsRail(opts.payoutRail)) {
+    return String(opts.fundingStatus || "").toUpperCase() === "POSTED"
+      ? "Available"
+      : "Not yet available";
+  }
+  return opts.funded ? "Available" : "Not yet available";
+}
+
+export function describeTicketItemStatus(opts: {
+  status?: string | null;
+  shipped?: boolean | null;
+  delivered?: boolean | null;
+  disputed?: boolean | null;
+}): string {
+  const status = String(opts.status || "").toUpperCase();
+  if (opts.disputed || status === "DISPUTED") return "Issue reported";
+  if (status === "RELEASED" || status === "READY_TO_RELEASE") return "Received";
+  if (status === "IN_INSPECTION") return "Inspection";
+  if (opts.delivered || status === "DELIVERED") return "Received";
+  if (opts.shipped || status === "IN_TRANSIT" || status === "AWAITING_SHIPMENT") {
+    return "Shipped — awaiting receipt";
+  }
+  return "Awaiting shipment";
+}
+
+function formatAmount(
+  minor: number,
+  currency: string,
+  formatMinor: (minor: number, currency: string) => string,
+): string {
+  return formatMinor(Math.max(0, minor), currency);
+}
+
+/**
+ * Concise bottom status rows for sourcing tickets. Omit inapplicable
+ * procurement split rows when there is no item-fund advance.
+ */
+export function ticketBottomStatusRows(opts: {
+  paymentOption?: string | null;
+  payoutRail?: string | null;
+  status: string;
+  funded?: boolean | null;
+  fundingStatus?: string | null;
+  procurementAgreed?: boolean | null;
+  itemCostMinor: number;
+  remainderMinor: number;
+  sellerEntitledMinor?: number | null;
+  procurementTransferredMinor?: number | null;
+  finalTransferredMinor?: number | null;
+  outboundKind?: string | null;
+  outboundStatus?: string | null;
+  currency: string;
+  shipped?: boolean | null;
+  delivered?: boolean | null;
+  disputed?: boolean | null;
+  formatMinor: (minor: number, currency: string) => string;
+}): TicketBottomStatusRow[] {
+  const option = String(opts.paymentOption || "").toUpperCase();
+  if (option === "INSTANT" || option === "DIRECT") return [];
+  const status = String(opts.status || "").toUpperCase();
+  if (
+    !opts.funded &&
+    ![
+      "FUNDED",
+      "PROCUREMENT_RELEASED",
+      "AWAITING_SHIPMENT",
+      "IN_TRANSIT",
+      "DELIVERED",
+      "IN_INSPECTION",
+      "READY_TO_RELEASE",
+      "RELEASED",
+      "DISPUTED",
+      "REFUNDED",
+      "PARTIALLY_REFUNDED",
+    ].includes(status)
+  ) {
+    return [];
+  }
+
+  const procurementAgreed =
+    Boolean(opts.procurementAgreed) && (opts.itemCostMinor ?? 0) > 0;
+  const remainderMinor = Math.max(0, opts.remainderMinor);
+  const itemMinor = Math.max(0, opts.itemCostMinor);
+  const fullMinor =
+    typeof opts.sellerEntitledMinor === "number" && opts.sellerEntitledMinor > 0
+      ? opts.sellerEntitledMinor
+      : itemMinor + remainderMinor;
+  const procTransferred = Math.max(0, opts.procurementTransferredMinor ?? 0);
+  const finalTransferred = Math.max(0, opts.finalTransferredMinor ?? 0);
+  const outboundKind = opts.outboundKind;
+  const outboundStatus = opts.outboundStatus;
+  const finalAuthorized =
+    status === "READY_TO_RELEASE" ||
+    status === "RELEASED" ||
+    (String(outboundKind || "").toUpperCase() === "FINAL" &&
+      FINAL_OUTBOUND.has(String(outboundStatus || "").toUpperCase()) &&
+      String(outboundStatus || "").toUpperCase() !== "FAILED");
+  const itemAuthorized =
+    procurementAgreed &&
+    (procTransferred > 0 ||
+      status === "PROCUREMENT_RELEASED" ||
+      (String(outboundKind || "").toUpperCase() === "PROCUREMENT" &&
+        PROCUREMENT_AUTHORIZED_OUTBOUND.has(
+          String(outboundStatus || "").toUpperCase(),
+        )));
+
+  const rows: TicketBottomStatusRow[] = [];
+  if (procurementAgreed) {
+    rows.push({
+      key: "item-funds-release",
+      label: `Item funds release (${formatAmount(itemMinor, opts.currency, opts.formatMinor)})`,
+      value: releaseCellStatusLabel(
+        describeReleaseCellStatus({
+          expectedKind: "PROCUREMENT",
+          authorized: itemAuthorized,
+          transferredMinor: procTransferred,
+          outboundKind,
+          outboundStatus,
+        }),
+      ),
+    });
+    rows.push({
+      key: "shipping-sourcer-fee",
+      label: `Shipping and sourcer fee (${formatAmount(remainderMinor, opts.currency, opts.formatMinor)})`,
+      value: releaseCellStatusLabel(
+        describeReleaseCellStatus({
+          expectedKind: "FINAL",
+          authorized: finalAuthorized,
+          transferredMinor: finalTransferred,
+          outboundKind,
+          outboundStatus,
+        }),
+      ),
+    });
+    rows.push({
+      key: "stripe-available-a",
+      label: "Funds available on Stripe — A: item cost",
+      value: stripePortionAvailability({
+        payoutRail: opts.payoutRail,
+        funded: opts.funded,
+        fundingStatus: opts.fundingStatus,
+        portionConsumed: procTransferred > 0,
+      }),
+    });
+    rows.push({
+      key: "stripe-available-b",
+      label: "Funds available on Stripe — B: shipping and sourcer fee",
+      value: stripePortionAvailability({
+        payoutRail: opts.payoutRail,
+        funded: opts.funded,
+        fundingStatus: opts.fundingStatus,
+        portionConsumed: finalTransferred > 0,
+      }),
+    });
+  }
+
+  const finalAmount = procurementAgreed ? remainderMinor : fullMinor;
+  rows.push({
+    key: "final-release",
+    label: procurementAgreed
+      ? "Final release"
+      : `Final release (${formatAmount(finalAmount, opts.currency, opts.formatMinor)})`,
+    value: releaseCellStatusLabel(
+      describeReleaseCellStatus({
+        expectedKind: "FINAL",
+        authorized: finalAuthorized,
+        transferredMinor: finalTransferred,
+        outboundKind,
+        outboundStatus,
+      }),
+    ),
+  });
+
+  if (!procurementAgreed) {
+    rows.push({
+      key: "stripe-available",
+      label: "Funds available on Stripe",
+      value: stripePortionAvailability({
+        payoutRail: opts.payoutRail,
+        funded: opts.funded,
+        fundingStatus: opts.fundingStatus,
+        portionConsumed: finalTransferred > 0,
+      }),
+    });
+  }
+
+  rows.push({
+    key: "item-status",
+    label: "Item status",
+    value: describeTicketItemStatus({
+      status,
+      shipped: opts.shipped,
+      delivered: opts.delivered,
+      disputed: opts.disputed,
+    }),
+  });
+  return rows;
+}

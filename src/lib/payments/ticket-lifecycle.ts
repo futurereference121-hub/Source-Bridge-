@@ -158,7 +158,7 @@ export function lifecycleLabel(stage: string): string {
     case "INSPECTION":
       return "INSPECTION";
     case "READY_TO_RELEASE":
-      return "RELEASING";
+      return "COMPLETED";
     case "COMPLETED":
     case "RELEASED":
       return "COMPLETED";
@@ -461,6 +461,7 @@ export function shouldShowItemFundsRemainingProtectedMessage(opts: {
     return false;
   }
   if (opts.protectedStatus === "RELEASED") return false;
+  if (opts.protectedStatus === "READY_TO_RELEASE") return false;
   return true;
 }
 

@@ -27,6 +27,7 @@ import {
   procurementAdvanceAuthorized,
   procurementRemainderHeldMinor,
 } from "@/lib/payments/fulfilment-display";
+import { afterBuyerReleaseAuthorized } from "@/lib/payments/ticket-mutation-sync";
 
 export {
   BUYER_INACTIVITY_ADMIN_RELEASE_MS,
@@ -51,8 +52,8 @@ function assertFulfilmentAccess() {
 /**
  * Seller may mark shipped / add tracking on the existing fulfilment engine.
  * Origin-agnostic (PRODUCT_CHECKOUT and CHAT_TICKET).
- * Procurement agreed: only after item funds released (PROCUREMENT_RELEASED / transferred).
- * No procurement: after FUNDED (same as product protected).
+ * Funded orders may ship without waiting for a procurement payout to finish.
+ * Shipping never releases the protected remainder.
  */
 export function sellerCanAddTracking(opts: {
   paymentOption: string;
@@ -71,22 +72,9 @@ export function sellerCanAddTracking(opts: {
   ) {
     return false;
   }
-  if (
-    !["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(opts.status)
-  ) {
-    return false;
-  }
-  const procAgreed =
-    Boolean(opts.procurementAdvanceAgreed) &&
-    (opts.procurementAdvanceMinor ?? 0) > 0;
-  if (procAgreed) {
-    const transferred =
-      (opts.procurementTransferredMinor ?? 0) > 0 ||
-      opts.status === "PROCUREMENT_RELEASED";
-    // After FUNDED but before item-fund release — wait (mirrors product timing with advance).
-    if (opts.status === "FUNDED" && !transferred) return false;
-  }
-  return true;
+  return ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT"].includes(
+    opts.status,
+  );
 }
 
 export function buyerCanConfirmReceipt(opts: {
@@ -113,7 +101,7 @@ export function buyerCanReleaseNow(opts: {
 }): boolean {
   if (opts.origin === "PRODUCT_CHECKOUT") return false;
   if (isDirectPaymentOption(opts.paymentOption)) return false;
-  if (opts.status === "IN_INSPECTION" || opts.status === "READY_TO_RELEASE") {
+  if (opts.status === "IN_INSPECTION") {
     return true;
   }
   if (!opts.shipped) return false;
@@ -439,6 +427,8 @@ export function mapProtectedTxnSummary(
         }),
       canReleaseNow:
         viewerRole === "buyer" &&
+        t.status !== "READY_TO_RELEASE" &&
+        t.status !== "RELEASED" &&
         !gpPayoutProgress?.hideReleaseActions &&
         buyerCanReleaseNow({
           paymentOption: t.paymentOption,
@@ -502,7 +492,7 @@ function paymentLabel(
   }
   if (status === "DELIVERED") return "Receipt confirmed — choose release or inspection";
   if (status === "IN_INSPECTION") return "Inspection active";
-  if (status === "READY_TO_RELEASE") return "Ready to release residual";
+  if (status === "READY_TO_RELEASE") return "Completed — payout in progress";
   if (status === "RELEASED") return "Completed — residual released";
   if (status === "REFUNDED" || status === "PARTIALLY_REFUNDED") return "Refunded";
   if (status === "DISPUTED") return "Issue reported — remaining funds on hold";
@@ -801,6 +791,7 @@ type TxnRow = {
   buyerId: string;
   sellerId: string;
   conversationId?: string | null;
+  title?: string | null;
   paymentOption: string;
   origin?: string | null;
   shippedAt: Date | null;
@@ -810,6 +801,17 @@ type TxnRow = {
   releasedAt: Date | null;
   termsHash?: string;
   stripeMode?: string | null;
+  currency: string;
+  itemCostMinor: number;
+  shippingMinor: number;
+  sellerServiceFeeMinor: number;
+  protectionFeeMinor: number;
+  totalChargeMinor: number;
+  procurementAdvanceAgreed: boolean;
+  procurementAdvanceMinor: number;
+  procurementTransferredMinor: number;
+  finalTransferredMinor: number;
+  refundedMinor: number;
 };
 
 async function acknowledgeReceiptAfterShip(opts: {
@@ -1062,6 +1064,27 @@ async function releaseNowAfterReceipt(opts: {
         termsHash: txn.termsHash || "",
       },
     });
+    const remainderBooks = computeProtectedFinancials({
+      itemCostMinor: txn.itemCostMinor,
+      shippingMinor: txn.shippingMinor,
+      sellerServiceFeeMinor: txn.sellerServiceFeeMinor,
+      protectionFeeMinor: txn.protectionFeeMinor,
+      totalChargeMinor: txn.totalChargeMinor,
+      procurementAdvanceAgreed: txn.procurementAdvanceAgreed,
+      procurementAdvanceMinor: txn.procurementAdvanceMinor,
+      procurementTransferredMinor: txn.procurementTransferredMinor,
+      finalTransferredMinor: txn.finalTransferredMinor,
+      refundedMinor: txn.refundedMinor,
+    });
+    if (remainderBooks.remainingProtectedSellerShareMinor > 0) {
+      await afterBuyerReleaseAuthorized({
+        txn,
+        kind: "FINAL",
+        amountMinor: remainderBooks.remainingProtectedSellerShareMinor,
+        currency: txn.currency,
+        actorUserId: opts.buyerId,
+      });
+    }
   }
 
   const { reconcileGpProceedsFunding, isGpFundingWaitingCode } = await import(

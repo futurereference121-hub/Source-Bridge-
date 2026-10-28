@@ -48,6 +48,10 @@ const {
   procurementAdvanceAuthorized,
   procurementRemainderHeldMinor,
   sourceBridgeFeeLineLabel,
+  ticketBottomStatusRows,
+  describeReleaseCellStatus,
+  releaseCellStatusLabel,
+  stripePortionAvailability,
 } = await import("../src/lib/payments/fulfilment-display.ts");
 const { shouldApplyTicketUpdate } = await import(
   "../src/lib/payments/ticket-state-guard.ts"
@@ -1133,6 +1137,167 @@ assert.equal(preview.includes("@luckyday"), true);
 assert.match(preview, /Payout posted/);
 assert.doesNotMatch(preview, /Released to sourcer/);
 assert.doesNotMatch(preview, /Review estimate|Release Funds Now/);
+
+assert.equal(
+  gpHidesFinalReleaseActions({
+    outboundKind: "PROCUREMENT",
+    outboundStatus: "SUCCEEDED",
+    txnStatus: "READY_TO_RELEASE",
+    remainderHeldMinor: 1500,
+  }),
+  true,
+);
+assert.equal(
+  describeReleaseCellStatus({
+    expectedKind: "FINAL",
+    authorized: true,
+    transferredMinor: 0,
+    outboundKind: "FINAL",
+    outboundStatus: "AWAITING_FA_FUNDS",
+  }),
+  "payout_pending",
+);
+assert.equal(releaseCellStatusLabel("authorization_confirmed"), "Authorization confirmed");
+assert.equal(
+  stripePortionAvailability({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    funded: true,
+    fundingStatus: "FUNDING",
+    portionConsumed: true,
+  }),
+  "Available",
+);
+assert.equal(
+  stripePortionAvailability({
+    payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+    funded: true,
+    fundingStatus: "FUNDING",
+    portionConsumed: false,
+  }),
+  "Not yet available",
+);
+assert.equal(
+  stripePortionAvailability({
+    payoutRail: "STRIPE_CONNECT",
+    funded: true,
+    fundingStatus: null,
+    portionConsumed: false,
+  }),
+  "Available",
+);
+
+const gpAuthRows = ticketBottomStatusRows({
+  paymentOption: "PROTECTED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  status: "READY_TO_RELEASE",
+  funded: true,
+  fundingStatus: "POSTED",
+  procurementAgreed: true,
+  itemCostMinor: 2000,
+  remainderMinor: 1500,
+  sellerEntitledMinor: 3500,
+  procurementTransferredMinor: 2000,
+  finalTransferredMinor: 0,
+  outboundKind: "FINAL",
+  outboundStatus: "PENDING",
+  currency: "GBP",
+  shipped: true,
+  delivered: true,
+  formatMinor: formatGbp,
+});
+assert.equal(
+  gpAuthRows.find((r) => r.key === "item-funds-release")?.value,
+  "Sent",
+);
+assert.equal(
+  gpAuthRows.find((r) => r.key === "shipping-sourcer-fee")?.value,
+  "Payout pending",
+);
+assert.equal(
+  gpAuthRows.find((r) => r.key === "final-release")?.value,
+  "Payout pending",
+);
+assert.equal(
+  gpAuthRows.find((r) => r.key === "stripe-available-a")?.value,
+  "Available",
+);
+assert.equal(
+  gpAuthRows.find((r) => r.key === "item-status")?.value,
+  "Received",
+);
+assert.equal(
+  gpAuthRows.some((r) => /item funds released to sourcer/i.test(r.label)),
+  false,
+);
+assert.doesNotMatch(
+  gpAuthRows.map((r) => r.label + r.value).join(" "),
+  /awaiting buyer approval|estimated|bank delivery|business day/i,
+);
+
+const connectNoProcRows = ticketBottomStatusRows({
+  paymentOption: "PROTECTED",
+  payoutRail: "STRIPE_CONNECT",
+  status: "READY_TO_RELEASE",
+  funded: true,
+  procurementAgreed: false,
+  itemCostMinor: 2000,
+  remainderMinor: 1500,
+  sellerEntitledMinor: 3500,
+  procurementTransferredMinor: 0,
+  finalTransferredMinor: 0,
+  currency: "GBP",
+  shipped: true,
+  delivered: true,
+  formatMinor: formatGbp,
+});
+assert.equal(
+  connectNoProcRows.some((r) => r.key === "item-funds-release"),
+  false,
+);
+assert.equal(
+  connectNoProcRows.some((r) => r.key === "stripe-available-a"),
+  false,
+);
+assert.match(
+  connectNoProcRows.find((r) => r.key === "final-release")?.label || "",
+  /£35\.00/,
+);
+assert.equal(
+  connectNoProcRows.find((r) => r.key === "final-release")?.value,
+  "Authorization confirmed",
+);
+assert.equal(
+  connectNoProcRows.find((r) => r.key === "stripe-available")?.value,
+  "Available",
+);
+
+const failedRows = ticketBottomStatusRows({
+  paymentOption: "PROTECTED",
+  payoutRail: "STRIPE_GLOBAL_PAYOUTS",
+  status: "READY_TO_RELEASE",
+  funded: true,
+  fundingStatus: "POSTED",
+  procurementAgreed: true,
+  itemCostMinor: 2000,
+  remainderMinor: 1500,
+  procurementTransferredMinor: 2000,
+  finalTransferredMinor: 0,
+  outboundKind: "FINAL",
+  outboundStatus: "FAILED",
+  currency: "GBP",
+  shipped: true,
+  delivered: true,
+  formatMinor: formatGbp,
+});
+assert.equal(failedRows.find((r) => r.key === "final-release")?.value, "Failed");
+
+const cardSrc = fs.readFileSync(
+  path.join(root, "src/components/messaging/PaymentTicketCard.tsx"),
+  "utf8",
+);
+assert.match(cardSrc, /ticketBottomStatusRows/);
+assert.doesNotMatch(cardSrc, /gpPayoutProgress\.timing/);
+assert.match(cardSrc, /itemReleaseHold/);
 
 if (process.env.SB_PURCHASES_PREVIEW === "1") {
   const previewPath = path.join(root, "tmp-purchases-gp-preview.html");

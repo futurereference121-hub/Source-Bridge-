@@ -35,7 +35,10 @@ import {
 import { StoryAvatar } from "@/components/stories/StoryAvatar";
 import { useStoriesOptional } from "@/components/stories/StoryProvider";
 import { SourceBridgeLoader } from "@/components/ui/SourceBridgeLoader";
-import { subscribeToNewNotifications } from "@/hooks/useNotifications";
+import {
+  refreshNotifications,
+  subscribeToNewNotifications,
+} from "@/hooks/useNotifications";
 
 type ParticipantUser = {
   id: string;
@@ -832,7 +835,7 @@ export function MessagesInbox({
   // Soft revalidate open conversation (messages + tickets) without wiping UI state.
   useEffect(() => {
     if (!activeId || !myId) return;
-    const POLL_MS = 2500;
+    const POLL_MS = 1000;
     let cancelled = false;
 
     async function softRefresh() {
@@ -867,6 +870,7 @@ export function MessagesInbox({
         }
         if (!data?.conversation) return;
 
+        void refreshNotifications();
         setThreadViewerUserId(data.viewerUserId || myId);
         setThreadViewerUsername(
           data.viewerUsername || account?.username || null,

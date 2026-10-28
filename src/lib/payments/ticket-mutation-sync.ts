@@ -16,8 +16,9 @@ type TxnSlice = {
 };
 
 /**
- * Bump ticket clocks + conversation activityVersion after authoritative txn mutation.
- * Call only after domain + Stripe transfer success (or idempotent reconcile).
+ * Bump ticket clocks + conversation activityVersion after an authoritative
+ * ticket mutation. Call after the mutation transaction has committed.
+ * Authorization and provider-success callers are separate.
  */
 export async function syncProtectedTxnParticipantActivity(opts: {
   protectedTxnId: string;
@@ -48,7 +49,60 @@ export async function syncProtectedTxnParticipantActivity(opts: {
   return { activityVersion, linkedTicketId: linked?.id ?? null };
 }
 
-/** Activity sync + idempotent counterparty notification for release events. */
+/**
+ * Buyer authorization has committed. Refresh the sourcer ticket immediately
+ * and notify; do not wait for funding, cron, or provider payout success.
+ */
+export async function afterBuyerReleaseAuthorized(opts: {
+  txn: TxnSlice;
+  kind: "PROCUREMENT" | "FINAL";
+  amountMinor: number;
+  currency?: string | null;
+  actorUserId?: string | null;
+}): Promise<{ activityVersion: number; linkedTicketId: string | null }> {
+  const stored = await prisma.protectedTransaction.findUnique({
+    where: { id: opts.txn.id },
+    select: {
+      id: true,
+      conversationId: true,
+      buyerId: true,
+      sellerId: true,
+      title: true,
+      origin: true,
+      currency: true,
+    },
+  });
+  const txn = {
+    ...opts.txn,
+    ...(stored || {}),
+  };
+  const sync = await syncProtectedTxnParticipantActivity({
+    protectedTxnId: txn.id,
+    conversationId: txn.conversationId,
+    touchLastMessage: true,
+  });
+  try {
+    const { notifyReleaseAuthorized } = await import("@/lib/payment-notifications");
+    await notifyReleaseAuthorized({
+      protectedTxnId: txn.id,
+      conversationId: txn.conversationId || "",
+      sellerId: txn.sellerId,
+      buyerId: txn.buyerId,
+      title: txn.title || "Protected Payment",
+      ticketId: sync.linkedTicketId,
+      origin: txn.origin,
+      actorUserId: opts.actorUserId ?? txn.buyerId,
+      kind: opts.kind,
+      amountMinor: opts.amountMinor,
+      currency: opts.currency || "GBP",
+    });
+  } catch (err) {
+    console.error("[payments:after-buyer-release-authorized:notify]", err);
+  }
+  return sync;
+}
+
+/** Activity sync + idempotent payout-sent notification after provider success. */
 export async function afterProtectedTxnMoneyEvent(opts: {
   txn: TxnSlice;
   event: ProtectedTxnMoneyEvent;

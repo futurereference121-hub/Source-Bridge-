@@ -29,6 +29,7 @@ import {
   computeProtectedFinancials,
 } from "@/lib/payments/breakdown";
 import {
+  afterBuyerReleaseAuthorized,
   afterProtectedTxnMoneyEvent,
   syncProtectedTxnParticipantActivity,
 } from "@/lib/payments/ticket-mutation-sync";
@@ -160,15 +161,32 @@ function countryMinimumBlocks(errMsg: string): boolean {
 }
 
 /** Authorization accepted; funding/outbound still pending. Refresh Ticket/Purchases/Sales clocks only. */
-async function surfaceAuthorizedReleasePending(protectedTxnId: string) {
+async function surfaceAuthorizedReleasePending(
+  protectedTxnId: string,
+  opts?: {
+    kind?: "PROCUREMENT" | "FINAL";
+    amountMinor?: number;
+    actorUserId?: string | null;
+  },
+) {
   const fresh = await prisma.protectedTransaction.update({
     where: { id: protectedTxnId },
     data: { updatedAt: new Date() },
   });
-  await syncProtectedTxnParticipantActivity({
-    protectedTxnId,
-    conversationId: fresh.conversationId,
-  });
+  if (opts?.kind && (opts.amountMinor ?? 0) > 0) {
+    await afterBuyerReleaseAuthorized({
+      txn: fresh,
+      kind: opts.kind,
+      amountMinor: opts.amountMinor ?? 0,
+      currency: fresh.currency,
+      actorUserId: opts.actorUserId,
+    });
+  } else {
+    await syncProtectedTxnParticipantActivity({
+      protectedTxnId,
+      conversationId: fresh.conversationId,
+    });
+  }
   return fresh;
 }
 
@@ -863,6 +881,14 @@ async function executeOutboundRelease(opts: {
       },
     }));
 
+  await afterBuyerReleaseAuthorized({
+    txn,
+    kind,
+    amountMinor: amount,
+    currency: txn.currency,
+    actorUserId: opts.actorUserId,
+  });
+
   if (
     existingAttempt &&
     existingAttempt.initiatedAt &&
@@ -1027,7 +1053,11 @@ async function executeOutboundRelease(opts: {
         lastAttemptAt: new Date(),
       },
     });
-    const freshUnconfirmed = await surfaceAuthorizedReleasePending(txn.id);
+    const freshUnconfirmed = await surfaceAuthorizedReleasePending(txn.id, {
+      kind,
+      amountMinor: amount,
+      actorUserId: opts.actorUserId,
+    });
     return {
       alreadyReleased: false,
       pendingProvider: true,
@@ -1074,7 +1104,11 @@ async function executeOutboundRelease(opts: {
       },
     });
     // Preserve entitlement — do not advance domain transferred counters.
-    const freshAwaiting = await surfaceAuthorizedReleasePending(txn.id);
+    const freshAwaiting = await surfaceAuthorizedReleasePending(txn.id, {
+      kind,
+      amountMinor: amount,
+      actorUserId: opts.actorUserId,
+    });
     return {
       alreadyReleased: false,
       pendingProvider: true,

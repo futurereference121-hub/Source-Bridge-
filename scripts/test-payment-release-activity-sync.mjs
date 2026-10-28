@@ -39,10 +39,24 @@ assert.match(confirmReceipt, /activityVersion/);
 assert.match(confirmReceipt, /getPaymentTicket/);
 assert.match(confirmReceipt, /ticket,/);
 
+assert.match(notify, /notifyReleaseAuthorized/);
+assert.match(notify, /Buyer authorised release of/);
+assert.match(notify, /dedupeKey: `pt-release-authorized:/);
 assert.match(notify, /notifyProcurementReleased/);
 assert.match(notify, /notifyFinalReleased/);
+assert.match(notify, /Item-fund payout has been sent/);
+assert.match(notify, /Final payout has been sent/);
 assert.match(notify, /dedupeKey: `pt-proc-released:/);
 assert.match(notify, /dedupeKey: `pt-final-released:/);
+assert.match(sync, /afterBuyerReleaseAuthorized/);
+assert.match(release, /afterBuyerReleaseAuthorized/);
+assert.match(fulfilment, /afterBuyerReleaseAuthorized/);
+assert.doesNotMatch(
+  fulfilment,
+  /FUNDED && !transferred/,
+  "shipping must not wait for procurement payout",
+);
+assert.doesNotMatch(tracking, /Cannot add tracking until item funds are released/);
 
 // 4–6: transfer failure / idempotent / stale — release engine guards
 assert.match(

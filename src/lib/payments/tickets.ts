@@ -449,6 +449,8 @@ function mapTicket(
       origin: extras?.origin ?? null,
     });
   const canReleaseNow =
+    ptStatus !== "READY_TO_RELEASE" &&
+    ptStatus !== "RELEASED" &&
     !extras?.gpPayoutProgress?.hideReleaseActions &&
     Boolean(extras?.viewerId && extras.viewerId === t.buyerId) &&
     buyerCanReleaseNow({

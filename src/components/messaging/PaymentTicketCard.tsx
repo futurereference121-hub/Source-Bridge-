@@ -9,7 +9,6 @@ import { ProtectedPaymentCheckout } from "@/components/payments/ProtectedPayment
 import { GpQuoteReview } from "@/components/payments/GpQuoteReview";
 import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
-  GP_FUNDING_CHECKING_COPY,
   type GpBuyerPayoutProgress,
 } from "@/lib/payments/payout-rail/proceeds-funding";
 import {
@@ -42,6 +41,7 @@ import {
   procurementRemainderHeldMinor,
   shippedAwaitingReceiptCopy,
   sourceBridgeFeeLineLabel,
+  ticketBottomStatusRows,
 } from "@/lib/payments/fulfilment-display";
 import { useInspectionDeadlineRefresh } from "@/hooks/useInspectionDeadlineRefresh";
 
@@ -326,6 +326,7 @@ export function PaymentTicketCard({
   const [issueDetails, setIssueDetails] = useState("");
   const [issueEvidenceUrls, setIssueEvidenceUrls] = useState<string[]>([]);
   const [releaseHold, setReleaseHold] = useState(false);
+  const [itemReleaseHold, setItemReleaseHold] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -524,7 +525,7 @@ export function PaymentTicketCard({
     }
     let cancelled = false;
     let inFlight = false;
-    const POLL_MS = 2500;
+    const POLL_MS = 1000;
     async function soft() {
       if (cancelled || inFlight) return;
       if (document.visibilityState !== "visible") return;
@@ -800,6 +801,7 @@ export function PaymentTicketCard({
   async function releaseItemFunds() {
     if (!ticket?.protectedTransactionId) return;
     setBusy(true);
+    setItemReleaseHold(true);
     setError("");
     try {
       const res = await fetch("/api/payments/release-procurement", {
@@ -828,6 +830,7 @@ export function PaymentTicketCard({
         json.ticket?.outboundStatus === "AWAITING_FA_FUNDS" ||
         json.ticket?.gpPayoutProgress?.hideReleaseActions === true;
       if (!res.ok && !authorizedPending) {
+        setItemReleaseHold(false);
         setError(
           json.error ||
             "Could not release item funds. Payment remains on the platform.",
@@ -879,6 +882,7 @@ export function PaymentTicketCard({
         void load({ silent: true });
       }
     } catch {
+      setItemReleaseHold(false);
       setError(
         "Could not release item funds. Payment remains on the platform.",
       );
@@ -1080,20 +1084,15 @@ export function PaymentTicketCard({
         }
       } else {
         if (decision === "RELEASE_NOW") {
-          if (json.waitingForProceeds || json.ticket?.gpPayoutProgress?.hideReleaseActions) {
-            setReleaseHold(true);
-            setPayNotice("");
-          } else {
-            setReleaseHold(false);
-            setPayNotice(
-              json.pendingProvider
-                ? json.message ||
-                    "Release submitted. Payout is confirming — not yet marked paid."
-                : json.alreadyConfirmed || !json.transferTriggered
-                  ? "Funds release already processed (or zero residual)."
-                  : "Residual seller funds released to the sourcer.",
-            );
-          }
+          setReleaseHold(true);
+          setPayNotice(
+            json.pendingProvider || json.waitingForProceeds
+              ? json.message ||
+                  "Release authorized. Payout is confirming — not yet marked paid."
+              : json.alreadyConfirmed || !json.transferTriggered
+                ? "Funds release already processed (or zero residual)."
+                : json.message || "Release authorized.",
+          );
         } else if (decision === "START_INSPECTION") {
           setPayNotice(
             json.alreadyConfirmed
@@ -1124,8 +1123,24 @@ export function PaymentTicketCard({
           delete (next as { viewer?: unknown }).viewer;
           setTicket((prev) => {
             if (prev && !shouldApplyTicketUpdate(next, prev)) return prev;
-            nextLocal = next;
-            return next;
+            const applied =
+              decision === "RELEASE_NOW"
+                ? {
+                    ...next,
+                    lifecycleLabel:
+                      next.protectedTxnStatus === "RELEASED"
+                        ? next.lifecycleLabel
+                        : "COMPLETED",
+                    actions: {
+                      ...next.actions,
+                      canReleaseNow: false,
+                      canReportIssue: false,
+                      canConfirmReceipt: false,
+                    },
+                  }
+                : next;
+            nextLocal = applied;
+            return applied;
           });
         } else {
           setTicket((prev) => {
@@ -1157,6 +1172,8 @@ export function PaymentTicketCard({
                       : decision === "REPORT_ISSUE"
                         ? "DISPUTED"
                         : prev.lifecycleStage,
+              lifecycleLabel:
+                decision === "RELEASE_NOW" ? "COMPLETED" : prev.lifecycleLabel,
               actions: {
                 ...prev.actions,
                 ...(decision === "START_INSPECTION"
@@ -1165,10 +1182,11 @@ export function PaymentTicketCard({
                 ...(decision === "REPORT_ISSUE"
                   ? { canReleaseNow: false, canReportIssue: false }
                   : {}),
-                ...(decision === "RELEASE_NOW" && released
+                ...(decision === "RELEASE_NOW"
                   ? {
                       canReleaseNow: false,
                       canReportIssue: false,
+                      canConfirmReceipt: false,
                       canMarkShipped: false,
                     }
                   : {}),
@@ -1427,6 +1445,7 @@ export function PaymentTicketCard({
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseProcurement) &&
     !itemReleaseAuthorized &&
+    !itemReleaseHold &&
     Boolean(ticket.protectedTransactionId);
   const canMarkShipped =
     !historical &&
@@ -1445,6 +1464,9 @@ export function PaymentTicketCard({
     paymentsAccess &&
     iAmBuyer &&
     Boolean(ticket.actions?.canReleaseNow) &&
+    ticket.protectedTxnStatus !== "READY_TO_RELEASE" &&
+    ticket.protectedTxnStatus !== "RELEASED" &&
+    !releaseHold &&
     Boolean(ticket.protectedTransactionId);
   const quoteConfirmationRequired = gpQuoteConfirmationRequired(
     ticket.stripeMode,
@@ -2121,7 +2143,9 @@ export function PaymentTicketCard({
             ? " · funds route on fund"
             : isCompleted
               ? " · completed"
-              : ticket.gpPayoutProgress?.hideReleaseActions
+              : releaseHold ||
+                  ticket.protectedTxnStatus === "READY_TO_RELEASE" ||
+                  ticket.gpPayoutProgress?.hideReleaseActions
               ? " · release authorized"
               : inInspection
                 ? " · inspection in progress"
@@ -2249,6 +2273,8 @@ export function PaymentTicketCard({
 
       {ticket.status === "FUNDED" &&
       !procTransferred &&
+      !itemReleaseAuthorized &&
+      !itemReleaseHold &&
       !isCompleted &&
       !hasTracking &&
       !canConfirmReceipt &&
@@ -2261,7 +2287,7 @@ export function PaymentTicketCard({
         </p>
       ) : null}
 
-      {showItemFundsRemainingProtected ? (
+      {showItemFundsRemainingProtected && !releaseHold ? (
         <p className="mt-3 text-xs text-amber-200/80">
           Item funds have been released to the sourcer. The remaining{" "}
           {formatMinor(remainingSellerEntitlement, cur)} stays protected until
@@ -2852,16 +2878,42 @@ export function PaymentTicketCard({
         </div>
       ) : null}
 
-      {ticket?.gpPayoutProgress ? (
-        <div className="mt-3 space-y-1 text-xs text-white/80" data-testid="gp-payout-progress">
-          <p>{ticket.gpPayoutProgress.headline}</p>
-          <p className="text-white/55">{ticket.gpPayoutProgress.timing}</p>
-        </div>
-      ) : releaseHold ? (
-        <p className="mt-3 text-xs text-white/80" data-testid="gp-payout-progress">
-          {GP_FUNDING_CHECKING_COPY}
-        </p>
-      ) : null}
+      {(() => {
+        const bottomRows = ticketBottomStatusRows({
+          paymentOption: ticket.paymentOption,
+          payoutRail: ticket.payoutRail,
+          status: ticket.protectedTxnStatus || ticket.status,
+          funded: Boolean(ticket.fundedAt),
+          fundingStatus: ticket.fundingStatus,
+          procurementAgreed: procAgreed,
+          itemCostMinor: ticket.itemCostMinor,
+          remainderMinor: ticket.shippingMinor + ticket.sellerServiceFeeMinor,
+          sellerEntitledMinor,
+          procurementTransferredMinor: itemFundsReceived,
+          finalTransferredMinor,
+          outboundKind: ticket.outboundKind,
+          outboundStatus: ticket.outboundStatus,
+          currency: cur,
+          shipped: hasTracking || Boolean(ticket.shippedAt),
+          delivered: Boolean(ticket.deliveredAt),
+          disputed: issueHold,
+          formatMinor,
+        });
+        if (bottomRows.length === 0) return null;
+        return (
+          <dl
+            className="mt-3 space-y-1 text-xs text-white/75"
+            data-testid="ticket-bottom-status"
+          >
+            {bottomRows.map((row) => (
+              <div key={row.key} className="flex justify-between gap-3">
+                <dt>{row.label}</dt>
+                <dd className="text-right text-white">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        );
+      })()}
       {error ? <p className="mt-3 text-xs text-amber-300">{error}</p> : null}
       {payNotice && !checkout ? (
         <p className="mt-3 text-xs text-electric">{payNotice}</p>

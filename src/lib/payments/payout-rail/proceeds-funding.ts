@@ -115,7 +115,7 @@ export function gpHidesFinalReleaseActions(opts: {
   const kind = String(opts.outboundKind || "").toUpperCase();
   const status = String(opts.outboundStatus || "").toUpperCase();
   if (opts.uncertain) return true;
-  if (txn === "RELEASED") return true;
+  if (txn === "RELEASED" || txn === "READY_TO_RELEASE") return true;
   if (status === "RETURNED") return true;
   const remainderHeld =
     typeof opts.remainderHeldMinor === "number" ? opts.remainderHeldMinor > 0 : true;

@@ -565,7 +565,6 @@ export default function PurchasesPage() {
                 {o.gpPayoutProgress ? (
                   <div className="mt-4 space-y-1 text-sm text-white/80" data-testid="purchase-gp-progress">
                     <p>{o.gpPayoutProgress.headline}</p>
-                    <p className="text-white/55">{o.gpPayoutProgress.timing}</p>
                   </div>
                 ) : releaseHold[o.id] ? (
                   <p className="mt-4 text-sm text-white/80" data-testid="purchase-gp-progress">

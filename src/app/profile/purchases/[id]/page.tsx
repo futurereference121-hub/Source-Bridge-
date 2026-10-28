@@ -253,7 +253,6 @@ export default function PurchaseOrderDetailPage() {
                   <dt className="text-white/40">Payout</dt>
                   <dd className="text-white/85">
                     <p>{order.gpPayoutProgress.headline}</p>
-                    <p className="text-white/55">{order.gpPayoutProgress.timing}</p>
                   </dd>
                 </div>
               ) : null}

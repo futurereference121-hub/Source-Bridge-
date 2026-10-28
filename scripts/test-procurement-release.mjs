@@ -448,7 +448,7 @@ assert.match(conversationSrc, /pairPolicy.sellerId === seller.id \? "TEST" : nul
 assert.doesNotMatch(ticketsSrc, /trustLevel:\s*2/);
 assert.match(
   readFileSync(join(root, "src/lib/payments/flags.ts"), "utf8"),
-  /envBool\("GP_TEST_PROCUREMENT_TRUST_OVERRIDE", true\)/,
+  /envBool\("GP_TEST_PROCUREMENT_TRUST_OVERRIDE", false\)/,
 );
 assert.match(
   readFileSync(join(root, "src/lib/payments/payout-rail/gp-testrun-verify.ts"), "utf8"),

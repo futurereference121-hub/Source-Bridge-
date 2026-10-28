@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Eligibility: origin-agnostic; procurement-agreed waits for item-fund release.
+    // Eligibility: origin-agnostic; funded orders may ship before procurement payout.
     if (
       !sellerCanAddTracking({
         paymentOption: txn.paymentOption,
@@ -128,14 +128,7 @@ export async function POST(req: NextRequest) {
         procurementTransferredMinor: txn.procurementTransferredMinor,
       })
     ) {
-      return jsonError(
-        txn.procurementAdvanceAgreed &&
-          txn.procurementTransferredMinor === 0 &&
-          txn.status === "FUNDED"
-          ? "Cannot add tracking until item funds are released"
-          : `Cannot add tracking from status ${txn.status}`,
-        409,
-      );
+      return jsonError(`Cannot add tracking from status ${txn.status}`, 409);
     }
 
     const status = txn.status as ProtectedStatus;

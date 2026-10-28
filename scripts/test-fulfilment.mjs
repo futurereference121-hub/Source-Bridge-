@@ -111,11 +111,9 @@ function canAddTracking({
     return false;
   }
   void origin;
-  if (procurementAdvanceAgreed && procurementAdvanceMinor > 0) {
-    const transferred =
-      procurementTransferredMinor > 0 || txnStatus === "PROCUREMENT_RELEASED";
-    if (txnStatus === "FUNDED" && !transferred) return false;
-  }
+  void procurementAdvanceAgreed;
+  void procurementAdvanceMinor;
+  void procurementTransferredMinor;
   return true;
 }
 
@@ -140,7 +138,8 @@ function canConfirmReceipt({
 
 function canReleaseNow({ role, txnStatus, shipped, deliveredAt = null }) {
   if (role !== "buyer") return false;
-  if (txnStatus === "IN_INSPECTION" || txnStatus === "READY_TO_RELEASE") return true;
+  if (txnStatus === "IN_INSPECTION") return true;
+  if (txnStatus === "READY_TO_RELEASE") return false;
   if (!shipped) return false;
   if (!deliveredAt) return false;
   return txnStatus === "DELIVERED";
@@ -311,7 +310,7 @@ assert.equal(
     procurementAdvanceMinor: 5000,
     procurementTransferredMinor: 0,
   }),
-  false,
+  true,
 );
 assert.equal(
   canAddTracking({
@@ -420,6 +419,7 @@ assert.equal(
   assert.equal(fx.residualOnly, true);
   assert.equal(canReleaseFinalProtected(fx.nextStatus, "PROTECTED"), true);
   assert.equal(canReleaseNow({ role: "buyer", txnStatus: "IN_INSPECTION", shipped: true }), true);
+  assert.equal(canReleaseNow({ role: "buyer", txnStatus: "READY_TO_RELEASE", shipped: true }), false);
   assert.equal(canReleaseNow({ role: "seller", txnStatus: "IN_INSPECTION", shipped: true }), false);
   assert.equal(
     canReleaseNow({

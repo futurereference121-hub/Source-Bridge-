@@ -378,11 +378,6 @@ export default function SalesFulfilmentPage() {
                           gpHeadline: o.gpPayoutProgress?.headline,
                         })}
                       </p>
-                      {o.gpPayoutProgress?.timing ? (
-                        <p className="mt-1 text-xs text-white/45">
-                          {o.gpPayoutProgress.timing}
-                        </p>
-                      ) : null}
                     </div>
                   ) : null}
                   {o.origin === "PRODUCT_CHECKOUT" ? (

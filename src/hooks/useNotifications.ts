@@ -83,6 +83,10 @@ async function fetchNotifications(): Promise<void> {
   return inFlight;
 }
 
+export function refreshNotifications(): Promise<void> {
+  return fetchNotifications();
+}
+
 function ensurePolling() {
   if (pollTimer) return;
   void fetchNotifications();

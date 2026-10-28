@@ -391,7 +391,8 @@ assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /!== "T
 
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
 assert.match(card, /gpPayoutProgress\?\.hideReleaseActions/);
-assert.match(card, /GP_FUNDING_CHECKING_COPY/);
+assert.match(card, /ticketBottomStatusRows/);
+assert.doesNotMatch(card, /GP_FUNDING_CHECKING_COPY/);
 assert.doesNotMatch(card, /GP_FUNDING_HOLD_COPY/);
 assert.doesNotMatch(card, /continues automatically/);
 assert.match(card, /releaseHold/);
@@ -1673,7 +1674,7 @@ assert.match(outbound, /replayOriginalOutboundIdempotency/);
 assert.match(outbound, /idempotencyKey: key/);
 assert.match(outbound, /attemptCount > 1/);
 const verifySrc = read("src/lib/payments/payout-rail/gp-testrun-verify.ts");
-assert.match(verifySrc, /470dd580/);
+assert.match(verifySrc, /d8e83c6c/);
 assert.match(verifySrc, /matchFundingCredit/);
 assert.match(verifySrc, /getStripe\("TEST"\)/);
 assert.match(verifySrc, /recoverUncertainInitiatedOutbound/);

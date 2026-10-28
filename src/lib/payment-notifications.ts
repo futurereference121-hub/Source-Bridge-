@@ -2,6 +2,7 @@ import {
   createNotification,
   createNotifications,
 } from "@/lib/notifications";
+import { formatMinor } from "@/lib/payments/money";
 
 function actorLabel(name: string, username: string | null | undefined): string {
   const u = (username || "").trim();
@@ -166,6 +167,40 @@ export async function notifyBuyerPurchaseRefunded(opts: {
   });
 }
 
+export async function notifyReleaseAuthorized(opts: {
+  protectedTxnId: string;
+  conversationId: string;
+  sellerId: string;
+  buyerId: string;
+  title: string;
+  ticketId?: string | null;
+  origin?: string | null;
+  actorUserId: string;
+  kind: "PROCUREMENT" | "FINAL";
+  amountMinor: number;
+  currency: string;
+}): Promise<void> {
+  const isProduct = opts.origin === "PRODUCT_CHECKOUT";
+  const href = isProduct
+    ? "/profile/sales"
+    : opts.ticketId
+      ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
+      : inboxHref(opts.conversationId);
+  const amount = formatMinor(opts.amountMinor, opts.currency);
+  await createNotification({
+    userId: opts.sellerId,
+    type: "PAYMENT_STATUS",
+    title: `Buyer authorised release of ${amount}.`,
+    body: isProduct
+      ? "Open Sales & Fulfilment. Payout is separate from this authorization."
+      : opts.title.slice(0, 140),
+    href,
+    actorId: opts.actorUserId,
+    actorName: "Buyer",
+    dedupeKey: `pt-release-authorized:${opts.protectedTxnId}:${opts.kind}`,
+  });
+}
+
 export async function notifyProcurementReleased(opts: {
   protectedTxnId: string;
   conversationId: string;
@@ -183,21 +218,16 @@ export async function notifyProcurementReleased(opts: {
     : opts.ticketId
       ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
       : inboxHref(opts.conversationId);
-  const who = opts.actorUsername
-    ? `@${opts.actorUsername.replace(/^@/, "")}`
-    : "Buyer";
   await createNotification({
     userId: opts.sellerId,
     type: "PAYMENT_STATUS",
-    title: isProduct
-      ? `${who} released item funds for your order`
-      : `${who} released item funds`,
+    title: "Item-fund payout has been sent",
     body: isProduct
       ? "Open Sales & Fulfilment to ship when ready."
       : opts.title.slice(0, 140),
     href,
     actorId: opts.actorUserId,
-    actorName: who,
+    actorName: "Source Bridge",
     dedupeKey: `pt-proc-released:${opts.protectedTxnId}`,
   });
 }
@@ -219,21 +249,14 @@ export async function notifyFinalReleased(opts: {
     : opts.ticketId
       ? `${inboxHref(opts.conversationId)}?ticket=${encodeURIComponent(opts.ticketId)}`
       : inboxHref(opts.conversationId);
-  const who = opts.actorUsername
-    ? `@${opts.actorUsername.replace(/^@/, "")}`
-    : "Buyer";
   await createNotification({
     userId: opts.sellerId,
     type: "PAYMENT_STATUS",
-    title: isProduct
-      ? `${who} released remaining funds for your order`
-      : `${who} released remaining seller funds`,
-    body: isProduct
-      ? "Funds are on your connected account per Stripe payout timing."
-      : "Remaining seller entitlement transferred to your connected account.",
+    title: "Final payout has been sent",
+    body: "Posted means the funds left Source Bridge. It does not confirm the sourcer’s bank has paid.",
     href,
     actorId: opts.actorUserId,
-    actorName: who,
+    actorName: "Source Bridge",
     dedupeKey: `pt-final-released:${opts.protectedTxnId}`,
   });
 }
