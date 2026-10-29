@@ -603,13 +603,13 @@ ok(
   "reconciliation stays available while initiation is off",
   globalPayoutsReconciliationAllowed({ masterEnabled: true, liveInitiationEnabled: false }) === true,
 );
-ok("LIVE still requires buyer quote confirmation as app policy", gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === true);
+ok("LIVE skips extra buyer quote confirmation", gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === false);
 ok(
   "LIVE confirmation comments no longer treat Stripe as requiring a second buyer confirm",
   !fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/quote-confirmation.ts"), "utf8").includes("Stripe has not disclosed") &&
-    fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/quote-confirmation.ts"), "utf8").includes("app policy"),
+    fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/quote-confirmation.ts"), "utf8").includes("no additional buyer"),
 );
-ok("TEST still skips quote confirmation", gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS") === false);
+ok("TEST still skips extra quote confirmation", gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS") === false);
 
 const outboundSrc = fs.readFileSync(path.join(root, "src/lib/payments/payout-rail/outbound-payment.ts"), "utf8");
 const testBranch = outboundSrc.slice(
@@ -617,7 +617,7 @@ const testBranch = outboundSrc.slice(
   outboundSrc.indexOf('if (opts.txnMode !== "LIVE")'),
 );
 ok("TEST release branch does not require quote confirmation", !testBranch.includes("evaluateQuoteConfirmation"));
-ok("LIVE release still evaluates quote confirmation", outboundSrc.includes("evaluateQuoteConfirmation"));
+ok("LIVE authorized release does not require extra quote confirmation", !outboundSrc.includes("evaluateQuoteConfirmation"));
 ok(
   "initiation is still checked before a quoted payout",
   outboundSrc.indexOf("if (!canInitiateGlobalPayoutsMoney") < outboundSrc.indexOf("const payout = await executeQuotedPayout"),
@@ -627,6 +627,6 @@ ok("inspection release still names the authorization failure", releaseSrc.includ
 ok("Connect release still has no background authorization flag", releaseSrc.includes("await releaseFinal({ protectedTxnId: fresh.id, actorUserId: null });"));
 const cardSrc = fs.readFileSync(path.join(root, "src/components/messaging/PaymentTicketCard.tsx"), "utf8");
 ok("the conversation release control is unchanged", cardSrc.includes('submitReceiptDecision("RELEASE_NOW")'));
-ok("LIVE quote review is still required in the conversation", cardSrc.includes("quoteConfirmationRequired && !gpQuoteConfirmed"));
+ok("conversation still uses the existing buyer release button", cardSrc.includes('submitReceiptDecision("RELEASE_NOW")'));
 
 console.log(`\n${passed} background authorization checks passed`);

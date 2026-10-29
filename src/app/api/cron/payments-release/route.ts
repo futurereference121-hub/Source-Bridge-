@@ -45,10 +45,21 @@ export async function POST(req: Request) {
     const gpReconcile = isGlobalPayoutsEnabled()
       ? await reconcileStuckOutboundPayments({ limit: 25 })
       : { scanned: 0, results: [] };
-    const gpFunding =
-      isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney("TEST")
-        ? await reconcileGpProceedsFunding({ stripeMode: "TEST" })
-        : { scanned: 0, funded: 0, resumed: 0 };
+    const gpFundingEnabled = isGlobalPayoutsProceedsFundingEnabled();
+    const gpFunding = {
+      TEST: gpFundingEnabled
+        ? await reconcileGpProceedsFunding({
+            stripeMode: "TEST",
+            resumeAuthorized: canInitiateGlobalPayoutsMoney("TEST"),
+          })
+        : { scanned: 0, funded: 0, resumed: 0 },
+      LIVE: gpFundingEnabled
+        ? await reconcileGpProceedsFunding({
+            stripeMode: "LIVE",
+            resumeAuthorized: canInitiateGlobalPayoutsMoney("LIVE"),
+          })
+        : { scanned: 0, funded: 0, resumed: 0 },
+    };
     const platformBalance = {
       TEST: await coordinatePlatformBalance({ stripeMode: "TEST" }),
       LIVE: await coordinatePlatformBalance({ stripeMode: "LIVE" }),

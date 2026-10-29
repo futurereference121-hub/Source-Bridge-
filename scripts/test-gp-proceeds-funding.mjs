@@ -176,7 +176,7 @@ assert.match(read("node_modules/stripe/types/BalanceTransactionsResource.d.ts"),
 assert.equal(balanceTransactionObjectHasPayoutProperty(["id", "net", "status", "available_on", "type"]), false);
 assert.equal(balanceTransactionObjectHasPayoutProperty(["id", "payout"]), true);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /Stripe has not disclosed/);
-assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /app policy/);
+assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /no additional buyer/);
 assert.doesNotMatch(read("src/lib/payments/payout-rail/live-pilot.ts"), /Stripe has not disclosed/);
 assert.match(read("src/lib/payments/payout-rail/live-pilot.ts"), /Stripe does not require/);
 assert.match(read("src/lib/payments/tickets.ts"), /proceedsFundingEnabled: isGlobalPayoutsProceedsFundingEnabled\(\)/);
@@ -373,10 +373,13 @@ assert.doesNotMatch(balanceCase, /event\.data/);
 assert.match(webhook, /metadata\?\.sb_funding_leg|sb_funding_leg/);
 
 const cron = read("src/app/api/cron/payments-release/route.ts");
-assert.match(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "TEST" \}\)/);
+assert.match(cron, /stripeMode: "TEST"/);
+assert.match(cron, /stripeMode: "LIVE"/);
 assert.match(cron, /isGlobalPayoutsProceedsFundingEnabled\(\)/);
+assert.match(cron, /canInitiateGlobalPayoutsMoney\("TEST"\)/);
+assert.match(cron, /canInitiateGlobalPayoutsMoney\("LIVE"\)/);
 assert.match(cron, /coordinatePlatformBalance\(\{ stripeMode: "LIVE" \}\)/);
-assert.doesNotMatch(cron, /reconcileGpProceedsFunding\(\{ stripeMode: "LIVE" \}\)/);
+assert.match(cron, /resumeAuthorized: canInitiateGlobalPayoutsMoney\("LIVE"\)/);
 assert.match(read("src/lib/payments/flags.ts"), /GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED", false/);
 const migration = read("prisma/migrations/20261010170000_gp_proceeds_funding/migration.sql");
 assert.match(migration, /CREATE TABLE "GpProceedsFunding"/);
@@ -387,7 +390,9 @@ assert.match(read("src/lib/payments/stripe/webhooks.ts"), /"balance.available"/)
 assert.match(read("src/lib/payments/stripe/webhooks.ts"), /"payout.paid"/);
 assert.match(read("vercel.json"), /"path": "\/api\/cron\/payments-release"[\s\S]*"schedule": "\*\/10 \* \* \* \*"/);
 assert.match(read("src/lib/payments/admin-protected-decision.ts"), /REFUND_BLOCKED_GP_FUNDING/);
-assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /!== "TEST"/);
+assert.match(read("src/lib/payments/payout-rail/quote-confirmation.ts"), /return false/);
+assert.match(runner, /evaluateLivePilotFundingScope/);
+assert.match(runner, /onReceivedCreditEvent/);
 
 const card = read("src/components/messaging/PaymentTicketCard.tsx");
 assert.match(card, /gpPayoutProgress\?\.hideReleaseActions/);
@@ -1212,7 +1217,7 @@ assert.equal(returned.phase, "returned");
 assert.equal(returned.hideReleaseActions, true);
 
 assert.equal(gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS"), false);
-assert.equal(gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS"), true);
+assert.equal(gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS"), false);
 const quoteNow = now.getTime();
 assert.equal(
   classifyStoredQuote({

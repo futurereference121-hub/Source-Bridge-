@@ -806,8 +806,8 @@ const openLive = purchaseCardModel({
   currency: "GBP",
   totalChargeMinor: 3745,
 });
-assert.equal(openLive.quoteKind, "FINAL");
-assert.equal(openLive.offersQuoteConfirmation, true);
+assert.equal(openLive.quoteKind, null);
+assert.equal(openLive.offersQuoteConfirmation, false);
 assert.equal(openLive.offersRelease, true);
 
 const payoutPhrases = {

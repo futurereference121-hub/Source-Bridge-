@@ -416,14 +416,14 @@ export type BackgroundReleaseAuthorization = {
 
 /**
  * Recorded buyer authorization for a background release.
- * This is not quote confirmation and does not satisfy evaluateQuoteConfirmation.
- * The worker user id must be empty. confirmedByUserId is not written here.
+ * This is not a second quote-confirmation click. The worker user id must be
+ * empty. confirmedByUserId is not written here.
  *
  * Stripe API 2026-08-26.preview locks an OutboundPaymentQuote FX rate for five
  * minutes (fx_quote.lock_expires_at / lock_status). Stripe's published guidance
  * is to request another quote after that lock expires. Stripe does not require
- * a second buyer confirmation of that replacement. LIVE still requires buyer
- * quote confirmation because Source Bridge's app policy does.
+ * a second buyer confirmation of that replacement. Authorized GP execution
+ * refreshes inside the accepted agreement without another buyer click.
  */
 export function evaluateDurableReleaseAuthorization(opts: {
   workerActorUserId?: string | null;
@@ -492,13 +492,14 @@ export function recordedInspectionDeadlineAllowsRelease(opts: {
 }
 
 /**
- * Quote check for a background release that already has durable buyer authorization.
- * A matching unexpired quote is used as stored. An expired quote may be refreshed
- * only before any payment submission. Term changes are refused. This function
- * does not compare the worker to confirmedByUserId and does not create one.
+ * Quote check for an already-authorized GP payout (buyer-present or background).
+ * A matching unexpired quote is used as stored. An expired or missing quote may
+ * be created/refreshed only before any payment submission. Term changes are
+ * refused. This function does not compare anyone to confirmedByUserId.
  */
 export function evaluateBackgroundQuote(opts: {
   stored: QuoteConfirmationSnapshot | null;
+  mode?: "TEST" | "LIVE";
   transactionId: string;
   recipientId: string;
   payoutMethodId: string;
@@ -515,13 +516,14 @@ export function evaluateBackgroundQuote(opts: {
   const stored = opts.stored;
   const source = opts.sourceCurrency.toLowerCase();
   const destination = opts.destinationCurrency.toLowerCase();
+  const mode = opts.mode || "LIVE";
   if (stored?.quoteId) {
     const sameTerms =
-      stored.transactionId === opts.transactionId &&
-      stored.mode === "LIVE" &&
-      stored.recipientId === opts.recipientId &&
-      stored.payoutMethodId === opts.payoutMethodId &&
-      stored.termsHash === opts.termsHash &&
+      (!stored.transactionId || stored.transactionId === opts.transactionId) &&
+      (!stored.mode || stored.mode === mode) &&
+      (!stored.recipientId || stored.recipientId === opts.recipientId) &&
+      (!stored.payoutMethodId || stored.payoutMethodId === opts.payoutMethodId) &&
+      (!stored.termsHash || stored.termsHash === opts.termsHash) &&
       stored.sourceAmountMinor === opts.sourceAmountMinor &&
       stored.sourceCurrency === source &&
       stored.destinationCurrency === destination;
@@ -537,8 +539,44 @@ export function evaluateBackgroundQuote(opts: {
     if (!opts.allowRefresh) return { ok: false, code: "GP_QUOTE_EXPIRED" };
     return { ok: true, action: "refresh" };
   }
-  if (!opts.allowRefresh) return { ok: false, code: "GP_QUOTE_REVIEW_REQUIRED" };
+  if (!opts.allowRefresh) return { ok: false, code: "GP_QUOTE_EXPIRED" };
   return { ok: true, action: "refresh" };
+}
+
+/**
+ * LIVE proceeds funding and outbound initiation stay behind live initiation
+ * AND the named-pilot transaction/currency. TEST only needs sandbox initiation.
+ * Missing or mismatched LIVE pilot env fails closed. This does not authorize
+ * using another purchase’s reserved funds.
+ */
+export function evaluateLivePilotFundingScope(opts: {
+  mode: "TEST" | "LIVE";
+  initiationEnabled: boolean;
+  transactionId: string;
+  authorizedTransactionIdRaw: string;
+  sourceCurrency: string;
+  configuredSourceCurrencyRaw: string;
+}): { ok: true } | { ok: false; code: string } {
+  if (!opts.initiationEnabled) {
+    return {
+      ok: false,
+      code:
+        opts.mode === "LIVE"
+          ? "GLOBAL_PAYOUTS_LIVE_INITIATION_DISABLED"
+          : "GLOBAL_PAYOUTS_INITIATION_DISABLED",
+    };
+  }
+  if (opts.mode !== "LIVE") return { ok: true };
+  const authorizedTxn = parsePilotTransactionId(opts.authorizedTransactionIdRaw);
+  if (!authorizedTxn || authorizedTxn !== opts.transactionId) {
+    return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+  }
+  const configuredCurrency = parsePilotSourceCurrency(opts.configuredSourceCurrencyRaw);
+  const sourceCurrency = parsePilotSourceCurrency(opts.sourceCurrency);
+  if (!configuredCurrency || !sourceCurrency || configuredCurrency !== sourceCurrency) {
+    return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
+  }
+  return { ok: true };
 }
 
 export function planQuotePreparation(opts: {

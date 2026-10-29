@@ -221,6 +221,10 @@ ok(
     eventsSrc.includes("syncGlobalPayoutRecipientByStripeId") &&
       eventsSrc.includes('type.includes("payout_method")'),
   );
+  ok(
+    "handler reconciles received_credit without new initiation",
+    eventsSrc.includes("received_credit") && eventsSrc.includes("onReceivedCreditEvent"),
+  );
 }
 
 // parseThinEvent parity with constructEvent for thin payloads (SDK sanity)

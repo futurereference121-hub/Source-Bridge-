@@ -10,7 +10,6 @@ import { sanitizeProviderFailureText } from "./outbound-display.ts";
 import {
   evaluateBackgroundQuote,
   evaluateDurableReleaseAuthorization,
-  evaluateQuoteConfirmation,
   pilotFailureIsSticky,
   type BackgroundReleaseAuthorization,
 } from "./live-pilot.ts";
@@ -669,6 +668,8 @@ export function preSubmissionQuoteRefreshAllowed(opts: {
  */
 export function backgroundAttemptDecision(opts: {
   hasBackgroundAuthorization: boolean;
+  /** Buyer-present authorized GP execution may refresh an expired quote too. */
+  allowAuthorizedQuoteRefresh?: boolean;
   status: string;
   failureCode: string;
   failureMessage: string;
@@ -696,8 +697,9 @@ export function backgroundAttemptDecision(opts: {
     stripeOutboundPaymentId: opts.stripeOutboundPaymentId,
     initiatedAt: opts.initiatedAt,
   });
+  const authorizedRefresh = opts.hasBackgroundAuthorization || opts.allowAuthorizedQuoteRefresh;
   const quoteRefresh =
-    opts.hasBackgroundAuthorization &&
+    authorizedRefresh &&
     preserved.preserve &&
     preserved.code === "GP_QUOTE_EXPIRED" &&
     refreshAllowed;
@@ -724,7 +726,7 @@ export function backgroundAttemptDecision(opts: {
   }
   return {
     action: "continue",
-    allowQuoteRefresh: opts.hasBackgroundAuthorization && refreshAllowed,
+    allowQuoteRefresh: Boolean(authorizedRefresh && refreshAllowed),
   };
 }
 
@@ -841,9 +843,8 @@ export async function executeQuotedPayout(opts: {
   actorUserId?: string | null;
   /**
    * Recorded buyer action for inspection expiry or an authorized retry.
-   * Absent on a buyer-present LIVE release, which still uses the app-policy
-   * quote confirmation gate. Stripe does not require a second confirmation of
-   * a replacement quote.
+   * Buyer-present authorization is the same payment gate. Quotes are created
+   * or refreshed automatically inside the accepted agreement.
    */
   backgroundRelease?: BackgroundReleaseAuthorization | null;
   allowQuoteRefresh?: boolean;
@@ -882,8 +883,12 @@ export async function executeQuotedPayout(opts: {
     if (!durable.ok) {
       return { ok: false, code: durable.code, parsed: null, uncertain: false };
     }
+  }
+
+  if (needsQuote) {
     const quoteUse = evaluateBackgroundQuote({
       stored,
+      mode: opts.mode,
       transactionId: opts.metadata.protectedTxnId || "",
       recipientId: opts.recipientId,
       payoutMethodId: opts.payoutMethodId,
@@ -892,22 +897,25 @@ export async function executeQuotedPayout(opts: {
       destinationCurrency: destination,
       termsHash: opts.metadata.termsHash || "",
       nowMs: opts.nowMs,
-      allowRefresh: Boolean(opts.allowQuoteRefresh),
+      allowRefresh: Boolean(opts.allowQuoteRefresh) || !stored?.quoteId,
     });
     if (!quoteUse.ok) {
       return { ok: false, code: quoteUse.code, parsed: null, uncertain: false };
     }
     if (quoteUse.action === "use") {
-      if (needsQuote) quoteId = quoteUse.quoteId;
-    } else if (needsQuote) {
+      quoteId = quoteUse.quoteId;
+    } else {
+      const replacing = Boolean(stored?.quoteId);
       const previousKey = stored?.createdIdempotencyKey || quoteIdempotencyKey(opts.paymentIdempotencyKey);
-      const refreshKey = opts.quoteRefreshIdempotencyKey || "";
       const originalKey = quoteIdempotencyKey(opts.paymentIdempotencyKey);
+      const refreshKey = opts.quoteRefreshIdempotencyKey || "";
+      const quoteKey = replacing ? refreshKey : originalKey;
       if (
-        !refreshKey ||
-        refreshKey === previousKey ||
-        refreshKey === originalKey ||
-        refreshKey === quoteIdempotencyKey(correctedQuoteRetryKey(opts.paymentIdempotencyKey))
+        replacing &&
+        (!refreshKey ||
+          refreshKey === previousKey ||
+          refreshKey === originalKey ||
+          refreshKey === quoteIdempotencyKey(correctedQuoteRetryKey(opts.paymentIdempotencyKey)))
       ) {
         return { ok: false, code: "GP_QUOTE_EXPIRED", parsed: null, uncertain: false };
       }
@@ -915,7 +923,7 @@ export async function executeQuotedPayout(opts: {
       try {
         quoted = await opts.post({
           path: OUTBOUND_PAYMENT_QUOTE_PATH,
-          idempotencyKey: refreshKey,
+          idempotencyKey: quoteKey,
           body: buildQuoteBody({
             financialAccountId: opts.financialAccountId,
             recipientId: opts.recipientId,
@@ -956,100 +964,18 @@ export async function executeQuotedPayout(opts: {
       }
       const { confirmedByUserId: _buyerConfirmation, ...withoutConfirmation } = validated.snapshot;
       void _buyerConfirmation;
-      const refreshed: QuoteSnapshot = {
+      const obtainedQuote: QuoteSnapshot = {
         ...withoutConfirmation,
         transactionId: opts.metadata.protectedTxnId || "",
         recipientId: opts.recipientId,
         payoutMethodId: opts.payoutMethodId,
-        mode: "LIVE",
-        termsHash: opts.metadata.termsHash || "",
-        createdIdempotencyKey: refreshKey,
-      };
-      await opts.persistQuote(refreshed);
-      activeSnapshot = refreshed;
-      quoteId = refreshed.quoteId;
-    }
-  } else if (opts.mode === "LIVE") {
-    const confirmed = evaluateQuoteConfirmation({
-      stored,
-      actorUserId: opts.actorUserId || "",
-      transactionId: opts.metadata.protectedTxnId || "",
-      mode: "LIVE",
-      recipientId: opts.recipientId,
-      payoutMethodId: opts.payoutMethodId,
-      sourceAmountMinor: opts.sourceAmountMinor,
-      sourceCurrency: source,
-      destinationCurrency: destination,
-      termsHash: opts.metadata.termsHash || "",
-      nowMs: opts.nowMs,
-    });
-    if (!confirmed.ok) {
-      return { ok: false, code: confirmed.code, parsed: null, uncertain: false };
-    }
-    if (needsQuote) quoteId = confirmed.quoteId;
-  } else if (needsQuote) {
-    if (stored) {
-      if (
-        stored.sourceAmountMinor !== opts.sourceAmountMinor ||
-        stored.sourceCurrency !== source ||
-        stored.destinationCurrency !== destination ||
-        Date.parse(stored.expiresAt) <= opts.nowMs
-      ) {
-        return {
-          ok: false,
-          code: Date.parse(stored.expiresAt) <= opts.nowMs ? "GP_QUOTE_EXPIRED" : "GP_QUOTE_MISMATCH",
-          parsed: null,
-          uncertain: false,
-        };
-      }
-      quoteId = stored.quoteId;
-    } else {
-      let quoted: QuoteHttpResult;
-      try {
-        quoted = await opts.post({
-          path: OUTBOUND_PAYMENT_QUOTE_PATH,
-          idempotencyKey: quoteIdempotencyKey(opts.paymentIdempotencyKey),
-          body: buildQuoteBody({
-            financialAccountId: opts.financialAccountId,
-            recipientId: opts.recipientId,
-            payoutMethodId: opts.payoutMethodId,
-            sourceAmountMinor: opts.sourceAmountMinor,
-            sourceCurrency: source,
-            destinationCurrency: destination,
-          }),
-        });
-      } catch (err) {
-        const gated = localGateResult(err);
-        if (gated) return gated;
-        return { ok: false, code: "GP_PAYMENT_OUTCOME_UNCERTAIN", parsed: null, uncertain: true };
-      }
-      if (!quoted.ok) {
-        const parsed = parseGpProviderError(quoted);
-        const uncertain = providerOutcomeUncertain(quoted.status, false);
-        return {
-          ok: false,
-          code: uncertain ? "GP_PAYMENT_OUTCOME_UNCERTAIN" : parsed.code || "GP_QUOTE_FAILED",
-          parsed,
-          uncertain,
-        };
-      }
-      const validated = validateOutboundQuote({
-        body: quoted.body,
-        financialAccountId: opts.financialAccountId,
-        recipientId: opts.recipientId,
-        payoutMethodId: opts.payoutMethodId,
-        sourceAmountMinor: opts.sourceAmountMinor,
-        sourceCurrency: source,
-        destinationCurrency: destination,
         mode: opts.mode,
-        nowMs: opts.nowMs,
-      });
-      if (!validated.ok) {
-        return { ok: false, code: validated.code, parsed: null, uncertain: false };
-      }
-      await opts.persistQuote(validated.snapshot);
-      activeSnapshot = validated.snapshot;
-      quoteId = validated.snapshot.quoteId;
+        termsHash: opts.metadata.termsHash || "",
+        createdIdempotencyKey: quoteKey,
+      };
+      await opts.persistQuote(obtainedQuote);
+      activeSnapshot = obtainedQuote;
+      quoteId = obtainedQuote.quoteId;
     }
   }
 

@@ -11,6 +11,8 @@ import {
   STRIPE_GP_API_VERSION,
 } from "@/lib/payments/payout-rail/gp-client";
 import {
+  evaluateLivePilotFundingScope,
+  parsePilotTransactionId,
   quotedPayoutCover,
   recordedInspectionDeadlineAllowsRelease,
 } from "@/lib/payments/payout-rail/live-pilot";
@@ -23,7 +25,6 @@ import {
   prepareQuoteOnly,
   resolveDestinationCurrency,
 } from "@/lib/payments/payout-rail/outbound-quote";
-import { gpQuoteConfirmationRequired } from "@/lib/payments/payout-rail/quote-confirmation";
 import {
   allocateGpProceedsFunding,
   assessChargePayoutMembership,
@@ -60,12 +61,27 @@ import { getStripe } from "@/lib/payments/stripe/client";
 import { listReceivedCredits } from "@/lib/payments/payout-rail/received-credits";
 import { withPlatformBalanceLock, fencedProviderWrite } from "@/lib/payments/payout-rail/platform-balance-lock";
 import {
+  isGlobalPayoutsEnabled,
   isGlobalPayoutsProceedsFundingEnabled,
   normalizeStripeMode,
   type StripeMode,
 } from "@/lib/payments/flags";
 
 const WAITING = GP_FUNDING_WAITING_CODES;
+
+function newGpFundingPermitted(
+  mode: StripeMode,
+  txn: { id: string; currency: string },
+): { ok: true } | { ok: false; code: string } {
+  return evaluateLivePilotFundingScope({
+    mode,
+    initiationEnabled: canInitiateGlobalPayoutsMoney(mode),
+    transactionId: txn.id,
+    authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
+    sourceCurrency: txn.currency,
+    configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
+  });
+}
 
 function feeMinor(snapshotRaw: string, principal: number, currency: string): number {
   const snapshot = parseQuoteSnapshot(snapshotRaw);
@@ -264,10 +280,15 @@ export async function reconcileGpProceedsFunding(opts: {
   /** Buyer click resumes through its own release call. Cron and webhooks resume here. */
   resumeAuthorized?: boolean;
 }): Promise<{ scanned: number; funded: number; resumed: number }> {
-  if (!isGlobalPayoutsProceedsFundingEnabled() || !canInitiateGlobalPayoutsMoney(opts.stripeMode)) {
+  if (!isGlobalPayoutsEnabled() || !isGlobalPayoutsProceedsFundingEnabled()) {
     return { scanned: 0, funded: 0, resumed: 0 };
   }
   const mode = normalizeStripeMode(opts.stripeMode);
+  const livePilotTxn =
+    mode === "LIVE"
+      ? parsePilotTransactionId(process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "")
+      : null;
+  const liveNewMoney = mode === "LIVE" && canInitiateGlobalPayoutsMoney("LIVE") && Boolean(livePilotTxn);
   const now = opts.now ?? new Date();
   if (!opts.lockHeld) {
     const currencies = opts.currency
@@ -323,19 +344,33 @@ export async function reconcileGpProceedsFunding(opts: {
           },
         ],
       },
-      OR: [
+      AND: [
         {
-          status: { not: "RELEASED" },
-          outboundPaymentAttempts: {
-            none: {
-              kind: "FINAL",
-              status: { in: [...GP_COMPLETED_OUTBOUND_STATUSES] },
+          OR: [
+            {
+              status: { not: "RELEASED" },
+              outboundPaymentAttempts: {
+                none: {
+                  kind: "FINAL",
+                  status: { in: [...GP_COMPLETED_OUTBOUND_STATUSES] },
+                },
+              },
             },
-          },
+            { gpProceedsFunding: { legs: { some: { status: "PENDING" } } } },
+          ],
         },
-        { gpProceedsFunding: { legs: { some: { status: "PENDING" } } } },
+        ...(opts.protectedTxnId ? [{ id: opts.protectedTxnId }] : []),
+        ...(mode === "LIVE"
+          ? [
+              {
+                OR: [
+                  { gpProceedsFunding: { legs: { some: { status: "PENDING" } } } },
+                  ...(liveNewMoney && livePilotTxn ? [{ id: livePilotTxn }] : []),
+                ],
+              },
+            ]
+          : []),
       ],
-      ...(opts.protectedTxnId ? { id: opts.protectedTxnId } : {}),
     },
     orderBy: { fundedAt: "asc" },
     take: limit,
@@ -618,9 +653,6 @@ async function prepareFundingQuote(opts: {
   sourceAmountMinor: number;
   nowMs: number;
 }): Promise<{ ok: true; fees: number; waived: boolean } | { ok: false; code: string }> {
-  if (gpQuoteConfirmationRequired(opts.mode, "STRIPE_GLOBAL_PAYOUTS")) {
-    return { ok: false, code: "GP_QUOTE_REVIEW_REQUIRED" };
-  }
   const faId = getGlobalPayoutsFinancialAccountId(opts.mode);
   if (!faId || !opts.txn.sellerGpRecipientId || !opts.txn.sellerGpPayoutMethodId) {
     return { ok: false, code: "GP_NOT_READY" };
@@ -778,13 +810,6 @@ async function fundOne(opts: {
   openDispute: boolean;
 }): Promise<boolean> {
   if (!isGlobalPayoutsProceedsFundingEnabled()) return false;
-  if (!canInitiateGlobalPayoutsMoney(opts.mode)) {
-    await prisma.gpProceedsFunding.update({
-      where: { id: opts.funding.id },
-      data: { status: "BLOCKED", failureCode: "GP_INITIATION_DISABLED" },
-    });
-    return false;
-  }
   if (
     opts.openDispute ||
     ["REFUNDED", "PARTIALLY_REFUNDED", "CANCELLED", "FAILED", "DISPUTED"].includes(opts.txn.status)
@@ -843,6 +868,8 @@ async function fundOne(opts: {
       );
       return false;
     }
+    const pendingScope = newGpFundingPermitted(opts.mode, opts.txn);
+    if (!pendingScope.ok) return false;
     if (!(await newFundingAllowedNow(opts.txn.id))) return false;
     await sendFundingPayout({
       mode: opts.mode,
@@ -981,7 +1008,7 @@ async function fundOne(opts: {
   });
   let quote = quoteMatchesSource
     ? classifyStoredQuote({
-        quoteConfirmationRequired: gpQuoteConfirmationRequired(opts.mode, opts.txn.payoutRail),
+        quoteConfirmationRequired: false,
         quoteId: storedQuote?.quoteId || "",
         expiresAt: storedQuote?.expiresAt || "",
         confirmedByUserId: storedQuote?.confirmedByUserId || "",
@@ -996,11 +1023,21 @@ async function fundOne(opts: {
     postedMinor,
     pendingMinor: 0,
   });
+  if (quotePlan.action !== "complete" && quotePlan.action !== "wait_inflight") {
+    const newMoney = newGpFundingPermitted(opts.mode, opts.txn);
+    if (!newMoney.ok) {
+      await prisma.gpProceedsFunding.update({
+        where: { id: opts.funding.id },
+        data: { status: "BLOCKED", failureCode: newMoney.code },
+      });
+      return false;
+    }
+  }
   if (quotePlan.action === "prepare_quote") {
     if (!attempt || attempt.stripeOutboundPaymentId || attempt.initiatedAt) {
       await prisma.gpProceedsFunding.update({
         where: { id: opts.funding.id },
-        data: { status: "BLOCKED", failureCode: "GP_QUOTE_REVIEW_REQUIRED" },
+        data: { status: "BLOCKED", failureCode: "GP_PAYMENT_IN_FLIGHT" },
       });
       return false;
     }
@@ -1045,7 +1082,7 @@ async function fundOne(opts: {
   if (quotePlan.action === "await_confirmation" || quotePlan.action === "prepare_quote") {
     await prisma.gpProceedsFunding.update({
       where: { id: opts.funding.id },
-      data: { status: "BLOCKED", failureCode: "GP_QUOTE_REVIEW_REQUIRED" },
+      data: { status: "BLOCKED", failureCode: "GP_QUOTE_FAILED" },
     });
     return false;
   }
@@ -1247,6 +1284,7 @@ async function confirmLegs(
 }
 
 async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<boolean> {
+  if (!canInitiateGlobalPayoutsMoney(mode)) return false;
   const txn = await prisma.protectedTransaction.findUnique({
     where: { id: protectedTxnId },
     include: {
@@ -1255,6 +1293,7 @@ async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<bool
     },
   });
   if (!txn || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
+  if (!newGpFundingPermitted(mode, txn).ok) return false;
   const funding = txn.gpProceedsFunding;
   if (!funding || funding.status !== "POSTED") return false;
   const procurement = txn.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT");
@@ -1307,17 +1346,6 @@ async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<bool
     procurementFeeMinor: procFees,
     finalFeeMinor: finalAttempt ? finalFees : 0,
   });
-  if (gpQuoteConfirmationRequired(txn.stripeMode, txn.payoutRail)) {
-    const storedQuote = parseQuoteSnapshot(finalAttempt?.fxRateSnapshot || "");
-    const quote = classifyStoredQuote({
-      quoteConfirmationRequired: true,
-      quoteId: storedQuote?.quoteId || "",
-      expiresAt: storedQuote?.expiresAt || "",
-      confirmedByUserId: storedQuote?.confirmedByUserId || "",
-      nowMs: Date.now(),
-    });
-    if (quote !== "usable") return false;
-  }
   if (posted < principal + fees) return false;
   const existingOutbound = txn.outboundPaymentAttempts[0];
   if (
@@ -1417,8 +1445,10 @@ export async function gpPayoutProgressForTransaction(opts: {
 
 export async function onPlatformBalanceAvailable(mode: StripeMode) {
   if (!isGlobalPayoutsProceedsFundingEnabled()) return { skipped: "proceeds_funding_disabled" as const };
-  if (!canInitiateGlobalPayoutsMoney(mode)) return { skipped: "initiation_disabled" as const };
-  return reconcileGpProceedsFunding({ stripeMode: mode });
+  return reconcileGpProceedsFunding({
+    stripeMode: mode,
+    resumeAuthorized: canInitiateGlobalPayoutsMoney(mode),
+  });
 }
 
 export async function onPlatformPayoutEvent(opts: {
@@ -1427,8 +1457,18 @@ export async function onPlatformPayoutEvent(opts: {
 }) {
   if (!opts.metadata?.sb_funding_leg) return { ignored: true as const };
   if (!isGlobalPayoutsProceedsFundingEnabled()) return { skipped: "proceeds_funding_disabled" as const };
-  if (!canInitiateGlobalPayoutsMoney(opts.mode)) return { skipped: "initiation_disabled" as const };
-  return reconcileGpProceedsFunding({ stripeMode: opts.mode });
+  return reconcileGpProceedsFunding({
+    stripeMode: opts.mode,
+    resumeAuthorized: false,
+  });
+}
+
+export async function onReceivedCreditEvent(mode: StripeMode) {
+  if (!isGlobalPayoutsProceedsFundingEnabled()) return { skipped: "proceeds_funding_disabled" as const };
+  return reconcileGpProceedsFunding({
+    stripeMode: mode,
+    resumeAuthorized: false,
+  });
 }
 
 export function isGpFundingWaitingCode(code: string): boolean {

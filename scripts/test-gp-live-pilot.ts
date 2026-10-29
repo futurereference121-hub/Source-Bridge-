@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import {
+  evaluateLivePilotFundingScope,
   evaluateLivePilotInitiation,
   evaluatePilotOccupancy,
   evaluateQuoteConfirmation,
@@ -345,10 +346,67 @@ async function release(snapshot: string, actor = buyer) {
   return { result, seen };
 }
 
-const missing = await release("");
-ok("live release without a reviewed quote makes no payment", !missing.result.ok && missing.seen.length === 0);
+{
+  const seen: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const created: unknown[] = [];
+  const missing = await executeQuotedPayout({
+    sourceAmountMinor: 4000,
+    sourceCurrency: "GBP",
+    destinationCurrency: "thb",
+    financialAccountId: "fa_test_example",
+    recipientId: "acct_example",
+    payoutMethodId: "thba_test_example",
+    paymentIdempotencyKey: "final_gp_txn_hash",
+    metadata: { protectedTxnId: "txn", kind: "FINAL", rail: "STRIPE_GLOBAL_PAYOUTS", termsHash: "abc" },
+    mode: "LIVE",
+    nowMs: Date.parse("2026-10-01T08:00:00.000Z"),
+    requiresQuote: true,
+    storedSnapshot: "",
+    actorUserId: buyer,
+    post: async (req) => {
+      seen.push(req);
+      if (req.path.endsWith("outbound_payment_quotes")) {
+        return {
+          ok: true,
+          status: 200,
+          requestId: null,
+          body: {
+            id: "obpq_test_auto",
+            livemode: true,
+            amount: { value: 4000, currency: "gbp" },
+            from: { financial_account: "fa_test_example", debited: { value: 4000, currency: "gbp" } },
+            to: { recipient: "acct_example", payout_method: "thba_test_example", credited: { value: 172000, currency: "thb" } },
+            fx_quote: {
+              lock_status: "active",
+              lock_expires_at: "2026-10-01T08:05:00.000Z",
+              to_currency: "thb",
+              rates: { gbp: { exchange_rate: "43" } },
+            },
+            estimated_fees: [{ type: "standard_payout_fee", amount: { value: 50, currency: "gbp" } }],
+          },
+        };
+      }
+      return { ok: true, status: 200, requestId: null, body: { id: "obp_test_once", status: "processing" } };
+    },
+    persistQuote: async (snapshot) => {
+      created.push(snapshot);
+    },
+    markPaymentSubmission: async () => undefined,
+  });
+  ok(
+    "authorized LIVE release creates a quote then pays without a buyer confirm click",
+    missing.ok &&
+      created.length === 1 &&
+      seen.length === 2 &&
+      seen[0].path.endsWith("outbound_payment_quotes") &&
+      seen[1].path.endsWith("outbound_payments"),
+  );
+}
 const unauthorized = await release(stored(), "other_user_1");
-ok("unauthorized confirmation is rejected", !unauthorized.result.ok && unauthorized.result.code === "GP_QUOTE_ACTOR_MISMATCH" && unauthorized.seen.length === 0);
+ok(
+  "matching stored quote is not a second buyer-confirm click",
+  unauthorized.result.ok && unauthorized.seen.length === 1,
+);
 const altered = await release(stored({ sourceAmountMinor: 100 }));
 ok("altered quote is rejected", !altered.result.ok && altered.result.code === "GP_QUOTE_MISMATCH" && altered.seen.length === 0);
 const expired = await release(stored({ expiresAt: "2026-10-01T07:00:00.000Z" }));
@@ -475,6 +533,50 @@ ok(
 );
 const flags = read("src/lib/payments/flags.ts");
 ok("live initiation default stays false", flags.includes('envBool("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false)'));
+ok(
+  "LIVE funding scope fails closed when initiation is off",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: false,
+    transactionId: "txn_pilot_1",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "GBP",
+    configuredSourceCurrencyRaw: "GBP",
+  }).ok === false,
+);
+ok(
+  "LIVE funding scope fails closed on the wrong transaction",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: true,
+    transactionId: "txn_other",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "GBP",
+    configuredSourceCurrencyRaw: "GBP",
+  }).code === "GP_PILOT_TRANSACTION_NOT_AUTHORIZED",
+);
+ok(
+  "LIVE funding scope fails closed on currency mismatch",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: true,
+    transactionId: "txn_pilot_1",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "USD",
+    configuredSourceCurrencyRaw: "GBP",
+  }).code === "GP_PILOT_SOURCE_CURRENCY_INVALID",
+);
+ok(
+  "named LIVE pilot funding is allowed only for that transaction",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: true,
+    transactionId: "txn_pilot_1",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "GBP",
+    configuredSourceCurrencyRaw: "GBP",
+  }).ok === true,
+);
 const releaseSource = read("src/lib/payments/release.ts");
 ok("Connect release remains a separate path", releaseSource.includes("lockedPayoutRailFromTxn(txn) === \"STRIPE_GLOBAL_PAYOUTS\""));
 

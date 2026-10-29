@@ -152,6 +152,11 @@ export async function handleGlobalPayoutsThinEvent(opts: {
         outboundPaymentId: relatedId,
         stripeMode: opts.stripeMode,
       });
+    } else if (type.includes("received_credit") || type.includes("receivedcredit")) {
+      const { onReceivedCreditEvent } = await import(
+        "@/lib/payments/payout-rail/proceeds-funding-run"
+      );
+      await onReceivedCreditEvent(opts.stripeMode);
     } else {
       console.info(
         "[gp:webhook] unhandled type",

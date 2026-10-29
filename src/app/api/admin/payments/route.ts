@@ -9,6 +9,7 @@ import {
 } from "@/lib/payments/admin-live-queue";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import { CHARGE_MODEL, getLivePaymentsReadinessReport, isStripeConfigured } from "@/lib/payments/stripe/client";
+import { readLiveGpAccountReadiness } from "@/lib/payments/payout-rail/live-gp-readiness";
 
 export const runtime = "nodejs";
 
@@ -77,12 +78,15 @@ export async function GET() {
       },
     });
 
+    const gpLiveReadiness = await readLiveGpAccountReadiness().catch(() => null);
+
     return Response.json({
       ok: true,
       flags: paymentFlagsSnapshot(),
       chargeModel: CHARGE_MODEL,
       stripeConfigured: isStripeConfigured(),
       liveReadiness: getLivePaymentsReadinessReport(),
+      gpLiveReadiness,
       config,
       stats: {
         funded,

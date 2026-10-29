@@ -508,7 +508,8 @@ export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; 
 }> {
   const mode = normalizeStripeMode(opts.stripeMode);
   const now = opts.now ?? new Date();
-  const fundingOn = isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney(mode);
+  const fundingOn = isGlobalPayoutsProceedsFundingEnabled();
+  const fundingNewMoney = fundingOn && canInitiateGlobalPayoutsMoney(mode);
   const bankOn = isPlatformBankRemainderPayoutEnabled(mode);
   const open = await prisma.platformBankPayoutAttempt.count({
     where: { stripeMode: mode, status: { in: [...OPEN_BANK] } },
@@ -535,7 +536,13 @@ export async function coordinatePlatformBalance(opts: { stripeMode: StripeMode; 
     const locked = await withPlatformBalanceLock(mode, currency, now, async (report) => {
       await reconcileOpenBankAttempts(mode, currency);
       if (fundingOn) {
-        await reconcileGpProceedsFunding({ stripeMode: mode, currency, now, lockHeld: true });
+        await reconcileGpProceedsFunding({
+          stripeMode: mode,
+          currency,
+          now,
+          lockHeld: true,
+          resumeAuthorized: fundingNewMoney,
+        });
       }
       const bank = bankOn
         ? await createSafeBankRemainder({

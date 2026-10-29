@@ -8,7 +8,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
 import { prisma } from "@/lib/db";
-import { canInitiateGlobalPayoutsMoney } from "@/lib/payments/payout-rail/eligibility";
 import {
   isGlobalPayoutsProceedsFundingEnabled,
   isPlatformBankRemainderPayoutEnabled,
@@ -27,7 +26,7 @@ const ownerStore = new AsyncLocalStorage<HeldLock>();
 
 function spendNeedsCoordination(mode: "TEST" | "LIVE"): boolean {
   if (isPlatformBankRemainderPayoutEnabled(mode)) return true;
-  return isGlobalPayoutsProceedsFundingEnabled() && canInitiateGlobalPayoutsMoney(mode);
+  return isGlobalPayoutsProceedsFundingEnabled();
 }
 
 export function isCoordinationRetryable(err: unknown): boolean {

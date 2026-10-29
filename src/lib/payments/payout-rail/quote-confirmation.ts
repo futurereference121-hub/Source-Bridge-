@@ -1,24 +1,23 @@
 /**
- * Buyer-present LIVE release still requires quote confirmation in the existing
- * review control. That is a Source Bridge app policy, not a Stripe requirement.
- * Stripe does not require a separate buyer confirmation of a replacement
- * OutboundPaymentQuote. After FX lock expiry, Stripe's published guidance is to
- * request another quote. LIVE still keeps this product gate. TEST skips it.
- * A missing mode keeps the confirmation gate.
+ * Global Payouts follows Connect’s buyer-authorized sourcing-ticket workflow.
+ * Buyer pay, Release Item Funds, final/inspection/admin authorization are the
+ * payment gates. After that authorization, quotes are created or refreshed
+ * automatically inside the accepted agreement. There is no additional buyer
+ * quote-confirmation click.
  *
- * Inspection expiry and an authorized retry have no buyer session. They use a
- * recorded buyer action (Start Inspection, or the original release action on
- * retry) plus a valid matching unexpired quote. The worker is not written into
- * confirmedByUserId. A pre-submission replacement quote may be requested
- * without a second buyer confirmation; LIVE still requires the stored quote
- * that is later submitted to satisfy this app-policy gate.
+ * Stripe does not require a separate buyer confirmation of an
+ * OutboundPaymentQuote. After FX lock expiry, Stripe's published guidance is
+ * to request another quote. Source Bridge now matches that: replacement quotes
+ * stay inside the recorded authorization and must not change seller entitlement
+ * or the accepted buyer total.
  */
 export function gpQuoteConfirmationRequired(
   stripeMode: string | null | undefined,
   payoutRail: string | null | undefined,
 ): boolean {
-  if (payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
-  return String(stripeMode || "").trim().toUpperCase() !== "TEST";
+  void stripeMode;
+  void payoutRail;
+  return false;
 }
 
 const QUOTE_REVIEW_CLOSED = new Set([
@@ -30,8 +29,9 @@ const QUOTE_REVIEW_CLOSED = new Set([
 ]);
 
 /**
- * Quote review is only offered with a server action that can still release.
- * Completed and other terminal purchases never show confirmation controls.
+ * Quote-review controls are retired. Authorized GP execution creates and
+ * refreshes quotes automatically. This stays so completed purchases never
+ * grow a confirmation UI if a caller still asks.
  */
 export function purchaseQuoteReviewKind(order: {
   status?: string | null;

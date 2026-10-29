@@ -71,6 +71,10 @@ export function getGlobalPayoutsWebhookSecret(mode: StripeMode): string {
   return getGlobalPayoutsWebhookSecrets(mode)[0] || "";
 }
 
+export function hasGlobalPayoutsWebhookSecret(mode: StripeMode): boolean {
+  return getGlobalPayoutsWebhookSecrets(mode).length > 0;
+}
+
 export function isGlobalPayoutsEventDestinationPing(eventType: string): boolean {
   return String(eventType || "").trim() === GP_EVENT_DESTINATION_PING;
 }

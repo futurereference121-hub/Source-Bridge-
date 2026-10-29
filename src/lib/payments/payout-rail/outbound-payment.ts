@@ -83,7 +83,6 @@ import {
   evaluateDurableReleaseAuthorization,
   evaluateLivePilotInitiation,
   evaluatePilotOccupancy,
-  evaluateQuoteConfirmation,
   LIVE_PILOT_LOCK_KEY,
   pilotFailureIsSticky,
   quotedPayoutCover,
@@ -607,7 +606,7 @@ async function assertLivePilotReleaseReady(opts: {
   }
   if (opts.txnMode !== "LIVE") return;
   const snap = parseQuoteSnapshot(opts.snapshotRaw);
-  let destinationQuoted = true;
+  let destinationQuoted = false;
   if (opts.backgroundRelease) {
     const durable = evaluateDurableReleaseAuthorization({
       workerActorUserId: opts.actorUserId,
@@ -622,46 +621,27 @@ async function assertLivePilotReleaseReady(opts: {
         code: durable.code,
       });
     }
-    const quoteUse = evaluateBackgroundQuote({
-      stored: snap,
-      transactionId: opts.txn.id,
-      recipientId: opts.recipientId,
-      payoutMethodId: opts.payoutMethodId,
-      sourceAmountMinor: opts.amount,
-      sourceCurrency: opts.txn.currency,
-      destinationCurrency: snap?.destinationCurrency || "",
-      termsHash: opts.termsHash,
-      nowMs: opts.nowMs,
-      allowRefresh: Boolean(opts.allowQuoteRefresh),
-    });
-    if (!quoteUse.ok) {
-      throw Object.assign(new Error("Stored payout quote cannot be submitted."), {
-        status: 409,
-        code: quoteUse.code,
-      });
-    }
-    destinationQuoted = quoteUse.action === "use";
-  } else {
-    const confirmed = evaluateQuoteConfirmation({
-      stored: snap,
-      actorUserId: opts.actorUserId || "",
-      transactionId: opts.txn.id,
-      mode: "LIVE",
-      recipientId: opts.recipientId,
-      payoutMethodId: opts.payoutMethodId,
-      sourceAmountMinor: opts.amount,
-      sourceCurrency: opts.txn.currency,
-      destinationCurrency: snap?.destinationCurrency || "",
-      termsHash: opts.termsHash,
-      nowMs: opts.nowMs,
-    });
-    if (!confirmed.ok) {
-      throw Object.assign(new Error("Review and confirm the payout estimate before release."), {
-        status: 409,
-        code: confirmed.code,
-      });
-    }
   }
+  const quoteUse = evaluateBackgroundQuote({
+    stored: snap,
+    mode: "LIVE",
+    transactionId: opts.txn.id,
+    recipientId: opts.recipientId,
+    payoutMethodId: opts.payoutMethodId,
+    sourceAmountMinor: opts.amount,
+    sourceCurrency: opts.txn.currency,
+    destinationCurrency: snap?.destinationCurrency || "",
+    termsHash: opts.termsHash,
+    nowMs: opts.nowMs,
+    allowRefresh: Boolean(opts.allowQuoteRefresh) || !snap?.quoteId,
+  });
+  if (!quoteUse.ok) {
+    throw Object.assign(new Error("Stored payout quote cannot be submitted."), {
+      status: 409,
+      code: quoteUse.code,
+    });
+  }
+  destinationQuoted = quoteUse.action === "use";
   const seller = await prisma.user.findUnique({
     where: { id: opts.txn.sellerId },
     select: { email: true, country: true },
@@ -825,6 +805,7 @@ async function executeOutboundRelease(opts: {
   if (existingAttempt) {
     const decision = backgroundAttemptDecision({
       hasBackgroundAuthorization: Boolean(opts.backgroundRelease) && txnMode === "LIVE",
+      allowAuthorizedQuoteRefresh: true,
       status: existingAttempt.status,
       failureCode: existingAttempt.failureCode,
       failureMessage: existingAttempt.failureMessage,
@@ -846,7 +827,7 @@ async function executeOutboundRelease(opts: {
       );
     }
     allowQuoteRefresh = decision.allowQuoteRefresh;
-  } else if (opts.backgroundRelease && txnMode === "LIVE") {
+  } else {
     allowQuoteRefresh = true;
   }
   if (
@@ -1253,20 +1234,19 @@ async function executeOutboundRelease(opts: {
       });
     }
 
-    const quoteUse = liveBackground && allowQuoteRefresh
-      ? evaluateBackgroundQuote({
-          stored: parseQuoteSnapshot(attempt.fxRateSnapshot),
-          transactionId: txn.id,
-          recipientId: txn.sellerGpRecipientId,
-          payoutMethodId: txn.sellerGpPayoutMethodId,
-          sourceAmountMinor: amount,
-          sourceCurrency: txn.currency,
-          destinationCurrency: destination.currency,
-          termsHash: txn.termsHash,
-          nowMs: Date.now(),
-          allowRefresh: true,
-        })
-      : null;
+    const quoteUse = evaluateBackgroundQuote({
+      stored: parseQuoteSnapshot(attempt.fxRateSnapshot),
+      mode: txnMode,
+      transactionId: txn.id,
+      recipientId: txn.sellerGpRecipientId,
+      payoutMethodId: txn.sellerGpPayoutMethodId,
+      sourceAmountMinor: amount,
+      sourceCurrency: txn.currency,
+      destinationCurrency: destination.currency,
+      termsHash: txn.termsHash,
+      nowMs: Date.now(),
+      allowRefresh: allowQuoteRefresh || !attempt.fxRateSnapshot,
+    });
     let quoteRefreshIdempotencyKey: string | undefined;
     if (quoteUse?.ok && quoteUse.action === "refresh") {
       const planned = planQuoteRefreshIdentity({

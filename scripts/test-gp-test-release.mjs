@@ -729,23 +729,22 @@ async function releaseNow(txnId) {
   });
 }
 
-assert(gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS") === false, "TEST GP skips quote confirmation");
-assert(gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === true, "LIVE GP keeps quote confirmation");
-assert(gpQuoteConfirmationRequired("", "STRIPE_GLOBAL_PAYOUTS") === true, "missing mode keeps confirmation");
+assert(gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS") === false, "TEST GP skips extra quote confirmation");
+assert(gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS") === false, "LIVE GP skips extra quote confirmation");
+assert(gpQuoteConfirmationRequired("", "STRIPE_GLOBAL_PAYOUTS") === false, "missing mode skips extra quote confirmation");
 assert(gpQuoteConfirmationRequired("TEST", "STRIPE_CONNECT") === false, "Connect has no quote confirmation");
 const testControl = gpQuoteConfirmationRequired("TEST", "STRIPE_GLOBAL_PAYOUTS");
 const liveControl = gpQuoteConfirmationRequired("LIVE", "STRIPE_GLOBAL_PAYOUTS");
 assert(testControl === false, "mocked TEST ticket keeps the existing release button");
-assert(liveControl === true, "mocked LIVE ticket still requires quote review");
+assert(liveControl === false, "mocked LIVE ticket uses buyer authorization without extra quote review");
 const cardSrc = fs.readFileSync(path.join(root, "src/components/messaging/PaymentTicketCard.tsx"), "utf8");
 const purchasesSrc = fs.readFileSync(path.join(root, "src/app/profile/purchases/page.tsx"), "utf8");
 assert(cardSrc.includes('submitReceiptDecision("RELEASE_NOW")'), "conversation release still uses the existing button");
-assert(cardSrc.includes("quoteConfirmationRequired && !gpQuoteConfirmed"), "LIVE inspection release stays behind quote review");
-assert(
-  purchasesSrc.includes('quoteKind === "FINAL" && !gpConfirmed'),
-  "Purchases release stays behind quote review for LIVE",
-);
 assert(!cardSrc.includes("confirmedByUserId"), "conversation control does not fabricate confirmation");
+assert(
+  liveControl === false,
+  "Purchases and Ticket release are not gated on an extra quote click",
+);
 
 const outboundSrc = fs.readFileSync(
   path.join(root, "src/lib/payments/payout-rail/outbound-payment.ts"),
@@ -758,8 +757,8 @@ const testBranch = outboundSrc.slice(
 assert(!testBranch.includes("evaluateQuoteConfirmation"), "TEST release must not require quote confirmation");
 assert(!testBranch.includes("confirmedByUserId"), "TEST release must not fabricate confirmation");
 assert(
-  outboundSrc.includes("evaluateQuoteConfirmation"),
-  "LIVE release still evaluates quote confirmation",
+  !outboundSrc.includes("evaluateQuoteConfirmation"),
+  "LIVE authorized release does not require an extra quote confirmation",
 );
 const releaseSrc = fs.readFileSync(path.join(root, "src/lib/payments/release.ts"), "utf8");
 assert(releaseSrc.includes("inspection_not_authorized"), "TEST inspection requires recorded authorization");
@@ -768,11 +767,10 @@ for (const file of [
   "src/app/profile/purchases/page.tsx",
 ]) {
   const text = fs.readFileSync(path.join(root, file), "utf8");
-  const usesGate = file.endsWith("purchases/page.tsx")
-    ? text.includes('quoteKind === "FINAL"') && text.includes("purchaseCardModel")
-    : text.includes("gpQuoteConfirmationRequired");
-  assert(usesGate, `${file} uses the TEST confirmation gate`);
-  assert(text.includes("GpQuoteReview"), `${file} still has LIVE quote review`);
+  const usesRelease = file.endsWith("purchases/page.tsx")
+    ? text.includes("purchaseCardModel")
+    : text.includes('submitReceiptDecision("RELEASE_NOW")');
+  assert(usesRelease, `${file} still uses the buyer release control`);
 }
 
 const liveConfirm = evaluateQuoteConfirmation({
@@ -788,7 +786,7 @@ const liveConfirm = evaluateQuoteConfirmation({
   termsHash: "terms35",
   nowMs: Date.now(),
 });
-assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRED", "LIVE confirmation stays closed");
+assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRED", "optional quote-review helper still fails closed without a stored quote");
 
 {
   const txn = gpTxn();
@@ -925,12 +923,12 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   });
   const since = httpLog.length;
   const res = await releaseNow(txn.id);
-  assert(res.status === 409, `expired quote status ${res.status} ${res.json.error || ""}`);
-  assert(posts("outbound_payments", since).length === 0, "expired quote submitted a payment");
-  assert(posts("outbound_payment_quotes", since).length === 0, "expired quote was replaced");
+  assert(res.status === 200, `expired quote refresh status ${res.status} ${res.json.error || ""}`);
+  assert(posts("outbound_payment_quotes", since).length === 1, "expired quote was not refreshed");
+  assert(posts("outbound_payments", since).length === 1, "refreshed quote did not submit a payment");
   assert(
-    attemptFor(txn.id).fxRateSnapshot.includes("obpq_expired_snapshot"),
-    "expired snapshot was rewritten",
+    !attemptFor(txn.id).fxRateSnapshot.includes("obpq_expired_snapshot"),
+    "expired snapshot was not replaced",
   );
   park(txn.id);
 }
@@ -1320,8 +1318,8 @@ assert(liveConfirm.ok === false && liveConfirm.code === "GP_QUOTE_REVIEW_REQUIRE
   process.env.GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED = "false";
   assert(res.status === 409, `live release status ${res.status} ${res.json.error || ""}`);
   assert(
-    (res.json.error || "").includes("Review and confirm the payout estimate"),
-    "LIVE confirmation message changed",
+    (res.json.error || "").includes("Live payout pilot limits denied this release"),
+    "LIVE unnamed-pilot message changed",
   );
   assert(posts("outbound_payment_quotes", since).length === 0, "LIVE release created a quote");
   assert(posts("outbound_payments", since).length === 0, "LIVE release created a payment");
