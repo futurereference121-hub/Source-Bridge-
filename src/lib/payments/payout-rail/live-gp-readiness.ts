@@ -14,6 +14,7 @@ import { hasGlobalPayoutsWebhookSecret } from "@/lib/payments/payout-rail/webhoo
 import { interpretFinancialAccountBalance } from "@/lib/payments/payout-rail/fa-funding";
 import { isGlobalPayoutsLiveInitiationEnabled } from "@/lib/payments/flags";
 import { getStripe } from "@/lib/payments/stripe/client";
+import { retrievedAccountLivemode } from "@/lib/payments/payout-rail/platform-bank-confirmation";
 
 function hash8(value: string): string {
   if (!value) return "";
@@ -87,7 +88,7 @@ async function readPlatformAccount(): Promise<{
     const interval = account.settings?.payouts?.schedule?.interval;
     return {
       platformReadAccess: "verified",
-      platformLivemode: typeof account.livemode === "boolean" ? account.livemode : null,
+      platformLivemode: retrievedAccountLivemode(account as object),
       platformAccountHash8: hash8(account.id || ""),
       payoutScheduleInterval: typeof interval === "string" ? interval.slice(0, 20) : "",
     };
