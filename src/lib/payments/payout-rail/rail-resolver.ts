@@ -105,8 +105,21 @@ export async function resolvePayoutRail(opts: {
     };
   }
 
-  // Flag off, or any customer outside the approved sourcer: Connect only.
-  if (!isGlobalPayoutsEnabled() || !dedicatedSourcer) {
+  if (!isGlobalPayoutsEnabled()) {
+    return {
+      rail: "STRIPE_CONNECT",
+      reason: "global_payouts_disabled",
+      connectReady: false,
+      connectHasAccount: false,
+      gpReady: false,
+      gpEligibleCountry: false,
+      country,
+      payoutReady: false,
+    };
+  }
+  // TEST Global Payouts stays on the approved sandbox sourcer.
+  // LIVE uses country + user allowlists. Connect-ready accounts still win above.
+  if (mode !== "LIVE" && !dedicatedSourcer) {
     return {
       rail: "STRIPE_CONNECT",
       reason: "global_payouts_disabled",

@@ -283,6 +283,34 @@ const readiness = read("src/lib/payments/payout-rail/live-gp-readiness.ts");
 ok("LIVE account snapshot is GET-only", readiness.includes('method: "GET"') && !readiness.includes("POST") && !readiness.includes("moneyMutation: true"));
 ok("LIVE write permissions stay unverified", readiness.includes('writePermissions: "unverified"'));
 ok("LIVE snapshot reads the platform account without payouts.create", readiness.includes("accounts.retrieve()") && !readiness.includes("payouts.create"));
+ok("LIVE snapshot reports GBP available balance", readiness.includes("gbpAvailableMinor"));
+ok(
+  "event destination list asks for webhook URL and never signing_secret",
+  readiness.includes("include[0]=webhook_endpoint.url") &&
+    !readiness.includes("webhook_endpoint.signing_secret") &&
+    !readiness.includes("include[0]=webhook_endpoint.signing_secret"),
+);
+ok("redacted destination URL stays unverified instead of a path mismatch", readiness.includes('urlRead === "redacted" ? null'));
+ok(
+  "pinned GP thin events include ReceivedCredit and outbound payment",
+  readiness.includes("v2.money_management.received_credit.available") &&
+    readiness.includes("v2.money_management.received_credit.failed") &&
+    readiness.includes("v2.money_management.received_credit.returned") &&
+    readiness.includes("v2.money_management.received_credit.succeeded") &&
+    readiness.includes("v2.money_management.outbound_payment.posted") &&
+    readiness.includes("v2.money_management.outbound_payment.under_review"),
+);
+const railResolver = read("src/lib/payments/payout-rail/rail-resolver.ts");
+ok(
+  "LIVE GP onboarding is not sandbox-sourcer-only",
+  railResolver.includes('mode !== "LIVE" && !dedicatedSourcer') &&
+    !railResolver.includes("!isGlobalPayoutsEnabled() || !dedicatedSourcer"),
+);
+ok(
+  "LIVE GP onboarding still uses country and user allowlists",
+  railResolver.includes("isGlobalPayoutsCountryAllowed") &&
+    railResolver.includes("isGlobalPayoutsUserAllowed"),
+);
 ok("admin payments exposes the hashed LIVE snapshot", read("src/app/api/admin/payments/route.ts").includes("gpLiveReadiness"));
 
 ok(
