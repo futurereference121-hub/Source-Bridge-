@@ -428,6 +428,11 @@ try {
   const checkout = readFileSync(new URL("../src/lib/payments/checkout.ts", import.meta.url), "utf8");
   ok("checkout rejects a stored mode that is not the approved pair", checkout.includes("GP_SANDBOX_MODE_MISMATCH"));
   ok(
+    "LIVE stored GP checkout is not forced onto the TEST pair",
+    checkout.includes('storedMode === "LIVE"') &&
+      checkout.includes('sandboxCheckout.state === "pair" || sandboxCheckout.state === "refused"'),
+  );
+  ok(
     "checkout keeps a stored Global Payouts rail",
     checkout.includes("snapshotStoredGlobalPayoutRail") && checkout.includes("honorStoredGlobalPayouts"),
   );

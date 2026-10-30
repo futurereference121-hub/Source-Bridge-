@@ -68,20 +68,24 @@ export async function createPaymentIntentForTxn(opts: {
     sellerId: txn.sellerId,
   });
   if (honorStoredGlobalPayouts) {
-    if (normalizeStripeMode(txn.stripeMode) !== "TEST") {
-      throw Object.assign(
-        new Error("Stored payment mode does not match the approved test pair."),
-        { status: 409, code: "GP_SANDBOX_MODE_MISMATCH" },
-      );
-    }
-    if (
-      sandboxCheckout.state === "refused" &&
-      sandboxCheckout.code === "GP_SANDBOX_INITIATION_DISABLED"
-    ) {
-      throw Object.assign(new Error("New test payments are stopped."), {
-        status: 409,
-        code: sandboxCheckout.code,
-      });
+    const storedMode = normalizeStripeMode(txn.stripeMode);
+    if (storedMode === "LIVE") {
+      if (sandboxCheckout.state === "pair" || sandboxCheckout.state === "refused") {
+        throw Object.assign(
+          new Error("Stored payment mode does not match the approved test pair."),
+          { status: 409, code: "GP_SANDBOX_MODE_MISMATCH" },
+        );
+      }
+    } else {
+      if (
+        sandboxCheckout.state === "refused" &&
+        sandboxCheckout.code === "GP_SANDBOX_INITIATION_DISABLED"
+      ) {
+        throw Object.assign(new Error("New test payments are stopped."), {
+          status: 409,
+          code: sandboxCheckout.code,
+        });
+      }
     }
   } else {
     if (sandboxCheckout.state === "refused") {

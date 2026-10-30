@@ -292,6 +292,13 @@ ok(
 );
 ok("redacted destination URL stays unverified instead of a path mismatch", readiness.includes('urlRead === "redacted" ? null'));
 ok(
+  "outbound coverage requires handler subtypes, not one family event",
+  readiness.includes("destinationSubscribesTo(events, REQUIRED_LIVE_GP_OUTBOUND_EVENTS)") &&
+    readiness.includes("destinationSubscribesTo(events, REQUIRED_LIVE_GP_RECEIVED_CREDIT_EVENTS)") &&
+    !readiness.includes('"v2.money_management.outbound_payment.updated"') &&
+    !readiness.includes("destinationCoversFamily"),
+);
+ok(
   "pinned GP thin events include ReceivedCredit and outbound payment",
   readiness.includes("v2.money_management.received_credit.available") &&
     readiness.includes("v2.money_management.received_credit.failed") &&
@@ -299,6 +306,16 @@ ok(
     readiness.includes("v2.money_management.received_credit.succeeded") &&
     readiness.includes("v2.money_management.outbound_payment.posted") &&
     readiness.includes("v2.money_management.outbound_payment.under_review"),
+);
+ok(
+  "ordinary LIVE tickets resolve the seller payout rail",
+  read("src/lib/payments/commercial-quote.ts").includes("resolvePayoutRail") &&
+    read("src/lib/payments/commercial-quote.ts").includes('sandboxDecision.state === "pair"'),
+);
+ok(
+  "LIVE stored GP checkout is allowed for ordinary users",
+  read("src/lib/payments/checkout.ts").includes('storedMode === "LIVE"') &&
+    !read("src/lib/payments/checkout.ts").includes('normalizeStripeMode(txn.stripeMode) !== "TEST"'),
 );
 const railResolver = read("src/lib/payments/payout-rail/rail-resolver.ts");
 ok(

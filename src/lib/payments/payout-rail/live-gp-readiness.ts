@@ -25,14 +25,17 @@ const LIVE_GP_WEBHOOK_HOST = "sourcebridge.app";
 const EVENT_DESTINATION_URL_INCLUDE = "include[0]=webhook_endpoint.url";
 const EVENT_DESTINATION_LIST_PATH = `/v2/core/event_destinations?limit=100&${EVENT_DESTINATION_URL_INCLUDE}`;
 
-/** Pinned 2026-08-26.preview thin events the LIVE GP destination must send. */
+/**
+ * Pinned 2026-08-26.preview thin events the LIVE GP destination must send.
+ * `outbound_payment.updated` exists in Stripe but mapThinOutboundEventType
+ * ignores it, so it is not required for coverage.
+ */
 export const REQUIRED_LIVE_GP_OUTBOUND_EVENTS = [
   "v2.money_management.outbound_payment.created",
   "v2.money_management.outbound_payment.posted",
   "v2.money_management.outbound_payment.failed",
   "v2.money_management.outbound_payment.returned",
   "v2.money_management.outbound_payment.canceled",
-  "v2.money_management.outbound_payment.updated",
   "v2.money_management.outbound_payment.under_review",
 ] as const;
 
@@ -75,6 +78,7 @@ export type LiveGpReadinessSnapshot = {
   eventDestinationLiveCount: number | null;
   eventDestinationCoversReceivedCredit: boolean | null;
   eventDestinationCoversOutbound: boolean | null;
+  eventDestinationEnabledEvents: string[];
   eventDestinationMatchesAppPath: boolean | null;
   receivedCreditsReadAccess: "verified" | "denied" | "unconfigured" | "error";
   platformReadAccess: "verified" | "denied" | "unconfigured" | "error";
@@ -102,6 +106,7 @@ function emptySnapshot(partial: Partial<LiveGpReadinessSnapshot>): LiveGpReadine
     eventDestinationLiveCount: null,
     eventDestinationCoversReceivedCredit: null,
     eventDestinationCoversOutbound: null,
+    eventDestinationEnabledEvents: [],
     eventDestinationMatchesAppPath: null,
     receivedCreditsReadAccess: "unconfigured",
     platformReadAccess: "unconfigured",
@@ -120,13 +125,28 @@ function destinationUrl(row: Record<string, unknown>): string {
   return typeof endpoint?.url === "string" ? endpoint.url.trim() : "";
 }
 
+function eventName(event: unknown): string {
+  if (typeof event === "string") return event.trim().toLowerCase();
+  if (event && typeof event === "object") {
+    const rec = event as Record<string, unknown>;
+    for (const key of ["type", "event", "name"]) {
+      if (typeof rec[key] === "string" && rec[key].trim()) {
+        return rec[key].trim().toLowerCase();
+      }
+    }
+  }
+  return "";
+}
+
 function destinationEvents(row: Record<string, unknown>): string[] {
   const raw = Array.isArray(row.enabled_events)
     ? row.enabled_events
     : Array.isArray(row.event_types)
       ? row.event_types
-      : [];
-  return raw.map((event) => String(event || "").trim().toLowerCase()).filter(Boolean);
+      : Array.isArray(row.events)
+        ? row.events
+        : [];
+  return raw.map(eventName).filter(Boolean);
 }
 
 function destinationEnabled(row: Record<string, unknown>): boolean {
@@ -155,12 +175,34 @@ export function destinationSubscribesTo(
 ): boolean {
   const events = subscribed.map((event) => String(event || "").trim().toLowerCase());
   if (events.includes("*")) return true;
-  return required.every((need) => {
-    const want = need.toLowerCase();
-    if (events.includes(want)) return true;
-    const family = want.replace(/\.[^.]+$/, "");
-    return events.includes(family) || events.includes(`${family}.*`);
-  });
+  return required.every((need) => subscribedCoversEvent(events, need));
+}
+
+function subscribedCoversEvent(events: string[], required: string): boolean {
+  const want = required.toLowerCase();
+  const family = want.replace(/\.[^.]+$/, "");
+  const subtype = want.slice(family.length + 1);
+  const familyToken = family.includes("outbound_payment")
+    ? "outbound_payment"
+    : family.includes("received_credit")
+      ? "received_credit"
+      : "";
+  const withoutV2 = want.replace(/^v2\./, "");
+  for (const event of events) {
+    if (event === "*" || event === want || event === withoutV2) return true;
+    if (event === family || event === `${family}.*` || event === `${familyToken}.*`) return true;
+    if (subtype && event.endsWith(`.${subtype}`) && familyToken && event.includes(familyToken)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function publicEventNames(events: string[]): string[] {
+  const unique = [...new Set(events.map((event) => event.slice(0, 120)))].sort();
+  return unique
+    .filter((event) => !/whsec_|sk_live|sk_test|rk_live|rk_test/.test(event))
+    .slice(0, 32);
 }
 
 export function inspectListedEventDestinations(destinations: unknown[]): {
@@ -169,6 +211,7 @@ export function inspectListedEventDestinations(destinations: unknown[]): {
   matchesAppPath: boolean | null;
   coversReceivedCredit: boolean | null;
   coversOutbound: boolean | null;
+  enabledEvents: string[];
 } {
   const live = liveDestinationRows(destinations);
   if (live.length === 0) {
@@ -178,6 +221,7 @@ export function inspectListedEventDestinations(destinations: unknown[]): {
       matchesAppPath: false,
       coversReceivedCredit: false,
       coversOutbound: false,
+      enabledEvents: [],
     };
   }
   const readable = live.filter((row) => destinationUrl(row));
@@ -188,18 +232,18 @@ export function inspectListedEventDestinations(destinations: unknown[]): {
       ? matching.filter(destinationEnabled)
       : live.filter(destinationEnabled);
   const events = scoped.flatMap(destinationEvents);
+  const uncovered = urlRead === "redacted" && scoped.length === 0;
   return {
     liveCount: live.length,
     urlRead,
     matchesAppPath: urlRead === "redacted" ? null : matching.length > 0,
-    coversReceivedCredit:
-      urlRead === "redacted" && scoped.length === 0
-        ? null
-        : destinationSubscribesTo(events, REQUIRED_LIVE_GP_RECEIVED_CREDIT_EVENTS),
-    coversOutbound:
-      urlRead === "redacted" && scoped.length === 0
-        ? null
-        : destinationSubscribesTo(events, REQUIRED_LIVE_GP_OUTBOUND_EVENTS),
+    coversReceivedCredit: uncovered
+      ? null
+      : destinationSubscribesTo(events, REQUIRED_LIVE_GP_RECEIVED_CREDIT_EVENTS),
+    coversOutbound: uncovered
+      ? null
+      : destinationSubscribesTo(events, REQUIRED_LIVE_GP_OUTBOUND_EVENTS),
+    enabledEvents: publicEventNames(events),
   };
 }
 
@@ -368,6 +412,7 @@ export async function readLiveGpAccountReadiness(): Promise<LiveGpReadinessSnaps
   let eventDestinationLiveCount: number | null = null;
   let eventDestinationCoversReceivedCredit: boolean | null = null;
   let eventDestinationCoversOutbound: boolean | null = null;
+  let eventDestinationEnabledEvents: string[] = [];
   let eventDestinationMatchesAppPath: boolean | null = null;
   try {
     const listed = await listLiveEventDestinations();
@@ -380,6 +425,7 @@ export async function readLiveGpAccountReadiness(): Promise<LiveGpReadinessSnaps
       eventDestinationLiveCount = inspected.liveCount;
       eventDestinationCoversReceivedCredit = inspected.coversReceivedCredit;
       eventDestinationCoversOutbound = inspected.coversOutbound;
+      eventDestinationEnabledEvents = inspected.enabledEvents;
       eventDestinationMatchesAppPath = inspected.matchesAppPath;
     }
   } catch {
@@ -402,6 +448,7 @@ export async function readLiveGpAccountReadiness(): Promise<LiveGpReadinessSnaps
     eventDestinationLiveCount,
     eventDestinationCoversReceivedCredit,
     eventDestinationCoversOutbound,
+    eventDestinationEnabledEvents,
     eventDestinationMatchesAppPath,
     receivedCreditsReadAccess,
   });

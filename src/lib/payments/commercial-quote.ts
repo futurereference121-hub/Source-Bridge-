@@ -24,6 +24,7 @@ import {
 } from "@/lib/payments/gp-pricing";
 import { normalizeCurrency } from "@/lib/payments/money";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
 
 export type QuotedCommercialTerms = {
@@ -196,9 +197,24 @@ export async function quoteCommercialTerms(opts: {
     principalMinor: entitlement,
     paymentOption,
   });
-  const payoutRail =
-    sandboxDecision.state === "pair" ? "STRIPE_GLOBAL_PAYOUTS" : "STRIPE_CONNECT";
-  const stripeMode = sandboxDecision.state === "pair" ? "TEST" : getStripeMode();
+  let payoutRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS" = "STRIPE_CONNECT";
+  let stripeMode = getStripeMode();
+  if (sandboxDecision.state === "pair") {
+    payoutRail = "STRIPE_GLOBAL_PAYOUTS";
+    stripeMode = "TEST";
+  } else {
+    const resolved = await resolvePayoutRail({ userId: opts.sellerId });
+    if (resolved.rail === "UNSUPPORTED") {
+      reject(
+        "Payouts are not yet available in the sourcer's location.",
+        409,
+        "PAYOUTS_UNAVAILABLE",
+      );
+    }
+    if (resolved.rail === "STRIPE_GLOBAL_PAYOUTS") {
+      payoutRail = "STRIPE_GLOBAL_PAYOUTS";
+    }
+  }
   const priced = priceAfterResolvedRail({
     ...lines,
     currency,
