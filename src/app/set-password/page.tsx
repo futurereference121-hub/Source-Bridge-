@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Container } from "@/components/ui/Container";
@@ -129,6 +129,43 @@ function SetNewPasswordForm({ token }: { token: string }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [linkReady, setLinkReady] = useState(false);
+  const [inspecting, setInspecting] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInspecting(true);
+    setError(null);
+    setLinkReady(false);
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/auth/set-password?token=${encodeURIComponent(token)}`,
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(data.error || "This password link is invalid.");
+          setLinkReady(false);
+          return;
+        }
+        setLinkReady(true);
+      } catch {
+        if (!cancelled) {
+          setError("Could not check password link");
+          setLinkReady(false);
+        }
+      } finally {
+        if (!cancelled) setInspecting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const strength = useMemo(
     () => (password ? passwordStrengthLevel(password) : null),
@@ -175,6 +212,11 @@ function SetNewPasswordForm({ token }: { token: string }) {
         letter, and a number.
       </p>
 
+      {inspecting ? (
+        <p className="mt-10 text-sm text-white/50">Checking link…</p>
+      ) : null}
+
+      {linkReady ? (
       <form
         className="panel-navy mt-10 space-y-4 rounded-xl px-5 py-6 sm:px-6"
         onSubmit={submit}
@@ -233,14 +275,17 @@ function SetNewPasswordForm({ token }: { token: string }) {
         </PrimaryButton>
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
       </form>
+      ) : !inspecting && error ? (
+        <p className="mt-10 text-sm text-red-300">{error}</p>
+      ) : null}
 
       <p className="mt-6 text-sm text-white/50">
-        Link expired or already used?{" "}
+        Need a new link?{" "}
         <Link
           href="/set-password"
           className="text-electric underline-offset-2 hover:underline"
         >
-          Request a new one
+          Request one
         </Link>
       </p>
     </Container>

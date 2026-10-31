@@ -64,6 +64,7 @@ function isNeverCachePath(pathname) {
   if (pathname.startsWith("/checkout")) return true;
   if (pathname.startsWith("/live")) return true;
   if (pathname.startsWith("/sign-in")) return true;
+  if (pathname.startsWith("/set-password")) return true;
   if (pathname.startsWith("/join")) return true;
   if (pathname.startsWith("/onboarding")) return true;
   if (pathname.startsWith("/check-email")) return true;

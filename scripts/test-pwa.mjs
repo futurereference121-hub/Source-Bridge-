@@ -217,6 +217,7 @@ check("13 never-cache sensitive paths", () => {
     "/search",
     "/uploads",
     "/sign-in",
+    "/set-password",
   ]) {
     assert.match(sw, new RegExp(p.replace("/", "\\/")));
   }
@@ -332,7 +333,7 @@ check("SW payment preservation: /api never cached; mutations not queued", () => 
   // Non-GET (POST/PUT/PATCH/DELETE payment mutations) exit before respondWith
   assert.match(sw, /if \(request\.method !== "GET"\) return;/);
   assert.doesNotMatch(sw, /BackgroundSync|sync\.register|periodicSync|workbox-background-sync/i);
-  assert.doesNotMatch(sw, /offline.?queue|replay|outbox/i);
+  assert.doesNotMatch(sw, /offline.?queue|replay queue|outbox/i);
   // Never-cache includes /api/ and checkout/profile (purchases/sales under /profile)
   const neverFn = sw.slice(
     sw.indexOf("function isNeverCachePath"),

@@ -19,6 +19,7 @@
     "test:messaging:integration": "node --env-file=.env scripts/test-messaging-integration.mjs",
     "test:messaging:e2e": "node --env-file=.env scripts/test-messaging-e2e.mjs",
     "test:accounts:e2e": "node --env-file=.env scripts/test-accounts-e2e.mjs",
+    "test:password-reset": "node --experimental-strip-types scripts/test-password-reset.ts",
     "cleanup-verification-docs": "node --env-file=.env scripts/cleanup-verification-documents.mjs",
     "cleanup-test-accounts": "node --env-file=.env scripts/cleanup-test-accounts.mjs",
     "cleanup-deleted-orphans": "node --env-file=.env scripts/cleanup-deleted-account-orphans.mjs",

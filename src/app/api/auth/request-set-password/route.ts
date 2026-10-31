@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import { createRawToken, hashToken } from "@/lib/storage";
+import { createRawToken } from "@/lib/storage";
 import { buildSetPasswordUrl, sendEmail } from "@/lib/email";
+import { hashResetToken, resetTokenExpiresAt } from "@/lib/password-reset";
 import {
   canAttemptIp,
   ipFromRequest,
@@ -9,11 +10,10 @@ import {
 } from "@/lib/rate-limit";
 import { jsonError, requestSetPasswordSchema } from "@/lib/validation";
 
-const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
-
 /**
  * Always responds `{ ok: true }` regardless of whether the email exists —
  * prevents account enumeration. Only sends an email for verified accounts.
+ * A newer request replaces older unused links at inspect/submit time.
  */
 export async function POST(req: NextRequest) {
   const ip = ipFromRequest(req);
@@ -35,26 +35,27 @@ export async function POST(req: NextRequest) {
 
     if (user && !user.deletedAt && user.emailVerified) {
       const raw = createRawToken();
+      const tokenHash = hashResetToken(raw);
+      if (!tokenHash) {
+        return Response.json({ ok: true });
+      }
       await prisma.passwordResetToken.create({
         data: {
           userId: user.id,
-          tokenHash: hashToken(raw),
-          expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+          tokenHash,
+          expiresAt: resetTokenExpiresAt(),
         },
       });
       const setPasswordUrl = buildSetPasswordUrl(raw);
+      const action = user.passwordHash ? "reset" : "set";
       const sent = await sendEmail({
         to: email,
         subject: user.passwordHash
           ? "Reset your Source Bridge password"
           : "Set your Source Bridge password",
         verifyUrl: setPasswordUrl,
-        text: `Hi ${user.name},\n\nOpen this link to ${
-          user.passwordHash ? "reset" : "set"
-        } your Source Bridge password:\n${setPasswordUrl}\n\nThis link expires in 1 hour and can only be used once.\n\nIf you did not request this, ignore this email.`,
-        html: `<p>Hi ${escapeHtml(user.name)},</p><p>Open this link to ${
-          user.passwordHash ? "reset" : "set"
-        } your Source Bridge password:</p><p><a href="${setPasswordUrl}">${setPasswordUrl}</a></p><p>This link expires in 1 hour and can only be used once.</p>`,
+        text: `Hi ${user.name},\n\nOpen this link to ${action} your Source Bridge password:\n\n${setPasswordUrl}\n\nThis link expires in 1 hour and can only be used once. Opening it does not use it.\n\nIf you did not request this, ignore this email.`,
+        html: `<p>Hi ${escapeHtml(user.name)},</p><p>Open this link to ${action} your Source Bridge password:</p><p><a href="${setPasswordUrl}">Set your password</a></p><p>This link expires in 1 hour and can only be used once. Opening it does not use it.</p>`,
       });
       previewUrl = sent.previewUrl ?? null;
     }
