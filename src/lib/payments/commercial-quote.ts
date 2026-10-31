@@ -21,6 +21,7 @@ import {
   globalPayoutsGbpFeeMinor,
   globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
+  gpLivePilotGbpEntitlementFloorMinor,
 } from "@/lib/payments/gp-pricing";
 import { normalizeCurrency } from "@/lib/payments/money";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
@@ -63,6 +64,8 @@ export function priceAfterResolvedRail(opts: {
   existingPricingPolicy: string | null;
   platformFeeIncludedInPrice?: boolean;
   destinationMinimumsRaw?: string;
+  /** When set, replaces gpGbpEntitlementFloorMinor for this quote only. */
+  entitlementFloorMinor?: number;
   config: FeeConfig;
 }): Omit<QuotedCommercialTerms, "config"> {
   const currency = normalizeCurrency(opts.currency);
@@ -119,7 +122,10 @@ export function priceAfterResolvedRail(opts: {
         "GP_FEE_ADDED_ON_TOP",
       );
     }
-    const floorMinor = gpGbpEntitlementFloorMinor(opts.destinationMinimumsRaw || "");
+    const floorMinor =
+      typeof opts.entitlementFloorMinor === "number"
+        ? opts.entitlementFloorMinor
+        : gpGbpEntitlementFloorMinor(opts.destinationMinimumsRaw || "");
     if (entitlement < floorMinor) {
       reject(
         `Minimum seller amount for this payment is ${formatGbpMinor(floorMinor)}.`,
@@ -215,6 +221,14 @@ export async function quoteCommercialTerms(opts: {
       payoutRail = "STRIPE_GLOBAL_PAYOUTS";
     }
   }
+  const destinationMinimumsRaw =
+    process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "";
+  const entitlementFloorMinor =
+    payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+      ? stripeMode === "LIVE"
+        ? gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw)
+        : gpGbpEntitlementFloorMinor(destinationMinimumsRaw)
+      : undefined;
   const priced = priceAfterResolvedRail({
     ...lines,
     currency,
@@ -222,7 +236,8 @@ export async function quoteCommercialTerms(opts: {
     payoutRail,
     existingPricingPolicy: opts.existingPricingPolicy,
     platformFeeIncludedInPrice: opts.platformFeeIncludedInPrice,
-    destinationMinimumsRaw: process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
+    destinationMinimumsRaw,
+    entitlementFloorMinor,
     config,
   });
   return { ...priced, payoutRail, stripeMode, config };

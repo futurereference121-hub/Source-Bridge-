@@ -7,13 +7,19 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   evaluateLivePilotFundingScope,
   evaluateLivePilotInitiation,
+  evaluateLivePilotTransactionClaim,
   evaluatePilotOccupancy,
   evaluateQuoteConfirmation,
+  gbpMinorToClearThbDestination,
   globalPayoutsReconciliationAllowed,
+  liveGpTicketCurrencyPolicy,
   liveUserAllowed,
+  LIVE_PILOT_THB_PER_GBP_MILLI,
   PILOT_CAP_COVERS,
   planQuotePreparation,
   pilotAppliesToRail,
+  resolveAuthorizedPilotTransactionId,
+  STRIPE_GP_THB_WIRE_MINIMUM_MINOR,
 } from "../src/lib/payments/payout-rail/live-pilot.ts";
 import {
   executeQuotedPayout,
@@ -112,6 +118,61 @@ ok("LIVE unlisted user is denied", liveUserAllowed({
   allowlistRaw: "someone_else_1",
   userId: seller,
 }) === false);
+
+ok(
+  "empty env uses the durable claim",
+  resolveAuthorizedPilotTransactionId({ envRaw: "", claimedTransactionId: txn }) === txn,
+);
+ok(
+  "env transaction id wins over a different claim",
+  resolveAuthorizedPilotTransactionId({ envRaw: txn, claimedTransactionId: otherTxn }) === txn,
+);
+ok(
+  "missing env and claim authorizes nobody",
+  resolveAuthorizedPilotTransactionId({ envRaw: "", claimedTransactionId: "" }) === null,
+);
+ok(
+  "first LIVE GP accept claims the named transaction",
+  evaluateLivePilotTransactionClaim({
+    existingClaimedId: null,
+    candidateTransactionId: txn,
+  }).ok === true,
+);
+ok(
+  "a second LIVE GP transaction cannot take the named slot",
+  evaluateLivePilotTransactionClaim({
+    existingClaimedId: txn,
+    candidateTransactionId: otherTxn,
+  }).ok === false,
+);
+const claimedAgain = evaluateLivePilotTransactionClaim({
+  existingClaimedId: txn,
+  candidateTransactionId: txn,
+});
+ok(
+  "re-accept of the claimed transaction is idempotent",
+  claimedAgain.ok === true && claimedAgain.alreadyClaimed === true,
+);
+ok(
+  "฿600 at 41 THB/GBP is £14.64",
+  gbpMinorToClearThbDestination({
+    thbMinor: STRIPE_GP_THB_WIRE_MINIMUM_MINOR,
+    thbPerGbpMilli: LIVE_PILOT_THB_PER_GBP_MILLI,
+  }) === 1464,
+);
+ok(
+  "LIVE GP ticket form locks GBP to the sourcer",
+  liveGpTicketCurrencyPolicy({
+    participantA: { id: buyer, userAllowed: false, gpCountry: false },
+    participantB: { id: seller, userAllowed: true, gpCountry: true },
+    floorMinor: 1464,
+  })?.sellerId === seller &&
+    liveGpTicketCurrencyPolicy({
+      participantA: { id: buyer, userAllowed: false, gpCountry: false },
+      participantB: { id: seller, userAllowed: true, gpCountry: true },
+      floorMinor: 1464,
+    })?.minimumEntitlementMinor === 1464,
+);
 
 const deniedCases: Array<[string, Record<string, unknown>, string]> = [
   ["empty cap", { amountCapRaw: "" }, "GP_PILOT_AMOUNT_CAP_INVALID"],

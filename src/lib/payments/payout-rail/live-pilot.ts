@@ -14,6 +14,23 @@ export const PILOT_CAP_COVERS = "quoted_debit_plus_separate_source_fees" as cons
 /** One transaction-scoped lock key for the single LIVE pilot payment. */
 export const LIVE_PILOT_LOCK_KEY = 87264011;
 
+/** FinancialAuditEvent.action for the durable named-pilot bind. */
+export const LIVE_GP_PILOT_BOUND_ACTION = "LIVE_GP_PILOT_BOUND";
+
+/** Stripe Global Payouts Thailand wire destination minimum: ฿600.00. */
+export const STRIPE_GP_THB_WIRE_MINIMUM_MINOR = 60_000;
+
+/** Stripe published GBP card charge minimum. */
+export const STRIPE_GBP_CHARGE_MINIMUM_MINOR = 30;
+
+/**
+ * Conservative THB per GBP used only to size the LIVE-pilot GBP floor.
+ * Thousandths: 41000 = 41.000 THB / GBP.
+ * Observed TEST Stripe quotes were 44.53–45.18 (Oct 2026). Mid-market ~45.20.
+ * This haircut keeps destination satang above ฿600 if LIVE quotes ~8% worse.
+ */
+export const LIVE_PILOT_THB_PER_GBP_MILLI = 41_000;
+
 export const PROVIDER_FEE_PAYER = "Source Bridge";
 
 export const GP_POSTED_WORDING =
@@ -110,6 +127,79 @@ export function parsePilotTransactionId(raw: string): string | null {
   const text = String(raw || "").trim();
   if (!TXN_ID.test(text)) return null;
   return text;
+}
+
+/**
+ * Env transaction id wins. Empty env uses the durable first-accept claim.
+ * Missing both fails closed at the caller.
+ */
+export function resolveAuthorizedPilotTransactionId(opts: {
+  envRaw: string;
+  claimedTransactionId?: string | null;
+}): string | null {
+  const fromEnv = parsePilotTransactionId(opts.envRaw);
+  if (fromEnv) return fromEnv;
+  return parsePilotTransactionId(String(opts.claimedTransactionId || "")) || null;
+}
+
+export function evaluateLivePilotTransactionClaim(opts: {
+  existingClaimedId: string | null;
+  candidateTransactionId: string;
+}):
+  | { ok: true; transactionId: string; alreadyClaimed: boolean }
+  | { ok: false; code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" } {
+  const candidate = parsePilotTransactionId(opts.candidateTransactionId);
+  if (!candidate) return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+  const existing = parsePilotTransactionId(opts.existingClaimedId || "");
+  if (!existing) return { ok: true, transactionId: candidate, alreadyClaimed: false };
+  if (existing === candidate) {
+    return { ok: true, transactionId: candidate, alreadyClaimed: true };
+  }
+  return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+}
+
+/**
+ * Smallest GBP minor units whose Stripe dest conversion at `thbPerGbpMilli`
+ * is at least `thbMinor`. Integer ceil. Null when inputs are unusable.
+ */
+export function gbpMinorToClearThbDestination(opts: {
+  thbMinor: number;
+  thbPerGbpMilli: number;
+}): number | null {
+  if (!Number.isInteger(opts.thbMinor) || opts.thbMinor <= 0) return null;
+  if (!Number.isInteger(opts.thbPerGbpMilli) || opts.thbPerGbpMilli <= 0) return null;
+  const product = opts.thbMinor * (10 ** 3);
+  return Math.ceil(product / opts.thbPerGbpMilli);
+}
+
+/**
+ * When the sourcer is the LIVE GP execution seller, lock the ticket form to GBP
+ * at the live-pilot floor. Ordinary chats stay unlocked.
+ */
+export function liveGpTicketCurrencyPolicy(opts: {
+  participantA: { id: string; userAllowed: boolean; gpCountry: boolean };
+  participantB: { id: string; userAllowed: boolean; gpCountry: boolean };
+  floorMinor: number;
+}): {
+  buyerId: string;
+  sellerId: string;
+  currency: "GBP";
+  minimumEntitlementMinor: number;
+} | null {
+  if (!Number.isInteger(opts.floorMinor) || opts.floorMinor <= 0) return null;
+  const a = opts.participantA;
+  const b = opts.participantB;
+  if (!a.id || !b.id || a.id === b.id) return null;
+  const seller =
+    a.userAllowed && a.gpCountry ? a : b.userAllowed && b.gpCountry ? b : null;
+  if (!seller) return null;
+  const buyer = seller.id === a.id ? b : a;
+  return {
+    buyerId: buyer.id,
+    sellerId: seller.id,
+    currency: "GBP",
+    minimumEntitlementMinor: opts.floorMinor,
+  };
 }
 
 export function parseDestinationMinimums(

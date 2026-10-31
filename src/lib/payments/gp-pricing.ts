@@ -10,7 +10,12 @@
  */
 
 import { assertNonNegativeInt, roundBpsToMinor } from "@/lib/payments/money";
-import { parseDestinationMinimums } from "@/lib/payments/payout-rail/live-pilot";
+import {
+  gbpMinorToClearThbDestination,
+  LIVE_PILOT_THB_PER_GBP_MILLI,
+  parseDestinationMinimums,
+  STRIPE_GBP_CHARGE_MINIMUM_MINOR,
+} from "@/lib/payments/payout-rail/live-pilot";
 
 export const GP_GBP_PROGRESSIVE_V1 = "GP_GBP_PROGRESSIVE_V1";
 export const GP_GBP_FLAT_V1 = "GP_GBP_FLAT_V1";
@@ -88,4 +93,37 @@ export function gpGbpEntitlementFloorMinor(destinationMinimumsRaw: string): numb
   const gbp = parsed.minimums.GBP;
   if (typeof gbp === "number" && gbp > GP_GBP_MINIMUM_ENTITLEMENT_MINOR) return gbp;
   return GP_GBP_MINIMUM_ENTITLEMENT_MINOR;
+}
+
+/**
+ * LIVE named-pilot floor only. Ordinary / TEST GP keep
+ * gpGbpEntitlementFloorMinor (£25, or a higher GBP destination minimum).
+ * A THB destination minimum is converted at LIVE_PILOT_THB_PER_GBP_MILLI.
+ * Without a THB (or higher GBP) destination minimum this does not lower £25.
+ */
+export function gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw: string): number {
+  const parsed = parseDestinationMinimums(destinationMinimumsRaw);
+  if (!parsed.ok) {
+    throw Object.assign(new Error("Destination payout minimums are not valid."), {
+      status: 409,
+      code: parsed.code,
+    });
+  }
+  const thb = parsed.minimums.THB;
+  const gbp = parsed.minimums.GBP;
+  if (typeof thb !== "number") {
+    return gpGbpEntitlementFloorMinor(destinationMinimumsRaw);
+  }
+  const converted = gbpMinorToClearThbDestination({
+    thbMinor: thb,
+    thbPerGbpMilli: LIVE_PILOT_THB_PER_GBP_MILLI,
+  });
+  if (converted == null) {
+    throw Object.assign(new Error("Destination payout minimums are not valid."), {
+      status: 409,
+      code: "GP_PILOT_DESTINATION_MINIMUMS_INVALID",
+    });
+  }
+  const gbpFloor = typeof gbp === "number" ? gbp : 0;
+  return Math.max(converted, gbpFloor, STRIPE_GBP_CHARGE_MINIMUM_MINOR);
 }

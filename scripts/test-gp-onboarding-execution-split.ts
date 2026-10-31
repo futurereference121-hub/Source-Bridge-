@@ -196,9 +196,11 @@ ok(
 );
 
 const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
+const claim = read("src/lib/payments/payout-rail/live-pilot-claim.ts");
 ok(
   "outbound payment still uses the LIVE user allowlist",
-  outbound.includes("userAllowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST"),
+  outbound.includes("userAllowlistRaw: env.userAllowlistRaw") &&
+    claim.includes("userAllowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST"),
 );
 
 console.log(`\n${passed} gp-onboarding-execution-split checks passed`);

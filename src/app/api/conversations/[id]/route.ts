@@ -20,6 +20,7 @@ import {
   userMatchesPaymentsAllowlist,
 } from "@/lib/payments/allowlist";
 import {
+  getStripeMode,
   isGpTestProcurementTrustOverrideEnabled,
   isInstantPaymentsEnabled,
   isProcurementAdvancesEnabled,
@@ -31,11 +32,19 @@ import {
   procurementAvailabilityCopy,
   procurementAvailabilityReason,
 } from "@/lib/payments/eligibility";
-import { gpGbpEntitlementFloorMinor } from "@/lib/payments/gp-pricing";
+import {
+  gpGbpEntitlementFloorMinor,
+  gpLivePilotGbpEntitlementFloorMinor,
+} from "@/lib/payments/gp-pricing";
 import {
   isApprovedSandboxSourcer,
   sandboxTicketCurrencyPolicy,
 } from "@/lib/payments/payout-rail/sandbox-pair";
+import {
+  isGlobalPayoutsCountryAllowed,
+  isGlobalPayoutsUserAllowed,
+} from "@/lib/payments/payout-rail/eligibility";
+import { liveGpTicketCurrencyPolicy } from "@/lib/payments/payout-rail/live-pilot";
 import {
   conversationActivityAt,
   getConversationActivityVersion,
@@ -269,20 +278,56 @@ export async function GET(_req: Request, { params }: Params) {
           }),
         };
       })(),
-      ticketCurrency: (() => {
-        const policy = peerPart
+      ticketCurrency: await (async () => {
+        const destRaw = process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "";
+        const sandbox = peerPart
           ? sandboxTicketCurrencyPolicy(user.id, peerPart.userId)
           : null;
-        if (!policy || policy.currency !== "GBP") return policy;
-        let minimumEntitlementMinor = 2500;
-        try {
-          minimumEntitlementMinor = gpGbpEntitlementFloorMinor(
-            process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
-          );
-        } catch {
-          minimumEntitlementMinor = 2500;
+        if (sandbox) {
+          if (sandbox.currency !== "GBP") return sandbox;
+          let minimumEntitlementMinor = 2500;
+          try {
+            minimumEntitlementMinor = gpGbpEntitlementFloorMinor(destRaw);
+          } catch {
+            minimumEntitlementMinor = 2500;
+          }
+          return { ...sandbox, minimumEntitlementMinor };
         }
-        return { ...policy, minimumEntitlementMinor };
+        if (!peerPart || getStripeMode() !== "LIVE") return null;
+        const parties = await prisma.user.findMany({
+          where: { id: { in: [user.id, peerPart.userId] } },
+          select: { id: true, email: true, country: true },
+        });
+        const self = parties.find((row) => row.id === user.id);
+        const peer = parties.find((row) => row.id === peerPart.userId);
+        if (!self || !peer) return null;
+        let floorMinor = 2500;
+        try {
+          floorMinor = gpLivePilotGbpEntitlementFloorMinor(destRaw);
+        } catch {
+          floorMinor = 2500;
+        }
+        return liveGpTicketCurrencyPolicy({
+          participantA: {
+            id: self.id,
+            userAllowed: isGlobalPayoutsUserAllowed({
+              userId: self.id,
+              email: self.email,
+              mode: "LIVE",
+            }),
+            gpCountry: isGlobalPayoutsCountryAllowed(self.country),
+          },
+          participantB: {
+            id: peer.id,
+            userAllowed: isGlobalPayoutsUserAllowed({
+              userId: peer.id,
+              email: peer.email,
+              mode: "LIVE",
+            }),
+            gpCountry: isGlobalPayoutsCountryAllowed(peer.country),
+          },
+          floorMinor,
+        });
       })(),
     };
 

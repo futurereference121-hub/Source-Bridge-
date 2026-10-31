@@ -28,6 +28,7 @@ import {
   planQuotePreparation,
   PROVIDER_FEE_PAYER,
 } from "@/lib/payments/payout-rail/live-pilot";
+import { livePilotControlEnv } from "@/lib/payments/payout-rail/live-pilot-claim";
 import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
 import {
   evaluateQuoteRoute,
@@ -115,14 +116,8 @@ function releaseAmount(
   return books.finalResidualMinor;
 }
 
-function pilotEnv() {
-  return {
-    userAllowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST || "",
-    configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
-    amountCapRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_AMOUNT_CAP_MINOR || "",
-    authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
-    destinationMinimumsRaw: process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
-  };
+async function pilotEnv() {
+  return livePilotControlEnv();
 }
 
 export async function reviewGlobalPayoutQuote(opts: {
@@ -419,7 +414,7 @@ async function liveLimitDecision(
     select: { email: true, country: true },
   });
   const balance = await readFinancialAccountBalance("LIVE", txn.currency);
-  const env = pilotEnv();
+  const env = await pilotEnv();
   const decision = evaluateLivePilotInitiation({
     mode: "LIVE",
     gpEnabled: isGlobalPayoutsEnabled(),

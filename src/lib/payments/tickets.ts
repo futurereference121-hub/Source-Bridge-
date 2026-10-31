@@ -23,6 +23,7 @@ import {
   isApprovedSandboxSourcer,
 } from "@/lib/payments/payout-rail/sandbox-pair";
 import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
+import { bindLivePilotTransactionIfOpen } from "@/lib/payments/payout-rail/live-pilot-claim";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import {
   describeGpBuyerPayout,
@@ -2538,6 +2539,13 @@ export async function respondToPaymentTicket(opts: {
       row = await tx.paymentTicket.update({
         where: { id: ticket.id },
         data: { protectedTransactionId: protectedTxn.id },
+      });
+      await bindLivePilotTransactionIfOpen(tx, {
+        transactionId: protectedTxn.id,
+        ticketId: ticket.id,
+        actorUserId: opts.actorId,
+        stripeMode: acceptedStripeMode,
+        payoutRail: acceptedPayoutRail,
       });
     }
 

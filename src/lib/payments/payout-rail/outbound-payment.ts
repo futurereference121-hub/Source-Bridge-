@@ -90,6 +90,7 @@ import {
   type BackgroundReleaseAuthorization,
 } from "@/lib/payments/payout-rail/live-pilot";
 import { evaluateSandboxReleaseLimits } from "@/lib/payments/payout-rail/sandbox-pair";
+import { livePilotControlEnv } from "@/lib/payments/payout-rail/live-pilot-claim";
 import {
   mapOutboundPaymentProviderStatus,
   outboundPaymentIsUnderReview,
@@ -428,14 +429,8 @@ export async function releaseFinalViaGlobalPayouts(opts: {
   });
 }
 
-function livePilotEnv() {
-  return {
-    userAllowlistRaw: process.env.GLOBAL_PAYOUTS_USER_ALLOWLIST || "",
-    configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
-    amountCapRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_AMOUNT_CAP_MINOR || "",
-    authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
-    destinationMinimumsRaw: process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "",
-  };
+async function livePilotEnv() {
+  return livePilotControlEnv();
 }
 
 function coverForRelease(amount: number, currency: string, snapshot: QuoteSnapshot | null) {
@@ -647,7 +642,7 @@ async function assertLivePilotReleaseReady(opts: {
     select: { email: true, country: true },
   });
   const balance = await readFinancialAccountBalance("LIVE", opts.txn.currency);
-  const env = livePilotEnv();
+  const env = await livePilotEnv();
   const decision = evaluateLivePilotInitiation({
     mode: "LIVE",
     gpEnabled: isGlobalPayoutsEnabled(),
@@ -688,7 +683,7 @@ async function claimLivePilotSlot(opts: {
   transactionId: string;
   attemptId: string;
 }) {
-  const authorized = (process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "").trim();
+  const authorized = (await livePilotEnv()).authorizedTransactionIdRaw;
   // The lock, the occupancy read, and the durable claim share this interactive
   // transaction, so they use one connection. The lock ends at commit; the claim remains.
   await prisma.$transaction(async (tx) => {

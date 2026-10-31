@@ -37,7 +37,13 @@ const {
   globalPayoutsGbpFeeMinor,
   globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
+  gpLivePilotGbpEntitlementFloorMinor,
 } = await import("../src/lib/payments/gp-pricing.ts");
+const {
+  gbpMinorToClearThbDestination,
+  LIVE_PILOT_THB_PER_GBP_MILLI,
+  STRIPE_GP_THB_WIRE_MINIMUM_MINOR,
+} = await import("../src/lib/payments/payout-rail/live-pilot.ts");
 const { priceAfterResolvedRail } = await import("../src/lib/payments/commercial-quote.ts");
 const { roundBpsToMinor } = await import("../src/lib/payments/money.ts");
 const { hashTerms } = await import("../src/lib/payments/terms.ts");
@@ -144,8 +150,33 @@ assert.throws(
 
 assert.equal(gpGbpEntitlementFloorMinor(""), 2500);
 assert.equal(gpGbpEntitlementFloorMinor("THB:500000"), 2500);
+assert.equal(gpGbpEntitlementFloorMinor("THB:60000"), 2500);
 assert.equal(gpGbpEntitlementFloorMinor("GBP:1000"), 2500);
 assert.equal(gpGbpEntitlementFloorMinor("GBP:4000,THB:500000"), 4000);
+assert.equal(
+  gbpMinorToClearThbDestination({
+    thbMinor: STRIPE_GP_THB_WIRE_MINIMUM_MINOR,
+    thbPerGbpMilli: LIVE_PILOT_THB_PER_GBP_MILLI,
+  }),
+  1464,
+);
+assert.equal(gpLivePilotGbpEntitlementFloorMinor(""), 2500);
+assert.equal(gpLivePilotGbpEntitlementFloorMinor("THB:60000"), 1464);
+assert.equal(gpLivePilotGbpEntitlementFloorMinor("THB:60000,GBP:2000"), 2000);
+assert.equal(gpLivePilotGbpEntitlementFloorMinor("THB:60000,GBP:4000"), 4000);
+assert.equal(1464 * 41, 60024);
+assert.throws(() => gpQuote(1464), (err) => err.code === "GP_MINIMUM_ENTITLEMENT");
+assert.throws(
+  () => gpQuote(1463, { entitlementFloorMinor: 1464, destinationMinimumsRaw: "THB:60000" }),
+  (err) => err.code === "GP_MINIMUM_ENTITLEMENT",
+);
+const liveMin = gpQuote(1464, {
+  entitlementFloorMinor: 1464,
+  destinationMinimumsRaw: "THB:60000",
+});
+assert.equal(liveMin.protectionFeeMinor, 220);
+assert.equal(liveMin.totalChargeMinor, 1684);
+assert.equal(liveMin.pricingPolicy, GP_GBP_FLAT_V1);
 assert.equal(gpQuote(2500, { destinationMinimumsRaw: "THB:999999" }).protectionFeeMinor, 375);
 assert.throws(
   () => gpQuote(3500, { destinationMinimumsRaw: "GBP:4000" }),

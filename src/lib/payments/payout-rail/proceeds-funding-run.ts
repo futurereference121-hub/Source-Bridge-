@@ -12,10 +12,10 @@ import {
 } from "@/lib/payments/payout-rail/gp-client";
 import {
   evaluateLivePilotFundingScope,
-  parsePilotTransactionId,
   quotedPayoutCover,
   recordedInspectionDeadlineAllowsRelease,
 } from "@/lib/payments/payout-rail/live-pilot";
+import { resolveLivePilotAuthorizedTransactionId } from "@/lib/payments/payout-rail/live-pilot-claim";
 import {
   evaluateQuoteRoute,
   financialAccountCountry,
@@ -69,15 +69,15 @@ import {
 
 const WAITING = GP_FUNDING_WAITING_CODES;
 
-function newGpFundingPermitted(
+async function newGpFundingPermitted(
   mode: StripeMode,
   txn: { id: string; currency: string },
-): { ok: true } | { ok: false; code: string } {
+): Promise<{ ok: true } | { ok: false; code: string }> {
   return evaluateLivePilotFundingScope({
     mode,
     initiationEnabled: canInitiateGlobalPayoutsMoney(mode),
     transactionId: txn.id,
-    authorizedTransactionIdRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "",
+    authorizedTransactionIdRaw: (await resolveLivePilotAuthorizedTransactionId()) || "",
     sourceCurrency: txn.currency,
     configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
   });
@@ -285,9 +285,7 @@ export async function reconcileGpProceedsFunding(opts: {
   }
   const mode = normalizeStripeMode(opts.stripeMode);
   const livePilotTxn =
-    mode === "LIVE"
-      ? parsePilotTransactionId(process.env.GLOBAL_PAYOUTS_LIVE_PILOT_TRANSACTION_ID || "")
-      : null;
+    mode === "LIVE" ? await resolveLivePilotAuthorizedTransactionId() : null;
   const liveNewMoney = mode === "LIVE" && canInitiateGlobalPayoutsMoney("LIVE") && Boolean(livePilotTxn);
   const now = opts.now ?? new Date();
   if (!opts.lockHeld) {
@@ -868,7 +866,7 @@ async function fundOne(opts: {
       );
       return false;
     }
-    const pendingScope = newGpFundingPermitted(opts.mode, opts.txn);
+    const pendingScope = await newGpFundingPermitted(opts.mode, opts.txn);
     if (!pendingScope.ok) return false;
     if (!(await newFundingAllowedNow(opts.txn.id))) return false;
     await sendFundingPayout({
@@ -1024,7 +1022,7 @@ async function fundOne(opts: {
     pendingMinor: 0,
   });
   if (quotePlan.action !== "complete" && quotePlan.action !== "wait_inflight") {
-    const newMoney = newGpFundingPermitted(opts.mode, opts.txn);
+    const newMoney = await newGpFundingPermitted(opts.mode, opts.txn);
     if (!newMoney.ok) {
       await prisma.gpProceedsFunding.update({
         where: { id: opts.funding.id },
@@ -1293,7 +1291,7 @@ async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<bool
     },
   });
   if (!txn || txn.payoutRail !== "STRIPE_GLOBAL_PAYOUTS") return false;
-  if (!newGpFundingPermitted(mode, txn).ok) return false;
+  if (!(await newGpFundingPermitted(mode, txn)).ok) return false;
   const funding = txn.gpProceedsFunding;
   if (!funding || funding.status !== "POSTED") return false;
   const procurement = txn.outboundPaymentAttempts.find((row) => row.kind === "PROCUREMENT");
