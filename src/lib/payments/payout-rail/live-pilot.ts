@@ -36,6 +36,39 @@ export function isValidLiveAllowlistEntry(entry: string): boolean {
   return EMAIL_ENTRY.test(entry) || ID_ENTRY.test(entry);
 }
 
+/** Onboarding is country-gated. Execution still requires the LIVE pilot user allowlist. */
+export type PayoutRailPurpose = "onboarding" | "execution";
+
+/**
+ * Pure LIVE/TEST GP routing decision after Connect-in-progress checks.
+ * Onboarding: supported GP country is enough.
+ * Execution: supported GP country AND user allowlist.
+ */
+export function decideLiveGpRoute(opts: {
+  purpose: PayoutRailPurpose;
+  gpEligibleCountry: boolean;
+  userAllowed: boolean;
+  connectUnsupported: boolean;
+}): {
+  takeGp: boolean;
+  unsupported: boolean;
+  reason: string;
+} {
+  if (opts.gpEligibleCountry && (opts.purpose === "onboarding" || opts.userAllowed)) {
+    return { takeGp: true, unsupported: false, reason: "gp_candidate" };
+  }
+  if (opts.connectUnsupported) {
+    return {
+      takeGp: false,
+      unsupported: true,
+      reason: !opts.gpEligibleCountry
+        ? "connect_unsupported_country_not_allowlisted"
+        : "user_not_allowlisted",
+    };
+  }
+  return { takeGp: false, unsupported: false, reason: "connect_default" };
+}
+
 /**
  * TEST: an empty user allowlist stays an open ramp behind the country gate.
  * LIVE: an empty list, a wildcard, or any invalid entry denies everyone.

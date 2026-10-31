@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
       userId: user.id,
       email: user.email,
       country: countryForRail || undefined,
+      purpose: "onboarding",
     });
 
     const needsCountry = needsPayoutCountrySelection({
@@ -184,6 +185,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       email: user.email,
       country,
+      purpose: "onboarding",
     });
 
     const confirmation = buildPayoutRouteConfirmation(

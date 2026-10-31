@@ -12,7 +12,6 @@ import {
 import {
   isGlobalPayoutsCountryAllowed,
   assertLiveOnboardingWrite,
-  isGlobalPayoutsUserAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
 import { gpErrorMessage, gpFetch, hasGlobalPayoutsRestrictedKey } from "@/lib/payments/payout-rail/gp-client";
 import {
@@ -172,18 +171,6 @@ export async function createGlobalPayoutOnboardingLink(opts: {
   if (!isGlobalPayoutsCountryAllowed(country)) {
     throw Object.assign(
       new Error("Payouts are not yet available in your location."),
-      { status: 409, code: "PAYOUTS_UNAVAILABLE" },
-    );
-  }
-  if (
-    !isGlobalPayoutsUserAllowed({
-      userId: opts.userId,
-      email: opts.email,
-      mode: stripeMode,
-    })
-  ) {
-    throw Object.assign(
-      new Error("Payouts are not yet available for this account."),
       { status: 409, code: "PAYOUTS_UNAVAILABLE" },
     );
   }

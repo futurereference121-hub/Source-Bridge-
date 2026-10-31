@@ -324,9 +324,10 @@ ok(
     !railResolver.includes("!isGlobalPayoutsEnabled() || !dedicatedSourcer"),
 );
 ok(
-  "LIVE GP onboarding still uses country and user allowlists",
+  "LIVE GP execution still uses country and user allowlists",
   railResolver.includes("isGlobalPayoutsCountryAllowed") &&
-    railResolver.includes("isGlobalPayoutsUserAllowed"),
+    railResolver.includes("isGlobalPayoutsUserAllowed") &&
+    railResolver.includes("decideLiveGpRoute"),
 );
 ok("admin payments exposes the hashed LIVE snapshot", read("src/app/api/admin/payments/route.ts").includes("gpLiveReadiness"));
 

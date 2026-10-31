@@ -29,7 +29,11 @@ export async function GET() {
     const user = await requireSessionUser();
     const [status, rail, connect] = await Promise.all([
       getGlobalPayoutStatus(user.id),
-      resolvePayoutRail({ userId: user.id, email: user.email }),
+      resolvePayoutRail({
+        userId: user.id,
+        email: user.email,
+        purpose: "onboarding",
+      }),
       getSellerConnectFundingState(user.id),
     ]);
     const full = await prisma.user.findUnique({
@@ -151,6 +155,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       email: full.email,
       country,
+      purpose: "onboarding",
     });
     if (rail.rail === "UNSUPPORTED") {
       return Response.json(

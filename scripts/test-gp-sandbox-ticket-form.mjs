@@ -432,7 +432,7 @@ async function main() {
   const { POST } = await import("../src/app/api/payments/tickets/route.ts");
   const { GP_GBP_FLAT_FEE_EXPLANATION } = await import("../src/lib/payments/gp-pricing.ts");
   const { readGpSandboxPair } = await import("../src/lib/payments/payout-rail/sandbox-pair.ts");
-  const { normalizeCurrency, roundBpsToMinor } = await import("../src/lib/payments/money.ts");
+  const { normalizeCurrency } = await import("../src/lib/payments/money.ts");
 
   async function loadAccess(conversationId, actorId) {
     state.actorId = actorId;
@@ -614,15 +614,11 @@ async function main() {
       }),
     );
     const ordinaryJson = await ordinaryRes.json();
-    assert(ordinaryRes.status === 201, `ordinary route ${ordinaryRes.status} ${JSON.stringify(ordinaryJson)}`);
-    const ordinaryStored = state.tickets[1];
-    assert(ordinaryStored.stripeMode === "LIVE", "ordinary mode");
-    assert(ordinaryStored.payoutRail === "STRIPE_CONNECT", "ordinary rail");
-    assert(ordinaryStored.currency === ordinaryBody.currency, "ordinary currency preserved");
-    const ordinaryPrincipal =
-      ordinaryStored.itemCostMinor + ordinaryStored.shippingMinor + ordinaryStored.sellerServiceFeeMinor;
-    assert(ordinaryStored.protectionFeeMinor === roundBpsToMinor(ordinaryPrincipal, 700), "ordinary 7% fee");
-    assert(!ordinaryStored.pricingPolicy, "ordinary policy empty");
+    assert(
+      ordinaryRes.status === 409 && ordinaryJson.code === "PAYOUTS_UNAVAILABLE",
+      `ordinary route ${ordinaryRes.status} ${JSON.stringify(ordinaryJson)}`,
+    );
+    assert(state.tickets.length === 1, "ordinary TH ticket was not stored");
 
     const trace = {
       visibleBeforeRole: beforeRole,
@@ -638,8 +634,7 @@ async function main() {
       payoutRail: stored.payoutRail,
       ordinaryVisible: ordinarySelected.value,
       ordinaryOfferedThb: ordinaryBefore.options.some((opt) => opt.value === "THB"),
-      ordinaryMode: ordinaryStored.stripeMode,
-      ordinaryRail: ordinaryStored.payoutRail,
+      ordinaryTicketCode: ordinaryJson.code,
       nonGbpStatus: rejected.status,
       nonGbpCode: rejectedJson.code,
       feeMinor: stored.protectionFeeMinor,
@@ -670,8 +665,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  if (err.calls) console.error(err.calls.join("\n"));
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err);
+    if (err.calls) console.error(err.calls.join("\n"));
+    process.exit(1);
+  });

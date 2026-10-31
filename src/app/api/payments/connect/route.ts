@@ -152,6 +152,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       email: full.email,
       country,
+      purpose: "onboarding",
     });
     if (rail.rail === "UNSUPPORTED") {
       return Response.json(

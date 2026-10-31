@@ -14,7 +14,13 @@ import {
   normalizeStripeMode,
   type StripeMode,
 } from "@/lib/payments/flags";
-import { liveUserAllowed } from "@/lib/payments/payout-rail/live-pilot";
+import {
+  decideLiveGpRoute,
+  liveUserAllowed,
+  type PayoutRailPurpose,
+} from "@/lib/payments/payout-rail/live-pilot";
+
+export { decideLiveGpRoute, type PayoutRailPurpose };
 
 function parseList(raw: string | undefined): string[] {
   return String(raw || "")
@@ -88,7 +94,11 @@ export function isGlobalPayoutsUserAllowed(opts: {
   });
 }
 
-/** Recheck LIVE user and country eligibility immediately before a provider write. */
+/**
+ * LIVE hosted recipient onboarding write gate.
+ * Country eligibility only — the pilot user allowlist is an execution control.
+ * Auth, ownership, and Stripe verification stay at the route / Stripe layer.
+ */
 export function assertLiveOnboardingWrite(opts: {
   mode: StripeMode;
   userId: string;
@@ -99,12 +109,6 @@ export function assertLiveOnboardingWrite(opts: {
   if (mode !== "LIVE") return;
   if (!isGlobalPayoutsCountryAllowed(opts.country)) {
     throw Object.assign(new Error("Payouts are not yet available in your location."), {
-      status: 409,
-      code: "PAYOUTS_UNAVAILABLE",
-    });
-  }
-  if (!isGlobalPayoutsUserAllowed({ userId: opts.userId, email: opts.email, mode: "LIVE" })) {
-    throw Object.assign(new Error("Payouts are not yet available for this account."), {
       status: 409,
       code: "PAYOUTS_UNAVAILABLE",
     });

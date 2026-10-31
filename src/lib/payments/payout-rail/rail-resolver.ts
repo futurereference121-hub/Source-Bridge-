@@ -11,9 +11,11 @@ import {
   type StripeMode,
 } from "@/lib/payments/flags";
 import {
+  decideLiveGpRoute,
   isConnectPayoutCountryUnsupported,
   isGlobalPayoutsCountryAllowed,
   isGlobalPayoutsUserAllowed,
+  type PayoutRailPurpose,
 } from "@/lib/payments/payout-rail/eligibility";
 import { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/gp-status-view";
 import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
@@ -23,6 +25,8 @@ export type PayoutRail =
   | "STRIPE_CONNECT"
   | "STRIPE_GLOBAL_PAYOUTS"
   | "UNSUPPORTED";
+
+export type { PayoutRailPurpose } from "@/lib/payments/payout-rail/eligibility";
 
 export type PayoutRailResolution = {
   rail: PayoutRail;
@@ -47,8 +51,10 @@ export { isGpRecipientPayoutReady } from "@/lib/payments/payout-rail/gp-status-v
  * Priority:
  * 1) Connect ready / in-progress always wins
  * 2) GP master OFF → Connect-only (identical to today)
- * 3) Connect-unsupported country + GP allowlisted → Global Payouts
- * 4) Connect-unsupported + not GP allowlisted → UNSUPPORTED
+ * 3) Supported GP country:
+ *    - purpose=onboarding → Global Payouts (no user allowlist)
+ *    - purpose=execution (default) → Global Payouts only if user allowlisted
+ * 4) Connect-unsupported + not GP-routable → UNSUPPORTED
  * 5) Otherwise stay on Connect onboarding (do not force GP)
  */
 export async function resolvePayoutRail(opts: {
@@ -56,6 +62,7 @@ export async function resolvePayoutRail(opts: {
   email?: string | null;
   country?: string | null;
   mode?: StripeMode;
+  purpose?: PayoutRailPurpose;
 }): Promise<PayoutRailResolution> {
   const dedicatedSourcer = isApprovedSandboxSourcer(opts.userId);
   const mode = dedicatedSourcer
@@ -118,7 +125,8 @@ export async function resolvePayoutRail(opts: {
     };
   }
   // TEST Global Payouts stays on the approved sandbox sourcer.
-  // LIVE uses country + user allowlists. Connect-ready accounts still win above.
+  // LIVE onboarding uses country. LIVE execution also requires the user allowlist.
+  // Connect-ready accounts still win above.
   if (mode !== "LIVE" && !dedicatedSourcer) {
     return {
       rail: "STRIPE_CONNECT",
@@ -132,6 +140,8 @@ export async function resolvePayoutRail(opts: {
     };
   }
 
+  const purpose: PayoutRailPurpose =
+    opts.purpose === "onboarding" ? "onboarding" : "execution";
   const gpEligibleCountry = isGlobalPayoutsCountryAllowed(country);
   const userAllowed = isGlobalPayoutsUserAllowed({
     userId: opts.userId,
@@ -139,8 +149,14 @@ export async function resolvePayoutRail(opts: {
     mode,
   });
   const connectUnsupported = isConnectPayoutCountryUnsupported(country);
+  const decided = decideLiveGpRoute({
+    purpose,
+    gpEligibleCountry,
+    userAllowed,
+    connectUnsupported,
+  });
 
-  if (gpEligibleCountry && userAllowed) {
+  if (decided.takeGp) {
     const gpRow = await prisma.globalPayoutRecipient.findUnique({
       where: {
         userId_stripeMode: { userId: opts.userId, stripeMode: mode },
@@ -160,12 +176,10 @@ export async function resolvePayoutRail(opts: {
   }
 
   // Connect cannot onboard this country and GP policy does not cover it.
-  if (connectUnsupported) {
+  if (decided.unsupported) {
     return {
       rail: "UNSUPPORTED",
-      reason: !gpEligibleCountry
-        ? "connect_unsupported_country_not_allowlisted"
-        : "user_not_allowlisted",
+      reason: decided.reason,
       connectReady: false,
       connectHasAccount: false,
       gpReady: false,
