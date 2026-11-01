@@ -1076,7 +1076,13 @@ async function releaseNowAfterReceipt(opts: {
       finalTransferredMinor: txn.finalTransferredMinor,
       refundedMinor: txn.refundedMinor,
     });
-    if (remainderBooks.remainingProtectedSellerShareMinor > 0) {
+    const { isLiveCollectionOnlyTransaction } = await import(
+      "@/lib/payments/payout-rail/live-pilot-claim"
+    );
+    if (
+      remainderBooks.remainingProtectedSellerShareMinor > 0 &&
+      !(await isLiveCollectionOnlyTransaction(txn.id))
+    ) {
       await afterBuyerReleaseAuthorized({
         txn,
         kind: "FINAL",
@@ -1085,6 +1091,24 @@ async function releaseNowAfterReceipt(opts: {
         actorUserId: opts.buyerId,
       });
     }
+  }
+
+  const { isLiveCollectionOnlyTransaction } = await import(
+    "@/lib/payments/payout-rail/live-pilot-claim"
+  );
+  if (await isLiveCollectionOnlyTransaction(txn.id)) {
+    return {
+      alreadyConfirmed: false,
+      decision: "RELEASE_NOW" as const,
+      transferTriggered: false,
+      alreadyReleased: false,
+      pendingProvider: false,
+      waitingForProceeds: false,
+      transferId: null,
+      transaction: txn,
+      activityVersion: 0,
+      linkedTicketId: null,
+    };
   }
 
   const { reconcileGpProceedsFunding, isGpFundingWaitingCode } = await import(

@@ -11,7 +11,11 @@ import {
   resolveAgreedSellerLines,
   type FeeConfig,
 } from "@/lib/payments/fees";
-import { getStripeMode } from "@/lib/payments/flags";
+import {
+  getStripeMode,
+  isLiveCollectionOnlyEnabled,
+  liveCollectionOnlyControlEnv,
+} from "@/lib/payments/flags";
 import {
   GP_GBP_FEE_EXPLANATION,
   GP_GBP_FLAT_FEE_EXPLANATION,
@@ -22,9 +26,14 @@ import {
   globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
   gpLivePilotGbpEntitlementFloorMinor,
+  liveCollectionOnlyEntitlementFloorMinor,
 } from "@/lib/payments/gp-pricing";
 import { normalizeCurrency } from "@/lib/payments/money";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
+import {
+  evaluateLiveCollectionOnlyCharge,
+  matchLiveCollectionOnlyPair,
+} from "@/lib/payments/payout-rail/live-pilot";
 import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
 import { assertSandboxCommercialTerms } from "@/lib/payments/payout-rail/sandbox-pair";
 
@@ -40,6 +49,7 @@ export type QuotedCommercialTerms = {
   feeExplanation: string;
   payoutRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS";
   stripeMode: "TEST" | "LIVE";
+  collectionOnly?: boolean;
   config: Awaited<ReturnType<typeof getPlatformPaymentConfig>>;
 };
 
@@ -180,6 +190,8 @@ export async function quoteCommercialTerms(opts: {
   paymentOption?: string;
   buyerId: string;
   sellerId: string;
+  buyerEmail?: string | null;
+  sellerEmail?: string | null;
   platformFeeIncludedInPrice?: boolean;
   /** null for a brand-new agreement. "" keeps the legacy 7% method. */
   existingPricingPolicy: string | null;
@@ -205,11 +217,24 @@ export async function quoteCommercialTerms(opts: {
   });
   let payoutRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS" = "STRIPE_CONNECT";
   let stripeMode = getStripeMode();
+  const collectionMatch =
+    sandboxDecision.state === "pair" || !isLiveCollectionOnlyEnabled()
+      ? { ok: false as const }
+      : matchLiveCollectionOnlyPair({
+          ...liveCollectionOnlyControlEnv(),
+          buyerId: opts.buyerId,
+          sellerId: opts.sellerId,
+          buyerEmail: opts.buyerEmail,
+          sellerEmail: opts.sellerEmail,
+        });
   if (sandboxDecision.state === "pair") {
     payoutRail = "STRIPE_GLOBAL_PAYOUTS";
     stripeMode = "TEST";
   } else {
-    const resolved = await resolvePayoutRail({ userId: opts.sellerId });
+    const resolved = await resolvePayoutRail({
+      userId: opts.sellerId,
+      purpose: collectionMatch.ok ? "collection" : undefined,
+    });
     if (resolved.rail === "UNSUPPORTED") {
       reject(
         "Payouts are not yet available in the sourcer's location.",
@@ -221,14 +246,23 @@ export async function quoteCommercialTerms(opts: {
       payoutRail = "STRIPE_GLOBAL_PAYOUTS";
     }
   }
+  if (collectionMatch.ok && payoutRail !== "STRIPE_GLOBAL_PAYOUTS") {
+    reject(
+      "This collection-only payment requires Global Payouts collection.",
+      409,
+      "GP_COLLECTION_ONLY_RAIL",
+    );
+  }
   const destinationMinimumsRaw =
     process.env.GLOBAL_PAYOUTS_LIVE_DESTINATION_MINIMUMS || "";
   const entitlementFloorMinor =
-    payoutRail === "STRIPE_GLOBAL_PAYOUTS"
-      ? stripeMode === "LIVE"
-        ? gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw)
-        : gpGbpEntitlementFloorMinor(destinationMinimumsRaw)
-      : undefined;
+    collectionMatch.ok
+      ? liveCollectionOnlyEntitlementFloorMinor(collectionMatch.capMinor)
+      : payoutRail === "STRIPE_GLOBAL_PAYOUTS"
+        ? stripeMode === "LIVE"
+          ? gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw)
+          : gpGbpEntitlementFloorMinor(destinationMinimumsRaw)
+        : undefined;
   const priced = priceAfterResolvedRail({
     ...lines,
     currency,
@@ -240,5 +274,27 @@ export async function quoteCommercialTerms(opts: {
     entitlementFloorMinor,
     config,
   });
-  return { ...priced, payoutRail, stripeMode, config };
+  if (collectionMatch.ok) {
+    const charge = evaluateLiveCollectionOnlyCharge({
+      pairMatched: true,
+      currency: priced.currency,
+      configuredCurrency: collectionMatch.currency,
+      totalChargeMinor: priced.totalChargeMinor,
+      capMinor: collectionMatch.capMinor,
+    });
+    if (!charge.ok) {
+      reject(
+        "This collection-only payment is outside the approved charge.",
+        409,
+        charge.code,
+      );
+    }
+  }
+  return {
+    ...priced,
+    payoutRail,
+    stripeMode,
+    collectionOnly: collectionMatch.ok,
+    config,
+  };
 }

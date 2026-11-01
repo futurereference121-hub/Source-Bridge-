@@ -90,7 +90,11 @@ import {
   type BackgroundReleaseAuthorization,
 } from "@/lib/payments/payout-rail/live-pilot";
 import { evaluateSandboxReleaseLimits } from "@/lib/payments/payout-rail/sandbox-pair";
-import { livePilotControlEnv } from "@/lib/payments/payout-rail/live-pilot-claim";
+import {
+  assertLiveCollectionOnlyBlocksPayout,
+  isLiveCollectionOnlyTransaction,
+  livePilotControlEnv,
+} from "@/lib/payments/payout-rail/live-pilot-claim";
 import {
   mapOutboundPaymentProviderStatus,
   outboundPaymentIsUnderReview,
@@ -207,6 +211,7 @@ export async function releaseProcurementViaGlobalPayouts(opts: {
   if (!txn) {
     throw Object.assign(new Error("Transaction not found"), { status: 404 });
   }
+  await assertLiveCollectionOnlyBlocksPayout(txn.id);
   assertStripeModeCompatible(txn.stripeMode);
   const txnMode = normalizeStripeMode(txn.stripeMode);
 
@@ -319,6 +324,7 @@ export async function releaseFinalViaGlobalPayouts(opts: {
   if (!txn) {
     throw Object.assign(new Error("Transaction not found"), { status: 404 });
   }
+  await assertLiveCollectionOnlyBlocksPayout(txn.id);
   assertStripeModeCompatible(txn.stripeMode);
   const txnMode = normalizeStripeMode(txn.stripeMode);
   const action = opts.action || "RELEASE_FINAL";
@@ -669,6 +675,7 @@ async function assertLivePilotReleaseReady(opts: {
     destinationMinimumsRaw: env.destinationMinimumsRaw,
     authorizedTransactionIdRaw: env.authorizedTransactionIdRaw,
     transactionId: opts.txn.id,
+    collectionOnly: await isLiveCollectionOnlyTransaction(opts.txn.id),
     durableBuyerId: opts.backgroundRelease ? opts.backgroundRelease.recordedActorUserId : undefined,
   });
   if (!decision.ok) {
@@ -763,6 +770,7 @@ async function executeOutboundRelease(opts: {
   backgroundRelease?: BackgroundReleaseAuthorization | null;
 }) {
   const { txn, txnMode, amount, idempotencyKey, kind } = opts;
+  await assertLiveCollectionOnlyBlocksPayout(txn.id);
 
   const existingAttempt = await prisma.outboundPaymentAttempt.findUnique({
     where: { idempotencyKey },

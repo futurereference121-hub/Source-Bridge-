@@ -212,6 +212,34 @@ export function isGlobalPayoutsProceedsFundingEnabled(): boolean {
 }
 
 /**
+ * Named LIVE card-collection test. Default OFF. Does not authorize FA funding
+ * or seller payout, and does not turn on LIVE Global Payouts initiation.
+ */
+export function isLiveCollectionOnlyEnabled(): boolean {
+  return (
+    isGlobalPayoutsEnabled() &&
+    isLivePaymentsEnabled() &&
+    envBool("GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_ENABLED", false)
+  );
+}
+
+export function liveCollectionOnlyControlEnv(): {
+  enabled: boolean;
+  buyerRaw: string;
+  sellerRaw: string;
+  currencyRaw: string;
+  capRaw: string;
+} {
+  return {
+    enabled: isLiveCollectionOnlyEnabled(),
+    buyerRaw: process.env.GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_BUYER || "",
+    sellerRaw: process.env.GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_SELLER || "",
+    currencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_CURRENCY || "",
+    capRaw: process.env.GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_CHARGE_CAP_MINOR || "",
+  };
+}
+
+/**
  * Pay the platform bank only the uncommitted remainder.
  * Default OFF. TEST and LIVE are separate. LIVE also requires the Live kill switch
  * and PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED. This does not change the payout schedule.
@@ -271,6 +299,7 @@ export function paymentFlagsSnapshot() {
     GP_TEST_PROCUREMENT_TRUST_OVERRIDE: isGpTestProcurementTrustOverrideEnabled(),
     GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED: isGlobalPayoutsLiveInitiationEnabled(),
     GLOBAL_PAYOUTS_PROCEEDS_FUNDING_ENABLED: isGlobalPayoutsProceedsFundingEnabled(),
+    GLOBAL_PAYOUTS_LIVE_COLLECTION_ONLY_ENABLED: isLiveCollectionOnlyEnabled(),
     PLATFORM_BANK_REMAINDER_PAYOUT_ENABLED: isPlatformBankRemainderPayoutEnabled("TEST"),
     PLATFORM_BANK_REMAINDER_PAYOUT_LIVE_ENABLED: isPlatformBankRemainderPayoutEnabled("LIVE"),
     PLATFORM_BALANCE_READINESS_TEST_ENABLED: isPlatformBalanceReadinessEnabled("TEST"),

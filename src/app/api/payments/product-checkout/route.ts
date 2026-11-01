@@ -139,6 +139,8 @@ export async function POST(req: NextRequest) {
       paymentOption: storageOption,
       buyerId: user.id,
       sellerId: listing.userId,
+      buyerEmail: user.email,
+      sellerEmail: listing.user.email,
       existingPricingPolicy: null,
     });
     const fees = quoted;

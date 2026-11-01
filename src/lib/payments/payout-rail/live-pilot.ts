@@ -17,6 +17,12 @@ export const LIVE_PILOT_LOCK_KEY = 87264011;
 /** FinancialAuditEvent.action for the durable named-pilot bind. */
 export const LIVE_GP_PILOT_BOUND_ACTION = "LIVE_GP_PILOT_BOUND";
 
+/** Durable collection-only LIVE ticket. Never authorizes FA funding or seller payout. */
+export const LIVE_GP_COLLECTION_ONLY_ACTION = "LIVE_GP_COLLECTION_ONLY";
+
+/** Separate from the payout-pilot lock so this ticket cannot occupy that slot. */
+export const LIVE_COLLECTION_LOCK_KEY = 87264012;
+
 /** Stripe Global Payouts Thailand wire destination minimum: ฿600.00. */
 export const STRIPE_GP_THB_WIRE_MINIMUM_MINOR = 60_000;
 
@@ -53,8 +59,8 @@ export function isValidLiveAllowlistEntry(entry: string): boolean {
   return EMAIL_ENTRY.test(entry) || ID_ENTRY.test(entry);
 }
 
-/** Onboarding is country-gated. Execution still requires the LIVE pilot user allowlist. */
-export type PayoutRailPurpose = "onboarding" | "execution";
+/** Onboarding is country-gated. Execution still requires the LIVE pilot user allowlist. Collection is a named pair for card capture only. */
+export type PayoutRailPurpose = "onboarding" | "execution" | "collection";
 
 /**
  * Pure LIVE/TEST GP routing decision after Connect-in-progress checks.
@@ -71,7 +77,12 @@ export function decideLiveGpRoute(opts: {
   unsupported: boolean;
   reason: string;
 } {
-  if (opts.gpEligibleCountry && (opts.purpose === "onboarding" || opts.userAllowed)) {
+  if (
+    opts.gpEligibleCountry &&
+    (opts.purpose === "onboarding" ||
+      opts.purpose === "collection" ||
+      opts.userAllowed)
+  ) {
     return { takeGp: true, unsupported: false, reason: "gp_candidate" };
   }
   if (opts.connectUnsupported) {
@@ -90,6 +101,147 @@ export function decideLiveGpRoute(opts: {
  * TEST: an empty user allowlist stays an open ramp behind the country gate.
  * LIVE: an empty list, a wildcard, or any invalid entry denies everyone.
  */
+export function liveIdentityMatchesEntry(opts: {
+  userId: string;
+  email?: string | null;
+  entryRaw: string;
+}): boolean {
+  return liveUserAllowed({
+    enabled: true,
+    mode: "LIVE",
+    allowlistRaw: opts.entryRaw,
+    userId: opts.userId,
+    email: opts.email,
+  });
+}
+
+export function readLiveCollectionOnlyConfig(opts: {
+  enabled: boolean;
+  buyerRaw: string;
+  sellerRaw: string;
+  currencyRaw: string;
+  capRaw: string;
+}):
+  | { ok: true; buyer: string; seller: string; currency: string; capMinor: number }
+  | { ok: false } {
+  if (!opts.enabled) return { ok: false };
+  const buyerList = parseAllowlist(opts.buyerRaw);
+  const sellerList = parseAllowlist(opts.sellerRaw);
+  if (buyerList.length !== 1 || sellerList.length !== 1) return { ok: false };
+  if (!buyerList.every(isValidLiveAllowlistEntry) || !sellerList.every(isValidLiveAllowlistEntry)) {
+    return { ok: false };
+  }
+  if (buyerList[0] === sellerList[0]) return { ok: false };
+  const currency = parsePilotSourceCurrency(opts.currencyRaw);
+  const capMinor = parsePilotAmountCapMinor(opts.capRaw);
+  if (!currency || capMinor == null || capMinor < STRIPE_GBP_CHARGE_MINIMUM_MINOR) {
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    buyer: buyerList[0],
+    seller: sellerList[0],
+    currency,
+    capMinor,
+  };
+}
+
+export function matchLiveCollectionOnlyPair(opts: {
+  enabled: boolean;
+  buyerRaw: string;
+  sellerRaw: string;
+  currencyRaw: string;
+  capRaw: string;
+  buyerId: string;
+  sellerId: string;
+  buyerEmail?: string | null;
+  sellerEmail?: string | null;
+}):
+  | { ok: true; currency: string; capMinor: number }
+  | { ok: false } {
+  const config = readLiveCollectionOnlyConfig(opts);
+  if (!config.ok) return { ok: false };
+  if (opts.buyerId === opts.sellerId) return { ok: false };
+  const buyerOk = liveIdentityMatchesEntry({
+    userId: opts.buyerId,
+    email: opts.buyerEmail,
+    entryRaw: config.buyer,
+  });
+  const sellerOk = liveIdentityMatchesEntry({
+    userId: opts.sellerId,
+    email: opts.sellerEmail,
+    entryRaw: config.seller,
+  });
+  if (!buyerOk || !sellerOk) return { ok: false };
+  return { ok: true, currency: config.currency, capMinor: config.capMinor };
+}
+
+export function evaluateLiveCollectionOnlyCharge(opts: {
+  pairMatched: boolean;
+  currency: string;
+  configuredCurrency: string;
+  totalChargeMinor: number;
+  capMinor: number;
+}): { ok: true } | { ok: false; code: string } {
+  if (!opts.pairMatched) return { ok: false, code: "GP_COLLECTION_ONLY_PAIR" };
+  const currency = parsePilotSourceCurrency(opts.currency);
+  const configured = parsePilotSourceCurrency(opts.configuredCurrency);
+  if (!currency || !configured || currency !== configured) {
+    return { ok: false, code: "GP_COLLECTION_ONLY_CURRENCY" };
+  }
+  if (!Number.isInteger(opts.totalChargeMinor) || opts.totalChargeMinor < STRIPE_GBP_CHARGE_MINIMUM_MINOR) {
+    return { ok: false, code: "GP_COLLECTION_ONLY_BELOW_CHARGE_MINIMUM" };
+  }
+  if (opts.totalChargeMinor > opts.capMinor) {
+    return { ok: false, code: "GP_COLLECTION_ONLY_CHARGE_CAP" };
+  }
+  return { ok: true };
+}
+
+export function liveCollectionOnlyTicketCurrencyPolicy(opts: {
+  enabled: boolean;
+  buyerRaw: string;
+  sellerRaw: string;
+  currencyRaw: string;
+  capRaw: string;
+  participantA: { id: string; email?: string | null };
+  participantB: { id: string; email?: string | null };
+  floorMinor: number;
+}): {
+  buyerId: string;
+  sellerId: string;
+  currency: "GBP";
+  minimumEntitlementMinor: number;
+} | null {
+  if (!Number.isInteger(opts.floorMinor) || opts.floorMinor <= 0) return null;
+  const attempts = [
+    { buyer: opts.participantA, seller: opts.participantB },
+    { buyer: opts.participantB, seller: opts.participantA },
+  ];
+  for (const attempt of attempts) {
+    const matched = matchLiveCollectionOnlyPair({
+      enabled: opts.enabled,
+      buyerRaw: opts.buyerRaw,
+      sellerRaw: opts.sellerRaw,
+      currencyRaw: opts.currencyRaw,
+      capRaw: opts.capRaw,
+      buyerId: attempt.buyer.id,
+      sellerId: attempt.seller.id,
+      buyerEmail: attempt.buyer.email,
+      sellerEmail: attempt.seller.email,
+    });
+    if (matched.ok && matched.currency === "GBP") {
+      return {
+        buyerId: attempt.buyer.id,
+        sellerId: attempt.seller.id,
+        currency: "GBP",
+        minimumEntitlementMinor: opts.floorMinor,
+      };
+    }
+  }
+  return null;
+}
+
 export function liveUserAllowed(opts: {
   enabled: boolean;
   mode: "TEST" | "LIVE";
@@ -293,6 +445,8 @@ export function evaluateLivePilotInitiation(opts: {
   destinationMinimumsRaw: string;
   authorizedTransactionIdRaw: string;
   transactionId: string;
+  /** Named collection-only LIVE tickets never authorize seller payout. */
+  collectionOnly?: boolean;
   /** Set only after a recorded buyer action. Never the worker's user id. */
   durableBuyerId?: string | null;
 }):
@@ -305,6 +459,7 @@ export function evaluateLivePilotInitiation(opts: {
       capMinor: number;
     }
   | { ok: false; code: string } {
+  if (opts.collectionOnly) return { ok: false, code: "GP_COLLECTION_ONLY" };
   if (opts.mode !== "LIVE") {
     return {
       ok: true,
@@ -679,7 +834,9 @@ export function evaluateLivePilotFundingScope(opts: {
   authorizedTransactionIdRaw: string;
   sourceCurrency: string;
   configuredSourceCurrencyRaw: string;
+  collectionOnly?: boolean;
 }): { ok: true } | { ok: false; code: string } {
+  if (opts.collectionOnly) return { ok: false, code: "GP_COLLECTION_ONLY" };
   if (!opts.initiationEnabled) {
     return {
       ok: false,
@@ -706,7 +863,9 @@ export function planQuotePreparation(opts: {
   mode: "TEST" | "LIVE";
   initiationEnabled: boolean;
   requiresQuote: boolean;
+  collectionOnly?: boolean;
 }): { ok: true; paymentPath: false; quotePath: boolean } | { ok: false; code: string } {
+  if (opts.collectionOnly) return { ok: false, code: "GP_COLLECTION_ONLY" };
   if (!opts.initiationEnabled) {
     return { ok: false, code: "GLOBAL_PAYOUTS_INITIATION_DISABLED" };
   }

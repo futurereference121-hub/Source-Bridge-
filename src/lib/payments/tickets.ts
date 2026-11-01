@@ -23,7 +23,11 @@ import {
   isApprovedSandboxSourcer,
 } from "@/lib/payments/payout-rail/sandbox-pair";
 import { quoteCommercialTerms } from "@/lib/payments/commercial-quote";
-import { bindLivePilotTransactionIfOpen } from "@/lib/payments/payout-rail/live-pilot-claim";
+import {
+  assertLiveCollectionOnlyOccupancy,
+  bindLiveCollectionOnlyIfOpen,
+  bindLivePilotTransactionIfOpen,
+} from "@/lib/payments/payout-rail/live-pilot-claim";
 import { feeExplanationForPolicy } from "@/lib/payments/gp-pricing";
 import {
   describeGpBuyerPayout,
@@ -1537,6 +1541,8 @@ async function resolveAmounts(
   commercial: {
     buyerId: string;
     sellerId: string;
+    buyerEmail?: string | null;
+    sellerEmail?: string | null;
     existingPricingPolicy: string | null;
   },
 ) {
@@ -1548,6 +1554,8 @@ async function resolveAmounts(
     paymentOption,
     buyerId: commercial.buyerId,
     sellerId: commercial.sellerId,
+    buyerEmail: commercial.buyerEmail,
+    sellerEmail: commercial.sellerEmail,
     platformFeeIncludedInPrice: input.platformFeeIncludedInPrice,
     existingPricingPolicy: commercial.existingPricingPolicy,
   });
@@ -1570,6 +1578,12 @@ async function resolveAmounts(
     paymentOption,
     agreed,
   };
+  if (quoted.collectionOnly && agreed) {
+    throw Object.assign(
+      new Error("Procurement advance is not available for this collection-only payment."),
+      { status: 409, code: "GP_COLLECTION_ONLY" },
+    );
+  }
   const ineligible = procurementIneligibilityReason(eligibilityInput);
   if (agreed && ineligible) {
     throw Object.assign(
@@ -1601,6 +1615,7 @@ async function resolveAmounts(
     pricingPolicy: quoted.pricingPolicy,
     payoutRail: quoted.payoutRail,
     stripeMode: quoted.stripeMode,
+    collectionOnly: Boolean(quoted.collectionOnly),
   };
 }
 
@@ -1733,9 +1748,12 @@ export async function createOrRevisePaymentTicket(opts: {
     pricingPolicy,
     payoutRail: ticketPayoutRail,
     stripeMode: ticketStripeMode,
+    collectionOnly,
   } = await resolveAmounts(opts.amounts, seller, paymentOption, {
     buyerId: opts.buyerId,
     sellerId: opts.sellerId,
+    buyerEmail: buyer.email,
+    sellerEmail: seller.email,
     existingPricingPolicy,
   });
 
@@ -1790,6 +1808,14 @@ export async function createOrRevisePaymentTicket(opts: {
     opts.conversationId,
     open?.id ?? null,
   );
+  if (collectionOnly) {
+    await assertLiveCollectionOnlyOccupancy({
+      buyerId: opts.buyerId,
+      sellerId: opts.sellerId,
+      excludeTicketId: opts.reviseFromTicketId ?? open?.id ?? null,
+    });
+  }
+
   if (activeCount >= MAX_ACTIVE_PAYMENT_TICKETS) {
     throw Object.assign(
       new Error("This conversation already has 3 active Payment Tickets"),
@@ -2540,13 +2566,26 @@ export async function respondToPaymentTicket(opts: {
         where: { id: ticket.id },
         data: { protectedTransactionId: protectedTxn.id },
       });
-      await bindLivePilotTransactionIfOpen(tx, {
+      const collectionBound = await bindLiveCollectionOnlyIfOpen(tx, {
         transactionId: protectedTxn.id,
         ticketId: ticket.id,
         actorUserId: opts.actorId,
+        buyerId: ticket.buyerId,
+        sellerId: ticket.sellerId,
         stripeMode: acceptedStripeMode,
         payoutRail: acceptedPayoutRail,
+        currency: ticket.currency,
+        totalChargeMinor: ticket.totalChargeMinor,
       });
+      if (!collectionBound) {
+        await bindLivePilotTransactionIfOpen(tx, {
+          transactionId: protectedTxn.id,
+          ticketId: ticket.id,
+          actorUserId: opts.actorId,
+          stripeMode: acceptedStripeMode,
+          payoutRail: acceptedPayoutRail,
+        });
+      }
     }
 
     await bumpConversationActivity(ticket.conversationId, tx, {

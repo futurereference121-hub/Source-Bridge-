@@ -15,7 +15,11 @@ import {
   quotedPayoutCover,
   recordedInspectionDeadlineAllowsRelease,
 } from "@/lib/payments/payout-rail/live-pilot";
-import { resolveLivePilotAuthorizedTransactionId } from "@/lib/payments/payout-rail/live-pilot-claim";
+import {
+  isLiveCollectionOnlyTransaction,
+  liveCollectionOnlyTransactionIds,
+  resolveLivePilotAuthorizedTransactionId,
+} from "@/lib/payments/payout-rail/live-pilot-claim";
 import {
   evaluateQuoteRoute,
   financialAccountCountry,
@@ -80,6 +84,7 @@ async function newGpFundingPermitted(
     authorizedTransactionIdRaw: (await resolveLivePilotAuthorizedTransactionId()) || "",
     sourceCurrency: txn.currency,
     configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
+    collectionOnly: await isLiveCollectionOnlyTransaction(txn.id),
   });
 }
 
@@ -204,6 +209,7 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
       connectReserveCode: connect.code,
     };
   }
+  const collectionIds = await liveCollectionOnlyTransactionIds();
   const [otherFundings, unreadableOthers] = await Promise.all([
     prisma.gpProceedsFunding.findMany({
       where: {
@@ -235,6 +241,7 @@ async function platformRoom(mode: StripeMode, currency: string, exceptFundingId:
         currency: { equals: currency, mode: "insensitive" },
         status: { notIn: ["REFUNDED", "CANCELLED", "FAILED", "RELEASED"] },
         gpProceedsFunding: null,
+        ...(collectionIds.length ? { id: { notIn: collectionIds } } : {}),
       },
     }),
   ]);
@@ -382,6 +389,7 @@ export async function reconcileGpProceedsFunding(opts: {
   let resumed = 0;
   for (const txn of txns) {
     try {
+    if (await isLiveCollectionOnlyTransaction(txn.id)) continue;
     const attempts = txn.outboundPaymentAttempts ?? [];
     const finalAttempt = attempts.find((row) => row.kind === "FINAL") ?? null;
     const procurementAttempt =
@@ -1283,6 +1291,7 @@ async function confirmLegs(
 
 async function resumeOne(protectedTxnId: string, mode: StripeMode): Promise<boolean> {
   if (!canInitiateGlobalPayoutsMoney(mode)) return false;
+  if (await isLiveCollectionOnlyTransaction(protectedTxnId)) return false;
   const txn = await prisma.protectedTransaction.findUnique({
     where: { id: protectedTxnId },
     include: {

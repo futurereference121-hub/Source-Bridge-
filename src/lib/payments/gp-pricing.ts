@@ -127,3 +127,23 @@ export function gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw: stri
   const gbpFloor = typeof gbp === "number" ? gbp : 0;
   return Math.max(converted, gbpFloor, STRIPE_GBP_CHARGE_MINIMUM_MINOR);
 }
+
+/**
+ * Largest GBP entitlement whose 15% GP fee still keeps the buyer total at or
+ * under the named collection-only charge cap and at or above the Stripe GBP
+ * card minimum. Used as the form floor so this ticket cannot undershoot or
+ * overshoot the US$1 budget.
+ */
+export function liveCollectionOnlyEntitlementFloorMinor(capMinor: number): number {
+  const cap = assertNonNegativeInt(capMinor, "capMinor");
+  for (let entitlement = cap; entitlement >= 1; entitlement -= 1) {
+    const total = entitlement + globalPayoutsGbpFlatFeeMinor(entitlement);
+    if (total <= cap && total >= STRIPE_GBP_CHARGE_MINIMUM_MINOR) {
+      return entitlement;
+    }
+  }
+  throw Object.assign(new Error("Collection-only charge cap is below the card minimum."), {
+    status: 409,
+    code: "GP_COLLECTION_ONLY_CHARGE_CAP",
+  });
+}

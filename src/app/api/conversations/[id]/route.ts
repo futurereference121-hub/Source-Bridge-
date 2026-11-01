@@ -23,8 +23,10 @@ import {
   getStripeMode,
   isGpTestProcurementTrustOverrideEnabled,
   isInstantPaymentsEnabled,
+  isLiveCollectionOnlyEnabled,
   isProcurementAdvancesEnabled,
   isProtectedPaymentsEnabled,
+  liveCollectionOnlyControlEnv,
 } from "@/lib/payments/flags";
 import { getPlatformPaymentConfig } from "@/lib/payments/config";
 import {
@@ -35,6 +37,7 @@ import {
 import {
   gpGbpEntitlementFloorMinor,
   gpLivePilotGbpEntitlementFloorMinor,
+  liveCollectionOnlyEntitlementFloorMinor,
 } from "@/lib/payments/gp-pricing";
 import {
   isApprovedSandboxSourcer,
@@ -44,7 +47,11 @@ import {
   isGlobalPayoutsCountryAllowed,
   isGlobalPayoutsUserAllowed,
 } from "@/lib/payments/payout-rail/eligibility";
-import { liveGpTicketCurrencyPolicy } from "@/lib/payments/payout-rail/live-pilot";
+import {
+  liveCollectionOnlyTicketCurrencyPolicy,
+  liveGpTicketCurrencyPolicy,
+  readLiveCollectionOnlyConfig,
+} from "@/lib/payments/payout-rail/live-pilot";
 import {
   conversationActivityAt,
   getConversationActivityVersion,
@@ -301,6 +308,25 @@ export async function GET(_req: Request, { params }: Params) {
         const self = parties.find((row) => row.id === user.id);
         const peer = parties.find((row) => row.id === peerPart.userId);
         if (!self || !peer) return null;
+        if (isLiveCollectionOnlyEnabled()) {
+          const collectionEnv = liveCollectionOnlyControlEnv();
+          const collectionConfig = readLiveCollectionOnlyConfig(collectionEnv);
+          if (collectionConfig.ok) {
+            try {
+              const collectionPolicy = liveCollectionOnlyTicketCurrencyPolicy({
+                ...collectionEnv,
+                participantA: { id: self.id, email: self.email },
+                participantB: { id: peer.id, email: peer.email },
+                floorMinor: liveCollectionOnlyEntitlementFloorMinor(
+                  collectionConfig.capMinor,
+                ),
+              });
+              if (collectionPolicy) return collectionPolicy;
+            } catch {
+              // Fall through to ordinary LIVE GP ticket policy.
+            }
+          }
+        }
         let floorMinor = 2500;
         try {
           floorMinor = gpLivePilotGbpEntitlementFloorMinor(destRaw);

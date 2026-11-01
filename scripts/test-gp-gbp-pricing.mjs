@@ -38,6 +38,7 @@ const {
   globalPayoutsGbpFlatFeeMinor,
   gpGbpEntitlementFloorMinor,
   gpLivePilotGbpEntitlementFloorMinor,
+  liveCollectionOnlyEntitlementFloorMinor,
 } = await import("../src/lib/payments/gp-pricing.ts");
 const {
   gbpMinorToClearThbDestination,
@@ -342,5 +343,7 @@ assert.match(flags, /envBool\("GLOBAL_PAYOUTS_LIVE_INITIATION_ENABLED", false\)/
 const pricingSource = readFileSync(path.join(root, "src/lib/payments/gp-pricing.ts"), "utf8");
 assert.doesNotMatch(pricingSource, /GLOBAL_PAYOUTS_SANDBOX_ENABLED\s*=/);
 assert.doesNotMatch(pricingSource, /LIVE_PAYMENTS_ENABLED\s*=/);
+assert.equal(liveCollectionOnlyEntitlementFloorMinor(70), 61);
+assert.equal(61 + globalPayoutsGbpFlatFeeMinor(61), 70);
 
 console.log("gp-gbp-pricing: PASS");

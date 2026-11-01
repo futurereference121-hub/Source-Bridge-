@@ -63,6 +63,15 @@ ok(
   }).takeGp === true,
 );
 ok(
+  "collection TH without user allowlist takes GP",
+  decideLiveGpRoute({
+    purpose: "collection",
+    gpEligibleCountry: true,
+    userAllowed: false,
+    connectUnsupported: true,
+  }).takeGp === true,
+);
+ok(
   "unsupported country stays blocked for onboarding",
   decideLiveGpRoute({
     purpose: "onboarding",

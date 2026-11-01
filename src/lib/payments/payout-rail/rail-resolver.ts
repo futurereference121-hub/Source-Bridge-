@@ -141,7 +141,11 @@ export async function resolvePayoutRail(opts: {
   }
 
   const purpose: PayoutRailPurpose =
-    opts.purpose === "onboarding" ? "onboarding" : "execution";
+    opts.purpose === "onboarding"
+      ? "onboarding"
+      : opts.purpose === "collection"
+        ? "collection"
+        : "execution";
   const gpEligibleCountry = isGlobalPayoutsCountryAllowed(country);
   const userAllowed = isGlobalPayoutsUserAllowed({
     userId: opts.userId,

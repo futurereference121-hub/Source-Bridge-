@@ -28,7 +28,10 @@ import {
   planQuotePreparation,
   PROVIDER_FEE_PAYER,
 } from "@/lib/payments/payout-rail/live-pilot";
-import { livePilotControlEnv } from "@/lib/payments/payout-rail/live-pilot-claim";
+import {
+  isLiveCollectionOnlyTransaction,
+  livePilotControlEnv,
+} from "@/lib/payments/payout-rail/live-pilot-claim";
 import { deriveOutboundDisplayState } from "@/lib/payments/payout-rail/outbound-display";
 import {
   evaluateQuoteRoute,
@@ -131,6 +134,9 @@ export async function reviewGlobalPayoutQuote(opts: {
     where: { id: opts.protectedTxnId },
   });
   if (!txn) return { ok: false, code: "NOT_FOUND" };
+  if (await isLiveCollectionOnlyTransaction(txn.id)) {
+    return { ok: false, code: "GP_COLLECTION_ONLY" };
+  }
   if (opts.actorUserId !== txn.buyerId) return { ok: false, code: "GP_QUOTE_ACTOR_MISMATCH" };
   if (lockedPayoutRailFromTxn(txn) !== "STRIPE_GLOBAL_PAYOUTS") {
     return { ok: false, code: "PAYOUT_RAIL_MISMATCH" };
@@ -208,6 +214,7 @@ export async function reviewGlobalPayoutQuote(opts: {
     mode: txnMode,
     initiationEnabled: canInitiateGlobalPayoutsMoney(txnMode),
     requiresQuote: true,
+    collectionOnly: await isLiveCollectionOnlyTransaction(txn.id),
   });
   if (!plan.ok) return { ok: false, code: plan.code };
 

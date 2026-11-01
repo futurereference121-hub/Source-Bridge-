@@ -86,6 +86,10 @@ export async function releaseProcurement(opts: {
 
   // Additive GP rail — never fall through into Connect transfers.
   if (lockedPayoutRailFromTxn(txn) === "STRIPE_GLOBAL_PAYOUTS") {
+    const { assertLiveCollectionOnlyBlocksPayout } = await import(
+      "@/lib/payments/payout-rail/live-pilot-claim"
+    );
+    await assertLiveCollectionOnlyBlocksPayout(txn.id);
     return releaseProcurementViaGlobalPayouts(opts);
   }
 
@@ -411,6 +415,10 @@ export async function releaseFinal(opts: {
 
   // Additive GP rail — never fall through into Connect transfers.
   if (lockedPayoutRailFromTxn(txn) === "STRIPE_GLOBAL_PAYOUTS") {
+    const { assertLiveCollectionOnlyBlocksPayout } = await import(
+      "@/lib/payments/payout-rail/live-pilot-claim"
+    );
+    await assertLiveCollectionOnlyBlocksPayout(txn.id);
     return releaseFinalViaGlobalPayouts(opts);
   }
 
