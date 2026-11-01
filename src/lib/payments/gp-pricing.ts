@@ -132,7 +132,7 @@ export function gpLivePilotGbpEntitlementFloorMinor(destinationMinimumsRaw: stri
  * Largest GBP entitlement whose 15% GP fee still keeps the buyer total at or
  * under the named collection-only charge cap and at or above the Stripe GBP
  * card minimum. Used as the form floor so this ticket cannot undershoot or
- * overshoot the US$1 budget.
+ * overshoot the approved collection charge.
  */
 export function liveCollectionOnlyEntitlementFloorMinor(capMinor: number): number {
   const cap = assertNonNegativeInt(capMinor, "capMinor");

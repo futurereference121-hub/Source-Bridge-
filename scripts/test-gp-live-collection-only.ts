@@ -32,7 +32,7 @@ const buyerEmail = "theowlsaid420@gmail.com";
 const sellerEmail = "isabellatempton@gmail.com";
 const buyerId = "buyer_theowlsaid_1";
 const sellerId = "seller_bellahap_1";
-const capMinor = 70;
+const capMinor = 30;
 const usdPerGbp = 1.3399;
 
 const config = readLiveCollectionOnlyConfig({
@@ -42,7 +42,7 @@ const config = readLiveCollectionOnlyConfig({
   currencyRaw: "GBP",
   capRaw: String(capMinor),
 });
-ok("collection config accepts the named pair and 70p cap", config.ok === true);
+ok("collection config accepts the named pair and 30p cap", config.ok === true);
 ok(
   "disabled collection config fails closed",
   readLiveCollectionOnlyConfig({
@@ -50,7 +50,7 @@ ok(
     buyerRaw: buyerEmail,
     sellerRaw: sellerEmail,
     currencyRaw: "GBP",
-    capRaw: "70",
+    capRaw: "30",
   }).ok === false,
 );
 ok(
@@ -60,7 +60,7 @@ ok(
     buyerRaw: buyerEmail,
     sellerRaw: buyerEmail,
     currencyRaw: "GBP",
-    capRaw: "70",
+    capRaw: "30",
   }).ok === false,
 );
 ok(
@@ -96,7 +96,7 @@ const pair = matchLiveCollectionOnlyPair({
   buyerRaw: buyerEmail,
   sellerRaw: sellerEmail,
   currencyRaw: "GBP",
-  capRaw: "70",
+  capRaw: "30",
   buyerId,
   sellerId,
   buyerEmail,
@@ -110,7 +110,7 @@ ok(
     buyerRaw: buyerEmail,
     sellerRaw: sellerEmail,
     currencyRaw: "GBP",
-    capRaw: "70",
+    capRaw: "30",
     buyerId: sellerId,
     sellerId: buyerId,
     buyerEmail: sellerEmail,
@@ -118,47 +118,42 @@ ok(
   }).ok === false,
 );
 
-const entitlement = 61;
-ok("named collection ticket uses 61p seller entitlement", entitlement === 61);
+const entitlement = 26;
+ok("named collection ticket uses 26p seller entitlement", entitlement === 26);
 
-const intendedTotal = 70;
+const intendedTotal = 30;
 ok(
-  "70p stays under US$1 at 1.3399 USD/GBP",
+  "30p is Stripe's published GBP card minimum",
+  intendedTotal === STRIPE_GBP_CHARGE_MINIMUM_MINOR,
+);
+ok(
+  "30p stays under US$1 at 1.3399 USD/GBP",
   (intendedTotal / 100) * usdPerGbp < 1,
 );
 ok(
-  "75p would exceed US$1 at 1.3399 USD/GBP",
-  (75 / 100) * usdPerGbp > 1,
-);
-ok(
-  "70p charge is above the Stripe GBP card minimum",
-  intendedTotal >= STRIPE_GBP_CHARGE_MINIMUM_MINOR,
-);
-
-ok(
-  "approved 70p charge is accepted",
+  "approved 30p charge is accepted",
   evaluateLiveCollectionOnlyCharge({
     pairMatched: true,
     currency: "GBP",
     configuredCurrency: "GBP",
-    totalChargeMinor: 70,
+    totalChargeMinor: 30,
     capMinor,
   }).ok === true,
 );
 ok(
-  "71p charge is rejected as over cap",
+  "31p charge is rejected as over cap",
   evaluateLiveCollectionOnlyCharge({
     pairMatched: true,
     currency: "GBP",
     configuredCurrency: "GBP",
-    totalChargeMinor: 71,
+    totalChargeMinor: 31,
     capMinor,
   }).ok === false &&
     evaluateLiveCollectionOnlyCharge({
       pairMatched: true,
       currency: "GBP",
       configuredCurrency: "GBP",
-      totalChargeMinor: 71,
+      totalChargeMinor: 31,
       capMinor,
     }).code === "GP_COLLECTION_ONLY_CHARGE_CAP",
 );
@@ -178,7 +173,7 @@ const ticketPolicy = liveCollectionOnlyTicketCurrencyPolicy({
   buyerRaw: buyerEmail,
   sellerRaw: sellerEmail,
   currencyRaw: "GBP",
-  capRaw: "70",
+  capRaw: "30",
   participantA: { id: buyerId, email: buyerEmail },
   participantB: { id: sellerId, email: sellerEmail },
   floorMinor: entitlement,
@@ -188,7 +183,7 @@ ok(
   ticketPolicy?.buyerId === buyerId &&
     ticketPolicy?.sellerId === sellerId &&
     ticketPolicy?.currency === "GBP" &&
-    ticketPolicy?.minimumEntitlementMinor === 61,
+    ticketPolicy?.minimumEntitlementMinor === 26,
 );
 
 ok(
@@ -222,7 +217,7 @@ const initiation = evaluateLivePilotInitiation({
   sourceCurrency: "GBP",
   configuredSourceCurrencyRaw: "GBP",
   amountCapRaw: "2500",
-  principalMinor: 61,
+  principalMinor: 26,
   providerFeeMinor: 0,
   crossBorderFeeMinor: 0,
   fxFeeMinor: 0,
