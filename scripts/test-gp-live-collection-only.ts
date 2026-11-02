@@ -324,5 +324,13 @@ ok(
   quote.includes('purpose: collectionMatch.ok ? "collection" : undefined') &&
     !quote.includes('purpose: "onboarding"'),
 );
+ok(
+  "listed-product quotes never claim the collection-only slot",
+  quote.includes('opts.origin === "PRODUCT_CHECKOUT"'),
+);
+ok(
+  "collection occupancy ignores listed-product tickets",
+  claim.includes('protectedTransaction: { origin: { not: "PRODUCT_CHECKOUT" } }'),
+);
 
 console.log(`\n${passed} gp-live-collection-only checks passed`);

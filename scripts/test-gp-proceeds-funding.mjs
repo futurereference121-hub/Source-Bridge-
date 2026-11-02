@@ -70,6 +70,7 @@ const {
   proceedsQuoteKeyPrefix,
   proceedsQuoteSourceAmount,
   proceedsRequiredPostedMinor,
+  listedProductReleaseMayFund,
   procurementAttemptAllowsFunding,
   fundingIdempotencyKey,
   fundingPayoutMatchesLeg,
@@ -637,6 +638,27 @@ assert.equal(
 );
 assert.equal(
   procurementAttemptAllowsFunding({ kind: "FINAL", status: "AWAITING_FA_FUNDS" }),
+  false,
+);
+assert.equal(
+  listedProductReleaseMayFund({
+    origin: "PRODUCT_CHECKOUT",
+    hasFinalOutboundAttempt: true,
+  }),
+  true,
+);
+assert.equal(
+  listedProductReleaseMayFund({
+    origin: "PRODUCT_CHECKOUT",
+    hasFinalOutboundAttempt: false,
+  }),
+  false,
+);
+assert.equal(
+  listedProductReleaseMayFund({
+    origin: "CHAT_TICKET",
+    hasFinalOutboundAttempt: true,
+  }),
   false,
 );
 assert.equal(

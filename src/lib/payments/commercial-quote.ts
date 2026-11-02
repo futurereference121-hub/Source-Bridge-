@@ -195,6 +195,8 @@ export async function quoteCommercialTerms(opts: {
   platformFeeIncludedInPrice?: boolean;
   /** null for a brand-new agreement. "" keeps the legacy 7% method. */
   existingPricingPolicy: string | null;
+  /** Listed-product checkout must not claim the named LIVE collection-only slot. */
+  origin?: "PRODUCT_CHECKOUT" | "CHAT_TICKET" | null;
 }): Promise<QuotedCommercialTerms> {
   const config = await getPlatformPaymentConfig();
   const currency = normalizeCurrency(opts.currency || "USD");
@@ -218,7 +220,9 @@ export async function quoteCommercialTerms(opts: {
   let payoutRail: "STRIPE_CONNECT" | "STRIPE_GLOBAL_PAYOUTS" = "STRIPE_CONNECT";
   let stripeMode = getStripeMode();
   const collectionMatch =
-    sandboxDecision.state === "pair" || !isLiveCollectionOnlyEnabled()
+    opts.origin === "PRODUCT_CHECKOUT" ||
+    sandboxDecision.state === "pair" ||
+    !isLiveCollectionOnlyEnabled()
       ? { ok: false as const }
       : matchLiveCollectionOnlyPair({
           ...liveCollectionOnlyControlEnv(),

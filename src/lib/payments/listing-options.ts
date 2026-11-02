@@ -104,6 +104,28 @@ export function listingAllowsContact(option: ListingPaymentOption): boolean {
   return option === "CONTACT_ONLY" || option === "BOTH";
 }
 
+/**
+ * Protected listed-product card checkout.
+ * Connect-ready sellers keep the existing path. TEST Global Payouts sellers
+ * (including the approved sandbox sourcer on a LIVE platform) may use
+ * Protected only. Direct Payment stays Connect-only. LIVE GP checkout
+ * stays closed while LIVE initiation is off.
+ * `stripeMode` is the seller rail mode, not always the platform mode.
+ */
+export function listingProtectedSellerReady(opts: {
+  connectReady: boolean;
+  gpRail: boolean;
+  gpReady: boolean;
+  stripeMode: string;
+}): boolean {
+  if (opts.connectReady) return true;
+  return (
+    opts.gpRail &&
+    opts.gpReady &&
+    String(opts.stripeMode || "").toUpperCase() === "TEST"
+  );
+}
+
 /** Server-side validation of buyer-selected checkout path vs listing config. */
 export function assertListingCheckoutOption(opts: {
   listingOption: string;

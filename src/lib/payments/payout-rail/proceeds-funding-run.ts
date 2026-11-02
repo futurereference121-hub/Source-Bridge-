@@ -46,6 +46,7 @@ import {
   isTestRepairAbandoned,
   fundingPrincipalMinor,
   inferredProcurementFeeMinor,
+  listedProductReleaseMayFund,
   nextProceedsQuoteKey,
   proceedsQuoteSourceAmount,
   proceedsRequiredPostedMinor,
@@ -786,6 +787,7 @@ async function fundOne(opts: {
   txn: {
     id: string;
     buyerId: string;
+    origin?: string | null;
     status: string;
     currency: string;
     stripeChargeId: string;
@@ -970,7 +972,19 @@ async function fundOne(opts: {
     });
     return false;
   }
-  if (!(await buyerReleaseMayFund(opts.txn, opts.now))) return false;
+  const listedFinal = await prisma.outboundPaymentAttempt.findFirst({
+    where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
+    select: { id: true },
+  });
+  if (
+    !(await buyerReleaseMayFund(opts.txn, opts.now)) &&
+    !listedProductReleaseMayFund({
+      origin: opts.txn.origin,
+      hasFinalOutboundAttempt: Boolean(listedFinal),
+    })
+  ) {
+    return false;
+  }
   const finalAttempt = await prisma.outboundPaymentAttempt.findFirst({
     where: { protectedTxnId: opts.txn.id, kind: "FINAL" },
     orderBy: { updatedAt: "desc" },

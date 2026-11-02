@@ -253,6 +253,21 @@ const PROCUREMENT_FUNDING_AUTHORIZED_STATUSES = [
   "RECONCILED",
 ] as const;
 
+/**
+ * Listed-product GP proceeds fund only after the existing product-flow
+ * release (admin decision / inactivity release), which creates a FINAL
+ * outbound attempt. Buyer-release and procurement do not apply.
+ */
+export function listedProductReleaseMayFund(opts: {
+  origin?: string | null;
+  hasFinalOutboundAttempt: boolean;
+}): boolean {
+  return (
+    String(opts.origin || "").toUpperCase() === "PRODUCT_CHECKOUT" &&
+    opts.hasFinalOutboundAttempt
+  );
+}
+
 /** Buyer-authorized item advance may fund FA proceeds. FAILED does not. */
 export function procurementAttemptAllowsFunding(opts: {
   kind?: string | null;

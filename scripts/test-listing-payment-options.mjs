@@ -63,4 +63,12 @@ assert.throws(() => assertListingCheckoutOption({ listingOption: "PROTECTED_ONLY
 assert.throws(() => assertListingCheckoutOption({ listingOption: "INSTANT_ONLY", selected: "PROTECTED" }), /Direct Payment only/);
 assert.doesNotThrow(() => assertListingCheckoutOption({ listingOption: "BOTH", selected: "DIRECT" }));
 assert.throws(() => assertListingCheckoutOption({ listingOption: "CONTACT_ONLY", selected: "DIRECT" }), /Protected Payment only/);
+function listingProtectedSellerReady(opts) {
+  if (opts.connectReady) return true;
+  return opts.gpRail && opts.gpReady && String(opts.stripeMode || "").toUpperCase() === "TEST";
+}
+assert.equal(listingProtectedSellerReady({ connectReady: true, gpRail: false, gpReady: false, stripeMode: "LIVE" }), true);
+assert.equal(listingProtectedSellerReady({ connectReady: false, gpRail: true, gpReady: true, stripeMode: "TEST" }), true);
+assert.equal(listingProtectedSellerReady({ connectReady: false, gpRail: true, gpReady: true, stripeMode: "LIVE" }), false);
+assert.equal(listingProtectedSellerReady({ connectReady: false, gpRail: true, gpReady: false, stripeMode: "TEST" }), false);
 console.log("test-listing-payment-options: OK");

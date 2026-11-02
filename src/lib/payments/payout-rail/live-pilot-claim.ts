@@ -129,6 +129,10 @@ export async function assertLiveCollectionOnlyOccupancy(opts: {
       stripeMode: "LIVE",
       payoutRail: "STRIPE_GLOBAL_PAYOUTS",
       status: { in: ["DRAFT", "PROPOSED", "ACCEPTED", "FUNDED"] },
+      OR: [
+        { protectedTransaction: null },
+        { protectedTransaction: { origin: { not: "PRODUCT_CHECKOUT" } } },
+      ],
       ...(opts.excludeTicketId ? { id: { not: opts.excludeTicketId } } : {}),
     },
     select: { id: true },

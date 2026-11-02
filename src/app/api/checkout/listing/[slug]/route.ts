@@ -5,6 +5,7 @@ import { getSessionUser } from "@/lib/auth";
 import { jsonError } from "@/lib/validation";
 import { checkoutPublicConfig } from "@/lib/payments/checkout";
 import {
+  getStripeMode,
   isDirectPaymentsEnabled,
   isProtectedPaymentsEnabled,
   paymentFlagsSnapshot,
@@ -13,9 +14,12 @@ import {
   listingAllowsDirect,
   listingAllowsProtected,
   listingPaymentFlags,
+  listingProtectedSellerReady,
   parseListingPaymentOptions,
 } from "@/lib/payments/listing-options";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import { isApprovedSandboxSourcer } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   getPaymentsTestAllowlistEntryCount,
   isPaymentsTestAllowlistConfigured,
@@ -64,6 +68,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     let paymentOptions = "CONTACT_ONLY";
     let sellerConnectReady = false;
+    let sellerProtectedReady = false;
     /** Always the stock listing owner User.id when DB listing — for allowlist. */
     let sellerUserId = listing.memberId;
     let sellerEmail: string | null = null;
@@ -99,6 +104,21 @@ export async function GET(_req: Request, ctx: Ctx) {
       sellerEmail = row?.user?.email ?? null;
       const connect = await getConnectStatus(sellerUserId);
       sellerConnectReady = connect.canReceiveProtectedPayments;
+      const rail = await resolvePayoutRail({
+        userId: sellerUserId,
+        email: sellerEmail,
+      });
+      // Sandbox sourcer rail is TEST even when the platform is LIVE.
+      // LIVE GP listed checkout stays closed while initiation is off.
+      const gpStripeMode = isApprovedSandboxSourcer(sellerUserId)
+        ? "TEST"
+        : getStripeMode();
+      sellerProtectedReady = listingProtectedSellerReady({
+        connectReady: sellerConnectReady,
+        gpRail: rail.rail === "STRIPE_GLOBAL_PAYOUTS",
+        gpReady: rail.payoutReady,
+        stripeMode: gpStripeMode,
+      });
     }
 
     const stripe = checkoutPublicConfig();
@@ -134,7 +154,14 @@ export async function GET(_req: Request, ctx: Ctx) {
         (allowlistConfigured && buyerAllowlisted && sellerAllowlisted));
 
     const notSelf = Boolean(session && session.id !== sellerUserId);
-    const baseStripeGates =
+    const baseProtectedGates =
+      listing.isDbListing &&
+      isStripeConfigured() &&
+      sellerProtectedReady &&
+      allowlistOk &&
+      notSelf &&
+      Boolean(session);
+    const baseDirectGates =
       listing.isDbListing &&
       isStripeConfigured() &&
       sellerConnectReady &&
@@ -146,10 +173,10 @@ export async function GET(_req: Request, ctx: Ctx) {
     const listingDirectOk = listingAllowsDirect(optionEnum);
 
     const canProtectedCheckout = Boolean(
-      baseStripeGates && isProtectedPaymentsEnabled() && listingProtectedOk,
+      baseProtectedGates && isProtectedPaymentsEnabled() && listingProtectedOk,
     );
     const canDirectCheckout = Boolean(
-      baseStripeGates && isDirectPaymentsEnabled() && listingDirectOk,
+      baseDirectGates && isDirectPaymentsEnabled() && listingDirectOk,
     );
 
     /** Back-compat alias for older clients (Protected card path). */
@@ -165,7 +192,7 @@ export async function GET(_req: Request, ctx: Ctx) {
           "Source Bridge payments are not enabled for this environment.";
       } else if (!session) {
         cardCheckoutBlockedReason = "Sign in to pay by card.";
-      } else if (!sellerConnectReady) {
+      } else if (!sellerProtectedReady && !sellerConnectReady) {
         cardCheckoutBlockedReason =
           "Seller must complete Payments & Payouts before card checkout.";
       } else if (!testRampOpen && (!allowlistConfigured || allowlistEntryCount === 0)) {
@@ -200,7 +227,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       } else if (!canProtectedCheckout) {
         if (!isProtectedPaymentsEnabled()) {
           protectedBlockedReason = "Protected Payment is not enabled.";
-        } else if (!sellerConnectReady) {
+        } else if (!sellerProtectedReady) {
           protectedBlockedReason =
             "Seller must complete Payments & Payouts before Protected Payment.";
         } else if (!allowlistOk) {

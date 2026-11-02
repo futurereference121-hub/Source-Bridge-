@@ -21,7 +21,10 @@ import { majorToMinor, normalizeCurrency } from "@/lib/payments/money";
 import { hashTerms, type CanonicalTerms } from "@/lib/payments/terms";
 import { recordAuditEvent } from "@/lib/payments/ledger";
 import { getConnectStatus } from "@/lib/payments/stripe/connect";
-import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import {
+  resolvePayoutRail,
+  snapshotStoredGlobalPayoutRail,
+} from "@/lib/payments/payout-rail/rail-resolver";
 import { decideSandboxCheckout } from "@/lib/payments/payout-rail/sandbox-pair";
 import {
   isDirectPaymentOption,
@@ -142,6 +145,7 @@ export async function POST(req: NextRequest) {
       buyerEmail: user.email,
       sellerEmail: listing.user.email,
       existingPricingPolicy: null,
+      origin: "PRODUCT_CHECKOUT",
     });
     const fees = quoted;
     const total = quoted.totalChargeMinor;
@@ -180,6 +184,8 @@ export async function POST(req: NextRequest) {
     }
     // Keep Connect status fetch for Direct destination validation below when needed.
     let sellerConnectAccountId = "";
+    let sellerGpRecipientId = "";
+    let sellerGpPayoutMethodId = "";
     if (isDirect) {
       const connect = await getConnectStatus(listing.userId);
       if (!connect.canReceiveProtectedPayments) {
@@ -189,6 +195,13 @@ export async function POST(req: NextRequest) {
         );
       }
       sellerConnectAccountId = connect.stripeAccountId || "";
+    } else if (storedRail === "STRIPE_GLOBAL_PAYOUTS") {
+      const snap = await snapshotStoredGlobalPayoutRail({
+        sellerId: listing.userId,
+        mode: storedMode,
+      });
+      sellerGpRecipientId = snap.sellerGpRecipientId;
+      sellerGpPayoutMethodId = snap.sellerGpPayoutMethodId;
     } else if (rail.rail === "STRIPE_CONNECT") {
       const connect = await getConnectStatus(listing.userId);
       sellerConnectAccountId = connect.stripeAccountId || "";
@@ -252,6 +265,8 @@ export async function POST(req: NextRequest) {
         totalChargeMinor: total,
         selectedSize: parsed.data.selectedSize || "",
         sellerConnectAccountId,
+        sellerGpRecipientId,
+        sellerGpPayoutMethodId,
       },
     });
 
