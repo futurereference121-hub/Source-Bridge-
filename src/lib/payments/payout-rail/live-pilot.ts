@@ -449,6 +449,11 @@ export function evaluateLivePilotInitiation(opts: {
   collectionOnly?: boolean;
   /** Set only after a recorded buyer action. Never the worker's user id. */
   durableBuyerId?: string | null;
+  /**
+   * Listed-product admin release. Does not consume the named sourcing-pilot
+   * slot or require a buyer actor. Initiation and allowlist still apply.
+   */
+  listedProduct?: boolean;
 }):
   | {
       ok: true;
@@ -471,14 +476,18 @@ export function evaluateLivePilotInitiation(opts: {
     };
   }
   if (!opts.gpEnabled) return { ok: false, code: "GLOBAL_PAYOUTS_DISABLED" };
+  const listedProduct = Boolean(opts.listedProduct);
   // A background worker is not the buyer. Durable authorization is checked
   // separately and must name this transaction's buyer. It does not fill actorUserId.
-  if (opts.durableBuyerId) {
-    if (opts.actorUserId || opts.durableBuyerId !== opts.buyerId) {
+  // Listed-product release is the existing admin decision, not a buyer click.
+  if (!listedProduct) {
+    if (opts.durableBuyerId) {
+      if (opts.actorUserId || opts.durableBuyerId !== opts.buyerId) {
+        return { ok: false, code: "GP_PILOT_ACTOR_UNAUTHORIZED" };
+      }
+    } else if (opts.actorUserId !== opts.buyerId || !opts.actorUserId) {
       return { ok: false, code: "GP_PILOT_ACTOR_UNAUTHORIZED" };
     }
-  } else if (opts.actorUserId !== opts.buyerId || !opts.actorUserId) {
-    return { ok: false, code: "GP_PILOT_ACTOR_UNAUTHORIZED" };
   }
   if (
     !liveUserAllowed({
@@ -493,21 +502,30 @@ export function evaluateLivePilotInitiation(opts: {
   }
   if (!opts.countryAllowed) return { ok: false, code: "GP_PILOT_COUNTRY_NOT_ALLOWLISTED" };
 
-  const configuredCurrency = parsePilotSourceCurrency(opts.configuredSourceCurrencyRaw);
   const sourceCurrency = parsePilotSourceCurrency(opts.sourceCurrency);
-  if (!configuredCurrency || !sourceCurrency || configuredCurrency !== sourceCurrency) {
+  if (!sourceCurrency) {
     return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
   }
-  const capMinor = parsePilotAmountCapMinor(opts.amountCapRaw);
-  if (capMinor == null) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_INVALID" };
-  const authorizedTxn = parsePilotTransactionId(opts.authorizedTransactionIdRaw);
-  if (!authorizedTxn || authorizedTxn !== opts.transactionId) {
-    return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+  if (!listedProduct) {
+    const configuredCurrency = parsePilotSourceCurrency(opts.configuredSourceCurrencyRaw);
+    if (!configuredCurrency || configuredCurrency !== sourceCurrency) {
+      return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
+    }
+  }
+  const capMinor = listedProduct ? 0 : parsePilotAmountCapMinor(opts.amountCapRaw);
+  if (!listedProduct && capMinor == null) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_INVALID" };
+  if (!listedProduct) {
+    const authorizedTxn = parsePilotTransactionId(opts.authorizedTransactionIdRaw);
+    if (!authorizedTxn || authorizedTxn !== opts.transactionId) {
+      return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+    }
   }
   if (!Number.isInteger(opts.principalMinor) || opts.principalMinor <= 0) {
     return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
   }
-  if (opts.principalMinor > capMinor) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
+  if (!listedProduct && opts.principalMinor > (capMinor || 0)) {
+    return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
+  }
 
   const cover = quotedPayoutCover({
     principalMinor: opts.principalMinor,
@@ -523,7 +541,9 @@ export function evaluateLivePilotInitiation(opts: {
   const providerFeeTotalMinor = cover.separateFeeMinor;
   // Fees are outside the quoted debit. Cover them once; do not add another currency.
   const totalSourceDebitMinor = cover.requiredCoverMinor;
-  if (totalSourceDebitMinor > capMinor) return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
+  if (!listedProduct && totalSourceDebitMinor > (capMinor || 0)) {
+    return { ok: false, code: "GP_PILOT_AMOUNT_CAP_EXCEEDED" };
+  }
 
   if (opts.availableBalanceMinor == null || !Number.isInteger(opts.availableBalanceMinor)) {
     return { ok: false, code: "GP_PILOT_FUNDING_UNVERIFIED" };
@@ -551,7 +571,7 @@ export function evaluateLivePilotInitiation(opts: {
     principalMinor: opts.principalMinor,
     providerFeeTotalMinor,
     totalSourceDebitMinor,
-    capMinor,
+    capMinor: capMinor ?? 0,
   };
 }
 
@@ -835,6 +855,7 @@ export function evaluateLivePilotFundingScope(opts: {
   sourceCurrency: string;
   configuredSourceCurrencyRaw: string;
   collectionOnly?: boolean;
+  listedProduct?: boolean;
 }): { ok: true } | { ok: false; code: string } {
   if (opts.collectionOnly) return { ok: false, code: "GP_COLLECTION_ONLY" };
   if (!opts.initiationEnabled) {
@@ -847,15 +868,20 @@ export function evaluateLivePilotFundingScope(opts: {
     };
   }
   if (opts.mode !== "LIVE") return { ok: true };
-  const authorizedTxn = parsePilotTransactionId(opts.authorizedTransactionIdRaw);
-  if (!authorizedTxn || authorizedTxn !== opts.transactionId) {
-    return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+  if (!opts.listedProduct) {
+    const authorizedTxn = parsePilotTransactionId(opts.authorizedTransactionIdRaw);
+    if (!authorizedTxn || authorizedTxn !== opts.transactionId) {
+      return { ok: false, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" };
+    }
+    const configuredCurrency = parsePilotSourceCurrency(opts.configuredSourceCurrencyRaw);
+    const sourceCurrency = parsePilotSourceCurrency(opts.sourceCurrency);
+    if (!configuredCurrency || !sourceCurrency || configuredCurrency !== sourceCurrency) {
+      return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
+    }
+    return { ok: true };
   }
-  const configuredCurrency = parsePilotSourceCurrency(opts.configuredSourceCurrencyRaw);
   const sourceCurrency = parsePilotSourceCurrency(opts.sourceCurrency);
-  if (!configuredCurrency || !sourceCurrency || configuredCurrency !== sourceCurrency) {
-    return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
-  }
+  if (!sourceCurrency) return { ok: false, code: "GP_PILOT_SOURCE_CURRENCY_INVALID" };
   return { ok: true };
 }
 

@@ -222,6 +222,37 @@ ok(
     fxFeeMinor: 0,
   }).ok === true,
 );
+ok(
+  "listed-product LIVE release does not require the named sourcing-pilot txn or buyer actor",
+  live({
+    listedProduct: true,
+    actorUserId: "admin_1",
+    transactionId: otherTxn,
+    principalMinor: 2500,
+    availableBalanceMinor: 4000,
+    providerFeeMinor: 0,
+    crossBorderFeeMinor: 0,
+    fxFeeMinor: 0,
+  }).ok === true,
+);
+ok(
+  "listed-product LIVE release still requires the seller allowlist",
+  live({
+    listedProduct: true,
+    actorUserId: "admin_1",
+    userAllowlistRaw: "someone_else_1",
+    transactionId: otherTxn,
+  }).code === "GP_PILOT_USER_NOT_ALLOWLISTED",
+);
+ok(
+  "listed-product LIVE still refuses collection-only tickets",
+  live({
+    listedProduct: true,
+    collectionOnly: true,
+    actorUserId: "admin_1",
+    transactionId: otherTxn,
+  }).code === "GP_COLLECTION_ONLY",
+);
 ok("TEST initiation does not apply the live cap", evaluateLivePilotInitiation({
   ...live(),
   mode: "TEST",
@@ -636,6 +667,30 @@ ok(
     authorizedTransactionIdRaw: "txn_pilot_1",
     sourceCurrency: "GBP",
     configuredSourceCurrencyRaw: "GBP",
+  }).ok === true,
+);
+ok(
+  "listed-product LIVE funding still fails closed when initiation is off",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: false,
+    transactionId: "txn_product_1",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "GBP",
+    configuredSourceCurrencyRaw: "GBP",
+    listedProduct: true,
+  }).code === "GLOBAL_PAYOUTS_LIVE_INITIATION_DISABLED",
+);
+ok(
+  "listed-product LIVE funding does not consume the named sourcing-pilot txn",
+  evaluateLivePilotFundingScope({
+    mode: "LIVE",
+    initiationEnabled: true,
+    transactionId: "txn_product_1",
+    authorizedTransactionIdRaw: "txn_pilot_1",
+    sourceCurrency: "GBP",
+    configuredSourceCurrencyRaw: "GBP",
+    listedProduct: true,
   }).ok === true,
 );
 const releaseSource = read("src/lib/payments/release.ts");

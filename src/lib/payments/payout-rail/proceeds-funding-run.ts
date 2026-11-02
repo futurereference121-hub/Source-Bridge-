@@ -76,7 +76,7 @@ const WAITING = GP_FUNDING_WAITING_CODES;
 
 async function newGpFundingPermitted(
   mode: StripeMode,
-  txn: { id: string; currency: string },
+  txn: { id: string; currency: string; origin?: string | null },
 ): Promise<{ ok: true } | { ok: false; code: string }> {
   return evaluateLivePilotFundingScope({
     mode,
@@ -86,6 +86,7 @@ async function newGpFundingPermitted(
     sourceCurrency: txn.currency,
     configuredSourceCurrencyRaw: process.env.GLOBAL_PAYOUTS_LIVE_PILOT_SOURCE_CURRENCY || "",
     collectionOnly: await isLiveCollectionOnlyTransaction(txn.id),
+    listedProduct: txn.origin === "PRODUCT_CHECKOUT",
   });
 }
 
@@ -294,7 +295,8 @@ export async function reconcileGpProceedsFunding(opts: {
   const mode = normalizeStripeMode(opts.stripeMode);
   const livePilotTxn =
     mode === "LIVE" ? await resolveLivePilotAuthorizedTransactionId() : null;
-  const liveNewMoney = mode === "LIVE" && canInitiateGlobalPayoutsMoney("LIVE") && Boolean(livePilotTxn);
+  const liveInitiationOn = mode === "LIVE" && canInitiateGlobalPayoutsMoney("LIVE");
+  const liveNewMoney = liveInitiationOn && Boolean(livePilotTxn);
   const now = opts.now ?? new Date();
   if (!opts.lockHeld) {
     const currencies = opts.currency
@@ -372,6 +374,7 @@ export async function reconcileGpProceedsFunding(opts: {
                 OR: [
                   { gpProceedsFunding: { legs: { some: { status: "PENDING" } } } },
                   ...(liveNewMoney && livePilotTxn ? [{ id: livePilotTxn }] : []),
+                  ...(liveInitiationOn ? [{ origin: "PRODUCT_CHECKOUT" as const }] : []),
                 ],
               },
             ]

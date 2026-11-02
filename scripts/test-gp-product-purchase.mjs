@@ -69,6 +69,17 @@ assert.equal(
   false,
   "LIVE GP listed-product checkout stays closed while initiation is off",
 );
+assert.equal(
+  listingOptions.listingProtectedSellerReady({
+    connectReady: false,
+    gpRail: true,
+    gpReady: true,
+    stripeMode: "LIVE",
+    liveInitiationEnabled: true,
+  }),
+  true,
+  "LIVE GP listed-product checkout opens only when initiation is on",
+);
 
 assert.equal(
   proceeds.listedProductReleaseMayFund({
@@ -112,6 +123,31 @@ assert.doesNotMatch(
   /bindLiveCollectionOnlyIfOpen/,
   "product checkout must not bind the named collection-only ticket",
 );
+assert.match(
+  productCheckout,
+  /assertGlobalPayoutsMoneyAllowed\("LIVE"\)/,
+  "LIVE listed-product checkout fails before reserve when initiation is off",
+);
+
+const checkout = read("src/lib/payments/checkout.ts");
+assert.match(
+  checkout,
+  /txn\.origin === "PRODUCT_CHECKOUT"/,
+);
+assert.match(
+  checkout,
+  /assertGlobalPayoutsMoneyAllowed\("LIVE"\)/,
+);
+
+const outbound = read("src/lib/payments/payout-rail/outbound-payment.ts");
+assert.match(outbound, /listedProduct: opts\.txn\.origin === "PRODUCT_CHECKOUT"/);
+assert.match(outbound, /txn\.origin !== "PRODUCT_CHECKOUT"/);
+
+const runner = read("src/lib/payments/payout-rail/proceeds-funding-run.ts");
+assert.match(runner, /listedProductReleaseMayFund/);
+assert.match(runner, /buyerReleaseMayFund/);
+assert.match(runner, /listedProduct: txn\.origin === "PRODUCT_CHECKOUT"/);
+assert.match(runner, /origin: "PRODUCT_CHECKOUT"/);
 
 const quote = read("src/lib/payments/commercial-quote.ts");
 assert.match(quote, /opts\.origin === "PRODUCT_CHECKOUT"/);
@@ -126,10 +162,6 @@ assert.doesNotMatch(
   productCheckout,
   /procurementAdvanceAgreed: true/,
 );
-
-const runner = read("src/lib/payments/payout-rail/proceeds-funding-run.ts");
-assert.match(runner, /listedProductReleaseMayFund/);
-assert.match(runner, /buyerReleaseMayFund/);
 
 const flags = read("src/lib/payments/flags.ts");
 assert.match(

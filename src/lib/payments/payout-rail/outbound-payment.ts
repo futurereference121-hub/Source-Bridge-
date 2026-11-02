@@ -566,7 +566,13 @@ async function verifiedBackgroundRelease(opts: {
 }
 
 async function assertLivePilotReleaseReady(opts: {
-  txn: { id: string; sellerId: string; buyerId: string; currency: string };
+  txn: {
+    id: string;
+    sellerId: string;
+    buyerId: string;
+    currency: string;
+    origin?: string | null;
+  };
   txnMode: "TEST" | "LIVE";
   actorUserId?: string | null;
   amount: number;
@@ -677,6 +683,7 @@ async function assertLivePilotReleaseReady(opts: {
     transactionId: opts.txn.id,
     collectionOnly: await isLiveCollectionOnlyTransaction(opts.txn.id),
     durableBuyerId: opts.backgroundRelease ? opts.backgroundRelease.recordedActorUserId : undefined,
+    listedProduct: opts.txn.origin === "PRODUCT_CHECKOUT",
   });
   if (!decision.ok) {
     throw Object.assign(new Error("Live payout pilot limits denied this release."), {
@@ -758,6 +765,7 @@ async function executeOutboundRelease(opts: {
     sellerGpRecipientId: string;
     sellerGpPayoutMethodId: string;
     stripeMode: string;
+    origin?: string | null;
   };
   txnMode: "TEST" | "LIVE";
   status: ProtectedStatus;
@@ -1135,7 +1143,7 @@ async function executeOutboundRelease(opts: {
       backgroundRelease: liveBackground,
       allowQuoteRefresh,
     });
-    if (txnMode === "LIVE" && !liveBackground) {
+    if (txnMode === "LIVE" && !liveBackground && txn.origin !== "PRODUCT_CHECKOUT") {
       await claimLivePilotSlot({ transactionId: txn.id, attemptId: attempt.id });
     }
   }
@@ -1354,7 +1362,7 @@ async function executeOutboundRelease(opts: {
             allowQuoteRefresh,
           });
         }
-        if (liveBackground) {
+        if (liveBackground && txn.origin !== "PRODUCT_CHECKOUT") {
           await claimLivePilotSlot({ transactionId: txn.id, attemptId: attempt.id });
         }
       },

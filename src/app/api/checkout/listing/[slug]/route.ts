@@ -7,9 +7,15 @@ import { checkoutPublicConfig } from "@/lib/payments/checkout";
 import {
   getStripeMode,
   isDirectPaymentsEnabled,
+  isGlobalPayoutsLiveInitiationEnabled,
   isProtectedPaymentsEnabled,
   paymentFlagsSnapshot,
 } from "@/lib/payments/flags";
+import {
+  gpListingMinimumCopy,
+  listingGpCurrencyOk,
+  listingGpPriceMeetsMinimum,
+} from "@/lib/payments/listing-currency";
 import {
   listingAllowsDirect,
   listingAllowsProtected,
@@ -69,6 +75,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     let paymentOptions = "CONTACT_ONLY";
     let sellerConnectReady = false;
     let sellerProtectedReady = false;
+    let listingGpRail = false;
     /** Always the stock listing owner User.id when DB listing — for allowlist. */
     let sellerUserId = listing.memberId;
     let sellerEmail: string | null = null;
@@ -118,7 +125,9 @@ export async function GET(_req: Request, ctx: Ctx) {
         gpRail: rail.rail === "STRIPE_GLOBAL_PAYOUTS",
         gpReady: rail.payoutReady,
         stripeMode: gpStripeMode,
+        liveInitiationEnabled: isGlobalPayoutsLiveInitiationEnabled(),
       });
+      listingGpRail = rail.rail === "STRIPE_GLOBAL_PAYOUTS";
     }
 
     const stripe = checkoutPublicConfig();
@@ -171,9 +180,20 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     const listingProtectedOk = listingAllowsProtected(optionEnum);
     const listingDirectOk = listingAllowsDirect(optionEnum);
+    const gpCurrencyOk = !listingGpRail || listingGpCurrencyOk(listing.currency);
+    const gpMinOk =
+      !listingGpRail ||
+      listingGpPriceMeetsMinimum({
+        priceMajor: listing.price,
+        currency: listing.currency,
+      });
 
     const canProtectedCheckout = Boolean(
-      baseProtectedGates && isProtectedPaymentsEnabled() && listingProtectedOk,
+      baseProtectedGates &&
+        isProtectedPaymentsEnabled() &&
+        listingProtectedOk &&
+        gpCurrencyOk &&
+        gpMinOk,
     );
     const canDirectCheckout = Boolean(
       baseDirectGates && isDirectPaymentsEnabled() && listingDirectOk,
@@ -212,6 +232,11 @@ export async function GET(_req: Request, ctx: Ctx) {
       } else if (!listingProtectedOk && !listingDirectOk) {
         cardCheckoutBlockedReason =
           "This listing does not accept card payments.";
+      } else if (!gpCurrencyOk) {
+        cardCheckoutBlockedReason =
+          "This Global Payouts listing must be priced in GBP.";
+      } else if (!gpMinOk) {
+        cardCheckoutBlockedReason = gpListingMinimumCopy();
       } else {
         cardCheckoutBlockedReason =
           "Card checkout is unavailable for this listing.";
@@ -224,6 +249,11 @@ export async function GET(_req: Request, ctx: Ctx) {
       if (!listingProtectedOk) {
         protectedBlockedReason =
           "This item is available for Direct Payment only.";
+      } else if (!gpCurrencyOk) {
+        protectedBlockedReason =
+          "This Global Payouts listing must be priced in GBP.";
+      } else if (!gpMinOk) {
+        protectedBlockedReason = gpListingMinimumCopy();
       } else if (!canProtectedCheckout) {
         if (!isProtectedPaymentsEnabled()) {
           protectedBlockedReason = "Protected Payment is not enabled.";

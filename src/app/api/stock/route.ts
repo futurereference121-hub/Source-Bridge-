@@ -11,7 +11,18 @@ import { syncListingImages } from "@/lib/listing-images";
 import {
   encodeListingPaymentOptions,
   DEFAULT_LISTING_PAYMENT_OPTION,
+  listingAllowsProtected,
+  parseListingPaymentOptions,
 } from "@/lib/payments/listing-options";
+import { getPlatformPaymentConfig } from "@/lib/payments/config";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import {
+  assertListingCurrencyForPublish,
+  defaultListingCurrency,
+  gpListingMinimumCopy,
+  gpListingMinimumMinor,
+  listingCurrencyChoices,
+} from "@/lib/payments/listing-currency";
 
 type StockInput = z.infer<typeof stockSchema>;
 
@@ -56,7 +67,7 @@ function stockCreateData(userId: string, data: StockInput, slug: string) {
     shipFromCountry: data.shipFromCountry,
     shippingAvailable: data.shippingAvailable,
     price: data.price,
-    currency: data.currency || "USD",
+    currency: data.currency,
     paymentOptions: resolvePaymentOptions(data),
   };
 }
@@ -76,6 +87,28 @@ async function assertCategoryAllowed(category: string, productKind: string) {
   return null;
 }
 
+async function listingCurrencyPolicyForUser(user: {
+  id: string;
+  email?: string | null;
+}) {
+  const config = await getPlatformPaymentConfig();
+  const rail = await resolvePayoutRail({
+    userId: user.id,
+    email: user.email,
+  });
+  const gpProtected = rail.rail === "STRIPE_GLOBAL_PAYOUTS";
+  return {
+    gpProtected,
+    defaultCurrency: defaultListingCurrency(gpProtected),
+    options: listingCurrencyChoices({
+      gpProtected,
+      allowedCurrencies: config.allowedCurrencies,
+    }),
+    minimumMinor: gpProtected ? gpListingMinimumMinor() : null,
+    minimumCopy: gpProtected ? gpListingMinimumCopy() : null,
+  };
+}
+
 export async function GET() {
   try {
     const user = await requireSessionUser();
@@ -84,7 +117,11 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
       include: { listingImages: { orderBy: { sortOrder: "asc" } } },
     });
-    return Response.json({ listings: rows.map(dbStockToListing) });
+    const currencyPolicy = await listingCurrencyPolicyForUser(user);
+    return Response.json({
+      listings: rows.map(dbStockToListing),
+      currencyPolicy,
+    });
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 401) return jsonError("Sign in required", 401);
@@ -119,12 +156,39 @@ export async function POST(req: NextRequest) {
       return jsonError("Select at least one size", 400);
     }
 
+    let paymentOptions: string;
     try {
-      resolvePaymentOptions(parsed.data);
+      paymentOptions = resolvePaymentOptions(parsed.data);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Choose at least one payment option.";
       return jsonError(message, 400);
+    }
+
+    const config = await getPlatformPaymentConfig();
+    const rail = await resolvePayoutRail({
+      userId: user.id,
+      email: user.email,
+    });
+    const gpProtected =
+      rail.rail === "STRIPE_GLOBAL_PAYOUTS" &&
+      listingAllowsProtected(parseListingPaymentOptions(paymentOptions));
+    try {
+      const providedCurrency =
+        typeof body.currency === "string" && body.currency.trim()
+          ? parsed.data.currency
+          : defaultListingCurrency(gpProtected);
+      parsed.data.currency = assertListingCurrencyForPublish({
+        currency: providedCurrency,
+        priceMajor: parsed.data.price,
+        gpProtected,
+        allowedCurrencies: config.allowedCurrencies,
+      });
+    } catch (err) {
+      const status = (err as { status?: number }).status || 400;
+      const code = (err as { code?: string }).code;
+      const message = err instanceof Error ? err.message : "Invalid currency";
+      return jsonError(message, status, code ? { code } : undefined);
     }
 
     const existing = await prisma.stockListing.findMany({

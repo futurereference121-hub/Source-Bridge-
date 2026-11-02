@@ -42,6 +42,7 @@ export function serializeListingFormSnapshot(form: {
   shipFromCity: string;
   shipFromCountry: string;
   price: string;
+  currency?: string;
   description: string;
   availability: string;
   saleStatus: string;
@@ -66,6 +67,7 @@ export function serializeListingFormSnapshot(form: {
     shipFromCity: form.shipFromCity,
     shipFromCountry: form.shipFromCountry,
     price: form.price,
+    currency: form.currency || "",
     description: form.description,
     availability: form.availability,
     saleStatus: form.saleStatus,

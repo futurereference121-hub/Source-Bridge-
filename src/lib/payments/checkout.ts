@@ -29,6 +29,7 @@ import {
   snapshotStoredGlobalPayoutRail,
 } from "@/lib/payments/payout-rail/rail-resolver";
 import { decideSandboxCheckout } from "@/lib/payments/payout-rail/sandbox-pair";
+import { assertGlobalPayoutsMoneyAllowed } from "@/lib/payments/payout-rail/eligibility";
 import {
   isLiveCollectionOnlyTransaction,
   resolveLivePilotAuthorizedTransactionId,
@@ -108,14 +109,18 @@ export async function createPaymentIntentForTxn(opts: {
   assertStripeModeCompatible(txn.stripeMode);
   const txnMode = normalizeStripeMode(txn.stripeMode);
   if (txnMode === "LIVE" && honorStoredGlobalPayouts) {
-    const collectionOnly = await isLiveCollectionOnlyTransaction(txn.id);
-    if (!collectionOnly) {
-      const authorized = await resolveLivePilotAuthorizedTransactionId();
-      if (!authorized || authorized !== txn.id) {
-        throw Object.assign(
-          new Error("This payment is outside the approved live payout pilot."),
-          { status: 409, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" },
-        );
+    if (txn.origin === "PRODUCT_CHECKOUT") {
+      assertGlobalPayoutsMoneyAllowed("LIVE");
+    } else {
+      const collectionOnly = await isLiveCollectionOnlyTransaction(txn.id);
+      if (!collectionOnly) {
+        const authorized = await resolveLivePilotAuthorizedTransactionId();
+        if (!authorized || authorized !== txn.id) {
+          throw Object.assign(
+            new Error("This payment is outside the approved live payout pilot."),
+            { status: 409, code: "GP_PILOT_TRANSACTION_NOT_AUTHORIZED" },
+          );
+        }
       }
     }
   }

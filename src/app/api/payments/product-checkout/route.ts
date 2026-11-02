@@ -26,6 +26,7 @@ import {
   snapshotStoredGlobalPayoutRail,
 } from "@/lib/payments/payout-rail/rail-resolver";
 import { decideSandboxCheckout } from "@/lib/payments/payout-rail/sandbox-pair";
+import { assertGlobalPayoutsMoneyAllowed } from "@/lib/payments/payout-rail/eligibility";
 import {
   isDirectPaymentOption,
   normalizeTxnPaymentOption,
@@ -154,6 +155,10 @@ export async function POST(req: NextRequest) {
       : platformFeePublicLabel(storageOption);
     const storedMode = quoted.stripeMode;
     const storedRail = quoted.payoutRail;
+    if (storedRail === "STRIPE_GLOBAL_PAYOUTS" && storedMode === "LIVE") {
+      // Fail before inventory reserve or PaymentIntent when LIVE initiation is off.
+      assertGlobalPayoutsMoneyAllowed("LIVE");
+    }
 
     const rail = await resolvePayoutRail({
       userId: listing.userId,

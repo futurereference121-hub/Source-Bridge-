@@ -33,6 +33,14 @@ import {
   jsonBody,
 } from "@/components/profile/editors/EditorShell";
 
+type ListingCurrencyPolicy = {
+  gpProtected: boolean;
+  defaultCurrency: string;
+  options: Array<{ code: string; label: string }>;
+  minimumMinor: number | null;
+  minimumCopy: string | null;
+};
+
 type ListingEditorProps = {
   onClose: () => void;
   /** After save / cancel edit: stay in listing UI but switch to blank create mode. */
@@ -57,6 +65,7 @@ type ListingForm = {
   shipFromCity: string;
   shipFromCountry: string;
   price: string;
+  currency: string;
   description: string;
   availability: ListingAvailability;
   saleStatus: "AVAILABLE" | "RESERVED" | "SOLD" | "ARCHIVED";
@@ -82,6 +91,7 @@ const blank: ListingForm = {
   shipFromCity: "",
   shipFromCountry: "",
   price: "",
+  currency: "USD",
   description: "",
   availability: "available",
   saleStatus: "AVAILABLE",
@@ -115,6 +125,7 @@ function fromListing(item: Listing): ListingForm {
     shipFromCity: item.shipFromCity || "",
     shipFromCountry: item.shipFromCountry || "",
     price: item.price != null ? String(item.price) : "",
+    currency: item.currency || "USD",
     description: item.description || "",
     availability: item.availability || "available",
     saleStatus,
@@ -139,6 +150,9 @@ export function ListingEditor({
   const [imagesUploading, setImagesUploading] = useState(false);
   const [loading, setLoading] = useState(Boolean(listingId));
   const [generalCategories, setGeneralCategories] = useState<string[]>([]);
+  const [currencyPolicy, setCurrencyPolicy] = useState<ListingCurrencyPolicy | null>(
+    null,
+  );
   const mode = listingEditorMode(listingId);
   const isEdit = mode === "edit";
   const baselineRef = useRef<string | null>(null);
@@ -167,6 +181,34 @@ export function ListingEditor({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson("/api/stock");
+        const policy = data.currencyPolicy as ListingCurrencyPolicy | undefined;
+        if (cancelled || !policy) return;
+        setCurrencyPolicy(policy);
+        if (!listingId) {
+          setForm((current) => {
+            if (current.currency && current.currency !== "USD") return current;
+            if (policy.gpProtected && current.currency === "USD") {
+              const next = { ...current, currency: policy.defaultCurrency };
+              baselineRef.current = serializeListingFormSnapshot(next);
+              return next;
+            }
+            return current;
+          });
+        }
+      } catch {
+        /* editor still works with USD default */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listingId]);
 
   useEffect(() => {
     if (!listingId) {
@@ -318,6 +360,7 @@ export function ListingEditor({
         shipFromCity: form.shipFromCity.trim(),
         shipFromCountry: form.shipFromCountry.trim(),
         price,
+        currency: form.currency,
         description: form.description.trim(),
         availability: form.availability,
         saleStatus: form.saleStatus,
@@ -598,6 +641,31 @@ export function ListingEditor({
               disabled={busy}
             />
           </EditorField>
+          <EditorField label="Currency">
+            <select
+              className={editorInputClass}
+              value={form.currency}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, currency: e.target.value }))
+              }
+              required
+              disabled={busy}
+            >
+              {(currencyPolicy?.options || [
+                { code: "USD", label: "USD ($)" },
+                { code: "GBP", label: "GBP (£)" },
+              ]).map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {currencyPolicy?.minimumCopy ? (
+              <p className="mt-1 text-xs text-white/55">
+                {currencyPolicy.minimumCopy}
+              </p>
+            ) : null}
+          </EditorField>
           <EditorField label="Availability">
             <select
               className={editorInputClass}
@@ -699,7 +767,7 @@ export function ListingEditor({
               <span>
                 <span className="font-medium text-white">Protected Payment</span>
                 <span className="mt-0.5 block text-xs text-white/45">
-                  Funds held until delivery and inspection rules are met.
+                  Funds held until Source Bridge releases them after fulfilment.
                 </span>
               </span>
             </label>

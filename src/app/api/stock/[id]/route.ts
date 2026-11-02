@@ -7,7 +7,14 @@ import { listCategoryNames } from "@/lib/categories-db";
 import { dbStockToListing } from "@/lib/member-map";
 import { deleteStoredImageForUser } from "@/lib/storage";
 import { syncListingImages } from "@/lib/listing-images";
-import { encodeListingPaymentOptions } from "@/lib/payments/listing-options";
+import {
+  encodeListingPaymentOptions,
+  listingAllowsProtected,
+  parseListingPaymentOptions,
+} from "@/lib/payments/listing-options";
+import { getPlatformPaymentConfig } from "@/lib/payments/config";
+import { resolvePayoutRail } from "@/lib/payments/payout-rail/rail-resolver";
+import { assertListingCurrencyForPublish } from "@/lib/payments/listing-currency";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -77,6 +84,38 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       const message =
         err instanceof Error ? err.message : "Choose at least one payment option.";
       return jsonError(message, 400);
+    }
+
+    const currencyFromBody = Object.prototype.hasOwnProperty.call(body, "currency");
+    const priceFromBody = Object.prototype.hasOwnProperty.call(body, "price");
+    const currencyTouched =
+      currencyFromBody || priceFromBody || paymentOptions !== undefined;
+    if (currencyTouched) {
+      const config = await getPlatformPaymentConfig();
+      const rail = await resolvePayoutRail({
+        userId: user.id,
+        email: user.email,
+      });
+      const nextOptions = paymentOptions || existing.paymentOptions;
+      const gpProtected =
+        rail.rail === "STRIPE_GLOBAL_PAYOUTS" &&
+        listingAllowsProtected(parseListingPaymentOptions(nextOptions));
+      try {
+        data.currency = assertListingCurrencyForPublish({
+          currency: currencyFromBody
+            ? data.currency || "USD"
+            : existing.currency || "USD",
+          priceMajor:
+            typeof data.price === "number" ? data.price : existing.price ?? 0,
+          gpProtected,
+          allowedCurrencies: config.allowedCurrencies,
+        });
+      } catch (err) {
+        const status = (err as { status?: number }).status || 400;
+        const code = (err as { code?: string }).code;
+        const message = err instanceof Error ? err.message : "Invalid currency";
+        return jsonError(message, status, code ? { code } : undefined);
+      }
     }
 
     await prisma.stockListing.update({
