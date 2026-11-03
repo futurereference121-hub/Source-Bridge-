@@ -8,6 +8,7 @@ import { isPaymentsEnabled } from "@/lib/payments/flags";
 import { adminLiveQueueDisputeWhere } from "@/lib/payments/admin-live-queue";
 import { isDirectPaymentOption } from "@/lib/payments/payment-option";
 import { executeAdminProtectedMoneyDecision } from "@/lib/payments/admin-protected-decision";
+import { deriveAdminReleaseDecisionView } from "@/lib/payments/admin-release-display";
 
 export const runtime = "nodejs";
 
@@ -200,11 +201,32 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    const finalOutbound = await prisma.outboundPaymentAttempt.findFirst({
+      where: { protectedTxnId: txn.id, kind: "FINAL" },
+      orderBy: { createdAt: "desc" },
+      select: { amountMinor: true, status: true },
+    });
+    const booksAfter = computeProtectedFinancials(money.working);
+    const view = deriveAdminReleaseDecisionView({
+      payoutRail: money.working.payoutRail,
+      currency: money.working.currency,
+      alreadyReleasedMinor:
+        booksAfter.procurementTransferredMinor + booksAfter.finalTransferredMinor,
+      finalResidualMinor: booksAfter.finalResidualMinor,
+      authorizedReleaseMinor: finalOutbound?.amountMinor ?? money.releaseAppliedMinor,
+      outboundStatus: finalOutbound?.status ?? null,
+    });
+
     return Response.json({
       ok: true,
       dispute: updated,
+      payoutRail: money.working.payoutRail,
       refundAppliedMinor: money.refundAppliedMinor,
       releaseAppliedMinor: money.releaseAppliedMinor,
+      releaseAuthorizedMinor: view.authorizedMinor,
+      payoutPhase: view.payoutPhase,
+      payoutCopy: view.payoutCopy,
+      confirmedCopy: view.confirmedCopy,
       released: money.released,
       transferId: money.transferId,
       refundId: money.refundId,

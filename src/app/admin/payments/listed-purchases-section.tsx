@@ -30,6 +30,13 @@ export default async function AdminListedPurchasesSection() {
       procurementTransferredMinor: true,
       finalTransferredMinor: true,
       refundedMinor: true,
+      payoutRail: true,
+      outboundPaymentAttempts: {
+        where: { kind: "FINAL" },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { amountMinor: true, status: true, kind: true },
+      },
       trackingNumber: true,
       trackingCarrier: true,
       shipmentPhotoUrl: true,
@@ -194,6 +201,9 @@ export default async function AdminListedPurchasesSection() {
                   <PaymentIssueActions
                     disputeId={dispute.id}
                     currency={t.currency}
+                    payoutRail={t.payoutRail}
+                    authorizedReleaseMinor={t.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                    outboundStatus={t.outboundPaymentAttempts[0]?.status ?? null}
                     totalPaidMinor={t.totalChargeMinor}
                     platformFeeMinor={books.platformFeeMinor}
                     platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
@@ -207,12 +217,15 @@ export default async function AdminListedPurchasesSection() {
                     protectedRemainingMinor={books.protectedRemainingMinor}
                   />
                 ) : !isDirectPaymentOption(t.paymentOption) &&
-                  ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "DISPUTED", "READY_TO_RELEASE", "PARTIALLY_REFUNDED"].includes(
+                  ["FUNDED", "PROCUREMENT_RELEASED", "AWAITING_SHIPMENT", "IN_TRANSIT", "DELIVERED", "IN_INSPECTION", "DISPUTED", "READY_TO_RELEASE", "PARTIALLY_REFUNDED", "RELEASED"].includes(
                     t.status,
                   ) ? (
                   <PaymentIssueActions
                     protectedTxnId={t.id}
                     currency={t.currency}
+                    payoutRail={t.payoutRail}
+                    authorizedReleaseMinor={t.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                    outboundStatus={t.outboundPaymentAttempts[0]?.status ?? null}
                     totalPaidMinor={t.totalChargeMinor}
                     platformFeeMinor={books.platformFeeMinor}
                     platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}

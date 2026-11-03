@@ -7,6 +7,14 @@ import {
   minorToMajor,
   parseHumanAmountToMinor,
 } from "@/lib/payments/money";
+import {
+  adminConfirmReleaseSentence,
+  adminPayoutStatusCopy,
+  adminReleaseAlreadyAccepted,
+  adminReleaseConfirmedCopy,
+  deriveAdminReleaseDecisionView,
+  type AdminPayoutPhase,
+} from "@/lib/payments/admin-release-display";
 
 type Props = {
   /** When set, resolve via dispute issues API (closes dispute). */
@@ -14,6 +22,7 @@ type Props = {
   /** When set (no open dispute), resolve via protected-txns API. */
   protectedTxnId?: string;
   currency: string;
+  payoutRail?: string | null;
   totalPaidMinor: number;
   finalResidualMinor: number;
   refundableMinor: number;
@@ -22,6 +31,9 @@ type Props = {
   sellerEntitledMinor?: number;
   alreadyReleasedMinor?: number;
   protectedRemainingMinor?: number;
+  /** GP FINAL outbound amount. Distinct from Connect transferred-minor. */
+  authorizedReleaseMinor?: number;
+  outboundStatus?: string | null;
   /** Read-only audit ids after resolution (P20). */
   lastRefundId?: string | null;
   lastTransferId?: string | null;
@@ -31,6 +43,7 @@ export default function PaymentIssueActions({
   disputeId,
   protectedTxnId,
   currency,
+  payoutRail = null,
   totalPaidMinor,
   finalResidualMinor,
   refundableMinor,
@@ -39,12 +52,18 @@ export default function PaymentIssueActions({
   sellerEntitledMinor = 0,
   alreadyReleasedMinor = 0,
   protectedRemainingMinor = refundableMinor,
+  authorizedReleaseMinor = 0,
+  outboundStatus = null,
   lastRefundId = null,
   lastTransferId = null,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState<{
+    authorizedMinor: number;
+    payoutPhase: AdminPayoutPhase;
+  } | null>(null);
   const feeStillOnPlatform = Math.max(
     0,
     Math.min(platformFeeMinor - platformFeeRefundedMinor, protectedRemainingMinor),
@@ -76,6 +95,26 @@ export default function PaymentIssueActions({
   );
   const allocatedMinor = refundMinor + releaseMinor;
   const remainingAfterAlloc = Math.max(0, protectedRemainingMinor - allocatedMinor);
+  const serverView = deriveAdminReleaseDecisionView({
+    payoutRail,
+    currency,
+    alreadyReleasedMinor,
+    finalResidualMinor,
+    authorizedReleaseMinor,
+    outboundStatus,
+  });
+  const view = accepted
+    ? {
+        decisionLocked: true,
+        authorizedMinor: accepted.authorizedMinor,
+        confirmedCopy: adminReleaseConfirmedCopy(
+          accepted.authorizedMinor,
+          currency,
+        ),
+        payoutPhase: accepted.payoutPhase,
+        payoutCopy: adminPayoutStatusCopy(accepted.payoutPhase),
+      }
+    : serverView;
 
   function askConfirm() {
     setError(null);
@@ -109,7 +148,11 @@ export default function PaymentIssueActions({
     }
     if (releaseMinor > 0) {
       parts.push(
-        `release ${formatMinor(releaseMinor, currency)} to the seller Connect account`,
+        adminConfirmReleaseSentence({
+          payoutRail,
+          releaseMinor,
+          currency,
+        }).replace(/\.$/, ""),
       );
     }
     setConfirmText(`Confirm decision: ${parts.join(" and ")}? Server recalculates books before money moves.`);
@@ -150,13 +193,32 @@ export default function PaymentIssueActions({
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
+        code?: string;
         refundId?: string;
         transferId?: string;
+        releaseAuthorizedMinor?: number;
+        payoutPhase?: AdminPayoutPhase;
       };
       if (!res.ok) {
+        if (willRelease && adminReleaseAlreadyAccepted(data.code)) {
+          setAccepted({
+            authorizedMinor:
+              data.releaseAuthorizedMinor || releaseMinor || authorizedReleaseMinor,
+            payoutPhase: data.payoutPhase || "pending",
+          });
+          setConfirmText(null);
+          router.refresh();
+          return;
+        }
         setError(data.error || `Failed (${res.status})`);
         return;
       }
+      setAccepted({
+        authorizedMinor:
+          data.releaseAuthorizedMinor ||
+          (willRelease ? releaseMinor : authorizedReleaseMinor),
+        payoutPhase: data.payoutPhase || (willRelease ? "pending" : "none"),
+      });
       setConfirmText(null);
       router.refresh();
     } catch {
@@ -232,120 +294,131 @@ export default function PaymentIssueActions({
         ) : null}
       </dl>
 
-      <label className="flex items-center gap-2 text-white/60">
-        <input
-          type="checkbox"
-          checked={includePlatformFee}
-          onChange={(e) => {
-            setIncludePlatformFee(e.target.checked);
-            if (!e.target.checked && refundMinor > maxRefundExcludingFee) {
-              setRefundMajor(
-                maxRefundExcludingFee > 0
-                  ? minorToMajor(maxRefundExcludingFee, currency).toFixed(2)
-                  : "0.00",
-              );
-            }
-          }}
-          disabled={busy || feeStillOnPlatform <= 0}
-          className="rounded border-white/30"
-        />
-        Include Source Bridge fee in buyer refund (up to{" "}
-        {formatMinor(feeStillOnPlatform, currency)})
-      </label>
-
-      <label className="block text-white/50">
-        Admin note (optional)
-        <input
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-          maxLength={2000}
-          disabled={busy}
-        />
-      </label>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-white/50">
-          REFUND BUYER £ (max {formatMinor(maxRefundable, currency)})
-          <input
-            value={refundMajor}
-            onChange={(e) => setRefundMajor(e.target.value)}
-            inputMode="decimal"
-            className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-            disabled={busy || maxRefundable <= 0}
-            placeholder="0.00"
-          />
-        </label>
-        <label className="block text-white/50">
-          RELEASE TO SELLER £ (max {formatMinor(finalResidualMinor, currency)})
-          <input
-            value={releaseMajor}
-            onChange={(e) => setReleaseMajor(e.target.value)}
-            inputMode="decimal"
-            className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
-            disabled={busy || finalResidualMinor <= 0}
-            placeholder="0.00"
-          />
-        </label>
-      </div>
-      {!confirmText ? (
-        <div className="flex flex-wrap gap-2">
-          {maxRefundable > 0 ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setRefundMajor(minorToMajor(maxRefundable, currency).toFixed(2));
-                setReleaseMajor("0.00");
-              }}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
-            >
-              Refund buyer (max {formatMinor(maxRefundable, currency)})
-            </button>
+      {view.decisionLocked ? (
+        <div className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-3 text-emerald-50">
+          <p className="text-sm font-medium">{view.confirmedCopy}</p>
+          {view.payoutCopy ? (
+            <p className="mt-1 text-xs text-white/70">{view.payoutCopy}</p>
           ) : null}
-          {finalResidualMinor > 0 ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setReleaseMajor(minorToMajor(finalResidualMinor, currency).toFixed(2));
-                setRefundMajor("0.00");
-              }}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
-            >
-              Release to seller (max {formatMinor(finalResidualMinor, currency)})
-            </button>
-          ) : null}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={askConfirm}
-            className="rounded-lg bg-electric px-4 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-app-navy disabled:opacity-50"
-          >
-            Confirm decision
-          </button>
         </div>
       ) : (
-        <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-amber-50">
-          <p>{confirmText}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
+        <>
+          <label className="flex items-center gap-2 text-white/60">
+            <input
+              type="checkbox"
+              checked={includePlatformFee}
+              onChange={(e) => {
+                setIncludePlatformFee(e.target.checked);
+                if (!e.target.checked && refundMinor > maxRefundExcludingFee) {
+                  setRefundMajor(
+                    maxRefundExcludingFee > 0
+                      ? minorToMajor(maxRefundExcludingFee, currency).toFixed(2)
+                      : "0.00",
+                  );
+                }
+              }}
+              disabled={busy || feeStillOnPlatform <= 0}
+              className="rounded border-white/30"
+            />
+            Include Source Bridge fee in buyer refund (up to{" "}
+            {formatMinor(feeStillOnPlatform, currency)})
+          </label>
+
+          <label className="block text-white/50">
+            Admin note (optional)
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+              maxLength={2000}
               disabled={busy}
-              onClick={() => void execute()}
-              className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
-            >
-              {busy ? "Working…" : "Confirm resolution"}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirmText(null)}
-              className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
-            >
-              Cancel
-            </button>
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-white/50">
+              REFUND BUYER £ (max {formatMinor(maxRefundable, currency)})
+              <input
+                value={refundMajor}
+                onChange={(e) => setRefundMajor(e.target.value)}
+                inputMode="decimal"
+                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                disabled={busy || maxRefundable <= 0}
+                placeholder="0.00"
+              />
+            </label>
+            <label className="block text-white/50">
+              RELEASE TO SELLER £ (max {formatMinor(finalResidualMinor, currency)})
+              <input
+                value={releaseMajor}
+                onChange={(e) => setReleaseMajor(e.target.value)}
+                inputMode="decimal"
+                className="mt-1 w-full rounded-lg border border-white/15 bg-black/20 px-3 py-2 text-sm text-white"
+                disabled={busy || finalResidualMinor <= 0}
+                placeholder="0.00"
+              />
+            </label>
           </div>
-        </div>
+          {!confirmText ? (
+            <div className="flex flex-wrap gap-2">
+              {maxRefundable > 0 ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setRefundMajor(minorToMajor(maxRefundable, currency).toFixed(2));
+                    setReleaseMajor("0.00");
+                  }}
+                  className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
+                >
+                  Refund buyer (max {formatMinor(maxRefundable, currency)})
+                </button>
+              ) : null}
+              {finalResidualMinor > 0 ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setReleaseMajor(minorToMajor(finalResidualMinor, currency).toFixed(2));
+                    setRefundMajor("0.00");
+                  }}
+                  className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/80 hover:border-electric/40"
+                >
+                  Release to seller (max {formatMinor(finalResidualMinor, currency)})
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={askConfirm}
+                className="rounded-lg bg-electric px-4 py-2 text-xs font-semibold uppercase tracking-[0.1em] text-app-navy disabled:opacity-50"
+              >
+                Confirm decision
+              </button>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-amber-50">
+              <p>{confirmText}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void execute()}
+                  className="rounded-lg bg-electric px-3 py-1.5 text-xs font-medium text-app-navy disabled:opacity-50"
+                >
+                  {busy ? "Working…" : "Confirm resolution"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setConfirmText(null)}
+                  className="rounded-lg border border-white/20 px-3 py-1.5 text-xs text-white/70"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
       {error ? <p className="text-amber-200/90">{error}</p> : null}
       {(lastRefundId || lastTransferId) ? (
@@ -381,9 +454,10 @@ export default function PaymentIssueActions({
             Advanced / audit
           </summary>
           <p className="mt-2 text-[11px] leading-relaxed">
-            Buyer refunds use the original PaymentIntent. Sourcer releases go to
-            that sourcer&apos;s Connect account. Refund and Transfer IDs appear
-            here after confirmation.
+            Buyer refunds use the original PaymentIntent. Sourcer releases use
+            this purchase&apos;s stored payout rail
+            {payoutRail ? ` (${payoutRail})` : ""}. Refund and Transfer IDs
+            appear here after confirmation.
           </p>
         </details>
       )}

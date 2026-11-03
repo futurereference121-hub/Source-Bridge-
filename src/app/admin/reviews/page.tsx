@@ -52,6 +52,13 @@ export default async function AdminReviewsPage() {
           finalTransferredMinor: true,
           refundedMinor: true,
           platformFeeRefundedMinor: true,
+          payoutRail: true,
+          outboundPaymentAttempts: {
+            where: { kind: "FINAL" },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { amountMinor: true, status: true, kind: true },
+          },
           conversationId: true,
           buyerId: true,
           sellerId: true,
@@ -223,6 +230,9 @@ export default async function AdminReviewsPage() {
                   <PaymentIssueActions
                     disputeId={issue.id}
                     currency={t.currency}
+                    payoutRail={t.payoutRail}
+                    authorizedReleaseMinor={t.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                    outboundStatus={t.outboundPaymentAttempts[0]?.status ?? null}
                     totalPaidMinor={t.totalChargeMinor}
                     platformFeeMinor={books.platformFeeMinor}
                     platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}

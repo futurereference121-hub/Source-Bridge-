@@ -120,6 +120,13 @@ export default async function AdminPaymentsPage() {
             refundedMinor: true,
             platformFeeRefundedMinor: true,
             conversationId: true,
+            payoutRail: true,
+            outboundPaymentAttempts: {
+              where: { kind: "FINAL" },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { amountMinor: true, status: true, kind: true },
+            },
             trackingCarrier: true,
             trackingNumber: true,
             shipmentPhotoUrl: true,
@@ -151,6 +158,13 @@ export default async function AdminPaymentsPage() {
         finalTransferredMinor: true,
         refundedMinor: true,
         stripeMode: true,
+        payoutRail: true,
+        outboundPaymentAttempts: {
+          where: { kind: "FINAL" },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { amountMinor: true, status: true, kind: true },
+        },
         updatedAt: true,
         fundedAt: true,
         shippedAt: true,
@@ -353,6 +367,9 @@ export default async function AdminPaymentsPage() {
                 <PaymentIssueActions
                   disputeId={issue.id}
                   currency={t.currency}
+                  payoutRail={t.payoutRail}
+                  authorizedReleaseMinor={t.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                  outboundStatus={t.outboundPaymentAttempts[0]?.status ?? null}
                   totalPaidMinor={t.totalChargeMinor}
                   platformFeeMinor={books.platformFeeMinor}
                   platformFeeRefundedMinor={t.platformFeeRefundedMinor ?? 0}
@@ -480,6 +497,9 @@ export default async function AdminPaymentsPage() {
                   <PaymentIssueActions
                     disputeId={dispute.id}
                     currency={row.currency}
+                    payoutRail={row.payoutRail}
+                    authorizedReleaseMinor={row.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                    outboundStatus={row.outboundPaymentAttempts[0]?.status ?? null}
                     totalPaidMinor={row.totalChargeMinor}
                     platformFeeMinor={books.platformFeeMinor}
                     platformFeeRefundedMinor={row.platformFeeRefundedMinor ?? 0}
@@ -496,6 +516,9 @@ export default async function AdminPaymentsPage() {
                   <PaymentIssueActions
                     protectedTxnId={row.id}
                     currency={row.currency}
+                    payoutRail={row.payoutRail}
+                    authorizedReleaseMinor={row.outboundPaymentAttempts[0]?.amountMinor ?? 0}
+                    outboundStatus={row.outboundPaymentAttempts[0]?.status ?? null}
                     totalPaidMinor={row.totalChargeMinor}
                     platformFeeMinor={books.platformFeeMinor}
                     platformFeeRefundedMinor={row.platformFeeRefundedMinor ?? 0}

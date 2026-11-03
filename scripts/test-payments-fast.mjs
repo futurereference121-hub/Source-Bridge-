@@ -39,6 +39,7 @@ runNodeTestScripts(
     "scripts/test-dispute-context-human.mjs",
     "scripts/test-payment-issue-support-context.mjs",
     "scripts/test-admin-case-accordion.mjs",
+    "scripts/test-admin-release-display.mjs",
     "scripts/test-admin-nav-reliability.mjs",
     "scripts/test-protected-fund-zero-transfer.mjs",
     "scripts/test-conversation-pair.mjs",
